@@ -1,0 +1,4195 @@
+"""
+app.py — Crypto Signal Model v5.9.13 | Streamlit Dashboard
+Run: streamlit run app.py
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+import json
+import logging
+import os
+import threading
+import time
+import requests
+from datetime import datetime, timedelta
+
+from apscheduler.schedulers.background import BackgroundScheduler
+import alerts as _alerts
+import pdf_export as _pdf
+import chart_component as _chart
+import llm_analysis as _llm
+import database as _db
+import websocket_feeds as _ws
+import execution as _exec
+import ui_components as _ui
+import arbitrage as _arb
+import data_feeds
+try:
+    import agent as _agent
+except Exception:
+    _agent = None
+
+
+def _numpy_serializer(obj):
+    """JSON serializer for numpy scalar types (used by json.dumps in download buttons)."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        v = float(obj)
+        # nan/inf are invalid JSON — convert to None
+        if v != v or v == float("inf") or v == float("-inf"):
+            return None
+        return v
+    if isinstance(obj, float):
+        if obj != obj or obj == float("inf") or obj == float("-inf"):
+            return None
+        return obj
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return str(obj)
+
+
+# ──────────────────────────────────────────────
+# SCAN CACHE FILE — survives Streamlit reloads and browser refresh
+# ──────────────────────────────────────────────
+_SCAN_CACHE_FILE = "scan_results_cache.json"  # legacy — only used for cleanup on scan start
+
+def _write_scan_status(running, timestamp=None, error=None, progress=0, pair=""):
+    try:
+        _db.write_scan_status(running, timestamp=timestamp, error=error,
+                              progress=progress, pair=pair or "")
+    except Exception:
+        pass
+
+def _read_scan_status():
+    try:
+        return _db.read_scan_status()
+    except Exception:
+        pass
+    return {"running": False, "timestamp": None, "error": None, "progress": 0, "pair": ""}
+
+def _write_scan_results(results):
+    try:
+        _db.write_scan_results(results)
+    except Exception:
+        pass
+
+def _read_scan_results():
+    try:
+        results = _db.read_scan_results()
+        return results if results else None
+    except Exception:
+        pass
+    return None
+
+# ──────────────────────────────────────────────
+# MODULE-LEVEL THREAD STATE (progress only — results go to file)
+# ──────────────────────────────────────────────
+_scan_lock = threading.Lock()
+_scan_state = {
+    "running": False,
+    "progress": 0,
+    "progress_pair": "Connecting to exchange...",
+}
+
+_bt_lock = threading.Lock()
+_bt_state = {
+    "running": False,
+    "results": None,
+    "error": None,
+}
+
+# ──────────────────────────────────────────────
+# AUTO-SCAN SCHEDULER (module-level singleton)
+# ──────────────────────────────────────────────
+_scheduler: BackgroundScheduler | None = None
+_AUTOSCAN_JOB_ID = "autoscan_job"
+
+
+def _get_scheduler() -> BackgroundScheduler:
+    global _scheduler
+    if _scheduler is None:
+        _scheduler = BackgroundScheduler(daemon=True)
+        _scheduler.start()
+    return _scheduler
+
+
+def _setup_autoscan(interval_minutes: int):
+    """Start or replace the auto-scan job with a new interval."""
+    sched = _get_scheduler()
+    sched.remove_job(_AUTOSCAN_JOB_ID) if sched.get_job(_AUTOSCAN_JOB_ID) else None
+    sched.add_job(
+        lambda: _scheduled_scan(),
+        trigger="interval",
+        minutes=interval_minutes,
+        id=_AUTOSCAN_JOB_ID,
+        replace_existing=True,
+        next_run_time=datetime.now() + timedelta(minutes=interval_minutes),
+    )
+
+
+def _stop_autoscan():
+    """Remove the auto-scan job if it exists."""
+    sched = _get_scheduler()
+    if sched.get_job(_AUTOSCAN_JOB_ID):
+        sched.remove_job(_AUTOSCAN_JOB_ID)
+
+
+def _get_next_autoscan_time() -> datetime | None:
+    """Return next scheduled run time, or None."""
+    sched = _get_scheduler()
+    job = sched.get_job(_AUTOSCAN_JOB_ID)
+    return job.next_run_time if job else None
+
+
+def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
+    """Return True if now_str (HH:MM UTC) falls in the [start, end) quiet window.
+    Handles overnight wrap (e.g. 22:00–06:00)."""
+    try:
+        h, m     = map(int, now_str.split(":"))
+        sh, sm   = map(int, start_str.split(":"))
+        eh, em   = map(int, end_str.split(":"))
+        now_mins = h  * 60 + m
+        s_mins   = sh * 60 + sm
+        e_mins   = eh * 60 + em
+        if s_mins <= e_mins:           # same-day window e.g. 09:00–17:00
+            return s_mins <= now_mins < e_mins
+        else:                          # overnight wrap e.g. 22:00–06:00
+            return now_mins >= s_mins or now_mins < e_mins
+    except Exception:
+        return False
+
+# ── Page config must be first ──
+st.set_page_config(
+    page_title="Crypto Signal Model v5.9.13",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Professional CSS design system (must come before any st.* calls) ──
+_ui.inject_css()
+
+# ── Import model (after page config) ──
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+import crypto_model_core as model
+
+# ──────────────────────────────────────────────
+# SESSION STATE INITIALIZATION
+# ──────────────────────────────────────────────
+def init_state():
+    defaults = {
+        "scan_results": [],
+        "scan_running": False,
+        "scan_timestamp": None,
+        "scan_error": None,
+        "backtest_results": None,
+        "backtest_running": False,
+        "backtest_error": None,
+        "chart_html": None,
+        "chart_pair_label": None,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+init_state()
+
+# Start WebSocket live price feed (idempotent — safe on every Streamlit rerun)
+_ws.start(model.PAIRS)
+
+# Auto-start autonomous agent if enabled in config (idempotent)
+if _agent is not None:
+    _agent_cfg_boot = _alerts.load_alerts_config()
+    if _agent_cfg_boot.get("agent_enabled", False):
+        _agent.supervisor.start()
+
+# ──────────────────────────────────────────────
+# SIDEBAR NAVIGATION
+# ──────────────────────────────────────────────
+_ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
+page = st.sidebar.radio(
+    "Navigate",
+    ["Dashboard", "Market Overview", "Config Editor", "Backtest Viewer",
+     "Trade Log & History", "Arbitrage", "Agent"],
+    label_visibility="collapsed",
+)
+
+# ──────────────────────────────────────────────
+# SIDEBAR: AUTO-SCAN
+# ──────────────────────────────────────────────
+st.sidebar.markdown("---")
+# CQ-10: Load alerts config once per sidebar render; reused by all expander sections.
+# Each expander that needs to mutate gets its own .copy() or re-reads when saving.
+_sidebar_alerts_cfg = _alerts.load_alerts_config()
+
+with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
+    _alert_cfg = _sidebar_alerts_cfg.copy()
+
+    autoscan_on = st.toggle(
+        "Enable Auto-Scan",
+        value=_alert_cfg.get("autoscan_enabled", False),
+        key="autoscan_toggle",
+    )
+    interval_options = {
+        "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
+        "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
+    }
+    interval_label = st.selectbox(
+        "Scan Interval",
+        options=list(interval_options.keys()),
+        index=list(interval_options.values()).index(
+            min(interval_options.values(),
+                key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
+        ),
+        key="autoscan_interval",
+        disabled=not autoscan_on,
+    )
+    interval_min = interval_options[interval_label]
+
+    quiet_on = st.toggle(
+        "Quiet Hours (UTC)",
+        value=_alert_cfg.get("autoscan_quiet_hours_enabled", False),
+        key="autoscan_quiet_on",
+        disabled=not autoscan_on,
+        help="Skip scheduled scans during these hours (times are UTC).",
+    )
+    _qc1, _qc2 = st.columns(2)
+    with _qc1:
+        quiet_start = st.text_input(
+            "Start HH:MM", value=_alert_cfg.get("autoscan_quiet_start", "22:00"),
+            key="autoscan_quiet_start", disabled=not (autoscan_on and quiet_on),
+        )
+    with _qc2:
+        quiet_end = st.text_input(
+            "End HH:MM", value=_alert_cfg.get("autoscan_quiet_end", "06:00"),
+            key="autoscan_quiet_end", disabled=not (autoscan_on and quiet_on),
+        )
+
+    # Apply scheduler changes only when job doesn't exist or interval has changed
+    # (avoid resetting next_run_time on every Streamlit rerun, which prevents the job from ever firing)
+    if autoscan_on:
+        _job_exists = bool(_get_scheduler().get_job(_AUTOSCAN_JOB_ID))
+        _interval_changed = interval_min != _alert_cfg.get("autoscan_interval_minutes")
+        if not _job_exists or _interval_changed:
+            _setup_autoscan(interval_min)
+        next_t = _get_next_autoscan_time()
+        if next_t:
+            # Strip timezone for display (APScheduler may return tz-aware)
+            try:
+                next_t_naive = next_t.replace(tzinfo=None)
+            except Exception:
+                next_t_naive = next_t
+            delta = next_t_naive - datetime.now()
+            total_secs = delta.total_seconds()
+            # BUG-L05: clamp negative deltas (overdue jobs) before computing mins/secs
+            total_secs = max(0.0, total_secs)
+            mins_left = int(total_secs // 60)
+            secs_left = int(total_secs % 60)
+            st.caption(f"Next scan in: {mins_left}m {secs_left}s")
+    else:
+        _stop_autoscan()
+        st.caption("Auto-scan is off.")
+
+    # Save autoscan config when changed
+    if (autoscan_on  != _alert_cfg.get("autoscan_enabled")
+            or interval_min != _alert_cfg.get("autoscan_interval_minutes")
+            or quiet_on      != _alert_cfg.get("autoscan_quiet_hours_enabled")
+            or quiet_start   != _alert_cfg.get("autoscan_quiet_start")
+            or quiet_end     != _alert_cfg.get("autoscan_quiet_end")):
+        _alert_cfg["autoscan_enabled"]            = autoscan_on
+        _alert_cfg["autoscan_interval_minutes"]   = interval_min
+        _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
+        _alert_cfg["autoscan_quiet_start"]        = quiet_start.strip()
+        _alert_cfg["autoscan_quiet_end"]          = quiet_end.strip()
+        _alerts.save_alerts_config(_alert_cfg)
+
+# ──────────────────────────────────────────────
+# SIDEBAR: TELEGRAM ALERTS
+# ──────────────────────────────────────────────
+with st.sidebar.expander("🔔 Telegram Alerts", expanded=False):
+    _alert_cfg2 = _sidebar_alerts_cfg.copy()
+
+    tg_enabled = st.toggle(
+        "Enable Telegram Alerts",
+        value=_alert_cfg2.get("telegram_enabled", False),
+        key="tg_enabled",
+    )
+    tg_token = st.text_input(
+        "Bot Token",
+        value=_alert_cfg2.get("telegram_token", ""),
+        type="password",
+        placeholder="123456:ABC-DEF...",
+        key="tg_token",
+        disabled=not tg_enabled,
+    )
+    tg_chat_id = st.text_input(
+        "Chat ID",
+        value=_alert_cfg2.get("telegram_chat_id", ""),
+        placeholder="-1001234567890 or your user ID",
+        key="tg_chat_id",
+        disabled=not tg_enabled,
+    )
+    tg_min_conf = st.slider(
+        "Alert threshold (%)",
+        min_value=50, max_value=95,
+        value=int(_alert_cfg2.get("min_confidence", 70)),
+        step=5,
+        key="tg_min_conf",
+        disabled=not tg_enabled,
+    )
+
+    col_save_tg, col_test_tg = st.columns(2)
+    with col_save_tg:
+        if st.button("Save", key="tg_save", use_container_width=True):
+            _alert_cfg2.update({
+                "telegram_enabled": tg_enabled,
+                "telegram_token": tg_token.strip(),
+                "telegram_chat_id": tg_chat_id.strip(),
+                "min_confidence": tg_min_conf,
+            })
+            _alerts.save_alerts_config(_alert_cfg2)
+            st.success("Saved!")
+    with col_test_tg:
+        if st.button("Test", key="tg_test", use_container_width=True, disabled=not tg_enabled):
+            ok, err = _alerts.send_telegram(
+                tg_token.strip(), tg_chat_id.strip(),
+                "✅ <b>Crypto Signal Model</b>\nTelegram alert test — connection successful!"
+            )
+            if ok:
+                st.success("Message sent!")
+            else:
+                st.error(f"Failed: {err}")
+
+    st.caption("Get a bot token from @BotFather on Telegram.\nGet your chat ID from @userinfobot.")
+
+# ──────────────────────────────────────────────
+# SIDEBAR: AUTO-REFRESH
+# ──────────────────────────────────────────────
+with st.sidebar.expander("🔄 Auto-Refresh", expanded=False):
+    _ar_enabled = st.toggle(
+        "Refresh Dashboard Live",
+        value=st.session_state.get("auto_refresh_enabled", False),
+        key="auto_refresh_toggle",
+    )
+    st.session_state["auto_refresh_enabled"] = _ar_enabled
+    _ar_options = {"10 seconds": 10, "30 seconds": 30, "1 minute": 60, "5 minutes": 300}
+    _ar_label = st.selectbox(
+        "Refresh interval",
+        options=list(_ar_options.keys()),
+        index=1,
+        key="auto_refresh_interval_label",
+        disabled=not _ar_enabled,
+    )
+    st.session_state["auto_refresh_interval"] = _ar_options[_ar_label]
+    if _ar_enabled:
+        st.caption(f"Dashboard reloads every {_ar_label}.")
+    else:
+        st.caption("Enable to keep dashboard live.")
+
+# ──────────────────────────────────────────────
+# SIDEBAR: EMAIL ALERTS
+# ──────────────────────────────────────────────
+with st.sidebar.expander("📧 Email Alerts", expanded=False):
+    _alert_cfg_em = _sidebar_alerts_cfg.copy()
+    em_enabled = st.toggle(
+        "Enable Email Alerts",
+        value=_alert_cfg_em.get("email_enabled", False),
+        key="em_enabled",
+    )
+    em_to = st.text_input(
+        "Recipient email",
+        value=_alert_cfg_em.get("email_to", ""),
+        placeholder="you@example.com",
+        key="em_to",
+        disabled=not em_enabled,
+    )
+    em_from = st.text_input(
+        "Sender email (Gmail)",
+        value=_alert_cfg_em.get("email_from", ""),
+        placeholder="yourbot@gmail.com",
+        key="em_from",
+        disabled=not em_enabled,
+    )
+    em_pass = st.text_input(
+        "App password",
+        value=_alert_cfg_em.get("email_pass", ""),
+        type="password",
+        placeholder="Gmail App Password (not your main password)",
+        key="em_pass",
+        disabled=not em_enabled,
+    )
+    em_min_conf = st.slider(
+        "Alert threshold (%)",
+        min_value=50, max_value=95,
+        value=int(_alert_cfg_em.get("email_min_confidence", 70)),
+        step=5,
+        key="em_min_conf",
+        disabled=not em_enabled,
+    )
+    col_save_em, col_test_em = st.columns(2)
+    with col_save_em:
+        if st.button("Save", key="em_save", use_container_width=True):
+            _alert_cfg_em.update({
+                "email_enabled": em_enabled,
+                "email_to": em_to.strip(),
+                "email_from": em_from.strip(),
+                "email_pass": em_pass,
+                "email_min_confidence": em_min_conf,
+            })
+            _alerts.save_alerts_config(_alert_cfg_em)
+            st.success("Saved!")
+    with col_test_em:
+        if st.button("Test", key="em_test", use_container_width=True, disabled=not em_enabled):
+            ok, err = _alerts.send_email_alert(
+                em_from.strip(), em_pass, em_to.strip(),
+                "Crypto Signal Model — Test Alert",
+                "✅ Email alert test successful. Your email alerts are configured correctly.",
+            )
+            if ok:
+                st.success("Email sent!")
+            else:
+                st.error(f"Failed: {err}")
+    st.caption("Use a Gmail App Password (Settings → Security → 2FA → App passwords).")
+
+# ──────────────────────────────────────────────
+# SIDEBAR: DISCORD ALERTS
+# ──────────────────────────────────────────────
+with st.sidebar.expander("💬 Discord Alerts", expanded=False):
+    _alert_cfg_dc = _sidebar_alerts_cfg.copy()
+    dc_enabled = st.toggle(
+        "Enable Discord Alerts",
+        value=_alert_cfg_dc.get("discord_enabled", False),
+        key="dc_enabled",
+    )
+    dc_webhook = st.text_input(
+        "Webhook URL",
+        value=_alert_cfg_dc.get("discord_webhook_url", ""),
+        type="password",
+        placeholder="https://discord.com/api/webhooks/...",
+        key="dc_webhook",
+        disabled=not dc_enabled,
+    )
+    dc_min_conf = st.slider(
+        "Alert threshold (%)",
+        min_value=50, max_value=95,
+        value=int(_alert_cfg_dc.get("discord_min_confidence", 70)),
+        step=5,
+        key="dc_min_conf",
+        disabled=not dc_enabled,
+    )
+    col_save_dc, col_test_dc = st.columns(2)
+    with col_save_dc:
+        if st.button("Save", key="dc_save", use_container_width=True):
+            _alert_cfg_dc.update({
+                "discord_enabled": dc_enabled,
+                "discord_webhook_url": dc_webhook.strip(),
+                "discord_min_confidence": dc_min_conf,
+            })
+            _alerts.save_alerts_config(_alert_cfg_dc)
+            st.success("Saved!")
+    with col_test_dc:
+        if st.button("Test", key="dc_test", use_container_width=True, disabled=not dc_enabled):
+            ok, err = _alerts.send_discord(
+                dc_webhook.strip(),
+                "✅ **Crypto Signal Model** — Discord alert test, connection successful!"
+            )
+            if ok:
+                st.success("Message sent!")
+            else:
+                st.error(f"Failed: {err}")
+    st.caption("Create a webhook: Discord channel → Edit → Integrations → Webhooks → New Webhook.")
+
+# ──────────────────────────────────────────────
+# SIDEBAR: LIVE PRICE FEED STATUS
+# ──────────────────────────────────────────────
+with st.sidebar.expander("📡 Live Prices", expanded=False):
+    _ws_status = _ws.get_status()
+    if not _ws_status.get("available", True):
+        st.warning("websocket-client not installed.\nRun: pip install websocket-client")
+    else:
+        _ws_conn  = _ws_status.get("connected", False)
+        _ws_last  = _ws_status.get("last_message_at")
+        _ws_rc    = _ws_status.get("reconnects", 0)
+        _ws_err   = _ws_status.get("error")
+
+        if _ws_conn:
+            st.markdown(
+                f'{_ui.live_dot_html()} <span style="color:#00d4aa;font-size:13px;font-weight:600">Connected — OKX live tickers</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.error("Disconnected" + (f": {_ws_err}" if _ws_err else ""))
+        if _ws_rc > 0:
+            st.caption(f"Reconnects: {_ws_rc}")
+        if _ws_last:
+            age = time.time() - _ws_last
+            st.caption(f"Last tick: {age:.0f}s ago")
+
+        # Live price mini-table
+        _live_all = _ws.get_all_prices()
+        if _live_all:
+            _live_rows = []
+            for _p in model.PAIRS:
+                _tick = _live_all.get(_p)
+                if _tick:
+                    _chg = _tick["change_24h_pct"]
+                    _arrow = "▲" if _chg >= 0 else "▼"
+                    _live_rows.append({
+                        "Pair": _p.replace("/USDT", ""),
+                        "Price": f"${_tick['price']:,.4f}",
+                        "24h": f"{_arrow} {abs(_chg):.2f}%",
+                    })
+            if _live_rows:
+                st.dataframe(
+                    pd.DataFrame(_live_rows).set_index("Pair"),
+                    use_container_width=True,
+                    hide_index=False,
+                )
+        else:
+            st.caption("Awaiting first tick...")
+
+# ──────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────
+def direction_color(d):
+    if "STRONG BUY" in d: return "🟢"
+    if "BUY" in d: return "🟩"
+    if "STRONG SELL" in d: return "🔴"
+    if "SELL" in d: return "🟥"
+    return "🟡"
+
+def conf_color(c):
+    if c >= model.HIGH_CONF_THRESHOLD: return "green"
+    if c >= 55: return "orange"
+    return "red"
+
+def conf_badge(c):
+    col = "🟢" if c >= model.HIGH_CONF_THRESHOLD else "🟡" if c >= 55 else "🔴"
+    return f"{col} {c}%"
+
+# ──────────────────────────────────────────────
+# PAGE 1: DASHBOARD
+# ──────────────────────────────────────────────
+def page_dashboard():
+    st.markdown(
+        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        'letter-spacing:-0.5px;margin-bottom:0">Signal Dashboard</h1>',
+        unsafe_allow_html=True,
+    )
+
+    # FNG chip + scan controls
+    col_btn, col_fng, col_ts = st.columns([2, 2, 4])
+    with col_btn:
+        with _scan_lock:
+            _scan_running_now = _scan_state["running"]
+        # BUG-R28: use .get() for all session_state accesses — prevents KeyError if
+        # init_state() is ever bypassed (e.g. session reset mid-run).
+        scan_disabled = st.session_state.get("scan_running", False) or _scan_running_now
+        if st.button("▶ Run Scan", disabled=scan_disabled, type="primary", use_container_width=True):
+            st.session_state["scan_results"] = []
+            st.session_state["scan_error"] = None
+            _start_scan()
+    with col_fng:
+        if st.session_state.get("scan_results"):
+            r0 = st.session_state["scan_results"][0]
+            fv, fc = r0.get("fng_value", 50), r0.get("fng_category", "Neutral")
+            color = "#00c076" if fv < 40 else "#f6465d" if fv > 60 else "#f0a500"
+            st.markdown(
+                f'<span style="color:rgba(255,255,255,0.4);font-size:11px;'
+                f'text-transform:uppercase;letter-spacing:0.8px">F&G Index</span><br/>'
+                f'<span style="color:{color};font-weight:700;font-size:16px">'
+                f'{fv}</span> '
+                f'<span style="color:rgba(255,255,255,0.55);font-size:13px">{fc}</span>',
+                unsafe_allow_html=True,
+            )
+    with col_ts:
+        if st.session_state.get("scan_timestamp"):
+            st.caption(f"Last scan: {st.session_state['scan_timestamp']}")
+
+    # Progress bar while scanning — read from status file (survives reloads)
+    status = _read_scan_status()
+    with _scan_lock:
+        _scan_running_now2 = _scan_state["running"]
+    is_scanning = st.session_state.get("scan_running", False) or _scan_running_now2 or status.get("running", False)
+
+    if is_scanning:
+        # Read progress from module-level dict first, fall back to file
+        with _scan_lock:
+            prog = _scan_state["progress"] if _scan_state["progress"] is not None else status.get("progress", 0)
+            pair_name = _scan_state["progress_pair"] if _scan_state["progress_pair"] is not None else status.get("pair", "")
+        total = len(model.PAIRS)
+        frac = min(prog / total, 1.0) if total > 0 else 0
+        if prog == 0:
+            status_text = f"Connecting to {model.TA_EXCHANGE.upper()} and loading markets..."
+        elif prog >= total:
+            status_text = "Finalizing scan results..."
+        else:
+            status_text = f"Scanning {pair_name or 'pair'}... ({prog}/{total} pairs complete)"
+
+        st.progress(frac, text=status_text)
+
+        # Check if scan just finished (status says not running, or status is empty = DB error)
+        with _scan_lock:
+            _still_running = _scan_state["running"]
+        if not status.get("running", False) and not _still_running:
+            cached = _read_scan_results()
+            if cached is not None:
+                st.session_state["scan_results"] = cached
+                st.session_state["scan_error"] = status.get("error")
+                st.session_state["scan_timestamp"] = status.get("timestamp")
+            st.session_state["scan_running"] = False
+            st.rerun()
+
+        # BUG-R08: reduced from 0.5s to 0.1s — 500ms blocking on the Streamlit
+        # server thread freezes UI interactions during the entire scan.
+        time.sleep(0.1)
+        st.rerun()
+
+    # On page load, always try to restore results from cache file if session is empty
+    if not st.session_state.get("scan_results"):
+        cached = _read_scan_results()
+        status = _read_scan_status()
+        if cached:
+            st.session_state["scan_results"] = cached
+            st.session_state["scan_timestamp"] = status.get("timestamp")
+
+    # Show scan error if one occurred
+    if st.session_state.get("scan_error"):
+        st.error(f"Scan failed: {st.session_state['scan_error']}")
+
+    results = st.session_state.get("scan_results", [])
+    if not results:
+        st.info("Click **▶ Run Scan** to fetch live signals for all pairs.")
+        return
+
+    if st.session_state.get("scan_timestamp"):
+        st.success(f"Scan complete — {len(results)} pairs | {st.session_state['scan_timestamp']}")
+
+    # ── Market stat bar (top strip with live market stats) ───────────────────
+    _stat_bar_data = {}
+    if results:
+        _fv = results[0].get("fng_value", 50)
+        _fc = results[0].get("fng_category", "Neutral")
+        _stat_bar_data["Fear & Greed"] = f"{_fv} — {_fc}"
+        _avg_c = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
+        _stat_bar_data["Avg Confidence"] = f"{_avg_c}%"
+        _buy_n  = sum(1 for r in results if "BUY"  in r.get("direction", ""))
+        _sell_n = sum(1 for r in results if "SELL" in r.get("direction", ""))
+        _stat_bar_data["Signals"] = f"▲{_buy_n} / ▼{_sell_n}"
+        _hc_n = sum(1 for r in results if r.get("high_conf"))
+        _stat_bar_data["High-Conf"] = f"⚡ {_hc_n}"
+        for _top_pair in ["BTC/USDT", "ETH/USDT"]:
+            _tick = _ws.get_price(_top_pair)
+            if _tick:
+                _sym = _top_pair.replace("/USDT", "")
+                _stat_bar_data[_sym] = f"${_tick['price']:,.2f}"
+        _ts = st.session_state.get("scan_timestamp", "—")
+        _stat_bar_data["Last Scan"] = _ts.split(" ")[1] if _ts and " " in str(_ts) else str(_ts)
+    if _stat_bar_data:
+        _ui.market_stat_bar(_stat_bar_data)
+
+    # Drawdown circuit breaker banner (check once from first result)
+    cb = results[0].get('circuit_breaker', {}) if results else {}
+    if cb.get('triggered'):
+        st.error(
+            f"DRAWDOWN CIRCUIT BREAKER ACTIVE — Portfolio drawdown {cb['drawdown_pct']:.1f}% "
+            f"exceeds {cb['threshold_pct']:.0f}% threshold. "
+            f"All new entry signals suppressed. Peak equity: ${cb['peak_equity']:,.0f}"
+        )
+
+    # F6/F7: Concept drift warning banner — shown when recent win rate decays vs historical baseline
+    _drift = model.get_drift_status()
+    if _drift.get('drift_detected'):
+        st.warning(
+            f"CONCEPT DRIFT DETECTED — Recent model accuracy has degraded. "
+            f"30d win rate: {_drift['win_rate_30d']:.1%} vs "
+            f"90d baseline: {_drift['win_rate_90d']:.1%} "
+            f"(ratio {_drift['ratio']:.2f} < 0.75 threshold, "
+            f"{_drift['n_resolved_30d']} recent / {_drift['n_resolved_90d']} total resolved signals). "
+            f"Optuna auto-reoptimization triggered after this scan."
+        )
+
+    # High-confidence alert banner
+    hc = [r for r in results if r.get("high_conf")]
+    if hc:
+        pairs_str = ", ".join(r["pair"] for r in hc)
+        st.success(f"⚡ Top Picks this scan — the model's highest-confidence opportunities: **{pairs_str}**")
+
+    # Summary metrics row
+    mc = st.columns(5)
+    mc[0].metric("Coins Scanned", len(results),
+                 help=_ui.HELP_PAIRS_SCANNED)
+    mc[1].metric("Top Picks", len(hc),
+                 help=_ui.HELP_HIGH_CONF)
+    avg_conf = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
+    mc[2].metric("Avg Signal Strength", f"{avg_conf}%",
+                 help=_ui.HELP_AVG_CONF)
+    buy_count = sum(1 for r in results if "BUY" in r.get("direction", ""))
+    sell_count = sum(1 for r in results if "SELL" in r.get("direction", ""))
+    mc[3].metric("Bullish Signals", buy_count,
+                 help=_ui.HELP_BUY_SIGNALS)
+    mc[4].metric("Bearish Signals", sell_count,
+                 help=_ui.HELP_SELL_SIGNALS)
+
+    st.markdown("---")
+
+    # ── Signal Heatmap — pairs × timeframes ──
+    _ui.section_header("Signal Heatmap",
+                       "Quick overview — green = buy signal, red = sell signal, grey = no clear signal. Numbers show how confident the model is.",
+                       icon="🗺️")
+    _tf_list = model.TIMEFRAMES  # e.g. ["15m","1h","4h","1d","1w"]
+    _hm_pairs = [r["pair"] for r in results]
+    _hm_conf  = []   # 2D list: rows=pairs, cols=TFs
+    _hm_text  = []   # annotation text
+    _hm_dir   = []   # direction per cell (for color mapping)
+
+    for r in results:
+        _tfd = r.get("timeframes", {})
+        _row_conf = []
+        _row_text = []
+        _row_dir  = []
+        for tf in _tf_list:
+            _cell = _tfd.get(tf, {})
+            _c    = float(_cell.get("confidence", 0) or 0)
+            _d    = str(_cell.get("direction", "NO DATA") or "NO DATA")
+            _row_conf.append(_c)
+            _row_text.append(f"{int(_c)}%\n{_d[:3]}")
+            _row_dir.append(_d)
+        _hm_conf.append(_row_conf)
+        _hm_text.append(_row_text)
+        _hm_dir.append(_row_dir)
+
+    # Map direction to numeric color scale: +1=strong buy, +0.5=buy, 0=neutral, -0.5=sell, -1=strong sell
+    def _dir_to_val(d: str) -> float:
+        d = d.upper()
+        if "STRONG BUY"  in d: return  1.0
+        if "BUY"         in d: return  0.5
+        if "STRONG SELL" in d: return -1.0
+        if "SELL"        in d: return -0.5
+        return 0.0
+
+    _hm_color = [[_dir_to_val(d) for d in row] for row in _hm_dir]
+
+    _hm_fig = go.Figure(data=go.Heatmap(
+        z            = _hm_color,
+        x            = _tf_list,
+        y            = _hm_pairs,
+        text         = _hm_text,
+        texttemplate = "%{text}",
+        textfont     = {"size": 9},
+        colorscale   = [
+            [0.0,  "#ff4b4b"],
+            [0.25, "#ffaaaa"],
+            [0.5,  "#888888"],
+            [0.75, "#99e6cc"],
+            [1.0,  "#00d4aa"],
+        ],
+        zmin=-1, zmax=1,
+        showscale=False,
+        hovertemplate="<b>%{y}</b> / %{x}<br>%{text}<extra></extra>",
+    ))
+    _hm_fig.update_layout(
+        height=max(250, 32 * len(_hm_pairs) + 60),
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        font=dict(color="#fafafa", size=9),
+        xaxis=dict(side="top", tickfont=dict(size=9)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
+    )
+    st.plotly_chart(_hm_fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # Quick-glance summary table
+    _ui.section_header("Signal Summary", "All coins ranked by signal strength — select a coin below for full details", icon="⚡")
+    summary_rows = []
+    for r in results:
+        _st = _ws.get_price(r["pair"])
+        _live_str = (
+            f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
+        )
+        _tp1 = r.get("tp1")
+        summary_rows.append({
+            "Coin": r["pair"],
+            "Price": _live_str,
+            "Signal": r.get("direction", "N/A"),
+            "Strength": f"{r.get('confidence_avg_pct', 0)}%",
+            "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
+            "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
+            "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
+            "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
+        })
+    st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), use_container_width=True)
+    st.markdown("---")
+
+    # Sort results: high-conf first, then by confidence descending
+    sorted_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
+
+    # Fetch once — avoids N×2 disk reads of alerts_config.json (PERF-02)
+    _exec_status = _exec.get_status()
+    _exec_cfg    = _exec.get_exec_config()
+
+    # ── Coin Selector Dropdown ─────────────────────────────────────────────────
+    _ui.section_header("Coin Details", "Select a coin from the dropdown to see its full signal breakdown", icon="🔍")
+
+    def _pair_label(r):
+        _d  = r.get("direction", "N/A")
+        _c  = r.get("confidence_avg_pct", 0)
+        _ic = direction_color(_d)
+        _hc = "  ⚡ TOP PICK" if r.get("high_conf") else ""
+        _tr = "  🔥" if r.get("trending") else ""
+        return f"{_ic}  {r['pair']}  ·  {_c:.0f}% strength  ·  {_d}{_hc}{_tr}"
+
+    _pair_labels  = [_pair_label(r) for r in sorted_results]
+    _label_to_r   = dict(zip(_pair_labels, sorted_results))
+
+    _selected_label = st.selectbox(
+        "Choose a coin to inspect",
+        options=_pair_labels,
+        index=0,
+        label_visibility="collapsed",
+        key="coin_selector",
+    )
+    r = _label_to_r[_selected_label]
+
+    # ── Selected Coin Detail Panel ─────────────────────────────────────────────
+    pair        = r["pair"]
+    conf        = r.get("confidence_avg_pct", 0)
+    direction   = r.get("direction", "N/A")
+    bias        = r.get("strategy_bias", "N/A")
+    mtf         = r.get("mtf_alignment", 0)
+    price       = r.get("price_usd")
+    entry       = r.get("entry")
+    exit_       = r.get("exit")
+    stop        = r.get("stop_loss")
+    pos_pct     = r.get("position_size_pct")
+    is_hc       = r.get("high_conf", False)
+    is_trending = r.get("trending", False)
+
+    _ui.signal_card_header(
+        pair=pair, direction=direction, conf=conf,
+        bias=bias, regime=r.get("regime", "N/A"), is_hc=is_hc,
+    )
+
+    # Plain English summary — designed for users unfamiliar with trading terms
+    _plain_summary = _ui.signal_plain_english(
+        pair=pair, direction=direction, conf=conf, mtf=mtf,
+        regime=r.get("regime", ""), entry=entry, stop=stop, exit_=exit_,
+    )
+    _ui.plain_english_box(_plain_summary, direction)
+
+    if is_trending:
+        st.markdown(
+            '<span style="display:inline-block;padding:2px 10px;border-radius:20px;'
+            'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
+            'color:#00d4aa;font-size:11px;font-weight:600;margin-bottom:6px">'
+            '🔥 Trending on CoinGecko right now</span>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Row 1: Price · Entry · Stop Loss ──────────────────────────────────────
+    top_cols = st.columns(3)
+    _live_tick = _ws.get_price(pair)
+    if _live_tick:
+        top_cols[0].metric(
+            "Current Price ⬤ LIVE",
+            f"${_live_tick['price']:,.4f}",
+            delta=f"{_live_tick['change_24h_pct']:+.2f}% today",
+            help="Live price from OKX.",
+        )
+    else:
+        top_cols[0].metric("Current Price", f"${price:,.4f}" if price else "N/A")
+    _entry_label = "Buy At" if "BUY" in direction.upper() else ("Sell At" if "SELL" in direction.upper() else "Entry Price")
+    top_cols[1].metric(_entry_label, f"${entry:,.4f}" if entry else "N/A",
+                       help="The price to enter this trade. Try to get close to this level.")
+    top_cols[2].metric("Stop Loss — Exit If Wrong", f"${stop:,.4f}" if stop else "N/A",
+                       help="If price hits this level, exit the trade to limit your loss.")
+
+    # ── Row 2: Take Profit · Signal Strength · Trade Size ─────────────────────
+    bot_cols = st.columns(3)
+    _tp1_val = r.get("tp1") or exit_
+    bot_cols[0].metric("Take Profit Target", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
+                       help="Where to take your profits. Consider selling here.")
+    bot_cols[1].metric("Signal Strength", f"{conf}%",
+                       help="How confident the model is. 70%+ = strong signal, below 50% = weak.")
+    bot_cols[2].metric("Suggested Trade Size", f"{pos_pct}% of funds" if pos_pct else "N/A",
+                       help="How much of your total funds to use for this trade. Keep it small.")
+
+    # ── Advanced Details (collapsed by default) ────────────────────────────────
+    with st.expander("📊 More Details — Timeframes & Technicals", expanded=False):
+        tp2       = r.get("tp2")
+        tp3       = r.get("tp3")
+        lev_rec   = r.get("leverage_rec") or {}
+        lev_label = lev_rec.get("label", "N/A")
+        lev_basis = lev_rec.get("basis", "")
+        mtf_conf  = r.get("mtf_confirmed", True)
+        rr        = r.get("rr_ratios") or {}
+
+        adv_cols = st.columns(4)
+        adv_cols[0].metric("Timeframes Agreeing", f"{mtf}%", help=_ui.HELP_MTF_ALIGN)
+        adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "N/A",
+                           delta=rr.get("tp2", ""), help="Second profit target — sell another 40% here.")
+        adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "N/A",
+                           delta=rr.get("tp3", ""), help="Final ambitious target — hold last 20% here.")
+        adv_cols[3].metric(
+            "Leverage (Futures Only)",
+            lev_label,
+            delta="✓ All timeframes agree" if mtf_conf else "⚠️ Mixed signals",
+            delta_color="normal" if mtf_conf else "inverse",
+            help=(f"For futures trading only. Basis: {lev_basis}. " if lev_basis else "") +
+                 "Use 1× for spot trading. Never use leverage you don't understand.",
+        )
+
+        tf_data = r.get("timeframes", {})
+        if tf_data:
+            _tf_head_col, _tf_info_col = st.columns([5, 1])
+            with _tf_head_col:
+                st.markdown("**What each timeframe says**")
+            with _tf_info_col:
+                _ui.tf_column_guide_popover()
+            _tf_rows = []
+            for tf, td in tf_data.items():
+                _tf_rows.append({
+                    "Timeframe": tf,
+                    "Signal": td.get("direction", "N/A"),
+                    "Strength": f"{td.get('confidence', 0)}%",
+                    "Momentum (RSI)": td.get("rsi", "N/A"),
+                    "Trend Strength (ADX)": td.get("adx", "N/A"),
+                    "Trend Direction": td.get("supertrend", "N/A"),
+                    "Market Mode": _ui.regime_label(td.get("regime", "")),
+                    "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
+                })
+            st.dataframe(pd.DataFrame(_tf_rows).set_index("Timeframe"), use_container_width=True)
+
+    # ── News Sentiment ─────────────────────────────────────────────────────────
+    _news = data_feeds.get_news_sentiment(pair)
+    if _news.get("signal") not in (None, "N/A"):
+        with st.expander("📰 Recent News", expanded=False):
+            _nsig       = _news.get("signal", "NEUTRAL")
+            _bpct       = _news.get("bullish_pct", 50.0)
+            _negpct     = _news.get("bearish_pct", 50.0)
+            _nsig_color = "🟢" if _nsig == "BULLISH" else "🔴" if _nsig == "BEARISH" else "⚪"
+            _nc0, _nc1, _nc2 = st.columns(3)
+            _nc0.metric("News Sentiment", f"{_nsig_color} {_nsig}")
+            _nc1.metric("Bullish Votes", f"{_bpct:.0f}%")
+            _nc2.metric("Bearish Votes", f"{_negpct:.0f}%")
+            for _art in _news.get("articles", []):
+                st.markdown(
+                    f"- [{_art['title']}]({_art['url']})  "
+                    f"<small>{_art['published_at']} · {_art['domain']}</small>",
+                    unsafe_allow_html=True,
+                )
+
+    # ── AI Analysis ────────────────────────────────────────────────────────────
+    ai_key = f"ai_explanation_{pair}"
+    ai_btn_col, ai_out_col = st.columns([1, 4])
+    with ai_btn_col:
+        run_ai = st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", use_container_width=True)
+    if run_ai:
+        with st.spinner("Asking Claude..."):
+            explanation = _llm.get_signal_explanation(pair, r)
+        st.session_state[ai_key] = explanation
+    if ai_key in st.session_state:
+        with ai_out_col:
+            st.info(st.session_state[ai_key])
+
+    # ── Order Execution ────────────────────────────────────────────────────────
+    st.markdown("---")
+    if not _exec_status.get("ccxt_available", False):
+        st.caption("ccxt not installed — run: pip install ccxt")
+    else:
+        _mode_label = "🔴 LIVE" if _exec_cfg.get("live_trading", False) else "📄 Paper"
+        _cur_price  = (_ws.get_price(pair) or {}).get("price") or price
+        _exec_size  = (float(pos_pct or 10) / 100) * float(
+            getattr(model, "PORTFOLIO_SIZE_USD", 10000)
+        )
+        ex_c0, ex_c1, ex_c2, ex_c3 = st.columns([2, 2, 2, 2])
+        with ex_c0:
+            st.caption(f"Mode: {_mode_label}")
+            st.caption(f"Order size: ${_exec_size:,.0f}")
+        with ex_c1:
+            if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{pair}",
+                         type="primary" if "BUY" in direction else "secondary",
+                         use_container_width=True):
+                _res = _exec.place_order(pair, "BUY", _exec_size, current_price=_cur_price)
+                if _res["ok"]:
+                    st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} BUY placed — ID: {_res['order_id']}")
+                else:
+                    st.error(f"Order failed: {_res['error']}")
+        with ex_c2:
+            if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{pair}",
+                         type="primary" if "SELL" in direction else "secondary",
+                         use_container_width=True):
+                _res = _exec.place_order(pair, "SELL", _exec_size, current_price=_cur_price)
+                if _res["ok"]:
+                    st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} SELL placed — ID: {_res['order_id']}")
+                else:
+                    st.error(f"Order failed: {_res['error']}")
+        with ex_c3:
+            _open_pos = _db.load_positions()
+            if pair in _open_pos:
+                _pos_dir = _open_pos[pair].get("direction", "BUY")
+                if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{pair}",
+                             use_container_width=True):
+                    _res = _exec.close_position(pair, _pos_dir, _exec_size, current_price=_cur_price)
+                    if _res["ok"]:
+                        st.success(f"Position closed — ID: {_res['order_id']}")
+                    else:
+                        st.error(f"Close failed: {_res['error']}")
+            else:
+                st.caption("No open position")
+
+    st.markdown("---")
+
+    # ── Live Chart ──────────────────────────────────────────────────────────
+    _ui.section_header("Live Chart", "Candlestick chart with entry / target / stop overlays", icon="📈")
+    ch_c1, ch_c2, ch_c3 = st.columns([3, 2, 2])
+    with ch_c1:
+        chart_pair_opts = [r["pair"] for r in sorted_results]
+        chart_pair = st.selectbox("Pair", chart_pair_opts, key="chart_pair_select")
+    with ch_c2:
+        _default_tf_idx = (
+            model.TIMEFRAMES.index("1h") if "1h" in model.TIMEFRAMES else 0
+        )
+        chart_tf = st.selectbox(
+            "Timeframe", model.TIMEFRAMES, index=_default_tf_idx, key="chart_tf_select"
+        )
+    with ch_c3:
+        st.write("")
+        load_chart = st.button(
+            "Load Chart", type="primary", use_container_width=True, key="btn_load_chart"
+        )
+
+    if load_chart:
+        try:
+            exchange = model.get_exchange_instance(model.TA_EXCHANGE)
+            if exchange:
+                with st.spinner(f"Fetching {chart_pair} {chart_tf}..."):
+                    ohlcv = exchange.fetch_ohlcv(chart_pair, chart_tf, limit=250)
+                r_sel = next((r for r in results if r["pair"] == chart_pair), {})
+                st.session_state["chart_html"] = _chart.build_chart_html(
+                    ohlcv, chart_pair, chart_tf,
+                    entry=r_sel.get("entry"),
+                    stop=r_sel.get("stop_loss"),
+                    target=r_sel.get("exit"),
+                )
+                st.session_state["chart_pair_label"] = f"{chart_pair} · {chart_tf}"
+            else:
+                st.error("Exchange unavailable — cannot load chart.")
+        except Exception as e:
+            st.error(f"Chart load failed: {e}")
+
+    _chart_html = st.session_state.get("chart_html")
+    if _chart_html:
+        _chart_label = st.session_state.get("chart_pair_label", "")
+        if _chart_label:
+            st.caption(
+                f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
+            )
+        st.components.v1.html(_chart_html, height=560, scrolling=False)
+
+    st.markdown("---")
+
+    # Export buttons
+    if results:
+        df_export = pd.DataFrame([{k: v for k, v in r.items() if k != "timeframes"} for r in results])
+        col_csv, col_json, col_pdf = st.columns(3)
+        with col_csv:
+            st.download_button(
+                "⬇ Download CSV",
+                data=df_export.to_csv(index=False),
+                file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with col_json:
+            st.download_button(
+                "⬇ Download JSON",
+                data=json.dumps(results, default=_numpy_serializer, indent=2),
+                file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with col_pdf:
+            ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
+            if st.session_state.get("_scan_pdf_ts") != ts_str:
+                st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
+                st.session_state["_scan_pdf_ts"] = ts_str
+            st.download_button(
+                "⬇ Download PDF",
+                data=st.session_state["_scan_pdf_bytes"],
+                file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+    # ── Autonomous Agent Status Panel ─────────────────────────────────────────
+    _agent_cfg = _alerts.load_alerts_config()
+    if _agent_cfg.get("agent_enabled", False):
+        # Auto-start supervisor if enabled in config and not already running
+        try:
+            if _agent is not None and not _agent.supervisor.is_running():
+                _agent.supervisor.start()
+        except Exception:
+            pass
+        st.markdown("---")
+        _ui.section_header("Autonomous Agent", "24/7 AI trading agent status", icon="🤖")
+        try:
+            _ag_st = _agent.supervisor.status() if _agent is not None else {}
+        except Exception:
+            _ag_st = {}
+        _ag_c1, _ag_c2, _ag_c3, _ag_c4 = st.columns(4)
+        _ag_c1.metric(
+            "Status",
+            "🟢 RUNNING" if _ag_st.get("running") else "🔴 STOPPED",
+            delta="LangGraph" if _ag_st.get("langgraph") else "Fallback pipeline",
+            delta_color="normal",
+        )
+        _ag_c2.metric("Total Cycles", _ag_st.get("cycles_total", 0))
+        _ag_c3.metric("Last Decision", _ag_st.get("last_decision") or "—")
+        _ag_c4.metric("Restarts", _ag_st.get("restart_count", 0))
+        if (_ag_st.get("last_run_ts") or 0) > 0:
+            _last_ago = int(time.time() - _ag_st["last_run_ts"])
+            st.caption(
+                f"Last pair: **{_ag_st.get('last_pair', '')}** "
+                f"| {_last_ago}s ago "
+                f"| Dry-run: {'ON' if _agent_cfg.get('agent_dry_run', True) else 'OFF'}"
+            )
+        with st.expander("Recent Agent Decisions", expanded=False):
+            try:
+                _ag_log_df = _db.get_agent_log_df(limit=50)
+                if _ag_log_df.empty:
+                    st.caption("No decisions recorded yet.")
+                else:
+                    _show_cols = [c for c in ["logged_at", "pair", "direction",
+                                              "confidence", "claude_decision",
+                                              "action_taken", "claude_rationale"]
+                                  if c in _ag_log_df.columns]
+                    st.dataframe(_ag_log_df[_show_cols], use_container_width=True, hide_index=True)
+            except Exception as _ae:
+                st.caption(f"Agent log unavailable: {_ae}")
+    else:
+        # Config was disabled — stop the running supervisor if active
+        try:
+            if _agent is not None and _agent.supervisor.is_running():
+                _agent.supervisor.stop()
+        except Exception:
+            pass
+
+    # ── Auto-refresh trigger (non-blocking) ──
+    if st.session_state.get("auto_refresh_enabled"):
+        interval = st.session_state.get("auto_refresh_interval", 30)
+        _ar_key = "auto_refresh_last_run"
+        _last = st.session_state.get(_ar_key, 0.0)
+        _now = time.time()
+        _elapsed = _now - _last
+        _remaining = max(0, interval - int(_elapsed))
+        st.caption(f"Auto-refresh in {_remaining}s  |  toggle off in sidebar to pause")
+        if _elapsed >= interval:
+            st.session_state[_ar_key] = _now
+            st.rerun()
+        else:
+            # Sleep 1s then rerun to decrement the countdown — avoids blocking the UI
+            # for the full interval while keeping server-side polling lightweight.
+            time.sleep(1)
+            st.rerun()
+
+
+def _progress_cb(done, total, pair_name):
+    """Called from background thread — updates module-level dict and status file."""
+    with _scan_lock:
+        _scan_state["progress"] = done
+        _scan_state["progress_pair"] = pair_name
+    _write_scan_status(running=True, progress=done, pair=pair_name)
+
+
+def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
+    """Send Telegram / email / Discord alerts for each closed paper position.
+
+    Called after model.update_positions() returns a non-empty closed list, both
+    from the automated scan thread and from the manual 'Check Exits & Refresh' button.
+    """
+    if not closed:
+        return
+    if cfg is None:
+        cfg = _alerts.load_alerts_config()
+    for _pos in closed:
+        _pair   = _pos.get("pair", "?")
+        _dir    = _pos.get("direction", "?")
+        _reason = _pos.get("reason", "?")
+        _pnl    = float(_pos.get("pnl_pct") or 0.0)
+        _entry  = float(_pos.get("entry") or 0.0)
+        _exit_p = float(_pos.get("exit") or 0.0)
+        _emoji  = "✅" if _pnl >= 0 else "❌"
+        _msg = (
+            f"{_emoji} Position Closed — {_pair}\n"
+            f"Direction: {_dir} | Reason: {_reason}\n"
+            f"Entry: {_entry:,.5g}  →  Exit: {_exit_p:,.5g}\n"
+            f"P&L: {_pnl:+.2f}%"
+        )
+        # Telegram
+        if cfg.get("telegram_enabled"):
+            try:
+                _alerts.send_telegram(
+                    cfg.get("telegram_token", ""),
+                    cfg.get("telegram_chat_id", ""),
+                    _msg,
+                )
+            except Exception as _e:
+                logging.warning("[ExitAlert] Telegram failed: %s", _e)
+        # Email
+        if cfg.get("email_enabled"):
+            try:
+                _alerts.send_email_alert(
+                    cfg.get("email_from", ""),
+                    cfg.get("email_pass", ""),
+                    cfg.get("email_to", ""),
+                    f"[Crypto Signal] Position Closed: {_pair} {_pnl:+.2f}%",
+                    _msg,
+                )
+            except Exception as _e:
+                logging.warning("[ExitAlert] Email failed: %s", _e)
+        # Discord
+        if cfg.get("discord_enabled"):
+            try:
+                _alerts.send_discord(
+                    cfg.get("discord_webhook_url", ""),
+                    _msg,
+                )
+            except Exception as _e:
+                logging.warning("[ExitAlert] Discord failed: %s", _e)
+
+
+def _run_scan_thread():
+    """Background scan thread — writes results to JSON file (survives Streamlit reloads)."""
+    with _scan_lock:
+        _scan_state["running"] = True
+        _scan_state["progress"] = 0
+        _scan_state["progress_pair"] = f"Connecting to {model.TA_EXCHANGE.upper()}..."
+    _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
+    try:
+        results = model.run_scan(progress_callback=_progress_cb)
+        model.append_to_master(results)
+        # F1/F2/F4/F6/F7: resolve past outcomes, update weights, check drift
+        try:
+            model.run_feedback_loop()
+        except Exception as _fb_err:
+            logging.warning(f"Feedback loop error: {_fb_err}")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _write_scan_results(results)
+        _write_scan_status(running=False, timestamp=ts, error=None)
+        # Check paper position exits using fresh scan prices
+        try:
+            _scan_px = {r["pair"]: r.get("price_usd", 0) for r in results if r.get("price_usd")}
+            if _scan_px:
+                _scan_closed = model.update_positions(_scan_px)
+                if _scan_closed:
+                    logging.info("[App] Auto-closed %d position(s) from scan prices", len(_scan_closed))
+        except Exception as _pos_err:
+            logging.warning("[App] Position exit check error: %s", _pos_err)
+            _scan_closed = []
+        # BUG-H06: each alert channel in its own try/except so one failure doesn't kill the others
+        cfg = _alerts.load_alerts_config()
+        # Send exit alerts for positions closed above
+        if _scan_closed:
+            try:
+                _send_exit_alerts(_scan_closed, cfg)
+            except Exception as _e:
+                logging.warning("[App] Exit alert failed: %s", _e)
+        try:
+            _alerts.send_scan_alerts(results, cfg)
+        except Exception as _e:
+            logging.warning("[App] Telegram alert failed: %s", _e)
+        try:
+            _alerts.send_scan_email_alerts(results, cfg)
+        except Exception as _e:
+            logging.warning("[App] Email alert failed: %s", _e)
+        try:
+            _alerts.send_scan_discord_alerts(results, cfg)
+        except Exception as _e:
+            logging.warning("[App] Discord alert failed: %s", _e)
+        try:
+            _alerts.check_watchlist_alerts(results, cfg)
+        except Exception as _e:
+            logging.warning("[App] Watchlist alert check failed: %s", _e)
+    except Exception as e:
+        # Don't overwrite good prior results — only update status with error
+        _write_scan_status(running=False, error=str(e))
+    finally:
+        with _scan_lock:
+            _scan_state["running"] = False
+
+
+def _scheduled_scan():
+    """Entry point for APScheduler — enforces quiet hours, then delegates to _run_scan_thread."""
+    cfg = _alerts.load_alerts_config()
+    if cfg.get("autoscan_quiet_hours_enabled"):
+        now_str = datetime.utcnow().strftime("%H:%M")
+        qs = cfg.get("autoscan_quiet_start", "22:00")
+        qe = cfg.get("autoscan_quiet_end", "06:00")
+        if _in_quiet_hours(now_str, qs, qe):
+            logging.info("[AutoScan] Skipped — quiet hours active (%s–%s UTC)", qs, qe)
+            return
+    _run_scan_thread()
+
+
+def _start_scan():
+    # BUG-C06: guard against duplicate threads from multiple browser tabs
+    with _scan_lock:
+        if _scan_state["running"]:
+            return
+        _scan_state["running"] = True
+    st.session_state["scan_running"] = True
+    st.session_state["scan_error"] = None
+    st.session_state["scan_results"] = []
+    # Clear old cache so stale results don't show during new scan
+    _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
+    try:
+        if os.path.exists(_SCAN_CACHE_FILE):
+            os.remove(_SCAN_CACHE_FILE)
+    except Exception:
+        pass
+    t = threading.Thread(target=_run_scan_thread, daemon=True)
+    t.start()
+
+# ──────────────────────────────────────────────
+# PAGE 2: CONFIG EDITOR
+# ──────────────────────────────────────────────
+def page_config():
+    st.markdown(
+        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        'letter-spacing:-0.5px;margin-bottom:0">Config Editor</h1>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Changes are saved to config_overrides.json and applied on next scan.")
+
+    overrides = {}
+
+    # ── Trading Pairs ──
+    _ui.section_header("Trading Pairs", "Select which crypto pairs to include in each scan", icon="🪙")
+    _common_pairs = [
+        'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT',
+        'ADA/USDT', 'AVAX/USDT', 'MATIC/USDT', 'LINK/USDT', 'LTC/USDT',
+        'DOT/USDT', 'UNI/USDT', 'ATOM/USDT', 'FIL/USDT', 'NEAR/USDT',
+    ]
+    # Include any currently active pairs not in the preset list so they appear in the options
+    _extra_active = [p for p in model.PAIRS if p not in _common_pairs]
+    _pair_options = _common_pairs + _extra_active + [
+        p for p in st.session_state.get("_custom_pairs_added", [])
+        if p not in _common_pairs and p not in _extra_active
+    ]
+    _default_pairs = [p for p in model.PAIRS if p in _pair_options]
+    selected_pairs = st.multiselect(
+        "Select pairs to scan", options=_pair_options,
+        default=_default_pairs, key="cfg_pairs"
+    )
+    # Custom pair entry — add any SYMBOL/USDT not in the predefined list
+    _cp1, _cp2 = st.columns([3, 1])
+    with _cp1:
+        _custom_pair_input = st.text_input(
+            "Add custom pair (e.g. PEPE/USDT)", value="",
+            placeholder="TOKEN/USDT", key="cfg_custom_pair_input",
+            help="Type any SYMBOL/QUOTE pair and click Add. It will be added to the list above.",
+        )
+    with _cp2:
+        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+        if st.button("Add Pair", key="cfg_add_custom_pair", use_container_width=True):
+            _cp_val = _custom_pair_input.strip().upper().replace(" ", "")
+            if "/" not in _cp_val:
+                _cp_val = _cp_val + "/USDT"
+            if _cp_val and _cp_val not in _pair_options:
+                _added = list(st.session_state.get("_custom_pairs_added", []))
+                _added.append(_cp_val)
+                st.session_state["_custom_pairs_added"] = _added
+                st.rerun()
+            elif _cp_val in _pair_options:
+                st.info(f"{_cp_val} is already in the list.")
+    overrides["PAIRS"] = selected_pairs
+
+    # ── Timeframes ──
+    _ui.section_header("Timeframes", "Timeframes used for multi-timeframe signal analysis", icon="⏱️")
+    tf_options = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M']
+    selected_tfs = st.multiselect(
+        "Select timeframes", options=tf_options,
+        default=model.TIMEFRAMES, key="cfg_tfs"
+    )
+    overrides["TIMEFRAMES"] = selected_tfs
+
+    # ── TA Exchange ──
+    _ui.section_header("Data Source Exchange", "OHLCV data provider for technical analysis", icon="🔗")
+    exchange_options = ['kraken', 'binance', 'coinbase', 'kucoin', 'okx', 'gemini', 'bitstamp']
+    ta_ex = st.selectbox("TA Exchange (OHLCV source)", exchange_options,
+                         index=exchange_options.index(model.TA_EXCHANGE) if model.TA_EXCHANGE in exchange_options else 0)
+    overrides["TA_EXCHANGE"] = ta_ex
+
+    # ── Risk Parameters ──
+    _ui.section_header("Risk Parameters", "Position sizing, Kelly Criterion inputs, and exposure limits", icon="⚖️")
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        portfolio = st.number_input("Portfolio Size (USD)", min_value=100.0, max_value=10_000_000.0,
+                                    value=float(model.PORTFOLIO_SIZE_USD), step=500.0,
+                                    help=_ui.HELP_PORTFOLIO_SIZE)
+        overrides["PORTFOLIO_SIZE_USD"] = portfolio
+    with r2:
+        risk_pct = st.number_input("Risk Per Trade (%)", min_value=0.1, max_value=10.0,
+                                   value=float(model.RISK_PER_TRADE_PCT), step=0.1,
+                                   help=_ui.HELP_RISK_PER_TRADE)
+        overrides["RISK_PER_TRADE_PCT"] = risk_pct
+    with r3:
+        max_exp = st.number_input("Max Total Exposure (%)", min_value=10.0, max_value=100.0,
+                                  value=float(model.MAX_TOTAL_EXPOSURE_PCT), step=5.0,
+                                  help=_ui.HELP_MAX_EXPOSURE)
+        overrides["MAX_TOTAL_EXPOSURE_PCT"] = max_exp
+
+    r4, r5 = st.columns(2)
+    with r4:
+        max_pos_cap = st.number_input("Max Position Cap (%)", min_value=5.0, max_value=100.0,
+                                      value=float(model.MAX_POSITION_PCT_CAP), step=5.0,
+                                      help=_ui.HELP_MAX_POS_CAP)
+        overrides["MAX_POSITION_PCT_CAP"] = max_pos_cap
+    with r5:
+        max_per_pair = st.number_input("Max Open Per Pair", min_value=1, max_value=5,
+                                       value=int(model.MAX_OPEN_PER_PAIR),
+                                       help=_ui.HELP_MAX_PER_PAIR)
+        overrides["MAX_OPEN_PER_PAIR"] = max_per_pair
+
+    # ── Signal Thresholds ──
+    _ui.section_header("Signal Thresholds", "Confidence and alignment thresholds for HIGH-CONF flag and alerts", icon="🎯")
+    t1, t2 = st.columns(2)
+    with t1:
+        hc_thresh = st.slider("High-Confidence Threshold (%)", 50, 90,
+                              int(model.HIGH_CONF_THRESHOLD), step=1,
+                              help=_ui.HELP_HIGH_CONF_THRESH)
+        overrides["HIGH_CONF_THRESHOLD"] = float(hc_thresh)
+    with t2:
+        mtf_thresh = st.slider("MTF Alignment Threshold (%)", 10, 80,
+                               int(model.HIGH_MTF_THRESHOLD), step=5,
+                               help=_ui.HELP_MTF_THRESH)
+        overrides["HIGH_MTF_THRESHOLD"] = float(mtf_thresh)
+
+    # ── Indicator Weights ──
+    _ui.section_header("Indicator Weights", "How much each component contributes to the confidence score (0–1 scale, or 0–30 for bonus components)", icon="🧮")
+    w_cols = st.columns(3)
+    new_weights = {}
+    weight_defs = [
+        ("core", "Core (RSI/MACD/BB)", 0.0, 1.0, 0.01),
+        ("momentum", "Momentum", 0.0, 1.0, 0.01),
+        ("stoch", "Stochastic", 0.0, 1.0, 0.01),
+        ("adx", "ADX", 0.0, 1.0, 0.01),
+        ("vwap_ich", "VWAP/Ichimoku", 0.0, 1.0, 0.01),
+        ("fib", "Fibonacci", 0.0, 1.0, 0.01),
+        ("div", "MACD Divergence", 0.0, 1.0, 0.01),
+        ("supertrend", "SuperTrend", 0.0, 30.0, 0.5),
+        ("sr_breakout", "S/R Breakout", 0.0, 30.0, 0.5),
+        ("regime", "Regime", 0.0, 30.0, 0.5),
+        ("bonus", "Bonus", 0.0, 5.0, 0.1),
+        ("fng", "Fear & Greed", 0.0, 1.0, 0.01),
+        ("onchain", "On-Chain", 0.0, 1.0, 0.01),
+        ("agents", "Multi-Agent", 0.0, 1.0, 0.01),
+        ("stat_arb", "Stat Arb", 0.0, 1.0, 0.01),
+    ]
+    for idx, (key, label, mn, mx, step) in enumerate(weight_defs):
+        with w_cols[idx % 3]:
+            cur = float(model.weights.get(key, model.DEFAULT_WEIGHTS.get(key, 0)))
+            new_weights[key] = st.slider(label, mn, mx, cur, step=step, key=f"w_{key}")
+    overrides["_weights"] = new_weights
+
+    # ── Correlation Filter ──
+    _ui.section_header("Correlation Filter", "Reduces position size for assets highly correlated with BTC", icon="🔗")
+    cr1, cr2 = st.columns(2)
+    with cr1:
+        corr_thresh = st.slider("BTC Correlation Threshold", 0.0, 1.0,
+                                float(model.CORR_THRESHOLD), step=0.05,
+                                help=_ui.HELP_CORR_THRESH)
+        overrides["CORR_THRESHOLD"] = corr_thresh
+    with cr2:
+        corr_lb = st.number_input("Correlation Lookback (days)", 5, 90,
+                                  int(model.CORR_LOOKBACK_DAYS),
+                                  help=_ui.HELP_CORR_LB)
+        overrides["CORR_LOOKBACK_DAYS"] = corr_lb
+
+    # ── Backtest Settings ──
+    _ui.section_header("Backtest Settings", "Fee model, slippage, holding period, and stop mode for historical simulation", icon="🔬")
+    b1, _ = st.columns(2)
+    with b1:
+        hold_days = st.number_input("Backtest Hold Days", 1, 60,
+                                    int(model.BACKTEST_HOLD_DAYS),
+                                    help=_ui.HELP_HOLD_DAYS)
+        overrides["BACKTEST_HOLD_DAYS"] = hold_days
+
+    st.caption("OKX defaults: Taker 0.05%, Maker 0.02%, Slippage 0.05% per side.")
+    b_fee1, b_fee2, b_fee3 = st.columns(3)
+    with b_fee1:
+        taker_fee = st.number_input("Taker Fee (fraction)", 0.0, 0.005,
+                                    float(model.TAKER_FEE_PCT), step=0.0001, format="%.4f",
+                                    help="Market order / stop fill fee. OKX default: 0.0005")
+        overrides["TAKER_FEE_PCT"] = taker_fee
+    with b_fee2:
+        maker_fee = st.number_input("Maker Fee (fraction)", 0.0, 0.005,
+                                    float(model.MAKER_FEE_PCT), step=0.0001, format="%.4f",
+                                    help="Limit order / target fill fee. OKX default: 0.0002")
+        overrides["MAKER_FEE_PCT"] = maker_fee
+    with b_fee3:
+        slippage = st.number_input("Slippage (fraction)", 0.0, 0.01,
+                                   float(model.SLIPPAGE_PCT), step=0.0001, format="%.4f",
+                                   help="Market impact per side. Conservative default: 0.0005")
+        overrides["SLIPPAGE_PCT"] = slippage
+
+    b3, b4 = st.columns(2)
+    with b3:
+        trailing_on = st.checkbox("Enable Trailing Stops in Backtest",
+                                  value=bool(model.TRAILING_STOP_ENABLED),
+                                  help="Stop loss advances with price to lock in profits. "
+                                       "More realistic than fixed stops.")
+        overrides["TRAILING_STOP_ENABLED"] = trailing_on
+    with b4:
+        dd_threshold = st.number_input(
+            "Drawdown Circuit Breaker (%)", 5.0, 50.0,
+            float(model.DRAWDOWN_CIRCUIT_BREAKER_PCT), step=1.0,
+            help="If paper trade portfolio drawdown exceeds this %, "
+                 "all new scan signals are downgraded to NEUTRAL (no entries)."
+        )
+        overrides["DRAWDOWN_CIRCUIT_BREAKER_PCT"] = dd_threshold
+
+    st.markdown("---")
+
+    # ── ML Weight Optimizer ──
+    _ui.section_header("ML Weight Optimizer", "Bayesian optimization finds indicator weights that maximize directional accuracy on historical data", icon="🤖")
+    st.caption(
+        "Bayesian optimization over 300 bars of historical OHLCV. "
+        "Finds weights that maximize directional accuracy (signal vs next-5-bar price move). "
+        "Optimizes: core, momentum, stoch, adx, vwap_ich, supertrend, regime, bonus. "
+        "Other weights remain unchanged. Saves result to dynamic_weights.json."
+    )
+    opt_c1, opt_c2, opt_c3 = st.columns(3)
+    with opt_c1:
+        opt_trials = st.number_input("Trials", min_value=10, max_value=500,
+                                     value=50, step=10, key="opt_trials")
+    with opt_c2:
+        opt_pair = st.selectbox("Training pair", model.PAIRS,
+                                index=0, key="opt_pair")
+    with opt_c3:
+        opt_tf = st.selectbox("Timeframe", model.TIMEFRAMES,
+                              index=0, key="opt_tf")
+
+    if st.button("Run Optuna Optimization", type="primary", use_container_width=True):
+        with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}..."):
+            result = model.run_optuna_weight_optimization(
+                n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
+            )
+        if 'error' in result:
+            st.error(f"Optimization failed: {result['error']}")
+        else:
+            st.success(
+                f"Optimization complete — Best Sharpe score: **{result['best_score']}** "
+                f"over {result['train_bars']} training bars ({opt_trials} trials)"
+            )
+            st.json(result['best_weights'])
+            st.info("Weights saved to dynamic_weights.json and applied immediately. "
+                    "Reload this page to see updated sliders.")
+
+    # ── LightGBM Feedback Retrain ──
+    st.markdown("---")
+    _ui.section_header("LightGBM Feedback Retrain",
+                       "Retrain the LightGBM agent using real resolved trade outcomes (was_correct) instead of in-sample price prediction",
+                       icon="🧠")
+    st.caption(
+        "Requires ≥50 resolved feedback rows (signals with actual outcome written back). "
+        "Run the Feedback Loop first to resolve pending outcomes. "
+        "The retrained model is cached for 24h and used automatically in the next scan."
+    )
+    lgbm_info = model.get_lgbm_feedback_cache_info() if hasattr(model, 'get_lgbm_feedback_cache_info') else {}
+    if lgbm_info.get("trained_at"):
+        st.info(f"Current model: trained {lgbm_info['trained_at']} on {lgbm_info['n_samples']} samples")
+
+    if st.button("Retrain LightGBM from Feedback", type="secondary", use_container_width=True, key="btn_lgbm_retrain"):
+        with st.spinner("Retraining LightGBM on resolved trade outcomes..."):
+            lgbm_r = model.retrain_lgbm_from_feedback()
+        if lgbm_r.get("success"):
+            st.success(lgbm_r["message"])
+        else:
+            st.warning(f"Retrain skipped: {lgbm_r.get('message', 'Unknown error')}")
+
+    # ── Paid API Keys ──
+    st.markdown("---")
+    _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
+    st.caption(
+        "Add keys here to activate premium data feeds. "
+        "Keys are stored in alerts_config.json (local only, never sent anywhere). "
+        "Leave blank to use free-tier fallbacks."
+    )
+    _api_cfg = _alerts.load_alerts_config()
+    ak1, ak2 = st.columns(2)
+    with ak1:
+        lc_key = st.text_input(
+            "LunarCrush Key", value=_api_cfg.get("lunarcrush_key", ""),
+            type="password", placeholder="Social sentiment: galaxy score, alt rank",
+            key="lc_key"
+        )
+        cq_key = st.text_input(
+            "CryptoQuant Key", value=_api_cfg.get("cryptoquant_key", ""),
+            type="password", placeholder="BTC/ETH exchange flow (inflow/outflow)",
+            key="cq_key"
+        )
+        cp_key = st.text_input(
+            "CryptoPanic Key", value=_api_cfg.get("cryptopanic_key", ""),
+            type="password", placeholder="Free news sentiment — sign up at cryptopanic.com",
+            key="cp_key"
+        )
+    with ak2:
+        cgl_key = st.text_input(
+            "Coinglass Key", value=_api_cfg.get("coinglass_key", ""),
+            type="password", placeholder="Liquidation data (longs vs shorts)",
+            key="cgl_key"
+        )
+        gn_key = st.text_input(
+            "Glassnode Key", value=_api_cfg.get("glassnode_key", ""),
+            type="password", placeholder="Real SOPR, MVRV-Z, active addresses",
+            key="gn_key"
+        )
+    if st.button("Save API Keys", use_container_width=True):
+        _api_cfg.update({
+            "lunarcrush_key":   lc_key.strip(),
+            "coinglass_key":    cgl_key.strip(),
+            "cryptoquant_key":  cq_key.strip(),
+            "glassnode_key":    gn_key.strip(),
+            "cryptopanic_key":  cp_key.strip(),
+        })
+        _alerts.save_alerts_config(_api_cfg)
+        st.success("API keys saved.")
+    st.caption(
+        "Token unlock data (Tokenomist.ai) requires no key — automatically checked. "
+        "CryptoPanic: free token (cryptopanic.com). "
+        "LunarCrush free tier: 10 req/min. Coinglass/CryptoQuant/Glassnode require paid plans."
+    )
+
+    # ── Auto-Scan Scheduler ────────────────────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header(
+        "Auto-Scan Scheduler",
+        "Automatic background scanning on a configurable interval with optional UTC quiet hours",
+        icon="⏰",
+    )
+    _sched_cfg = _alerts.load_alerts_config()
+    with st.form("autoscan_form"):
+        _sc1, _sc2 = st.columns(2)
+        with _sc1:
+            _sched_on = st.toggle(
+                "Enable Auto-Scan",
+                value=_sched_cfg.get("autoscan_enabled", False),
+            )
+            _sched_interval_opts = {
+                "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
+                "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
+            }
+            _sched_interval_label = st.selectbox(
+                "Scan Interval",
+                options=list(_sched_interval_opts.keys()),
+                index=list(_sched_interval_opts.values()).index(
+                    min(_sched_interval_opts.values(),
+                        key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 60)))
+                ),
+                disabled=not _sched_on,
+            )
+        with _sc2:
+            _quiet_on = st.toggle(
+                "Quiet Hours (UTC)",
+                value=_sched_cfg.get("autoscan_quiet_hours_enabled", False),
+                disabled=not _sched_on,
+                help="Scheduled scans are skipped during this UTC time window.",
+            )
+            _sqc1, _sqc2 = st.columns(2)
+            with _sqc1:
+                _quiet_start = st.text_input(
+                    "Start HH:MM",
+                    value=_sched_cfg.get("autoscan_quiet_start", "22:00"),
+                    disabled=not (_sched_on and _quiet_on),
+                )
+            with _sqc2:
+                _quiet_end = st.text_input(
+                    "End HH:MM",
+                    value=_sched_cfg.get("autoscan_quiet_end", "06:00"),
+                    disabled=not (_sched_on and _quiet_on),
+                )
+        if st.form_submit_button("💾 Save Scheduler Config", type="primary"):
+            _sched_cfg.update({
+                "autoscan_enabled":            _sched_on,
+                "autoscan_interval_minutes":   _sched_interval_opts[_sched_interval_label],
+                "autoscan_quiet_hours_enabled": _quiet_on,
+                "autoscan_quiet_start":        _quiet_start.strip(),
+                "autoscan_quiet_end":          _quiet_end.strip(),
+            })
+            _alerts.save_alerts_config(_sched_cfg)
+            st.success("Scheduler config saved. Toggle will apply on next Streamlit rerun.")
+
+    _next_t = _get_next_autoscan_time()
+    if _next_t:
+        try:
+            _next_t = _next_t.replace(tzinfo=None)
+        except Exception:
+            pass
+        _delta = _next_t - datetime.now()
+        _m = max(0, int(_delta.total_seconds() // 60))
+        _s = max(0, int(_delta.total_seconds() % 60))
+        st.info(f"Scheduler active — next auto-scan fires in **{_m}m {_s}s**")
+    else:
+        st.caption("Scheduler inactive — enable via the sidebar ⏰ Auto-Scan toggle.")
+
+    st.markdown("---")
+    save_col, reset_col = st.columns(2)
+    with save_col:
+        if st.button("💾 Save Config", type="primary", use_container_width=True):
+            _save_config(overrides)
+    with reset_col:
+        if st.button("↺ Reset to Defaults", use_container_width=True):
+            _reset_config()
+
+    # ── SQLite Database Stats ──────────────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header("Database Health", "SQLite WAL-mode database — row counts and disk usage", icon="🗄️")
+    try:
+        stats = _db.get_db_stats()
+        dc1, dc2, dc3, dc4, dc5 = st.columns(5)
+        dc1.metric("Feedback Log",    f"{stats.get('feedback_log', 0):,} rows")
+        dc2.metric("Signal History",  f"{stats.get('daily_signals', 0):,} rows")
+        dc3.metric("Backtest Trades", f"{stats.get('backtest_trades', 0):,} rows")
+        dc4.metric("Paper Trades",    f"{stats.get('paper_trades', 0):,} rows")
+        dc5.metric("DB Size",         f"{stats.get('db_size_kb', 0):,} KB")
+        with st.expander("All table counts"):
+            st.json({k: v for k, v in stats.items() if k != 'db_size_kb'})
+    except Exception as e:
+        st.warning(f"DB stats unavailable: {e}")
+
+    # ── FastAPI REST Server ────────────────────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header("REST API Server", "FastAPI + Uvicorn — 14 endpoints for external integrations, TradingView webhooks", icon="🚀")
+    st.caption(
+        "Run `python -m uvicorn api:app --host 0.0.0.0 --port 8000` alongside the Streamlit app. "
+        "Interactive docs at **http://localhost:8000/docs**."
+    )
+
+    _api_cfg = _alerts.load_alerts_config()
+    with st.form("api_server_form"):
+        api_key_val = st.text_input(
+            "API Key",
+            value=_api_cfg.get("api_key", ""),
+            type="password",
+            help="Clients must pass this as the `X-API-Key` header. Leave blank to disable auth (local dev only).",
+        )
+        ac1, ac2 = st.columns(2)
+        api_host_val = ac1.text_input(
+            "Host",
+            value=_api_cfg.get("api_host", "0.0.0.0"),
+            help="0.0.0.0 = all interfaces. Use 127.0.0.1 for local-only.",
+        )
+        api_port_val = ac2.number_input(
+            "Port",
+            min_value=1024,
+            max_value=65535,
+            value=int(_api_cfg.get("api_port", 8000)),
+            step=1,
+        )
+        if st.form_submit_button("💾 Save API Config", type="primary"):
+            _api_cfg.update({
+                "api_key": api_key_val.strip(),
+                "api_host": api_host_val.strip(),
+                "api_port": int(api_port_val),
+            })
+            _alerts.save_alerts_config(_api_cfg)
+            st.success("API config saved.")
+
+    _host = _api_cfg.get("api_host", "0.0.0.0")
+    _port = int(_api_cfg.get("api_port", 8000))
+    _display_host = "localhost" if _host == "0.0.0.0" else _host
+    with st.expander("Start command + endpoint reference"):
+        config_dir = os.path.dirname(os.path.abspath(model._CONFIG_FILE)) or "."
+        st.code(
+            f"cd \"{config_dir}\"\n"
+            f"python -m uvicorn api:app --host {_host} --port {_port} --reload",
+            language="bash",
+        )
+        st.markdown(f"""
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/health` | No | DB stats + scan status |
+| GET | `/signals` | Yes | Latest scan results (filterable) |
+| GET | `/signals/{{pair}}` | Yes | Single-pair signal |
+| GET | `/signals/history` | Yes | Historical signal log |
+| GET | `/positions` | Yes | Open paper trade positions |
+| GET | `/paper-trades` | Yes | Closed paper trade history |
+| GET | `/backtest` | Yes | Latest backtest metrics |
+| GET | `/backtest/trades` | Yes | Trade log (paginated) |
+| GET | `/backtest/runs` | Yes | All backtest run summaries |
+| GET | `/weights` | Yes | Current indicator weights |
+| GET | `/scan/status` | No | Scan progress |
+| POST | `/scan/trigger` | Yes | Start a background scan |
+| POST | `/webhook/tradingview` | Yes | TradingView strategy webhook |
+| GET | `/alerts/log` | Yes | Alert dispatch audit log |
+
+Swagger UI: **http://{_display_host}:{_port}/docs**
+""")
+
+
+    # ── Live Execution Settings ────────────────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
+    st.caption(
+        "Connect OKX API keys to enable order execution directly from the dashboard. "
+        "Paper mode is always on by default — real orders only fire when "
+        "**LIVE TRADING MODE** is explicitly enabled below."
+    )
+    _exec_ui_cfg = _alerts.load_alerts_config()
+    with st.form("exec_config_form"):
+        _live_on = st.toggle(
+            "🔴 LIVE TRADING MODE",
+            value=bool(_exec_ui_cfg.get("live_trading_enabled", False)),
+            help="OFF = paper simulation only. ON = real orders sent to OKX with real funds.",
+        )
+        if _live_on:
+            st.error("LIVE MODE ENABLED — orders placed here use real funds.")
+        _auto_on = st.toggle(
+            "Auto-Execute on Scan (HIGH_CONF signals only)",
+            value=bool(_exec_ui_cfg.get("auto_execute_enabled", False)),
+            help="After each scan, automatically place orders for HIGH_CONF signals "
+                 "above the threshold. Respects paper/live mode toggle above.",
+        )
+        _auto_conf = st.slider(
+            "Auto-Execute Confidence Threshold (%)",
+            min_value=70, max_value=95,
+            value=int(_exec_ui_cfg.get("auto_execute_min_confidence", 80)),
+            step=5,
+            disabled=not _auto_on,
+        )
+        st.markdown("**OKX API Keys**")
+        st.caption(
+            "Create a key at okx.com → API Management. "
+            "Grant: Read + Trade + Futures. Never grant Withdrawal permission."
+        )
+        st.warning(
+            "Security note: API keys are stored in alerts_config.json in plain text. "
+            "Do not commit this file to version control. "
+            "Add alerts_config.json to your .gitignore."
+        )
+        _ek1, _ek2, _ek3 = st.columns(3)
+        _okx_key  = _ek1.text_input("API Key",     value=_exec_ui_cfg.get("okx_api_key", ""),
+                                    type="password", placeholder="OKX API Key")
+        _okx_sec  = _ek2.text_input("Secret",      value=_exec_ui_cfg.get("okx_secret", ""),
+                                    type="password", placeholder="OKX Secret")
+        _okx_pass = _ek3.text_input("Passphrase",  value=_exec_ui_cfg.get("okx_passphrase", ""),
+                                    type="password", placeholder="API Passphrase")
+        _ord_type = st.selectbox(
+            "Default Order Type", ["market", "limit"],
+            index=0 if _exec_ui_cfg.get("default_order_type", "market") == "market" else 1,
+        )
+        if st.form_submit_button("💾 Save Execution Config", type="primary"):
+            _exec_ui_cfg.update({
+                "live_trading_enabled":        _live_on,
+                "auto_execute_enabled":        _auto_on,
+                "auto_execute_min_confidence": _auto_conf,
+                "okx_api_key":                 _okx_key.strip(),
+                "okx_secret":                  _okx_sec.strip(),
+                "okx_passphrase":              _okx_pass.strip(),
+                "default_order_type":          _ord_type,
+            })
+            _alerts.save_alerts_config(_exec_ui_cfg)
+            st.success("Execution config saved.")
+
+    if st.button("🔌 Test OKX Connection", use_container_width=False):
+        _es = _exec.get_status()
+        if not _es.get("keys_configured", False):
+            st.warning("No API keys saved — enter and save keys first.")
+        else:
+            with st.spinner("Connecting to OKX..."):
+                _conn = _exec.test_connection()
+            if _conn["ok"]:
+                st.success(f"Connected! USDT Balance: ${_conn['balance_usdt']:,.2f}")
+            else:
+                st.error(f"Connection failed: {_conn['error']}")
+
+    # ── Autonomous Agent Settings ──────────────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header(
+        "Autonomous AI Agent",
+        "24/7 LangGraph + Claude reasoning loop — approve/reject trades without human interaction",
+        icon="🤖",
+    )
+    st.caption(
+        "The agent runs independently in a background thread, scanning all pairs every "
+        "**interval_seconds** and asking Claude to approve or reject each signal. "
+        "Hard Python risk gates fire before AND after Claude — Claude never calls place_order directly. "
+        "**Dry-run mode** (recommended) logs all decisions without placing orders."
+    )
+    st.warning(
+        "⚠ Enabling live trading via the agent means real orders will be placed 24/7 "
+        "without your review. Start with Dry-run=ON and monitor the Agent Decisions log "
+        "in the Dashboard for at least a few days before disabling dry-run."
+    )
+
+    _ag_ui_cfg = _alerts.load_alerts_config()
+    with st.form("agent_config_form"):
+        _ag_enabled = st.toggle(
+            "🤖 Enable Autonomous Agent",
+            value=bool(_ag_ui_cfg.get("agent_enabled", False)),
+            help="Start the 24/7 agent loop. Pairs are cycled every interval_seconds.",
+        )
+        _ag_dry = st.toggle(
+            "Dry-run (log only — no orders placed)",
+            value=bool(_ag_ui_cfg.get("agent_dry_run", True)),
+            help="When ON, agent logs approve/reject decisions but never calls place_order.",
+        )
+        if _ag_enabled and not _ag_dry:
+            st.error("DRY-RUN IS OFF — approved signals will place real/paper orders.")
+
+        _ag_col1, _ag_col2 = st.columns(2)
+        _ag_interval = _ag_col1.number_input(
+            "Interval (seconds per cycle)",
+            min_value=30, max_value=3600,
+            value=int(_ag_ui_cfg.get("agent_interval_seconds", 60)),
+            step=30,
+            help="Time between complete pair-scan cycles. Min 30s to respect API rate limits.",
+        )
+        _ag_min_conf = _ag_col2.slider(
+            "Min Confidence to Consider (%)",
+            min_value=60, max_value=95,
+            value=int(_ag_ui_cfg.get("agent_min_confidence", 80)),
+            step=5,
+            help="Signals below this threshold are skipped before calling Claude.",
+        )
+        _ag_col3, _ag_col4 = st.columns(2)
+        _ag_max_pos = _ag_col3.number_input(
+            "Max Concurrent Positions",
+            min_value=1, max_value=10,
+            value=int(_ag_ui_cfg.get("agent_max_concurrent_positions", 3)),
+            step=1,
+        )
+        _ag_loss_limit = _ag_col4.number_input(
+            "Daily Loss Limit (%)",
+            min_value=1.0, max_value=20.0,
+            value=float(_ag_ui_cfg.get("agent_daily_loss_limit_pct", 5.0)),
+            step=0.5,
+            help="Agent stops trading for the day when cumulative PnL hits this loss.",
+        )
+        _ag_portfolio = st.number_input(
+            "Portfolio Size (USD)",
+            min_value=100.0,
+            value=float(_ag_ui_cfg.get("agent_portfolio_size_usd", 10_000.0)),
+            step=500.0,
+            help="Used to calculate position sizes when balance cannot be fetched from OKX.",
+        )
+        if st.form_submit_button("💾 Save Agent Config", type="primary"):
+            _ag_ui_cfg.update({
+                "agent_enabled":                  _ag_enabled,
+                "agent_dry_run":                  _ag_dry,
+                "agent_interval_seconds":         int(_ag_interval),
+                "agent_min_confidence":           float(_ag_min_conf),
+                "agent_max_concurrent_positions": int(_ag_max_pos),
+                "agent_daily_loss_limit_pct":     float(_ag_loss_limit),
+                "agent_portfolio_size_usd":       float(_ag_portfolio),
+            })
+            _alerts.save_alerts_config(_ag_ui_cfg)
+            if _agent is not None:
+                if _ag_enabled and not _agent.supervisor.is_running():
+                    _agent.supervisor.start()
+                elif not _ag_enabled and _agent.supervisor.is_running():
+                    _agent.supervisor.stop()
+            st.success("Agent config saved. Refresh Dashboard to see status panel.")
+
+    # Agent runtime controls
+    if _agent is None:
+        st.error("agent.py failed to import — check logs.")
+    else:
+        _ag_c1, _ag_c2 = st.columns(2)
+        with _ag_c1:
+            if st.button("▶ Start Agent Now", use_container_width=True,
+                         disabled=_agent.supervisor.is_running()):
+                _agent.supervisor.start()
+                st.success("Agent started.")
+                st.rerun()
+        with _ag_c2:
+            if st.button("⏹ Stop Agent", use_container_width=True,
+                         disabled=not _agent.supervisor.is_running()):
+                _agent.supervisor.stop()
+                st.warning("Agent stop requested.")
+                st.rerun()
+
+        # Live status summary
+        _ag_live = _agent.supervisor.status()
+        st.markdown(
+            f"**Agent status:** {'🟢 Running' if _ag_live['running'] else '🔴 Stopped'} "
+            f"| Cycles: {_ag_live['cycles_total']} "
+            f"| Last decision: {_ag_live['last_decision'] or '—'} "
+            f"| Restarts: {_ag_live['restart_count']} "
+            f"| Engine: {'LangGraph' if _ag_live.get('langgraph') else 'Fallback pipeline'}"
+        )
+
+
+    # ── Watchlist Alerts ───────────────────────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header(
+        "Watchlist Alerts",
+        "Get notified when a specific coin hits a signal you care about — fires on every scan",
+        icon="🔔",
+    )
+    st.caption(
+        "Each rule fires via Telegram, Discord, and/or Email (whichever channels you have enabled above). "
+        "Use 'ALL' in the coin field to watch every coin in the scan list."
+    )
+
+    _wl_cfg = _alerts.load_alerts_config()
+    _watchlist = _wl_cfg.get("watchlist", [])
+
+    # Add new rule form
+    with st.expander("➕ Add New Watchlist Rule", expanded=False):
+        with st.form("wl_add_form", clear_on_submit=True):
+            _wl_c1, _wl_c2, _wl_c3 = st.columns([2, 2, 1])
+            with _wl_c1:
+                _wl_name = st.text_input("Rule Name", placeholder="e.g. BTC Strong Buy Alert")
+                _wl_pair_opts = ["ALL"] + model.PAIRS
+                _wl_pair = st.selectbox("Coin", _wl_pair_opts, index=0)
+            with _wl_c2:
+                _wl_cond = st.selectbox(
+                    "Signal Condition",
+                    ["ANY", "BUY", "STRONG BUY", "SELL", "STRONG SELL"],
+                    index=0,
+                    help="Alert fires when this coin's signal matches this direction",
+                )
+                _wl_min_conf = st.slider("Min Confidence %", min_value=40, max_value=95, value=70, step=5)
+            with _wl_c3:
+                st.write("")
+                st.write("")
+                _wl_enabled = st.checkbox("Enabled", value=True)
+            _wl_submitted = st.form_submit_button("Add Rule", type="primary", use_container_width=True)
+            if _wl_submitted:
+                if not _wl_name.strip():
+                    st.warning("Please enter a rule name.")
+                else:
+                    _watchlist.append({
+                        "name":           _wl_name.strip(),
+                        "pair":           _wl_pair,
+                        "condition":      _wl_cond,
+                        "min_confidence": _wl_min_conf,
+                        "enabled":        _wl_enabled,
+                    })
+                    _wl_cfg["watchlist"] = _watchlist
+                    _alerts.save_alerts_config(_wl_cfg)
+                    st.success(f"Rule '{_wl_name.strip()}' added.")
+                    st.rerun()
+
+    # Display + manage existing rules
+    if not _watchlist:
+        st.info("No watchlist rules yet — add your first rule above.")
+    else:
+        for _wl_idx, _wl_rule in enumerate(_watchlist):
+            _wl_pill_color = (
+                "#00d4aa" if "BUY" in _wl_rule.get("condition", "") else
+                "#f6465d" if "SELL" in _wl_rule.get("condition", "") else
+                "#6366f1"
+            )
+            _wl_status = "🟢 ON" if _wl_rule.get("enabled", True) else "⚫ OFF"
+            _wl_rc1, _wl_rc2, _wl_rc3 = st.columns([5, 1, 1])
+            with _wl_rc1:
+                st.markdown(
+                    f"""<div style="background:rgba(14,18,30,0.7);border:1px solid rgba(255,255,255,0.07);
+                    border-radius:10px;padding:10px 14px;margin-bottom:4px">
+                    <span style="font-weight:700;color:#e8ecf4">{_wl_rule.get('name','—')}</span>
+                    <span style="background:{_wl_pill_color}22;color:{_wl_pill_color};
+                          border:1px solid {_wl_pill_color}55;border-radius:999px;
+                          font-size:10px;font-weight:700;padding:1px 9px;margin:0 6px">
+                          {_wl_rule.get('condition','ANY')}</span>
+                    <span style="color:rgba(168,180,200,0.55);font-size:12px">
+                        {_wl_rule.get('pair','ALL')} · ≥{_wl_rule.get('min_confidence',70):.0f}% conf · {_wl_status}
+                    </span></div>""",
+                    unsafe_allow_html=True,
+                )
+            with _wl_rc2:
+                _toggle_label = "Disable" if _wl_rule.get("enabled", True) else "Enable"
+                if st.button(_toggle_label, key=f"wl_toggle_{_wl_idx}", use_container_width=True):
+                    _watchlist[_wl_idx]["enabled"] = not _wl_rule.get("enabled", True)
+                    _wl_cfg["watchlist"] = _watchlist
+                    _alerts.save_alerts_config(_wl_cfg)
+                    st.rerun()
+            with _wl_rc3:
+                if st.button("Delete", key=f"wl_del_{_wl_idx}", use_container_width=True):
+                    _watchlist.pop(_wl_idx)
+                    _wl_cfg["watchlist"] = _watchlist
+                    _alerts.save_alerts_config(_wl_cfg)
+                    st.rerun()
+
+
+def _save_config(overrides):
+    weights_override = overrides.pop("_weights", {})
+    try:
+        with open(model._CONFIG_FILE, 'w') as f:
+            json.dump(overrides, f, indent=4)
+        # Save weights separately
+        if weights_override:
+            model.weights.update(weights_override)
+            model.save_weights()
+        model.load_config_overrides()
+        # INT-07: restart WebSocket feed with updated PAIRS list (idempotent)
+        _ws.start(model.PAIRS)
+        st.success("Config saved. Changes applied to next scan.")
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+
+
+def _reset_config():
+    try:
+        if os.path.exists(model._CONFIG_FILE):
+            os.remove(model._CONFIG_FILE)
+        if os.path.exists(model.DYNAMIC_WEIGHTS_FILE):
+            os.remove(model.DYNAMIC_WEIGHTS_FILE)
+        # Clear weights from DB and re-seed with defaults via public API (BUG-15)
+        _db.clear_weights(seed_weights=model.DEFAULT_WEIGHTS)
+        model.weights = model.DEFAULT_WEIGHTS.copy()
+        st.success("Config reset to defaults.")
+    except Exception as e:
+        st.error(f"Reset failed: {e}")
+
+# ──────────────────────────────────────────────
+# PAGE 3: BACKTEST VIEWER
+# ──────────────────────────────────────────────
+def page_backtest():
+    st.markdown(
+        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        'letter-spacing:-0.5px;margin-bottom:0">Backtest Viewer</h1>',
+        unsafe_allow_html=True,
+    )
+
+    run_col, _ = st.columns([2, 6])
+    with run_col:
+        bt_disabled = st.session_state.get("backtest_running", False)
+        if st.button("▶ Run Backtest", disabled=bt_disabled, type="primary", use_container_width=True):
+            _start_backtest()
+
+    if st.session_state.get("backtest_running", False) or _bt_state["running"]:
+        st.info("Running backtest — fetching historical candles for each signal... (2–5 min)")
+        # Detect thread completion and sync to session_state
+        if not _bt_state["running"] and st.session_state.get("backtest_running", False):
+            with _bt_lock:
+                st.session_state["backtest_results"] = _bt_state["results"]
+                st.session_state["backtest_error"] = _bt_state["error"]
+            st.session_state["backtest_running"] = False
+            st.rerun()
+        time.sleep(1)
+        st.rerun()
+
+    if st.session_state.get("backtest_error"):
+        st.error(f"Backtest failed: {st.session_state['backtest_error']}")
+
+    # Show existing results — from session state (fresh run) or DB (prior run)
+    bt_res = st.session_state.get("backtest_results")
+    df_trades = _db.get_backtest_df()
+
+    if bt_res is None and df_trades.empty:
+        st.info("No backtest data yet. Run **▶ Run Backtest** or ensure the daily signals DB table has entries.")
+        return
+
+    # Use session results if available, otherwise load from file
+    metrics = None
+    equity = None
+    if bt_res and isinstance(bt_res, dict):
+        metrics = bt_res.get("metrics")
+        equity = bt_res.get("equity")
+        df_trades = bt_res.get("trades", df_trades)
+
+    if metrics:
+        m = metrics
+        mc = st.columns(6)
+        mc[0].metric("Total Trades", m["total_trades"],
+                     help=_ui.HELP_TOTAL_TRADES)
+        mc[1].metric("Win Rate", f"{m['win_rate']}%",
+                     help=_ui.HELP_WIN_RATE)
+        mc[2].metric("Avg PnL/Trade", f"{m['avg_pnl']}%",
+                     help=_ui.HELP_AVG_PNL)
+        mc[3].metric("Profit Factor", m["profit_factor"],
+                     help=_ui.HELP_PROFIT_FACTOR)
+        mc[4].metric("Sharpe Ratio", m["sharpe"],
+                     help=_ui.HELP_SHARPE)
+        mc[5].metric("Max Drawdown", f"{m['max_drawdown']}%",
+                     help=_ui.HELP_MAX_DRAWDOWN)
+
+        mc2 = st.columns(5)
+        mc2[0].metric("Total Return", f"{m['total_return']}%")
+        mc2[1].metric("Sortino Ratio", m.get("sortino", "N/A"),
+                      help=_ui.HELP_SORTINO)
+        mc2[2].metric("Calmar Ratio", m.get("calmar", "N/A"),
+                      help=_ui.HELP_CALMAR)
+        mc2[3].metric("Max Consec Losses", m.get("max_consec_losses", "N/A"),
+                      help="Longest consecutive losing streak in the backtest. High values indicate drawdown risk from clustering losses.")
+        mc2[4].metric("Expectancy/Trade", f"{m.get('expectancy', 0)}%",
+                      help=_ui.HELP_EXPECTANCY)
+
+        mc3 = st.columns(3)
+        mc3[0].metric("VaR (95%)", f"{m.get('var_95', 'N/A')}%",
+                      help="Value at Risk: worst single-trade loss in the worst 5% of trades.")
+        mc3[1].metric("CVaR (95%)", f"{m.get('cvar_95', 'N/A')}%",
+                      help="Conditional VaR: average loss when VaR threshold is breached (expected shortfall).")
+        trailing_label = "Trailing Stops" if model.TRAILING_STOP_ENABLED else "Fixed Stops"
+        mc3[2].metric("Stop Mode", trailing_label,
+                      help="Trailing: stop advances with price to lock in profits. Fixed: stop stays at initial level.")
+
+        # ── Fee & slippage breakdown ──
+        if m.get("total_fees_usd") is not None:
+            st.markdown("**Fee & Slippage Breakdown**")
+            mf = st.columns(5)
+            mf[0].metric("Gross Return", f"{m.get('gross_return', 'N/A')}%",
+                         help="Total return before exchange fees and slippage.")
+            mf[1].metric("Net Return", f"{m.get('total_return', 'N/A')}%",
+                         help="Total return after fees and slippage. This is what you actually keep.")
+            fee_drag = m.get('fee_drag_pct', 0)
+            mf[2].metric("Fee Drag", f"{fee_drag}%",
+                         delta=f"-{abs(fee_drag)}%" if fee_drag else None,
+                         delta_color="inverse",
+                         help="Gross Return minus Net Return. Total performance lost to exchange fees and slippage.")
+            mf[3].metric("Total Fees ($)", f"${m.get('total_fees_usd', 0):,.2f}",
+                         help=f"Sum of taker ({model.TAKER_FEE_PCT*100:.3f}%) + maker ({model.MAKER_FEE_PCT*100:.3f}%) fees across all trades.")
+            mf[4].metric("Total Slippage ($)", f"${m.get('total_slippage_usd', 0):,.2f}",
+                         help=f"Market impact cost ({model.SLIPPAGE_PCT*100:.3f}% per side) applied to market-order fills.")
+        st.markdown("---")
+
+    # Enhanced Equity Curve with drawdown subplot and win/loss markers
+    if equity and len(equity) > 1:
+        _ui.section_header("Equity Curve", "Portfolio value with drawdown — green dots=wins, red dots=losses", icon="📈")
+
+        _eq = np.array(equity, dtype=float)
+        _x  = list(range(len(_eq)))
+
+        # Compute running peak and drawdown %
+        _peak = np.maximum.accumulate(_eq)
+        _dd   = (_eq - _peak) / _peak * 100  # negative values = drawdown
+
+        # Win/loss markers from trade log
+        _win_x, _win_y, _loss_x, _loss_y = [], [], [], []
+        if not df_trades.empty and "pnl_pct" in df_trades.columns:
+            for _ti, (_tidx, _trow) in enumerate(df_trades.iterrows()):
+                if _ti < len(_eq):
+                    _pnl_val = float(_trow.get("pnl_pct", 0) or 0)
+                    if _pnl_val > 0:
+                        _win_x.append(_ti); _win_y.append(_eq[_ti])
+                    elif _pnl_val < 0:
+                        _loss_x.append(_ti); _loss_y.append(_eq[_ti])
+
+        from plotly.subplots import make_subplots
+        _efig = make_subplots(
+            rows=2, cols=1,
+            row_heights=[0.65, 0.35],
+            shared_xaxes=True,
+            vertical_spacing=0.04,
+        )
+
+        # Row 1: equity curve + initial equity line + win/loss dots
+        _init_eq = float(_eq[0])
+        _efig.add_trace(go.Scatter(
+            x=_x, y=_eq.tolist(), mode="lines", name="Portfolio",
+            line=dict(color="#00d4aa", width=2),
+        ), row=1, col=1)
+        _efig.add_hline(y=_init_eq, line_dash="dot", line_color="#888888",
+                        annotation_text=f"Start ${_init_eq:,.0f}",
+                        annotation_position="bottom right", row=1, col=1)
+        if _win_x:
+            _efig.add_trace(go.Scatter(
+                x=_win_x, y=_win_y, mode="markers", name="Win",
+                marker=dict(color="#00cc96", size=5, symbol="circle"),
+            ), row=1, col=1)
+        if _loss_x:
+            _efig.add_trace(go.Scatter(
+                x=_loss_x, y=_loss_y, mode="markers", name="Loss",
+                marker=dict(color="#ff4b4b", size=5, symbol="circle"),
+            ), row=1, col=1)
+
+        # Row 2: drawdown % (filled red below 0)
+        _efig.add_trace(go.Scatter(
+            x=_x, y=_dd.tolist(), mode="lines", name="Drawdown %",
+            line=dict(color="#ff4b4b", width=1),
+            fill="tozeroy", fillcolor="rgba(255,75,75,0.2)",
+        ), row=2, col=1)
+
+        _efig.update_layout(
+            height=480,
+            margin=dict(l=10, r=10, t=20, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=1.08, font=dict(size=9)),
+            showlegend=True,
+        )
+        _efig.update_yaxes(title_text="Portfolio ($)", row=1, col=1,
+                           gridcolor="#222", tickformat="$,.0f")
+        _efig.update_yaxes(title_text="Drawdown %", row=2, col=1,
+                           gridcolor="#222")
+        _efig.update_xaxes(title_text="Trade #", row=2, col=1,
+                           gridcolor="#222")
+        _efig.update_xaxes(gridcolor="#222", row=1, col=1)
+        st.plotly_chart(_efig, use_container_width=True)
+    elif os.path.exists("backtest_equity_curve.png"):
+        st.image("backtest_equity_curve.png", caption="Equity Curve (static)")
+
+    # Trade table
+    if not df_trades.empty:
+        st.subheader("Trade Log")
+
+        # Filters
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            pair_filter = st.multiselect("Filter by Pair",
+                                         options=df_trades['pair'].unique().tolist() if 'pair' in df_trades.columns else [],
+                                         default=[])
+        with f2:
+            dir_filter = st.multiselect("Filter by Direction",
+                                        options=['BUY', 'STRONG BUY', 'SELL', 'STRONG SELL'],
+                                        default=[])
+        with f3:
+            reason_filter = st.multiselect("Exit Reason",
+                                           options=df_trades['exit_reason'].unique().tolist() if 'exit_reason' in df_trades.columns else [],
+                                           default=[])
+
+        filtered = df_trades.copy()
+        if pair_filter and 'pair' in filtered.columns:
+            filtered = filtered[filtered['pair'].isin(pair_filter)]
+        if dir_filter and 'direction' in filtered.columns:
+            filtered = filtered[filtered['direction'].isin(dir_filter)]
+        if reason_filter and 'exit_reason' in filtered.columns:
+            filtered = filtered[filtered['exit_reason'].isin(reason_filter)]
+
+        def _color_pnl(val):
+            try:
+                v = float(val)
+                return 'color: green' if v > 0 else 'color: red'
+            except Exception:
+                return ''
+
+        _pnl_cols = [c for c in ['pnl_pct', 'pnl_usd'] if c in filtered.columns]
+        styled = filtered.style.map(_color_pnl, subset=_pnl_cols if _pnl_cols else [])
+        st.dataframe(styled, use_container_width=True, height=400)
+
+        dl_col1, dl_col2 = st.columns(2)
+        with dl_col1:
+            st.download_button(
+                "⬇ Download Trade Log (CSV)",
+                data=filtered.to_csv(index=False),
+                file_name="backtest_trades.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with dl_col2:
+            bt_pdf_bytes = _pdf.generate_backtest_pdf(
+                metrics=metrics,
+                trades_df=filtered,
+                scan_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            st.download_button(
+                "⬇ Download Report (PDF)",
+                data=bt_pdf_bytes,
+                file_name=f"backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+        # PnL distribution
+        if 'pnl_pct' in df_trades.columns and len(df_trades) > 3:
+            st.subheader("PnL Distribution")
+            fig2 = px.histogram(df_trades, x='pnl_pct', nbins=20,
+                                color_discrete_sequence=['#636EFA'],
+                                labels={'pnl_pct': 'PnL %'})
+            fig2.add_vline(x=0, line_dash="dash", line_color="red")
+            fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # Monte Carlo simulation
+        if 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
+            _ui.section_header("Monte Carlo Simulation",
+                               "Bootstrap resamples trade sequence to estimate distribution of equity outcomes and max drawdown", icon="🎲")
+            mc_c1, mc_c2 = st.columns([1, 4])
+            with mc_c1:
+                n_mc = st.number_input("Simulations", 100, 5000, 1000, step=100,
+                                       key="n_mc_sims")
+                if st.button("Run Monte Carlo", type="secondary", use_container_width=True,
+                             key="btn_monte_carlo"):
+                    with st.spinner(f"Running {int(n_mc)} Monte Carlo simulations..."):
+                        mc_res = model.run_monte_carlo(df_trades, n_sim=int(n_mc))
+                    st.session_state["mc_result"] = mc_res
+
+            mc_r = st.session_state.get("mc_result")
+            if mc_r and 'error' not in mc_r:
+                with mc_c2:
+                    mc_m = st.columns(4)
+                    mc_m[0].metric("Profitable Runs", f"{mc_r['pct_profitable']}%",
+                                   help="% of simulations where final equity > starting equity")
+                    mc_m[1].metric("Median Equity", f"${mc_r['equity_p50']:,.0f}",
+                                   help="50th percentile final equity across all simulations")
+                    mc_m[2].metric("Worst 5% Equity", f"${mc_r['equity_p5']:,.0f}",
+                                   help="5th percentile — tail risk floor")
+                    mc_m[3].metric("Median Max DD", f"{mc_r['mdd_p50']}%",
+                                   help="Median max drawdown across all simulations")
+
+                fig_mc = go.Figure()
+                fig_mc.add_trace(go.Histogram(
+                    x=mc_r['all_final_equities'],
+                    nbinsx=60,
+                    name="Final Equity",
+                    marker_color='#636EFA',
+                    opacity=0.75,
+                ))
+                fig_mc.add_vline(x=mc_r['initial_equity'], line_dash="dash",
+                                 line_color="white", annotation_text="Start")
+                fig_mc.add_vline(x=mc_r['equity_p5'], line_dash="dot",
+                                 line_color="red", annotation_text="P5")
+                fig_mc.add_vline(x=mc_r['equity_p95'], line_dash="dot",
+                                 line_color="green", annotation_text="P95")
+                fig_mc.update_layout(
+                    xaxis_title="Final Equity (USD)",
+                    yaxis_title="Frequency",
+                    height=300, margin=dict(l=0, r=0, t=10, b=0),
+                )
+                st.plotly_chart(fig_mc, use_container_width=True)
+            elif mc_r and 'error' in mc_r:
+                st.warning(mc_r['error'])
+
+    # Walk-forward out-of-sample validation
+    st.markdown("---")
+    _ui.section_header("Walk-Forward Validation",
+                       "Splits OHLCV into N windows · First 60% warm-up · Last 40% out-of-sample test · Checks signal predictiveness across regimes",
+                       icon="🔄")
+    wf_c1, wf_c2, wf_c3 = st.columns(3)
+    with wf_c1:
+        wf_splits = st.number_input("Windows", 2, 8, 4, step=1, key="wf_splits")
+    with wf_c2:
+        wf_pair = st.selectbox("Pair", model.PAIRS, index=0, key="wf_pair")
+    with wf_c3:
+        wf_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wf_tf")
+
+    if st.button("Run Walk-Forward Validation", type="secondary", use_container_width=True,
+                 key="btn_wf"):
+        with st.spinner(f"Running {int(wf_splits)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)"):
+            wf_res = model.run_walk_forward(n_splits=int(wf_splits), pair=wf_pair, tf=wf_tf)
+        st.session_state["wf_result"] = wf_res
+
+    wf_r = st.session_state.get("wf_result")
+    if wf_r:
+        if 'error' in wf_r:
+            st.error(wf_r['error'])
+        else:
+            wf_cols = st.columns(2)
+            wf_cols[0].metric("Mean OOS Accuracy",
+                              f"{wf_r['mean_accuracy']}%" if wf_r['mean_accuracy'] else "N/A",
+                              help="Average directional accuracy across all out-of-sample test windows")
+            wf_cols[1].metric("Std Dev",
+                              f"±{wf_r['std_accuracy']}%" if wf_r['std_accuracy'] is not None else "N/A",
+                              help="Lower = more consistent across market regimes")
+            wf_df = pd.DataFrame(wf_r['windows'])
+            wf_df['accuracy_pct'] = wf_df['accuracy_pct'].apply(
+                lambda x: f"{x}%" if x is not None else "N/A"
+            )
+            st.dataframe(wf_df.rename(columns={
+                'window': 'Window', 'period': 'Period',
+                'test_signals': 'Test Signals', 'accuracy_pct': 'OOS Accuracy'
+            }).set_index('Window'), use_container_width=True)
+
+
+    # Deep OHLCV-replay backtest
+    st.markdown("---")
+    _ui.section_header("Deep OHLCV-Replay Backtest",
+                       "True bar-by-bar simulation using paginated historical data · No lookahead bias · Proper entry/stop/target replay",
+                       icon="🔬")
+    db_c1, db_c2, db_c3, db_c4 = st.columns(4)
+    with db_c1:
+        db_pair = st.selectbox("Pair", model.PAIRS, index=0, key="db_pair")
+    with db_c2:
+        db_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="db_tf")
+    with db_c3:
+        db_years = st.number_input("Years of History", 0.5, 5.0, 2.0, step=0.5, key="db_years")
+    with db_c4:
+        db_pos = st.number_input("Position Size %", 2.0, 25.0, 10.0, step=1.0, key="db_pos")
+
+    if st.button("Run Deep Backtest", type="primary", use_container_width=True, key="btn_deep_bt"):
+        with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min)"):
+            deep_r = model.run_deep_backtest(
+                pair=db_pair, tf=db_tf, years=float(db_years), pos_pct=float(db_pos)
+            )
+        st.session_state["deep_backtest_result"] = deep_r
+
+    deep_r = st.session_state.get("deep_backtest_result")
+    if deep_r:
+        if deep_r.get("error"):
+            st.error(f"Deep Backtest: {deep_r['error']}")
+        else:
+            m = deep_r.get("metrics", {})
+            d_cols = st.columns(5)
+            d_cols[0].metric("Total Trades",    str(m.get("total_trades", 0)))
+            d_cols[1].metric("Win Rate",         f"{m.get('win_rate', 0)}%")
+            d_cols[2].metric("Avg PnL/Trade",    f"{m.get('avg_pnl', 0)}%")
+            d_cols[3].metric("Total Return",     f"{m.get('total_return', 0)}%")
+            d_cols[4].metric("Sharpe Ratio",     str(m.get("sharpe", 0)))
+            d_cols2 = st.columns(4)
+            d_cols2[0].metric("Max Drawdown",    f"{m.get('max_drawdown', 0)}%")
+            d_cols2[1].metric("Profit Factor",   str(m.get("profit_factor", 0)))
+            d_cols2[2].metric("Final Equity",    f"${m.get('final_equity', 0):,.0f}")
+            d_cols2[3].metric("Years Tested",    str(m.get("years_tested", 0)))
+
+            df_dbt = deep_r.get("trades", pd.DataFrame())
+            if not df_dbt.empty:
+                # Equity curve chart
+                import plotly.graph_objects as go
+                fig_dbt = go.Figure()
+                fig_dbt.add_trace(go.Scatter(
+                    x=df_dbt['timestamp'], y=df_dbt['equity'],
+                    mode='lines', name='Equity', line=dict(color='#00d4aa', width=2)
+                ))
+                fig_dbt.update_layout(
+                    template='plotly_dark', title=f"Deep Backtest Equity Curve — {db_pair} {db_tf}",
+                    height=350, showlegend=True,
+                    xaxis_title="Date", yaxis_title="Equity ($)",
+                )
+                st.plotly_chart(fig_dbt, use_container_width=True)
+
+                # Trade log (first 100 rows)
+                with st.expander(f"Trade Log ({len(df_dbt)} trades)", expanded=False):
+                    st.dataframe(
+                        df_dbt[['timestamp', 'direction', 'confidence', 'entry', 'exit',
+                                 'exit_reason', 'pnl_pct', 'pnl_usd']].head(100),
+                        use_container_width=True
+                    )
+                    csv_dbt = df_dbt.to_csv(index=False)
+                    st.download_button("📥 Download Full Deep Backtest CSV", csv_dbt,
+                                       f"deep_backtest_{db_pair.replace('/','')}_{db_tf}.csv",
+                                       "text/csv", key="dl_deep_bt")
+
+    # ── Signal Calibration Analytics ────────────────────────────────────────
+    st.divider()
+    _ui.section_header(
+        "Signal Calibration",
+        "How well does predicted confidence match actual win rate? Perfect calibration = diagonal line.",
+        icon="🎯",
+    )
+    _cal_df = _db.get_resolved_feedback_df(days=365)
+    _cal_has = (
+        not _cal_df.empty
+        and "confidence" in _cal_df.columns
+        and "was_correct" in _cal_df.columns
+        and _cal_df["was_correct"].notna().any()
+    )
+    if not _cal_has:
+        st.info(
+            "No resolved feedback data yet. Run scans over time — outcomes are auto-resolved "
+            "after the hold period and used to calibrate confidence scores."
+        )
+    else:
+        _cal_df = _cal_df.dropna(subset=["confidence", "was_correct"]).copy()
+        _cal_df["conf_bucket"] = ((_cal_df["confidence"] // 10) * 10).clip(0, 90).astype(int)
+        _cal_summary = (
+            _cal_df.groupby("conf_bucket")
+            .agg(count=("was_correct", "count"), win_rate=("was_correct", "mean"))
+            .reset_index()
+        )
+        _cal_summary["win_rate_pct"] = (_cal_summary["win_rate"] * 100).round(1)
+        _cal_summary["label"] = _cal_summary["conf_bucket"].astype(str) + "–" + (_cal_summary["conf_bucket"] + 10).astype(str) + "%"
+
+        # Brier score = mean squared error between predicted prob and actual outcome
+        _brier = float(((_cal_df["confidence"] / 100 - _cal_df["was_correct"]) ** 2).mean())
+        # Expected Calibration Error (ECE) weighted by bucket size
+        _ece_rows = []
+        for _, _r in _cal_summary.iterrows():
+            _mid = (_r["conf_bucket"] + 5) / 100
+            _ece_rows.append(abs(_mid - _r["win_rate"]) * _r["count"])
+        _ece = sum(_ece_rows) / len(_cal_df) if len(_cal_df) > 0 else 0.0
+
+        _cm1, _cm2, _cm3, _cm4 = st.columns(4)
+        _cm1.metric("Signals Resolved", len(_cal_df))
+        _cm2.metric("Overall Win Rate", f"{_cal_df['was_correct'].mean() * 100:.1f}%")
+        _cm3.metric("Brier Score", f"{_brier:.4f}", help="Lower = better. 0 = perfect, 0.25 = random")
+        _cm4.metric("Calibration Error (ECE)", f"{_ece * 100:.1f}%", help="Mean absolute deviation between predicted and actual win rate")
+
+        # Calibration bar chart
+        import plotly.graph_objects as _go_cal
+        _fig_cal = _go_cal.Figure()
+        _fig_cal.add_trace(_go_cal.Bar(
+            x=_cal_summary["label"],
+            y=_cal_summary["win_rate_pct"],
+            name="Actual Win Rate",
+            marker_color=[
+                "#00d4aa" if r["win_rate_pct"] >= r["conf_bucket"] + 5 else "#ff4b4b"
+                for _, r in _cal_summary.iterrows()
+            ],
+            text=_cal_summary.apply(lambda r: f"{r['win_rate_pct']:.0f}%<br>n={int(r['count'])}", axis=1),
+            textposition="outside",
+        ))
+        # Perfect calibration diagonal
+        _diag_x = _cal_summary["label"].tolist()
+        _diag_y = [(_r["conf_bucket"] + 5) for _, _r in _cal_summary.iterrows()]
+        _fig_cal.add_trace(_go_cal.Scatter(
+            x=_diag_x, y=_diag_y,
+            mode="lines", name="Perfect Calibration",
+            line=dict(color="#ffffff", width=1, dash="dot"),
+        ))
+        _fig_cal.update_layout(
+            template="plotly_dark", height=340,
+            title="Confidence Bucket vs Actual Win Rate (teal = over-performing, red = under-performing)",
+            xaxis_title="Predicted Confidence", yaxis_title="Actual Win Rate (%)",
+            yaxis=dict(range=[0, 110]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        st.plotly_chart(_fig_cal, use_container_width=True)
+
+        # Per-pair calibration breakdown
+        with st.expander("Per-Pair Calibration Breakdown", expanded=False):
+            _pair_cal = (
+                _cal_df.groupby("pair")
+                .agg(signals=("was_correct", "count"), win_rate=("was_correct", "mean"),
+                     avg_conf=("confidence", "mean"))
+                .reset_index()
+            )
+            _pair_cal["win_rate"] = (_pair_cal["win_rate"] * 100).round(1)
+            _pair_cal["avg_conf"] = _pair_cal["avg_conf"].round(1)
+            _pair_cal["diff"] = (_pair_cal["win_rate"] - _pair_cal["avg_conf"]).round(1)
+            _pair_cal.columns = ["Pair", "Signals", "Win Rate %", "Avg Confidence %", "Conf − Win Rate"]
+            st.dataframe(
+                _pair_cal.sort_values("Win Rate %", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+
+    # ── Performance Attribution ────────────────────────────────────────────────
+    if not df_trades.empty and "exit_reason" in df_trades.columns:
+        st.divider()
+        _ui.section_header(
+            "Performance Attribution",
+            "Where do wins and losses actually come from? Breaks down results by exit type, direction, and coin.",
+            icon="🔬",
+        )
+        _pat_col1, _pat_col2, _pat_col3 = st.columns(3)
+
+        # ── Exit reason breakdown ────────────────────────────────────────────
+        with _pat_col1:
+            st.markdown("**How did trades exit?**")
+            _exit_grp = (
+                df_trades.groupby("exit_reason")
+                .agg(
+                    Trades=("pnl_pct", "count"),
+                    WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
+                    AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
+                )
+                .reset_index()
+                .sort_values("AvgPnL", ascending=False)
+            )
+            _exit_grp.columns = ["How It Exited", "# Trades", "Win Rate %", "Avg P&L %"]
+            _exit_label_map = {
+                "Target":       "✅ Hit Profit Target",
+                "Stop":         "❌ Hit Stop Loss",
+                "TrailingStop": "🔒 Trailing Stop",
+                "Timeout":      "⏰ Time Expired",
+            }
+            _exit_grp["How It Exited"] = _exit_grp["How It Exited"].map(
+                lambda v: _exit_label_map.get(v, v)
+            )
+            st.dataframe(_exit_grp, hide_index=True, use_container_width=True)
+            st.caption("Target = profitable exit. Stop = loss. Trailing Stop = stop that moved with price. Timeout = held too long.")
+
+        # ── Buy vs Sell breakdown ───────────────────────────────────────────
+        with _pat_col2:
+            st.markdown("**Buy signals vs Sell signals**")
+            _df_dir = df_trades.copy()
+            _df_dir["Signal Type"] = _df_dir["direction"].apply(
+                lambda d: "📈 Buy / Long" if "BUY" in str(d).upper() else "📉 Sell / Short"
+            )
+            _dir_grp = (
+                _df_dir.groupby("Signal Type")
+                .agg(
+                    Trades=("pnl_pct", "count"),
+                    WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
+                    AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
+                    TotalPnL=("pnl_pct", lambda x: round(x.sum(), 1)),
+                )
+                .reset_index()
+            )
+            _dir_grp.columns = ["Signal Type", "# Trades", "Win Rate %", "Avg P&L %", "Total P&L %"]
+            st.dataframe(_dir_grp, hide_index=True, use_container_width=True)
+            st.caption("Shows whether the model performs better on buy or sell signals historically.")
+
+        # ── Per-coin breakdown ──────────────────────────────────────────────
+        with _pat_col3:
+            st.markdown("**Which coins performed best?**")
+            _coin_grp = (
+                df_trades.groupby("pair")
+                .agg(
+                    Trades=("pnl_pct", "count"),
+                    WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
+                    AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
+                )
+                .reset_index()
+                .sort_values("AvgPnL", ascending=False)
+            )
+            _coin_grp.columns = ["Coin", "# Trades", "Win Rate %", "Avg P&L %"]
+            st.dataframe(_coin_grp, hide_index=True, use_container_width=True, height=220)
+            st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
+
+
+def _run_backtest_thread():
+    """Background backtest thread — writes only to _bt_state (never st.session_state)."""
+    with _bt_lock:
+        _bt_state["running"] = True
+        _bt_state["results"] = None
+        _bt_state["error"] = None
+    try:
+        result = model.run_backtest()
+        with _bt_lock:
+            _bt_state["results"] = result
+    except Exception as e:
+        with _bt_lock:
+            _bt_state["error"] = str(e)
+    finally:
+        with _bt_lock:
+            _bt_state["running"] = False
+
+
+def _start_backtest():
+    st.session_state["backtest_running"] = True
+    st.session_state["backtest_error"] = None
+    t = threading.Thread(target=_run_backtest_thread, daemon=True)
+    t.start()
+
+# ──────────────────────────────────────────────
+# PAGE 4: TRADE LOG & HISTORY
+# ──────────────────────────────────────────────
+def page_trade_log():
+    st.markdown(
+        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        'letter-spacing:-0.5px;margin-bottom:0">Trade Log & History</h1>',
+        unsafe_allow_html=True,
+    )
+
+    tab_master, tab_paper, tab_feedback, tab_exec = st.tabs([
+        "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log"
+    ])
+
+    # ── Tab 1: Master Log ──
+    with tab_master:
+        df = _db.get_signals_df()
+        if df.empty:
+            st.info("No master log data yet. Run a scan first.")
+        else:
+            # Summary metrics
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Records", len(df))
+            if 'direction' in df.columns:
+                buys = df['direction'].str.contains("BUY", na=False).sum()
+                sells = df['direction'].str.contains("SELL", na=False).sum()
+                m2.metric("Total Buy Signals", int(buys))
+                m3.metric("Total Sell Signals", int(sells))
+            if 'confidence_avg_pct' in df.columns:
+                avg_conf = pd.to_numeric(df['confidence_avg_pct'], errors='coerce').mean()
+                m4.metric("Avg Confidence", f"{avg_conf:.1f}%" if pd.notna(avg_conf) else "N/A")
+
+            st.markdown("---")
+
+            # Confidence trend per pair
+            if 'scan_timestamp' in df.columns and 'confidence_avg_pct' in df.columns and 'pair' in df.columns:
+                st.subheader("Confidence Trend by Pair")
+                pair_filter = st.multiselect("Select pairs", options=df['pair'].unique().tolist(),
+                                              default=df['pair'].unique().tolist()[:3], key="master_pair_filter")
+                df_plot = df[df['pair'].isin(pair_filter)] if pair_filter else df
+                fig = px.line(df_plot, x='scan_timestamp', y='confidence_avg_pct',
+                              color='pair', markers=True,
+                              labels={'confidence_avg_pct': 'Confidence (%)', 'scan_timestamp': 'Scan Time'})
+                fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green",
+                              annotation_text=f"High-Conf ({model.HIGH_CONF_THRESHOLD}%)")
+                fig.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Searchable table
+            st.subheader("All Records")
+            search = st.text_input("Search (pair, direction...)", key="master_search")
+            if search:
+                _search_cols = [c for c in ['pair', 'direction', 'strategy_bias', 'regime'] if c in df.columns]
+                _mask = df[_search_cols].astype(str).apply(lambda r: r.str.contains(search, case=False, na=False)).any(axis=1)
+                display_df = df[_mask]
+            else:
+                display_df = df
+
+            # Rename columns to human-readable labels for display
+            col_labels = {
+                'scan_timestamp': 'Scan Time', 'pair': 'Pair', 'price_usd': 'Price (USD)',
+                'confidence_avg_pct': 'Confidence %', 'direction': 'Direction',
+                'strategy_bias': 'Strategy Bias', 'mtf_alignment': 'MTF Alignment',
+                'high_conf': 'High Conf', 'fng_value': 'Fear & Greed', 'fng_category': 'F&G Label',
+                'entry': 'Entry', 'exit': 'Target', 'stop_loss': 'Stop Loss',
+                'risk_pct': 'Risk %', 'position_size_usd': 'Position USD',
+                'position_size_pct': 'Position %', 'risk_mode': 'Risk Mode',
+                'corr_with_btc': 'BTC Corr', 'corr_adjusted_size_pct': 'Corr-Adj Size %',
+                'regime': 'Regime', 'sr_status': 'S/R Status',
+                'circuit_breaker_triggered': 'CB Triggered',
+                'circuit_breaker_drawdown_pct': 'CB Drawdown %', 'scan_sec': 'Scan Sec',
+            }
+            display_df = display_df.rename(columns={k: v for k, v in col_labels.items() if k in display_df.columns})
+            st.dataframe(display_df, use_container_width=True, height=400)
+            st.download_button("⬇ Download Master Log", data=df.to_csv(index=False),
+                               file_name="daily_signals_master.csv", mime="text/csv")
+
+    # ── Tab 2: Paper Trades ──
+    with tab_paper:
+        df_closed = _db.get_paper_trades_df()
+        try:
+            positions = model.load_positions()
+        except Exception as _e:
+            logging.warning(f"load_positions failed: {_e}")
+            positions = {}
+
+        # ── Portfolio Heat Strip ──────────────────────────────────────────────
+        if positions:
+            _total_exp  = sum(float(p.get("size_pct", 0)) for p in positions.values())
+            _buy_exp    = sum(float(p.get("size_pct", 0)) for p in positions.values() if "BUY"  in str(p.get("direction", "")))
+            _sell_exp   = sum(float(p.get("size_pct", 0)) for p in positions.values() if "SELL" in str(p.get("direction", "")))
+            _n_pos      = len(positions)
+            # Heat color: green < 30%, amber 30–60%, red > 60%
+            _heat_color = "#00d4aa" if _total_exp < 30 else ("#f59e0b" if _total_exp < 60 else "#f6465d")
+            _heat_label = "Low" if _total_exp < 30 else ("Medium" if _total_exp < 60 else "High")
+            st.markdown(
+                f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
+                f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                f'border-radius:10px;padding:10px 18px;text-align:center">'
+                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">PORTFOLIO HEAT</div>'
+                f'<div style="font-size:20px;font-weight:700;color:{_heat_color}">{_heat_label}</div>'
+                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">Total exposure</div></div>'
+                f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                f'border-radius:10px;padding:10px 18px;text-align:center">'
+                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">FUNDS IN TRADES</div>'
+                f'<div style="font-size:20px;font-weight:700;color:{_heat_color}">{_total_exp:.1f}%</div>'
+                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">of portfolio</div></div>'
+                f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                f'border-radius:10px;padding:10px 18px;text-align:center">'
+                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">OPEN POSITIONS</div>'
+                f'<div style="font-size:20px;font-weight:700;color:#e8ecf4">{_n_pos}</div>'
+                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">trades active</div></div>'
+                f'<div style="background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.2);'
+                f'border-radius:10px;padding:10px 18px;text-align:center">'
+                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">BUY EXPOSURE</div>'
+                f'<div style="font-size:20px;font-weight:700;color:#00d4aa">{_buy_exp:.1f}%</div>'
+                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">long trades</div></div>'
+                f'<div style="background:rgba(246,70,93,0.06);border:1px solid rgba(246,70,93,0.2);'
+                f'border-radius:10px;padding:10px 18px;text-align:center">'
+                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">SELL EXPOSURE</div>'
+                f'<div style="font-size:20px;font-weight:700;color:#f6465d">{_sell_exp:.1f}%</div>'
+                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">short trades</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.subheader("Open Positions")
+        if positions:
+            # ── Price resolution: WS first, scan fallback ──────────────────
+            _live_ticks  = _ws.get_all_prices()
+            _scan_prices = {
+                r['pair']: r.get('price_usd')
+                for r in st.session_state.get("scan_results", [])
+                if r.get("price_usd")
+            }
+            _ws_ok = _ws.get_status().get("connected", False)
+            _price_src_label = "● LIVE (WebSocket)" if _ws_ok else "◎ Last Scan Price"
+            st.caption(f"Price source: {_price_src_label}  ·  {len(positions)} open position(s)")
+
+            for _pair, _pos in positions.items():
+                _entry     = _pos.get('entry')
+                _direction = _pos.get('direction', 'BUY')
+                _target    = _pos.get('target')
+                _stop      = _pos.get('stop')
+                _size_pct  = _pos.get('size_pct')
+                _entry_time = _pos.get('entry_time')
+
+                # Current price
+                _tick = _live_ticks.get(_pair)
+                _cur  = float(_tick['price']) if _tick else (
+                    float(_scan_prices[_pair]) if _pair in _scan_prices else None
+                )
+                _src_tag = "● LIVE" if _tick else ("◎ scan" if _cur else "—")
+
+                # Unrealized P&L
+                if _cur is not None and _entry and float(_entry) > 0:
+                    _ef = float(_entry)
+                    if "BUY" in _direction:
+                        _pnl_pct = (_cur - _ef) / _ef * 100
+                    else:
+                        _pnl_pct = (_ef - _cur) / _ef * 100
+                else:
+                    _pnl_pct = float(_pos.get('current_pnl_pct', 0))
+                    _cur = None
+
+                # Distance to stop / target  (as % of entry)
+                _stop_dist = _tgt_dist = None
+                if _cur is not None and _entry and float(_entry) > 0:
+                    _ef = float(_entry)
+                    if _stop:
+                        _stop_dist = abs(_cur - float(_stop)) / _ef * 100
+                    if _target:
+                        _tgt_dist  = abs(float(_target) - _cur) / _ef * 100
+
+                # Time in trade
+                _dur_str = "—"
+                if _entry_time:
+                    try:
+                        from datetime import timezone as _tz
+                        _et  = pd.to_datetime(_entry_time, utc=True)
+                        _dur = datetime.now(_tz.utc) - _et.to_pydatetime()
+                        _h, _rem = divmod(int(_dur.total_seconds()), 3600)
+                        _dur_str = f"{_h}h {_rem // 60}m"
+                    except Exception:
+                        pass
+
+                # Render position card
+                _pnl_sign  = "+" if _pnl_pct >= 0 else ""
+                _dir_emoji = "🟢" if "BUY" in _direction else "🔴"
+                _pnl_color = "#00d4aa" if _pnl_pct >= 0 else "#ff4b4b"
+
+                st.markdown(
+                    f'<div style="background:#1a1f2e;border-radius:10px;padding:14px 18px;'
+                    f'margin-bottom:10px;border-left:4px solid {_pnl_color}">'
+                    f'<span style="font-size:15px;font-weight:700">{_dir_emoji} {_pair}</span>'
+                    f'&nbsp;&nbsp;<code style="font-size:12px">{_direction}</code>'
+                    f'&nbsp;&nbsp;<span style="color:#888;font-size:11px">{_src_tag}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
+                _pc1.metric("Entry Price",   f"{float(_entry):,.5g}" if _entry else "—")
+                _pc2.metric("Current Price", f"{_cur:,.5g}"          if _cur   else "—")
+                _pc3.metric(
+                    "Unrealized P&L",
+                    f"{_pnl_sign}{_pnl_pct:.2f}%",
+                    delta=f"{_pnl_sign}{_pnl_pct:.2f}%",
+                    delta_color="normal",
+                )
+                _pc4.metric("Time In Trade", _dur_str)
+                _pc5.metric("Size", f"{_size_pct}%" if _size_pct else "—")
+
+                _dc1, _dc2, _dc3 = st.columns(3)
+                _dc1.caption(
+                    f"Stop: {float(_stop):,.5g}  ({_stop_dist:.2f}% away)"
+                    if _stop and _stop_dist is not None
+                    else f"Stop: {float(_stop):,.5g}" if _stop else "Stop: —"
+                )
+                _dc2.caption(
+                    f"Target: {float(_target):,.5g}  ({_tgt_dist:.2f}% to go)"
+                    if _target and _tgt_dist is not None
+                    else f"Target: {float(_target):,.5g}" if _target else "Target: —"
+                )
+                _dc3.caption(f"Entry time: {_entry_time}" if _entry_time else "")
+                st.markdown("")
+
+            # ── Actions ────────────────────────────────────────────────────
+            _btn_col, _auto_col, _ = st.columns([1.5, 1.5, 3])
+            with _btn_col:
+                if st.button("Check Exits & Refresh", key="refresh_pos"):
+                    _all_prices = dict(_scan_prices)
+                    _all_prices.update({p: v['price'] for p, v in _live_ticks.items()})
+                    if _all_prices:
+                        _closed = model.update_positions(_all_prices)
+                        if _closed:
+                            st.success(f"Closed {len(_closed)} position(s) at stop/target.")
+                            try:
+                                _send_exit_alerts(_closed)
+                            except Exception as _ae:
+                                logging.warning("[App] Exit alert (manual) failed: %s", _ae)
+                        st.rerun()
+                    else:
+                        st.warning("Run a scan first to get current prices.")
+            with _auto_col:
+                _auto_pos = st.toggle("Auto-update (5s)", key="pos_auto_refresh",
+                                      value=_ws_ok, help="Auto-refresh live P&L every 5 seconds")
+
+            # Auto-rerun every 5s when toggle is on
+            if _auto_pos:
+                import time as _time_pos
+                _pos_ts_key = "_pos_live_ts"
+                _now_pos    = _time_pos.time()
+                if _now_pos - st.session_state.get(_pos_ts_key, 0) >= 5:
+                    st.session_state[_pos_ts_key] = _now_pos
+                    _time_pos.sleep(0.1)
+                    st.rerun()
+        else:
+            st.info("No open positions.")
+
+        st.subheader("Closed Trades History")
+        if df_closed.empty:
+            st.info("No closed paper trades yet.")
+        else:
+            p1, p2, p3 = st.columns(3)
+            if 'pnl_pct' in df_closed.columns:
+                df_closed['pnl_pct'] = pd.to_numeric(df_closed['pnl_pct'], errors='coerce')
+                total_pnl = df_closed['pnl_pct'].sum()
+                wins = (df_closed['pnl_pct'] > 0).sum()
+                p1.metric("Total Trades", len(df_closed))
+                p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "N/A")
+                p3.metric("Cumulative PnL %", f"{total_pnl:.2f}%")
+
+            st.dataframe(df_closed, use_container_width=True, height=350)
+            st.download_button("⬇ Download Paper Trades", data=df_closed.to_csv(index=False),
+                               file_name="paper_trades_log.csv", mime="text/csv")
+
+    # ── Tab 3: Feedback Log ──
+    with tab_feedback:
+        df_fb = _db.get_feedback_df()
+        if df_fb.empty:
+            st.info("No feedback log data yet.")
+        else:
+            f1, f2 = st.columns(2)
+            f1.metric("Logged Signals", len(df_fb))
+            if 'confidence' in df_fb.columns:
+                avg_fb_conf = pd.to_numeric(df_fb['confidence'], errors='coerce').mean()
+                f2.metric("Avg Confidence Logged", f"{avg_fb_conf:.1f}%" if pd.notna(avg_fb_conf) else "N/A")
+
+            if 'confidence' in df_fb.columns and 'timestamp' in df_fb.columns:
+                fig = px.scatter(df_fb, x='timestamp', y='confidence', color='direction',
+                                 labels={'confidence': 'Confidence (%)', 'timestamp': 'Time'})
+                fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green")
+                fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.dataframe(df_fb, use_container_width=True, height=350)
+            st.download_button("⬇ Download Feedback Log", data=df_fb.to_csv(index=False),
+                               file_name="feedback_log.csv", mime="text/csv")
+
+    # ── Tab 4: Execution Log ──
+    with tab_exec:
+        _exec_st = _exec.get_status()
+        _mode_disp = "🔴 LIVE" if _exec_st.get("live_trading", False) else "📄 Paper"
+        ec1, ec2, ec3 = st.columns(3)
+        ec1.metric("Execution Mode", _mode_disp)
+        ec2.metric("Auto-Execute", "ON" if _exec_st.get("auto_execute", False) else "OFF")
+        ec3.metric("Keys Configured", "Yes" if _exec_st.get("keys_configured", False) else "No")
+        st.caption("Configure execution in Config Editor → Live Execution section.")
+        st.markdown("---")
+
+        df_exec_log = _db.get_execution_log_df(limit=300)
+        if df_exec_log.empty:
+            st.info(
+                "No execution records yet. "
+                "Use the BUY/SELL buttons in the Dashboard to place orders."
+            )
+        else:
+            ex_m1, ex_m2, ex_m3 = st.columns(3)
+            ex_m1.metric("Total Orders", len(df_exec_log))
+            if "mode" in df_exec_log.columns:
+                live_cnt  = (df_exec_log["mode"] == "live").sum()
+                paper_cnt = (df_exec_log["mode"] == "paper").sum()
+                ex_m2.metric("Live Orders", int(live_cnt))
+                ex_m3.metric("Paper Orders", int(paper_cnt))
+
+            # Colour-code status
+            def _colour_exec_status(val):
+                if val == "ok":      return "color: green"
+                if val == "failed":  return "color: red"
+                return ""
+
+            styled_exec = df_exec_log.style.map(
+                _colour_exec_status, subset=["status"] if "status" in df_exec_log.columns else []
+            )
+            st.dataframe(styled_exec, use_container_width=True, height=400)
+            st.download_button(
+                "⬇ Download Execution Log",
+                data=df_exec_log.to_csv(index=False),
+                file_name=f"execution_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+
+# ──────────────────────────────────────────────
+# PAGE: MARKET OVERVIEW
+# ──────────────────────────────────────────────
+def page_market_overview():
+    import data_feeds as _df
+
+    st.markdown(
+        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        'letter-spacing:-0.5px;margin-bottom:0">Market Overview</h1>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Global Market Stats ─────────────────────────────────────────────────
+    _ui.section_header("Global Market", "Live macro snapshot — BTC dominance, total cap, trending coins", icon="🌐")
+
+    gm  = _df.get_global_market()
+    trending = _df.get_trending_coins()
+
+    # Format helpers
+    def _fmt_cap(v):
+        if v >= 1e12: return f"${v/1e12:.2f}T"
+        if v >= 1e9:  return f"${v/1e9:.1f}B"
+        return f"${v/1e6:.0f}M"
+
+    total_mcap  = gm.get("total_market_cap_usd", 0)
+    btc_dom     = gm.get("btc_dominance", 0.0)
+    eth_dom     = gm.get("eth_dominance", 0.0)
+    mcap_chg    = gm.get("market_cap_change_24h", 0.0)
+    vol_24h     = gm.get("total_volume_24h_usd", 0)
+    alt_label   = gm.get("altcoin_season_label", "N/A")
+    src         = gm.get("source", "fallback")
+
+    alt_colors  = {"ALTSEASON": "#00d4aa", "BTC_DOMINANT": "#6366f1", "MIXED": "#f0a500", "N/A": "#888"}
+    alt_color   = alt_colors.get(alt_label, "#888")
+    chg_color   = "#00c076" if mcap_chg >= 0 else "#f6465d"
+    chg_arrow   = "▲" if mcap_chg >= 0 else "▼"
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("Total Market Cap", _fmt_cap(total_mcap),
+                  delta=f"{chg_arrow} {abs(mcap_chg):.2f}% 24h",
+                  delta_color="normal")
+    with c2:
+        st.metric("BTC Dominance", f"{btc_dom:.1f}%")
+    with c3:
+        st.metric("ETH Dominance", f"{eth_dom:.1f}%")
+    with c4:
+        st.metric("24h Volume", _fmt_cap(vol_24h))
+    with c5:
+        st.metric("Market Regime", alt_label.replace("_", " "))
+
+    # Trending coins chip row
+    if trending:
+        chips_html = " ".join(
+            f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
+            f'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
+            f'color:#00d4aa;font-size:12px;font-weight:600;margin:2px">{sym}</span>'
+            for sym in trending[:10]
+        )
+        st.markdown(
+            f'<div style="margin:4px 0 12px">'
+            f'<span style="color:rgba(255,255,255,0.45);font-size:11px;'
+            f'text-transform:uppercase;letter-spacing:0.8px;margin-right:10px">🔥 Trending</span>'
+            + chips_html + '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption(f"Trending data unavailable  |  Source: {src}")
+
+    _ui.gradient_divider()
+
+    # ── Correlation Matrix ──
+    _ui.section_header("Asset Correlation Matrix",
+                       "Pairwise Pearson correlation of daily returns — Red = strong positive · Blue = negative",
+                       icon="🔥")
+
+    col_lk, col_tf, col_run = st.columns([2, 2, 2])
+    with col_lk:
+        lookback = st.slider("Lookback (days)", min_value=7, max_value=90,
+                             value=30, step=7, key="corr_lookback")
+    with col_tf:
+        corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
+    with col_run:
+        st.write("")
+        run_corr = st.button("Compute Correlation", type="primary", use_container_width=True, key="run_corr")
+
+    if run_corr:
+        with st.spinner("Fetching OHLCV data..."):
+            corr_matrix, err = model.compute_correlation_matrix(
+                pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
+            )
+        if err:
+            st.error(f"Correlation error: {err}")
+            st.session_state["corr_matrix_data"] = None
+            st.session_state["corr_error"] = err
+        else:
+            st.session_state["corr_matrix_data"] = corr_matrix.to_dict()
+            st.session_state["corr_matrix_pairs"] = list(corr_matrix.columns)
+            st.session_state["corr_error"] = None
+
+    cached = st.session_state.get("corr_matrix_data")
+    if cached:
+        pairs_list = st.session_state.get("corr_matrix_pairs", [])
+        corr_df = pd.DataFrame(cached, index=pairs_list, columns=pairs_list)
+
+        fig_corr = go.Figure(data=go.Heatmap(
+            z=corr_df.values,
+            x=corr_df.columns.tolist(),
+            y=corr_df.index.tolist(),
+            colorscale="RdBu_r",
+            zmin=-1, zmax=1,
+            text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
+            texttemplate="%{text}",
+            hoverongaps=False,
+        ))
+        fig_corr.update_layout(
+            height=450,
+            margin=dict(l=0, r=0, t=10, b=0),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+        # Highlight high-correlation pairs
+        st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
+        high_corr_rows = []
+        for i, a in enumerate(pairs_list):
+            for j, b in enumerate(pairs_list):
+                if i < j:
+                    val = corr_df.iloc[i, j]
+                    if abs(val) > 0.75:
+                        high_corr_rows.append({"Pair A": a, "Pair B": b, "Correlation": round(val, 3)})
+        if high_corr_rows:
+            st.dataframe(pd.DataFrame(high_corr_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No pairs exceed the 0.75 correlation threshold for this period.")
+    elif st.session_state.get("corr_error"):
+        st.error(f"Correlation error: {st.session_state['corr_error']}")
+
+    st.markdown("---")
+
+    # ── Return Distribution ──
+    _ui.section_header("30-Day Return Summary",
+                       "Estimated price return per pair — 7-day and 30-day based on exchange daily close",
+                       icon="📊")
+    if st.button("Load Returns", key="load_returns"):
+        with st.spinner("Fetching prices..."):
+            returns_data = []
+            exchange = model.get_exchange_instance(model.TA_EXCHANGE)
+            if exchange:
+                for pair in model.PAIRS:
+                    try:
+                        ohlcv = exchange.fetch_ohlcv(pair, "1d", limit=32)
+                        if len(ohlcv) >= 2:
+                            closes = [o[4] for o in ohlcv]
+                            ret_30d = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] else 0
+                            ret_7d = (closes[-1] - closes[-8]) / closes[-8] * 100 if len(closes) >= 8 and closes[-8] else 0
+                            returns_data.append({
+                                "Asset": pair.replace("/USDT", ""),
+                                "Current Price": round(closes[-1], 4),
+                                "7d Return %": round(ret_7d, 2),
+                                "30d Return %": round(ret_30d, 2),
+                            })
+                    except Exception:
+                        pass
+        if returns_data:
+            ret_df = pd.DataFrame(returns_data)
+            def color_ret(val):
+                color = "color: #00d4aa" if val > 0 else "color: #ff4b4b" if val < 0 else ""
+                return color
+            styled = ret_df.style.map(color_ret, subset=["7d Return %", "30d Return %"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            fig_bar = px.bar(
+                ret_df, x="Asset", y="30d Return %",
+                color="30d Return %",
+                color_continuous_scale=["#ff4b4b", "#333333", "#00d4aa"],
+                color_continuous_midpoint=0,
+                title="30-Day Returns by Asset",
+            )
+            fig_bar.update_layout(
+                height=300, margin=dict(l=0, r=0, t=40, b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.warning("Could not fetch return data.")
+
+    st.markdown("---")
+
+    # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
+    _ui.section_header(
+        "Pair Trade Scanner",
+        "Finds cryptocurrency pairs that move together — then signals when one is unusually cheap or expensive vs the other",
+        icon="⚖️",
+    )
+    st.caption(
+        "A pair trade buys the underpriced coin and sells the overpriced one, profiting when prices converge. "
+        "Only pairs with a statistically significant relationship (p < 0.05) are shown."
+    )
+
+    _coint_col1, _coint_col2, _coint_col3 = st.columns([2, 2, 2])
+    with _coint_col1:
+        _coint_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="coint_tf")
+    with _coint_col2:
+        _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
+    with _coint_col3:
+        st.write("")
+        _run_coint = st.button("Scan for Pair Trades", type="primary", use_container_width=True, key="run_coint")
+
+    if _run_coint:
+        with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations..."):
+            _coint_results, _coint_err = model.run_cointegration_scan(
+                pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
+            )
+        if _coint_err:
+            st.error(f"Scan error: {_coint_err}")
+            st.session_state["coint_results"] = None
+        else:
+            st.session_state["coint_results"] = _coint_results
+            st.session_state["coint_err"] = None
+
+    _coint_data = st.session_state.get("coint_results")
+    if _coint_data is not None:
+        if not _coint_data:
+            st.info("No cointegrated pairs found — try a longer lookback or different timeframe.")
+        else:
+            # Signal color map
+            _COINT_COLORS = {
+                "LONG_SPREAD":  "#00d4aa",
+                "SHORT_SPREAD": "#f6465d",
+                "EXIT_SPREAD":  "#f59e0b",
+                "NEUTRAL":      "#64748b",
+            }
+
+            # Summary banner
+            _actionable = [r for r in _coint_data if r["signal"] not in ("NEUTRAL", "EXIT_SPREAD")]
+            if _actionable:
+                st.success(
+                    f"⚖️ **{len(_actionable)} actionable pair trade{'s' if len(_actionable) != 1 else ''}** found "
+                    f"out of {len(_coint_data)} cointegrated pairs."
+                )
+
+            # Render cards for top pairs
+            for _cr in _coint_data[:12]:
+                _sig_color = _COINT_COLORS.get(_cr["signal"], "#64748b")
+                _z         = _cr["zscore"]
+                _z_bar_pct = min(abs(_z) / 3.0 * 100, 100)
+
+                # Plain English signal label
+                _sig_labels = {
+                    "LONG_SPREAD":  "BUY SPREAD",
+                    "SHORT_SPREAD": "SELL SPREAD",
+                    "EXIT_SPREAD":  "CLOSE POSITION",
+                    "NEUTRAL":      "NEUTRAL",
+                }
+                _sig_label = _sig_labels.get(_cr["signal"], _cr["signal"])
+
+                st.markdown(
+                    f"""
+                    <div style="
+                        background:linear-gradient(rgba(14,18,30,0.8),rgba(14,18,30,0.8)) padding-box,
+                                   linear-gradient(135deg,{_sig_color}30,rgba(99,102,241,0.15)) border-box;
+                        border:1px solid transparent;border-radius:12px;
+                        padding:14px 18px;margin-bottom:8px;
+                        backdrop-filter:blur(12px)">
+                        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                            <div>
+                                <span style="font-size:15px;font-weight:800;color:#e8ecf4;
+                                             font-family:'JetBrains Mono',monospace">
+                                    {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
+                                </span>
+                                <span style="font-size:11px;color:rgba(168,180,200,0.5);margin-left:10px">
+                                    hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
+                                </span>
+                            </div>
+                            <span style="background:{_sig_color};color:#06101c;padding:4px 13px;
+                                         border-radius:999px;font-size:11px;font-weight:800;
+                                         letter-spacing:0.5px">{_sig_label}</span>
+                        </div>
+                        <div style="margin:10px 0 6px">
+                            <div style="display:flex;justify-content:space-between;
+                                        font-size:11px;color:rgba(168,180,200,0.5);margin-bottom:4px">
+                                <span>Z-Score: <strong style="color:{_sig_color}">{_z:+.2f}</strong></span>
+                                <span>±2σ threshold</span>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
+                                <div style="
+                                    position:absolute;
+                                    {'left:50%;' if _z >= 0 else f'right:{50}%;'}
+                                    width:{_z_bar_pct/2:.1f}%;
+                                    height:6px;border-radius:4px;
+                                    background:{_sig_color};
+                                    transition:width 0.4s ease"></div>
+                                <div style="position:absolute;left:50%;top:-2px;
+                                            width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
+                            </div>
+                        </div>
+                        <div style="font-size:12px;color:#c4cedd;line-height:1.5;
+                                    border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
+                            {_cr['signal_plain']}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            if len(_coint_data) > 12:
+                st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
+
+    st.markdown("---")
+
+    # ── MTF Signal Heatmap ──────────────────────────────────────────────────
+    _ui.section_header("Multi-Timeframe Signal Heatmap",
+                       f"Green = bullish · Red = bearish · White = neutral · Numbers = confidence % — {_ui.HELP_MTF_HEATMAP}",
+                       icon="🗺️")
+
+    scan_results = _db.read_scan_results()
+    if not scan_results:
+        st.info("No scan data found — run a scan on the Dashboard first.")
+    else:
+        _TF_ORDER = ["1h", "4h", "1d", "1w"]
+        pairs = [r["pair"] for r in scan_results]
+
+        matrix, hover_text, cell_text = [], [], []
+        for r in scan_results:
+            row_vals, row_hover, row_lbl = [], [], []
+            tf_data = r.get("timeframes", {})
+            for tf in _TF_ORDER:
+                td        = tf_data.get(tf, {})
+                direction = td.get("direction", "NO DATA")
+                conf      = td.get("confidence", 0)
+                if direction in ("NO DATA", "LOW VOL", "N/A"):
+                    signed = 0
+                    row_hover.append(f"{tf}: {direction}")
+                    row_lbl.append("")
+                elif "BUY" in direction:
+                    signed = conf
+                    row_hover.append(f"{tf}: {direction} ({conf:.0f}%)")
+                    row_lbl.append(f"{conf:.0f}")
+                elif "SELL" in direction:
+                    signed = -conf
+                    row_hover.append(f"{tf}: {direction} ({conf:.0f}%)")
+                    row_lbl.append(f"−{conf:.0f}")
+                else:
+                    signed = 0
+                    row_hover.append(f"{tf}: NEUTRAL ({conf:.0f}%)")
+                    row_lbl.append("~")
+                row_vals.append(signed)
+            matrix.append(row_vals)
+            hover_text.append(row_hover)
+            cell_text.append(row_lbl)
+
+        pair_labels = [p.replace("/USDT", "") for p in pairs]
+
+        fig_heat = go.Figure(data=go.Heatmap(
+            z=matrix,
+            x=_TF_ORDER,
+            y=pair_labels,
+            colorscale=[
+                [0.00, "#ff4b4b"],
+                [0.35, "#442222"],
+                [0.50, "#1a1d23"],
+                [0.65, "#224433"],
+                [1.00, "#00d4aa"],
+            ],
+            zmin=-100, zmax=100,
+            text=cell_text,
+            hovertext=hover_text,
+            hovertemplate="%{y} · %{hovertext}<extra></extra>",
+            texttemplate="%{text}",
+            textfont=dict(size=11, color="rgba(255,255,255,0.9)"),
+        ))
+        fig_heat.update_layout(
+            height=max(260, len(pairs) * 44),
+            margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(side="top", tickfont=dict(size=12, color="#e0e0e0")),
+            yaxis=dict(tickfont=dict(size=11, color="#e0e0e0"), autorange="reversed"),
+            font=dict(color="#e0e0e0"),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+        # Composite score table
+        comp_rows = []
+        for r in scan_results:
+            tf_data = r.get("timeframes", {})
+            signed_scores = []
+            for tf in _TF_ORDER:
+                td        = tf_data.get(tf, {})
+                direction = td.get("direction", "NO DATA")
+                conf      = td.get("confidence", 0)
+                if direction in ("NO DATA", "LOW VOL", "N/A"):
+                    continue
+                elif "BUY" in direction:
+                    signed_scores.append(conf)
+                elif "SELL" in direction:
+                    signed_scores.append(-conf)
+                else:
+                    signed_scores.append(0)
+            composite = round(sum(signed_scores) / len(signed_scores), 1) if signed_scores else 0
+            comp_rows.append({
+                "Pair":            r["pair"],
+                "Overall":         r.get("direction", "N/A"),
+                "Avg Conf%":       f"{r.get('confidence_avg_pct', 0):.0f}%",
+                "MTF Align%":      f"{r.get('mtf_alignment', 0):.0f}%",
+                "Composite Score": composite,
+                "Strategy":        r.get("strategy_bias", "N/A"),
+            })
+
+        comp_df = (
+            pd.DataFrame(comp_rows)
+            .sort_values("Composite Score", ascending=False)
+            .reset_index(drop=True)
+        )
+
+        def _color_composite(val):
+            if not isinstance(val, (int, float)):
+                return ""
+            if val > 20:  return "color: #00d4aa; font-weight: bold"
+            if val > 0:   return "color: #7ecb9a"
+            if val < -20: return "color: #ff4b4b; font-weight: bold"
+            if val < 0:   return "color: #ff9999"
+            return ""
+
+        def _color_dir(val):
+            v = str(val)
+            if "STRONG BUY"  in v: return "color: #00d4aa; font-weight: bold"
+            if "BUY"         in v: return "color: #7ecb9a"
+            if "STRONG SELL" in v: return "color: #ff4b4b; font-weight: bold"
+            if "SELL"        in v: return "color: #ff9999"
+            return "color: #888888"
+
+        st.dataframe(
+            comp_df.style
+                .map(_color_composite, subset=["Composite Score"])
+                .map(_color_dir,       subset=["Overall"]),
+            use_container_width=True, hide_index=True,
+        )
+
+    st.markdown("---")
+
+    # ── Fear & Greed 30-Day History ─────────────────────────────────────────
+    _ui.section_header("Fear & Greed Index — 30-Day History",
+                       _ui.HELP_FNG, icon="😱")
+    st.caption("Source: alternative.me  |  0 = Extreme Fear  ·  100 = Extreme Greed")
+
+    if st.button("Load F&G History", key="load_fng_history"):
+        try:
+            resp = requests.get("https://api.alternative.me/fng/?limit=30", timeout=8)
+            resp.raise_for_status()
+            fng_raw = resp.json().get("data", [])
+            fng_rows = [
+                {
+                    "date":  pd.to_datetime(int(d["timestamp"]), unit="s"),
+                    "value": int(d["value"]),
+                    "label": d["value_classification"],
+                }
+                for d in fng_raw
+            ]
+            st.session_state["fng_history_df"] = (
+                pd.DataFrame(fng_rows).sort_values("date").reset_index(drop=True)
+            )
+        except Exception as exc:
+            st.error(f"Could not fetch F&G data: {exc}")
+
+    fng_df = st.session_state.get("fng_history_df")
+    if fng_df is not None and not fng_df.empty:
+        latest  = fng_df.iloc[-1]
+        fng_val = int(latest["value"])
+        fng_emoji = (
+            "😱" if fng_val <= 24 else
+            "😨" if fng_val <= 49 else
+            "😏" if fng_val <= 74 else
+            "🤑"
+        )
+        col_metric, col_chart = st.columns([1, 4])
+
+        with col_metric:
+            delta_7d = (
+                int(fng_val) - int(fng_df.iloc[-8]["value"])
+                if len(fng_df) >= 8 else None
+            )
+            st.metric(
+                f"{fng_emoji} Today",
+                str(fng_val),
+                delta=f"{delta_7d:+d} vs 7d ago" if delta_7d is not None else None,
+            )
+            st.caption(latest["label"])
+
+        with col_chart:
+            dot_colors = [
+                "#00d4aa" if v <= 24 else
+                "#7ecb9a" if v <= 49 else
+                "#ffa500" if v <= 74 else
+                "#ff4b4b"
+                for v in fng_df["value"]
+            ]
+            fig_fng = go.Figure()
+            for y0, y1, bg_col, zone_label in [
+                (0,  25,  "rgba(0,212,170,0.08)",  "Extreme Fear"),
+                (25, 50,  "rgba(0,212,170,0.04)",  "Fear"),
+                (50, 75,  "rgba(255,165,0,0.04)",   "Greed"),
+                (75, 100, "rgba(255,75,75,0.08)",   "Extreme Greed"),
+            ]:
+                fig_fng.add_hrect(
+                    y0=y0, y1=y1, fillcolor=bg_col, line_width=0,
+                    annotation_text=zone_label, annotation_position="right",
+                    annotation_font_size=9, annotation_font_color="#666",
+                )
+            fig_fng.add_trace(go.Scatter(
+                x=fng_df["date"], y=fng_df["value"],
+                mode="lines+markers",
+                line=dict(color="#00d4aa", width=2),
+                marker=dict(size=7, color=dot_colors),
+                hovertemplate="%{x|%b %d}: %{y} (%{text})<extra></extra>",
+                text=fng_df["label"],
+                name="F&G",
+            ))
+            fig_fng.update_layout(
+                height=240,
+                yaxis=dict(range=[0, 100], title="", gridcolor="#1a1d23",
+                           tickfont=dict(size=9)),
+                xaxis=dict(gridcolor="#1a1d23", tickfont=dict(size=9)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=20, r=100, t=10, b=20),
+                font=dict(color="#e0e0e0"),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_fng, use_container_width=True)
+
+        with st.expander("📋 Raw F&G Data"):
+            st.dataframe(
+                fng_df[["date", "value", "label"]]
+                    .rename(columns={"date": "Date", "value": "Value", "label": "Zone"})
+                    .sort_values("Date", ascending=False)
+                    .reset_index(drop=True),
+                use_container_width=True, hide_index=True,
+            )
+
+    st.markdown("---")
+
+    # ── Funding Rate Monitor ─────────────────────────────────────────────────
+    _ui.section_header(
+        "Funding Rate Monitor",
+        "Compare perpetual funding rates across OKX · Binance · Bybit · KuCoin — "
+        "positive = longs paying shorts (bearish); negative = bullish",
+        icon="📡",
+    )
+
+    fr_col1, fr_col2 = st.columns([4, 1])
+    with fr_col1:
+        fr_pairs_sel = st.multiselect(
+            "Pairs to monitor",
+            model.PAIRS,
+            default=model.PAIRS[:8],
+            key="fr_pairs_select",
+        )
+    with fr_col2:
+        st.write("")
+        st.write("")
+        run_fr = st.button(
+            "🔍 Load Rates", type="primary",
+            use_container_width=True, key="run_fr_btn",
+        )
+
+    if run_fr and fr_pairs_sel:
+        with st.spinner("Fetching rates from 4 exchanges…"):
+            fr_rows: list[dict] = []
+            for pair in fr_pairs_sel:
+                multi = _df.get_multi_exchange_funding_rates(pair)
+                row: dict = {"Pair": pair}
+                for exch in ("okx", "binance", "bybit", "kucoin"):
+                    rd   = multi.get(exch, {})
+                    rate = rd.get("funding_rate_pct", 0.0)
+                    row[exch.upper()] = None if rd.get("error") else rate
+                # best carry = exchange with largest |rate|
+                valid = {
+                    exch: multi[exch]["funding_rate_pct"]
+                    for exch in multi
+                    if not multi[exch].get("error") and multi[exch].get("source")
+                }
+                if valid:
+                    best_exch = max(valid, key=lambda e: abs(valid[e]))
+                    best_rate = valid[best_exch]
+                    row["Best Rate"] = f"{best_rate:+.4f}% ({best_exch.upper()})"
+                    row["Ann. Yield%"] = round(abs(best_rate) * 1095, 1)
+                else:
+                    row["Best Rate"] = "N/A"
+                    row["Ann. Yield%"] = 0.0
+                fr_rows.append(row)
+
+            carry_opps = _df.get_carry_trade_opportunities(fr_pairs_sel, threshold_pct=0.01)
+            st.session_state["fr_table"]   = fr_rows
+            st.session_state["carry_opps"] = carry_opps
+
+    fr_table = st.session_state.get("fr_table")
+    if fr_table:
+        fr_df = pd.DataFrame(fr_table)
+
+        def _color_fr(val):
+            if not isinstance(val, (int, float)):
+                return "color: #555555"
+            if val >  0.05: return "color: #ff4b4b; font-weight: bold"
+            if val >  0.01: return "color: #ffa500"
+            if val < -0.05: return "color: #00d4aa; font-weight: bold"
+            if val < -0.01: return "color: #7ecb9a"
+            return "color: #888888"
+
+        def _color_ann(val):
+            if not isinstance(val, (int, float)):
+                return ""
+            if val >= 30: return "color: #00d4aa; font-weight: bold"
+            if val >= 10: return "color: #7ecb9a"
+            return ""
+
+        exch_cols = [c for c in ["OKX", "BINANCE", "BYBIT", "KUCOIN"] if c in fr_df.columns]
+        ann_cols  = ["Ann. Yield%"] if "Ann. Yield%" in fr_df.columns else []
+
+        st.dataframe(
+            fr_df.style
+                .map(_color_fr,  subset=exch_cols)
+                .map(_color_ann, subset=ann_cols),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "Rates are % per 8-hour interval. "
+            "Ann. Yield% = |rate| × 1 095 (assumes 3 payments/day). "
+            "N/A = geo-blocked or pair not listed on that exchange."
+        )
+
+        # ── Carry Trade Opportunities ──────────────────────────────────────
+        carry_opps = st.session_state.get("carry_opps", [])
+        if carry_opps:
+            st.markdown("#### 🏦 Carry Trade Opportunities (|rate| > 0.01%)")
+            st.caption(
+                "Market-neutral strategy: hold opposite positions on perp + spot "
+                "to collect funding payments without directional exposure."
+            )
+            carry_df = pd.DataFrame(carry_opps).rename(columns={
+                "pair":             "Pair",
+                "exchange":         "Exchange",
+                "funding_rate_pct": "Rate %",
+                "direction":        "Direction",
+                "strategy":         "Strategy",
+                "annualized_yield": "Ann. Yield %",
+            })
+
+            def _color_carry_yield(val):
+                if not isinstance(val, (int, float)):
+                    return ""
+                if val >= 50: return "color: #00d4aa; font-weight: bold"
+                if val >= 20: return "color: #7ecb9a"
+                if val >= 10: return "color: #ffa500"
+                return ""
+
+            def _color_rate(val):
+                if not isinstance(val, (int, float)):
+                    return ""
+                if val >  0.05: return "color: #ff4b4b; font-weight: bold"
+                if val >  0.01: return "color: #ffa500"
+                if val < -0.05: return "color: #00d4aa; font-weight: bold"
+                if val < -0.01: return "color: #7ecb9a"
+                return ""
+
+            st.dataframe(
+                carry_df[["Pair", "Exchange", "Rate %", "Strategy", "Ann. Yield %"]].style
+                    .map(_color_rate,        subset=["Rate %"])
+                    .map(_color_carry_yield, subset=["Ann. Yield %"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No carry trade opportunities above 0.01% threshold for the selected pairs.")
+
+    st.markdown("---")
+
+    # ── Signal Accuracy by Pair (Backtest Data) ─────────────────────────────
+    _ui.section_header("Signal Accuracy by Pair",
+                       "Win rate from the most recent backtest — a trade wins when pnl_pct > 0",
+                       icon="🎯")
+
+    bt_df = _db.get_backtest_df()
+    if bt_df.empty or "pair" not in bt_df.columns:
+        st.info("Run a backtest on the Backtest Viewer page to see accuracy stats here.")
+    else:
+        bt_df["win"] = bt_df["pnl_pct"].fillna(0) > 0
+        total_by_pair = bt_df.groupby("pair")["win"].count().rename("Total")
+        wins_by_pair  = bt_df.groupby("pair")["win"].sum().rename("Wins")
+        avg_pnl       = bt_df.groupby("pair")["pnl_pct"].mean().round(2).rename("Avg PnL %")
+        acc_df = (
+            pd.concat([total_by_pair, wins_by_pair, avg_pnl], axis=1)
+            .reset_index()
+            .rename(columns={"pair": "Pair"})
+        )
+        acc_df["Win Rate %"] = (acc_df["Wins"] / acc_df["Total"] * 100).round(1)
+        acc_df = acc_df.sort_values("Win Rate %", ascending=False).reset_index(drop=True)
+
+        col_bar, col_tbl = st.columns([3, 2])
+        with col_bar:
+            fig_acc = px.bar(
+                acc_df, x="Pair", y="Win Rate %",
+                color="Win Rate %",
+                color_continuous_scale=["#ff4b4b", "#333333", "#00d4aa"],
+                color_continuous_midpoint=50,
+                range_y=[0, 100],
+                text_auto=".1f",
+            )
+            fig_acc.add_hline(
+                y=50, line_dash="dash", line_color="#888888",
+                annotation_text="50%", annotation_font_color="#888",
+            )
+            fig_acc.update_layout(
+                height=300, margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#e0e0e0"), showlegend=False,
+                coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig_acc, use_container_width=True)
+
+        with col_tbl:
+            def _color_wr(val):
+                if not isinstance(val, (int, float)): return ""
+                if val >= 60: return "color: #00d4aa; font-weight: bold"
+                if val >= 50: return "color: #7ecb9a"
+                if val <  40: return "color: #ff4b4b; font-weight: bold"
+                if val <  50: return "color: #ff9999"
+                return ""
+
+            def _color_pnl(val):
+                if not isinstance(val, (int, float)): return ""
+                return "color: #00d4aa" if val > 0 else "color: #ff4b4b" if val < 0 else ""
+
+            st.dataframe(
+                acc_df[["Pair", "Total", "Wins", "Win Rate %", "Avg PnL %"]].style
+                    .map(_color_wr,  subset=["Win Rate %"])
+                    .map(_color_pnl, subset=["Avg PnL %"]),
+                use_container_width=True, hide_index=True,
+            )
+
+
+# ──────────────────────────────────────────────
+# PAGE: ARBITRAGE
+# ──────────────────────────────────────────────
+def page_arbitrage():
+    st.title("⚡ Arbitrage Scanner")
+    st.caption(
+        "Cross-exchange spot price spreads and funding-rate carry trades. "
+        "Net spread = gross spread − round-trip taker fees."
+    )
+
+    # ── Controls ──
+    col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
+    with col_btn:
+        run_scan = st.button("🔍 Scan Now", use_container_width=True, type="primary")
+    with col_thresh:
+        min_net = st.number_input(
+            "Min Net Spread %",
+            min_value=0.0, max_value=5.0,
+            value=_arb.MIN_NET_SPREAD_PCT,
+            step=0.05, format="%.2f",
+        )
+        _arb.MIN_NET_SPREAD_PCT = min_net
+
+    # ── Run scan ──
+    if run_scan:
+        with st.spinner("Fetching prices from OKX, KuCoin, Kraken, Gate.io …"):
+            arb_results = _arb.scan_all_arb(model.PAIRS)
+        st.session_state["arb_results"] = arb_results
+        ts = datetime.now().strftime("%H:%M:%S")
+        st.session_state["arb_ts"] = ts
+        st.success(f"Scan complete — {ts}")
+
+    arb_results = st.session_state.get("arb_results")
+    if not arb_results:
+        st.info("Press **Scan Now** to detect arbitrage opportunities across exchanges.")
+        # Show DB history if any
+        hist_df = _db.get_arb_opportunities_df(limit=50)
+        if not hist_df.empty:
+            st.subheader("Recent Opportunities (DB)")
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+        return
+
+    # ── Spot Arbitrage ──
+    st.subheader("📊 Spot Price Spread")
+    spot = arb_results.get("spot", [])
+    if spot:
+        opp_rows = [r for r in spot if r["signal"] == "OPPORTUNITY"]
+        mar_rows = [r for r in spot if r["signal"] == "MARGINAL"]
+        no_rows  = [r for r in spot if r["signal"] == "NO_ARB"]
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Pairs Scanned",    len(spot))
+        m2.metric("Opportunities",    len(opp_rows), delta=f"+{len(opp_rows)}" if opp_rows else None)
+        m3.metric("Marginal",         len(mar_rows))
+        m4.metric("No Arb",           len(no_rows))
+
+        # Build display table
+        rows = []
+        for r in spot:
+            sig_icon = {"OPPORTUNITY": "🟢", "MARGINAL": "🟡", "NO_ARB": "🔴"}.get(r["signal"], "")
+            prices_str = " | ".join(
+                f"{ex}: ${p:,.2f}" for ex, p in sorted(r["prices"].items())
+            ) if r["prices"] else "—"
+            rows.append({
+                "Pair":            r["pair"],
+                "Signal":          f"{sig_icon} {r['signal']}",
+                "Buy On":          r["buy_exchange"] or "—",
+                "Sell On":         r["sell_exchange"] or "—",
+                "Buy Price":       f"${r['buy_price']:,.4f}"  if r["buy_price"]  else "—",
+                "Sell Price":      f"${r['sell_price']:,.4f}" if r["sell_price"] else "—",
+                "Gross Spread %":  f"{r['gross_spread_pct']:.4f}%",
+                "Fees %":          f"{r['fees_pct']:.4f}%",
+                "Net Spread %":    f"{r['net_spread_pct']:.4f}%",
+                "Exchanges Live":  r["n_exchanges"],
+                "All Prices":      prices_str,
+            })
+
+        spot_df = pd.DataFrame(rows)
+
+        def _color_signal(val: str) -> str:
+            if "OPPORTUNITY" in val: return "color: #00d4aa; font-weight:bold"
+            if "MARGINAL"    in val: return "color: #f0b429"
+            return "color: #888"
+
+        def _color_net(val: str) -> str:
+            try:
+                v = float(val.replace("%", ""))
+                if v >= _arb.MIN_NET_SPREAD_PCT: return "color: #00d4aa; font-weight:bold"
+                if v >= 0:                        return "color: #f0b429"
+                return "color: #ff4b4b"
+            except Exception:
+                return ""
+
+        st.dataframe(
+            spot_df.style
+                .map(_color_signal, subset=["Signal"])
+                .map(_color_net,    subset=["Net Spread %"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Detail expanders for each opportunity
+        if opp_rows:
+            st.markdown("#### Active Opportunities")
+            for r in opp_rows:
+                with st.expander(
+                    f"🟢 {r['pair']}  →  Buy {r['buy_exchange']}  Sell {r['sell_exchange']}  "
+                    f"| Net {r['net_spread_pct']:.4f}%",
+                    expanded=True,
+                ):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Buy Exchange",  r["buy_exchange"])
+                    c2.metric("Sell Exchange", r["sell_exchange"])
+                    c3.metric("Gross Spread",  f"{r['gross_spread_pct']:.4f}%")
+                    c4.metric("Net Spread",    f"{r['net_spread_pct']:.4f}%")
+                    st.caption(
+                        f"Buy at ${r['buy_price']:,.4f} on {r['buy_exchange']}, "
+                        f"sell at ${r['sell_price']:,.4f} on {r['sell_exchange']}. "
+                        f"Round-trip fees: {r['fees_pct']:.4f}%."
+                    )
+    else:
+        st.info("No spot prices returned — check network connectivity.")
+
+    st.markdown("---")
+
+    # ── Funding-Rate Carry Trades ──
+    st.subheader("💰 Funding-Rate Carry Trades")
+    funding = arb_results.get("funding", [])
+    if funding:
+        f_rows = []
+        for opp in funding:
+            rate = opp.get("funding_rate_pct", 0)
+            f_rows.append({
+                "Pair":             opp["pair"],
+                "Exchange":         opp.get("exchange", "—").upper(),
+                "Funding Rate %":   f"{rate:+.4f}%",
+                "Direction":        opp.get("direction", "—"),
+                "Strategy":         opp.get("strategy", "—"),
+                "Annualized Yield": f"{opp.get('annualized_yield', 0):.1f}%",
+            })
+        f_df = pd.DataFrame(f_rows)
+
+        def _color_rate(val: str) -> str:
+            try:
+                v = float(val.replace("%", ""))
+                if v > 0.05:  return "color: #00d4aa; font-weight:bold"
+                if v < -0.05: return "color: #ff4b4b; font-weight:bold"
+                return ""
+            except Exception:
+                return ""
+
+        st.dataframe(
+            f_df.style.map(_color_rate, subset=["Funding Rate %"]),
+            use_container_width=True, hide_index=True,
+        )
+        st.caption(
+            "**Strategy**: Collect funding payments by holding opposite spot + perp positions. "
+            "Positive funding → Short Perp + Long Spot. "
+            "Negative funding → Long Perp + Short Spot. "
+            "Net-delta-neutral; no directional exposure."
+        )
+    else:
+        st.info("No funding-rate opportunities found above threshold.")
+
+    st.markdown("---")
+
+    # ── Historical log ──
+    with st.expander("📋 Historical Arbitrage Log (DB)", expanded=False):
+        hist_df = _db.get_arb_opportunities_df(limit=100)
+        if not hist_df.empty:
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            csv_data = hist_df.to_csv(index=False)
+            st.download_button(
+                "⬇ Download CSV",
+                data=csv_data,
+                file_name="arb_opportunities.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("No historical records yet — run a scan to populate.")
+
+
+# ──────────────────────────────────────────────
+# PAGE: AUTONOMOUS AGENT
+# ──────────────────────────────────────────────
+def page_agent():
+    st.title("🤖 Autonomous Agent")
+    st.caption(
+        "LangGraph + Claude claude-sonnet-4-6 autonomous trading agent. "
+        "Hard Python risk gates before and after every Claude decision. "
+        "Claude may only approve or reject — never place orders directly."
+    )
+
+    if _agent is None:
+        st.error("agent.py failed to import. Check logs for details.")
+        return
+
+    # ── Live status ──
+    status = _agent.supervisor.status()
+    is_running = status["running"]
+
+    col_status, col_start, col_stop, col_spacer = st.columns([2, 1, 1, 3])
+    with col_status:
+        if is_running:
+            st.success("● RUNNING")
+        elif status["kill_requested"]:
+            st.warning("◌ STOPPING…")
+        else:
+            st.error("● STOPPED")
+    with col_start:
+        if st.button("▶ Start", use_container_width=True, type="primary",
+                     disabled=is_running, key="agent_start_btn"):
+            _ac = _alerts.load_alerts_config()
+            _ac["agent_enabled"] = True
+            _alerts.save_alerts_config(_ac)
+            _agent.supervisor.start()
+            st.rerun()
+    with col_stop:
+        if st.button("■ Stop", use_container_width=True,
+                     disabled=not is_running, key="agent_stop_btn"):
+            _ac = _alerts.load_alerts_config()
+            _ac["agent_enabled"] = False
+            _alerts.save_alerts_config(_ac)
+            _agent.supervisor.stop()
+            st.rerun()
+
+    # ── Metrics ──
+    st.markdown("---")
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Total Cycles", status["cycles_total"])
+    with m2:
+        last_ts = status["last_run_ts"]
+        if last_ts:
+            age_s = int(time.time() - last_ts)
+            age_str = f"{age_s // 60}m {age_s % 60}s ago" if age_s >= 60 else f"{age_s}s ago"
+        else:
+            age_str = "Never"
+        st.metric("Last Cycle", age_str)
+    with m3:
+        st.metric("Last Pair", status["last_pair"] or "—")
+    with m4:
+        _dec_icon = {"approve": "🟢", "reject": "🔴", "skip": "⚪"}.get(
+            status["last_decision"], "⚪"
+        )
+        st.metric("Last Decision", f"{_dec_icon} {status['last_decision'] or '—'}")
+
+    m5, m6 = st.columns([1, 3])
+    with m5:
+        st.metric("Crash Restarts", status["restart_count"])
+    with m6:
+        _lg = "LangGraph state machine" if status.get("langgraph") else "Sequential pipeline (LangGraph not installed)"
+        st.metric("Engine", _lg)
+
+    # ── Config form ──
+    st.markdown("---")
+    _ui.section_header("Agent Configuration",
+                       "Saved to alerts_config.json — takes effect on next cycle")
+    with st.form("agent_config_form"):
+        _cfg = _agent.get_agent_config()
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            _dry_run  = st.toggle("Dry Run (no real orders)", value=_cfg["dry_run"])
+            _interval = st.number_input(
+                "Cycle Interval (seconds)", min_value=30, max_value=3600,
+                value=_cfg["interval_seconds"], step=30,
+            )
+            _min_conf = st.slider(
+                "Min Confidence to Act (%)", min_value=50.0, max_value=99.0,
+                value=float(_cfg["min_confidence"]), step=1.0,
+            )
+        with ac2:
+            _max_pos  = st.number_input(
+                "Max Concurrent Positions", min_value=1, max_value=10,
+                value=_cfg["max_concurrent_positions"], step=1,
+            )
+            _loss_lim = st.number_input(
+                "Daily Loss Limit (%)", min_value=0.5, max_value=50.0,
+                value=float(_cfg["daily_loss_limit_pct"]), step=0.5, format="%.1f",
+            )
+            _port_sz  = st.number_input(
+                "Portfolio Size (USD)", min_value=100.0, max_value=1_000_000.0,
+                value=float(_cfg["portfolio_size_usd"]), step=500.0, format="%.0f",
+            )
+        if st.form_submit_button("💾 Save Agent Config", type="secondary",
+                                  use_container_width=True):
+            _saved = _alerts.load_alerts_config()
+            _saved["agent_dry_run"]                  = _dry_run
+            _saved["agent_interval_seconds"]         = int(_interval)
+            _saved["agent_min_confidence"]           = float(_min_conf)
+            _saved["agent_max_concurrent_positions"] = int(_max_pos)
+            _saved["agent_daily_loss_limit_pct"]     = float(_loss_lim)
+            _saved["agent_portfolio_size_usd"]       = float(_port_sz)
+            _alerts.save_alerts_config(_saved)
+            st.success("Agent config saved.")
+
+    # ── Architecture notes ──
+    st.markdown("---")
+    _ui.section_header("Pipeline Architecture",
+                       "Hard risk gates prevent Claude from ever executing without validation")
+    st.code(
+        "fetch signal → pre-risk check → Claude approve/reject → post-risk check → execute → log",
+        language=None,
+    )
+    st.markdown("""
+**Safety guarantees:**
+- Claude may only call `approve_trade` or `reject_trade` — never `place_order` directly
+- **pre-risk check**: position count limit, min confidence, daily loss limit, circuit breaker
+- **post-risk check**: size cap re-validation, direction mismatch guard
+- All cycles logged to `agent_log` SQLite table regardless of outcome
+- Prompt injection sanitizer strips jailbreak phrases from exchange data before Claude sees it
+""")
+
+    # ── Decision log ──
+    st.markdown("---")
+    _ui.section_header("Recent Agent Decisions", "Last 200 cycles from agent_log table")
+    _log_df = _db.get_agent_log_df(limit=200)
+    if _log_df.empty:
+        st.info("No decisions recorded yet. Start the agent to begin logging.")
+    else:
+        def _dec_color(v):
+            if v == "approve":
+                return "background-color: #c8f7e5"
+            if v == "reject":
+                return "background-color: #ffd6d6"
+            return ""
+        _styled = _log_df.style.map(_dec_color, subset=["claude_decision"])
+        st.dataframe(_styled, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇ Download Agent Log CSV",
+            data=_log_df.to_csv(index=False),
+            file_name="agent_log.csv",
+            mime="text/csv",
+        )
+
+
+# ──────────────────────────────────────────────
+# ROUTER
+# ──────────────────────────────────────────────
+if page == "Dashboard":
+    page_dashboard()
+elif page == "Market Overview":
+    page_market_overview()
+elif page == "Config Editor":
+    page_config()
+elif page == "Backtest Viewer":
+    page_backtest()
+elif page == "Trade Log & History":
+    page_trade_log()
+elif page == "Arbitrage":
+    page_arbitrage()
+elif page == "Agent":
+    page_agent()

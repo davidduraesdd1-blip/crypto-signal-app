@@ -1,0 +1,1418 @@
+"""
+database.py — SQLite backend for Crypto Signal Model v5.9.13
+
+Replaces all CSV/JSON file I/O with ACID-compliant SQLite operations.
+Thread-safe: WAL mode enables concurrent reads + one writer at a time.
+Write operations protected by a module-level lock (consistent with _log_lock
+pattern already used in crypto_model_core.py parallel scan workers).
+
+On first import:
+  1. Creates crypto_model.db with full schema
+  2. Migrates any existing CSV/JSON data (idempotent — skips if rows already exist)
+
+Drop-in API: all functions match existing signatures in crypto_model_core.py / app.py.
+"""
+
+import sqlite3
+import threading
+import json
+import os
+import logging
+from typing import Optional
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+DB_FILE = "crypto_model.db"
+
+# Single write lock — mirrors _log_lock used in crypto_model_core.py
+_write_lock = threading.Lock()
+
+# ──────────────────────────────────────────────
+# CONNECTION FACTORY
+# ──────────────────────────────────────────────
+def _get_conn() -> sqlite3.Connection:
+    """Open a connection with WAL mode (concurrent reads, one writer)."""
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+# ──────────────────────────────────────────────
+# SCHEMA CREATION
+# ──────────────────────────────────────────────
+def init_db():
+    """Create all tables and indexes. Idempotent — safe to call on every startup."""
+    with _write_lock:
+        conn = None
+        try:  # BUG-C01 / BUG-H02: conn inside try so finally always has a reference to close
+            conn = _get_conn()
+            conn.executescript("""
+                -- Per-signal feedback log (was feedback_log.csv, 12,795+ rows)
+                -- F1: actual_exit/actual_pnl_pct/outcome/was_correct/resolved_at store real trade outcomes
+                -- F4: vote_* columns store per-agent votes for accuracy-weighted ensemble
+                CREATE TABLE IF NOT EXISTS feedback_log (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       TEXT NOT NULL,
+                    pair            TEXT NOT NULL,
+                    direction       TEXT,
+                    entry           REAL,
+                    exit_target     REAL,
+                    confidence      REAL,
+                    actual_exit     REAL,
+                    actual_pnl_pct  REAL,
+                    outcome         TEXT,
+                    was_correct     INTEGER,
+                    resolved_at     TEXT,
+                    vote_trend      REAL,
+                    vote_momentum   REAL,
+                    vote_meanrev    REAL,
+                    vote_sentiment  REAL,
+                    vote_risk       REAL,
+                    vote_lgbm       REAL,
+                    -- Indicator snapshots at signal time (F-SNAP: enables LightGBM retraining)
+                    snap_rsi        REAL,
+                    snap_macd_hist  REAL,
+                    snap_bb_pos     REAL,
+                    snap_adx        REAL,
+                    snap_stoch_k    REAL,
+                    snap_volume_ok  INTEGER,
+                    snap_regime     TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_fb_pair ON feedback_log(pair);
+                CREATE INDEX IF NOT EXISTS idx_fb_ts   ON feedback_log(timestamp);
+
+                -- Master scan results log (was daily_signals_master.csv)
+                CREATE TABLE IF NOT EXISTS daily_signals (
+                    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scan_timestamp              TEXT,
+                    pair                        TEXT,
+                    price_usd                   REAL,
+                    confidence_avg_pct          REAL,
+                    direction                   TEXT,
+                    strategy_bias               TEXT,
+                    mtf_alignment               REAL,
+                    high_conf                   INTEGER,
+                    fng_value                   REAL,
+                    fng_category                TEXT,
+                    entry                       REAL,
+                    exit                        REAL,
+                    stop_loss                   REAL,
+                    risk_pct                    REAL,
+                    position_size_usd           REAL,
+                    position_size_pct           REAL,
+                    risk_mode                   TEXT,
+                    corr_with_btc               REAL,
+                    corr_adjusted_size_pct      REAL,
+                    regime                      TEXT,
+                    sr_status                   TEXT,
+                    circuit_breaker_triggered   INTEGER DEFAULT 0,
+                    circuit_breaker_drawdown_pct REAL DEFAULT 0.0,
+                    scan_sec                    REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sig_pair ON daily_signals(pair);
+                CREATE INDEX IF NOT EXISTS idx_sig_ts   ON daily_signals(scan_timestamp);
+                CREATE INDEX IF NOT EXISTS idx_sig_dir  ON daily_signals(direction);
+                CREATE INDEX IF NOT EXISTS idx_signals_pair_time ON daily_signals (pair, scan_timestamp DESC);
+
+                -- Backtest trade-by-trade results (was backtest_summary.csv)
+                CREATE TABLE IF NOT EXISTS backtest_trades (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id       TEXT NOT NULL,
+                    timestamp    TEXT,
+                    pair         TEXT,
+                    direction    TEXT,
+                    entry        REAL,
+                    exit         REAL,
+                    exit_reason  TEXT,
+                    pnl_pct      REAL,
+                    pnl_usd      REAL,
+                    pos_pct      REAL,
+                    gross_pnl_pct REAL,
+                    fee_usd      REAL,
+                    slippage_usd REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bt_run  ON backtest_trades(run_id);
+                CREATE INDEX IF NOT EXISTS idx_bt_pair ON backtest_trades(pair);
+
+                -- Closed paper trade positions (was paper_trades_log.csv)
+                CREATE TABLE IF NOT EXISTS paper_trades (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pair       TEXT,
+                    entry_time TEXT,
+                    close_time TEXT,
+                    direction  TEXT,
+                    entry      REAL,
+                    exit       REAL,
+                    pnl_pct    REAL,
+                    size_pct   REAL,
+                    reason     TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_pt_pair ON paper_trades(pair);
+
+                -- Open paper trade positions (was positions.json)
+                CREATE TABLE IF NOT EXISTS positions (
+                    pair            TEXT PRIMARY KEY,
+                    direction       TEXT,
+                    entry           REAL,
+                    target          REAL,
+                    stop            REAL,
+                    entry_time      TEXT,
+                    size_pct        REAL DEFAULT 0.0,
+                    current_pnl_pct REAL DEFAULT 0.0
+                );
+
+                -- Versioned indicator weights (was dynamic_weights.json)
+                CREATE TABLE IF NOT EXISTS dynamic_weights (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    saved_at     TEXT NOT NULL,
+                    source       TEXT DEFAULT 'manual',
+                    weights_json TEXT NOT NULL
+                );
+
+                -- Weight evaluation log (was weights_log.csv)
+                CREATE TABLE IF NOT EXISTS weights_log (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp    TEXT,
+                    avg_pnl      REAL,
+                    accuracy_pct REAL
+                );
+
+                -- Scan results cache (singleton row id=1)
+                CREATE TABLE IF NOT EXISTS scan_cache (
+                    id           INTEGER PRIMARY KEY CHECK (id = 1),
+                    saved_at     TEXT,
+                    results_json TEXT
+                );
+
+                -- Scan progress state (singleton row id=1)
+                CREATE TABLE IF NOT EXISTS scan_status (
+                    id       INTEGER PRIMARY KEY CHECK (id = 1),
+                    running  INTEGER DEFAULT 0,
+                    timestamp TEXT,
+                    error    TEXT,
+                    progress REAL DEFAULT 0,
+                    pair     TEXT DEFAULT ''
+                );
+
+                -- Alert audit log
+                CREATE TABLE IF NOT EXISTS alerts_log (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sent_at   TEXT NOT NULL,
+                    channel   TEXT,
+                    pair      TEXT,
+                    direction TEXT,
+                    confidence REAL,
+                    status    TEXT DEFAULT 'sent',
+                    error_msg TEXT
+                );
+
+                -- Execution log (paper + live orders)
+                CREATE TABLE IF NOT EXISTS execution_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    placed_at  TEXT NOT NULL,
+                    pair       TEXT,
+                    direction  TEXT,
+                    side       TEXT,
+                    size_usd   REAL,
+                    order_type TEXT DEFAULT 'market',
+                    price      REAL,
+                    order_id   TEXT,
+                    status     TEXT DEFAULT 'ok',
+                    mode       TEXT DEFAULT 'paper',
+                    error_msg  TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_exec_pair ON execution_log(pair);
+                CREATE INDEX IF NOT EXISTS idx_exec_ts   ON execution_log(placed_at);
+
+                -- Agent decision log (autonomous agent cycle records)
+                CREATE TABLE IF NOT EXISTS agent_log (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    logged_at        TEXT NOT NULL,
+                    pair             TEXT NOT NULL,
+                    direction        TEXT,
+                    confidence       REAL,
+                    claude_decision  TEXT,
+                    claude_rationale TEXT,
+                    action_taken     TEXT,
+                    execution_result TEXT,
+                    notes            TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_pair ON agent_log(pair);
+                CREATE INDEX IF NOT EXISTS idx_agent_ts   ON agent_log(logged_at);
+
+                -- Arbitrage opportunities (spot spread + funding-rate carry)
+                CREATE TABLE IF NOT EXISTS arb_opportunities (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    detected_at      TEXT NOT NULL,
+                    pair             TEXT NOT NULL,
+                    arb_type         TEXT NOT NULL,
+                    buy_exchange     TEXT,
+                    sell_exchange    TEXT,
+                    gross_spread_pct REAL,
+                    net_spread_pct   REAL,
+                    buy_price        REAL,
+                    sell_price       REAL,
+                    signal           TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_arb_pair ON arb_opportunities(pair);
+                CREATE INDEX IF NOT EXISTS idx_arb_ts   ON arb_opportunities(detected_at);
+            """)
+            conn.commit()
+
+            # ── Migrate existing feedback_log tables — add new columns if missing ──
+            # Required for databases created before Phase 2 (F1 + F4 columns).
+            # ALTER TABLE IF NOT EXISTS column is not valid SQLite syntax; use PRAGMA check.
+            def _add_col(tbl, col, col_def):
+                existing = [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_def}")
+
+            for col, dfn in [
+                ('actual_exit',    'REAL'),
+                ('actual_pnl_pct', 'REAL'),
+                ('outcome',        'TEXT'),
+                ('was_correct',    'INTEGER'),
+                ('resolved_at',    'TEXT'),
+                ('vote_trend',     'REAL'),
+                ('vote_momentum',  'REAL'),
+                ('vote_meanrev',   'REAL'),
+                ('vote_sentiment', 'REAL'),
+                ('vote_risk',      'REAL'),
+                ('vote_lgbm',      'REAL'),
+                # F-SNAP: indicator snapshots for LightGBM retraining
+                ('snap_rsi',       'REAL'),
+                ('snap_macd_hist', 'REAL'),
+                ('snap_bb_pos',    'REAL'),
+                ('snap_adx',       'REAL'),
+                ('snap_stoch_k',   'REAL'),
+                ('snap_volume_ok', 'INTEGER'),
+                ('snap_regime',    'TEXT'),
+            ]:
+                _add_col('feedback_log', col, dfn)
+
+            # Index for resolved lookups (may already exist on fresh DBs from executescript)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fb_resolved ON feedback_log(resolved_at)"
+            )
+            # Compound index for pair-level resolved queries (feedback loop performance)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fb_pair_resolved ON feedback_log(pair, resolved_at)"
+            )
+            conn.commit()
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+# ──────────────────────────────────────────────
+# MIGRATION  (CSV/JSON → SQLite, one-time)
+# ──────────────────────────────────────────────
+MASTER_COLS = [
+    'scan_timestamp', 'pair', 'price_usd', 'confidence_avg_pct', 'direction',
+    'strategy_bias', 'mtf_alignment', 'high_conf', 'fng_value', 'fng_category',
+    'entry', 'exit', 'stop_loss', 'risk_pct', 'position_size_usd',
+    'position_size_pct', 'risk_mode', 'corr_with_btc', 'corr_adjusted_size_pct',
+    'regime', 'sr_status', 'circuit_breaker_triggered', 'circuit_breaker_drawdown_pct',
+    'scan_sec',
+]
+
+
+_VALID_TABLES = frozenset([
+    'feedback_log', 'daily_signals', 'backtest_trades', 'paper_trades',
+    'positions', 'dynamic_weights', 'weights_log', 'scan_cache',
+    'scan_status', 'alerts_log', 'execution_log', 'arb_opportunities',
+    'agent_log',
+])
+
+# Pre-built COUNT(*) queries per table — eliminates f-string SQL construction (SEC-CRITICAL-01).
+# SQLite does not support parameterised table names so this dict is the correct safe pattern.
+_TABLE_COUNT_SQL: dict[str, str] = {t: f"SELECT COUNT(*) FROM {t}" for t in _VALID_TABLES}
+
+
+def _row_count(conn: sqlite3.Connection, table: str) -> int:
+    if table not in _VALID_TABLES:
+        raise ValueError(f"_row_count: unknown table '{table}'")
+    return conn.execute(_TABLE_COUNT_SQL[table]).fetchone()[0]
+
+
+def migrate_csv_to_db():
+    """
+    Import existing CSV/JSON data into SQLite.
+    Idempotent: each table is only populated if it is currently empty.
+    Original files are NOT deleted — they serve as a backup.
+
+    BUG-R01: wrap entire migration in _write_lock so that the
+    'check row count → write' sequence is atomic.  Without the outer lock
+    two threads could both see count==0 and both import, doubling all rows.
+    The inner with _write_lock blocks are removed (would deadlock a non-reentrant lock).
+    """
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            # ── feedback_log.csv ──────────────────────
+            if os.path.exists("feedback_log.csv") and _row_count(conn, "feedback_log") == 0:
+                try:
+                    df = pd.read_csv("feedback_log.csv")
+                    if not df.empty:
+                        df.to_sql("feedback_log", conn, if_exists="append", index=False)
+                        conn.commit()
+                        logger.info(f"DB migration: imported {len(df)} rows → feedback_log")
+                except Exception as e:
+                    logger.warning(f"DB migration feedback_log failed: {e}")
+
+            # ── daily_signals_master.csv ──────────────
+            if os.path.exists("daily_signals_master.csv") and _row_count(conn, "daily_signals") == 0:
+                try:
+                    df = pd.read_csv("daily_signals_master.csv")
+                    if not df.empty:
+                        # Keep only known columns; fill missing with None
+                        for col in MASTER_COLS:
+                            if col not in df.columns:
+                                df[col] = None
+                        df = df[MASTER_COLS]
+                        if 'high_conf' in df.columns:
+                            df['high_conf'] = df['high_conf'].apply(
+                                lambda x: 1 if str(x).lower() in ('true', '1', 'yes') else 0
+                            )
+                        if 'circuit_breaker_triggered' in df.columns:
+                            df['circuit_breaker_triggered'] = df['circuit_breaker_triggered'].apply(
+                                lambda x: 1 if str(x).lower() in ('true', '1', 'yes') else 0
+                            )
+                        df.to_sql("daily_signals", conn, if_exists="append", index=False)
+                        conn.commit()
+                        logger.info(f"DB migration: imported {len(df)} rows → daily_signals")
+                except Exception as e:
+                    logger.warning(f"DB migration daily_signals failed: {e}")
+
+            # ── backtest_summary.csv ──────────────────
+            if os.path.exists("backtest_summary.csv") and _row_count(conn, "backtest_trades") == 0:
+                try:
+                    df = pd.read_csv("backtest_summary.csv")
+                    if not df.empty:
+                        df['run_id'] = 'migrated_' + datetime.now().strftime('%Y%m%d_%H%M%S')
+                        df.to_sql("backtest_trades", conn, if_exists="append", index=False)
+                        conn.commit()
+                        logger.info(f"DB migration: imported {len(df)} rows → backtest_trades")
+                except Exception as e:
+                    logger.warning(f"DB migration backtest_trades failed: {e}")
+
+            # ── paper_trades_log.csv ──────────────────
+            if os.path.exists("paper_trades_log.csv") and _row_count(conn, "paper_trades") == 0:
+                try:
+                    df = pd.read_csv("paper_trades_log.csv")
+                    if not df.empty:
+                        df.to_sql("paper_trades", conn, if_exists="append", index=False)
+                        conn.commit()
+                        logger.info(f"DB migration: imported {len(df)} rows → paper_trades")
+                except Exception as e:
+                    logger.warning(f"DB migration paper_trades failed: {e}")
+
+            # ── positions.json ────────────────────────
+            if os.path.exists("positions.json") and _row_count(conn, "positions") == 0:
+                try:
+                    with open("positions.json") as f:
+                        positions = json.load(f)
+                    if positions:
+                        cols = {'pair', 'direction', 'entry', 'target', 'stop',
+                                'entry_time', 'size_pct', 'current_pnl_pct'}
+                        rows = []
+                        for pair, pos in positions.items():
+                            row = {'pair': pair}
+                            row.update({k: pos.get(k) for k in cols if k != 'pair'})
+                            rows.append(row)
+                        pd.DataFrame(rows).to_sql("positions", conn, if_exists="append", index=False)
+                        conn.commit()
+                        logger.info(f"DB migration: imported {len(rows)} positions → positions")
+                except Exception as e:
+                    logger.warning(f"DB migration positions failed: {e}")
+
+            # ── dynamic_weights.json ──────────────────
+            if os.path.exists("dynamic_weights.json") and _row_count(conn, "dynamic_weights") == 0:
+                try:
+                    with open("dynamic_weights.json") as f:
+                        w = json.load(f)
+                    conn.execute(
+                        "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
+                        (datetime.now().isoformat(), 'migrated', json.dumps(w))
+                    )
+                    conn.commit()
+                    logger.info("DB migration: imported dynamic_weights.json → dynamic_weights")
+                except Exception as e:
+                    logger.warning(f"DB migration dynamic_weights failed: {e}")
+
+            # ── weights_log.csv ───────────────────────
+            if os.path.exists("weights_log.csv") and _row_count(conn, "weights_log") == 0:
+                try:
+                    df = pd.read_csv("weights_log.csv")
+                    if not df.empty:
+                        df.to_sql("weights_log", conn, if_exists="append", index=False)
+                        conn.commit()
+                        logger.info(f"DB migration: imported {len(df)} rows → weights_log")
+                except Exception as e:
+                    logger.warning(f"DB migration weights_log failed: {e}")
+
+            # ── scan_results_cache.json ───────────────
+            if os.path.exists("scan_results_cache.json") and _row_count(conn, "scan_cache") == 0:
+                try:
+                    with open("scan_results_cache.json") as f:
+                        results = json.load(f)
+                    if results:
+                        conn.execute(
+                            "INSERT INTO scan_cache (id, saved_at, results_json) VALUES (1,?,?)",
+                            (datetime.now().isoformat(), json.dumps(results, default=str))
+                        )
+                        conn.commit()
+                    logger.info("DB migration: imported scan_results_cache.json → scan_cache")
+                except Exception as e:
+                    logger.warning(f"DB migration scan_cache failed: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# ──────────────────────────────────────────────
+# FEEDBACK LOG
+# ──────────────────────────────────────────────
+def log_feedback(pair: str, direction: str, entry: float,
+                 exit_: float, confidence: float,
+                 agent_votes: dict = None,
+                 indicator_snaps: dict = None):
+    """Append one signal to the feedback log. Thread-safe.
+
+    Args:
+        agent_votes:      dict with keys 'trend','momentum','meanrev','sentiment','risk','lgbm'
+                          (F4) — used to compute per-agent accuracy weights.
+        indicator_snaps:  dict with keys 'rsi','macd_hist','bb_pos','adx','stoch_k',
+                          'volume_ok','regime' (F-SNAP) — stored for LightGBM retraining.
+                          All values optional; missing keys stored as NULL.
+    """
+    v = agent_votes or {}
+    s = indicator_snaps or {}
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO feedback_log "
+                "(timestamp, pair, direction, entry, exit_target, confidence,"
+                " vote_trend, vote_momentum, vote_meanrev, vote_sentiment, vote_risk, vote_lgbm,"
+                " snap_rsi, snap_macd_hist, snap_bb_pos, snap_adx, snap_stoch_k,"
+                " snap_volume_ok, snap_regime)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (datetime.now().isoformat(), pair, direction, float(entry or 0),
+                 float(exit_ or 0), float(confidence or 0),
+                 v.get('trend'), v.get('momentum'), v.get('meanrev'),
+                 v.get('sentiment'), v.get('risk'), v.get('lgbm'),
+                 s.get('rsi'), s.get('macd_hist'), s.get('bb_pos'),
+                 s.get('adx'), s.get('stoch_k'),
+                 int(bool(s.get('volume_ok'))) if s.get('volume_ok') is not None else None,
+                 s.get('regime'))
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_feedback_df() -> pd.DataFrame:
+    conn = _get_conn()
+    try:
+        df = pd.read_sql("SELECT * FROM feedback_log ORDER BY timestamp ASC", conn)
+    finally:
+        conn.close()
+    return df
+
+
+def get_resolved_feedback_df(days: int = 90) -> pd.DataFrame:
+    """Return feedback rows where actual outcome has been resolved, within last N days.
+
+    Used by F2 (update_dynamic_weights) and F6/F7 (drift detection).
+    """
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM feedback_log "
+            "WHERE resolved_at IS NOT NULL AND actual_pnl_pct IS NOT NULL "
+            "AND timestamp > datetime('now', ?) "
+            "ORDER BY timestamp ASC",
+            conn,
+            params=(f"-{days} days",),
+        )
+    finally:
+        conn.close()
+    return df
+
+
+def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 50) -> int:
+    """Resolve unresolved feedback_log rows whose hold period has elapsed.
+
+    For each unresolved row older than hold_days, fetches the actual close price
+    at entry_time + hold_days via fetch_price_fn, then writes back:
+    actual_exit, actual_pnl_pct, outcome ('win'/'loss'), was_correct (1/0), resolved_at.
+
+    This converts the dead signal log into a live training dataset (F1).
+
+    Args:
+        fetch_price_fn: callable(pair: str, since_ms: int) -> float | None
+                        Must return the close price at or after since_ms.
+        hold_days:      Days to wait before resolution (should match BACKTEST_HOLD_DAYS).
+        batch:          Max rows processed per call to avoid long API waits.
+
+    Returns:
+        Number of rows successfully resolved in this call.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=hold_days)).isoformat()
+    # BUG-R05: convert sqlite3.Row objects to plain dicts BEFORE closing the
+    # connection.  sqlite3.Row subscript access on a closed connection is
+    # implementation-defined and can raise ProgrammingError in some versions.
+    conn = _get_conn()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, pair, direction, entry, timestamp FROM feedback_log "
+            "WHERE resolved_at IS NULL AND entry IS NOT NULL AND entry > 0 "
+            "AND timestamp < ? ORDER BY timestamp ASC LIMIT ?",
+            (cutoff, batch),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    if not rows:
+        return 0
+
+    resolved = 0
+    for row in rows:
+        try:
+            ts = datetime.fromisoformat(row['timestamp'])
+            since_ms = int((ts + timedelta(days=hold_days)).timestamp() * 1000)
+            actual_price = fetch_price_fn(row['pair'], since_ms)
+            if actual_price is None:
+                continue
+
+            entry = row['entry']
+            direction = str(row['direction'] or '')
+            if 'BUY' in direction.upper():
+                pnl_pct = (actual_price - entry) / entry * 100
+            elif 'SELL' in direction.upper():
+                pnl_pct = (entry - actual_price) / entry * 100
+            else:
+                continue  # NEUTRAL/LOW VOL — skip
+
+            outcome = 'win' if pnl_pct > 0 else 'loss'
+            was_correct = 1 if pnl_pct > 0 else 0
+
+            with _write_lock:
+                conn2 = _get_conn()
+                try:
+                    conn2.execute(
+                        "UPDATE feedback_log "
+                        "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
+                        "    was_correct=?, resolved_at=? "
+                        "WHERE id=?",
+                        (float(actual_price), round(float(pnl_pct), 4),
+                         outcome, was_correct, datetime.now(timezone.utc).isoformat(),
+                         row['id']),
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+            resolved += 1
+        except Exception as e:
+            logger.warning(f"resolve_feedback_outcomes failed for row {row['id']}: {e}")
+
+    return resolved
+
+
+def quick_resolve_feedback(fetch_ohlcv_fn, hold_hours: int = 72, batch: int = 100) -> int:
+    """Accelerated feedback resolution using 3-day directional check instead of 14-day hold.
+
+    Cuts the feedback dead zone from 14 days down to hold_hours (default 72h = 3 days).
+    Resolves signals where hold_hours have elapsed by fetching a 1h OHLCV candle close
+    price at entry_time + hold_hours and computing directional PnL.
+
+    This is a 'quick win' resolution pass — full hold_days resolution still runs separately.
+    Both can coexist: quick_resolve runs first, resolve_feedback_outcomes skips already-resolved rows.
+
+    Args:
+        fetch_ohlcv_fn: callable(pair: str, since_ms: int, tf: str) -> list of OHLCV candles
+                        Each candle = [timestamp_ms, open, high, low, close, volume].
+                        Should return the first candle at or after since_ms.
+        hold_hours:     Hours to wait before 3-day resolution check (default 72).
+        batch:          Max rows processed per call.
+
+    Returns:
+        Number of rows resolved in this call.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hold_hours)).isoformat()
+    conn = _get_conn()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, pair, direction, entry, timestamp FROM feedback_log "
+            "WHERE resolved_at IS NULL AND entry IS NOT NULL AND entry > 0 "
+            "AND timestamp < ? ORDER BY timestamp ASC LIMIT ?",
+            (cutoff, batch),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    if not rows:
+        return 0
+
+    resolved = 0
+    for row in rows:
+        try:
+            ts = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')
+                                        if row['timestamp'].endswith('Z')
+                                        else row['timestamp'])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            target_ms = int((ts + timedelta(hours=hold_hours)).timestamp() * 1000)
+            candles = fetch_ohlcv_fn(row['pair'], target_ms, '1h')
+            if not candles:
+                continue
+            # Use close price of first candle at or after hold_hours mark
+            actual_price = float(candles[0][4])  # index 4 = close
+
+            entry = float(row['entry'])
+            direction = str(row['direction'] or '')
+            if 'BUY' in direction.upper():
+                pnl_pct = (actual_price - entry) / entry * 100
+            elif 'SELL' in direction.upper():
+                pnl_pct = (entry - actual_price) / entry * 100
+            else:
+                continue  # NEUTRAL/LOW VOL — skip
+
+            outcome = 'win' if pnl_pct > 0 else 'loss'
+            was_correct = 1 if pnl_pct > 0 else 0
+
+            with _write_lock:
+                conn2 = _get_conn()
+                try:
+                    conn2.execute(
+                        "UPDATE feedback_log "
+                        "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
+                        "    was_correct=?, resolved_at=? "
+                        "WHERE id=?",
+                        (actual_price, round(float(pnl_pct), 4),
+                         outcome, was_correct,
+                         datetime.now(timezone.utc).isoformat(),
+                         row['id']),
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+            resolved += 1
+        except Exception as e:
+            logger.warning(f"quick_resolve_feedback failed for row {row.get('id')}: {e}")
+
+    return resolved
+
+
+def get_agent_accuracy_weights(days: int = 30) -> dict:
+    """Compute per-agent directional accuracy over the last N days from resolved feedback.
+
+    An agent vote is 'correct' if its sign matches the actual trade outcome:
+      - vote > 0 (bullish) AND was_correct == 1  → correct (BUY signal won)
+      - vote < 0 (bearish) AND was_correct == 1  → correct (SELL signal won = price fell)
+      - vote == 0                                 → excluded from accuracy calc
+
+    NOTE: was_correct == 1 means pnl_pct > 0 (trade profited), regardless of direction.
+    A bearish (SELL) agent is correct when the SELL trade makes money (was_correct==1),
+    NOT when the trade loses (was_correct==0). The old inverted logic rewarded bearish
+    agents for bad calls, poisoning the entire feedback loop (BUG-DB01).
+
+    Returns:
+        dict: {'trend': 0.65, 'momentum': 0.52, 'meanrev': 0.48, 'sentiment': 0.61,
+               'risk': 0.55, 'lgbm': 0.58}
+        Falls back to 0.5 (equal weight) if <30 resolved rows available.
+    """
+    agents = ['trend', 'momentum', 'meanrev', 'sentiment', 'risk', 'lgbm']
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            "SELECT vote_trend, vote_momentum, vote_meanrev, vote_sentiment, vote_risk, vote_lgbm, "
+            "       was_correct FROM feedback_log "
+            "WHERE resolved_at IS NOT NULL AND was_correct IS NOT NULL "
+            "AND timestamp > datetime('now', ?)",
+            conn,
+            params=(f"-{days} days",),
+        )
+    finally:
+        conn.close()
+
+    if len(df) < 30:
+        return {a: 0.5 for a in agents}
+
+    result = {}
+    for agent in agents:
+        col = f'vote_{agent}'
+        if col not in df.columns:
+            result[agent] = 0.5
+            continue
+        sub = df[[col, 'was_correct']].dropna()
+        sub = sub[sub[col] != 0]  # exclude neutral/abstain votes
+        if len(sub) < 10:
+            result[agent] = 0.5
+            continue
+        correct = (
+            ((sub[col] > 0) & (sub['was_correct'] == 1)) |
+            ((sub[col] < 0) & (sub['was_correct'] == 1))  # BUG-DB01 fix: bearish correct when SELL wins
+        )
+        result[agent] = round(float(correct.mean()), 4)
+
+    return result
+
+
+# ──────────────────────────────────────────────
+# DAILY SIGNALS (master log)
+# ──────────────────────────────────────────────
+def append_to_master(results: list):
+    """Append a list of scan result dicts to the daily_signals table."""
+    if not results:
+        return
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    rows = []
+    for r in results:
+        cb = r.get('circuit_breaker', {})
+        rows.append({
+            'scan_timestamp':               ts,
+            'pair':                         r.get('pair'),
+            'price_usd':                    r.get('price_usd'),
+            'confidence_avg_pct':           r.get('confidence_avg_pct'),
+            'direction':                    r.get('direction'),
+            'strategy_bias':                r.get('strategy_bias'),
+            'mtf_alignment':                r.get('mtf_alignment'),
+            'high_conf':                    1 if r.get('high_conf') else 0,
+            'fng_value':                    r.get('fng_value'),
+            'fng_category':                 r.get('fng_category'),
+            'entry':                        r.get('entry'),
+            'exit':                         r.get('exit'),
+            'stop_loss':                    r.get('stop_loss'),
+            'risk_pct':                     r.get('risk_pct'),
+            'position_size_usd':            r.get('position_size_usd'),
+            'position_size_pct':            r.get('position_size_pct'),
+            'risk_mode':                    r.get('risk_mode'),
+            'corr_with_btc':                r.get('corr_with_btc'),
+            'corr_adjusted_size_pct':       r.get('corr_adjusted_size_pct'),
+            'regime':                       r.get('regime'),
+            'sr_status':                    r.get('sr_status'),
+            'circuit_breaker_triggered':    1 if cb.get('triggered', False) else 0,
+            'circuit_breaker_drawdown_pct': cb.get('drawdown_pct', 0.0),
+            'scan_sec':                     r.get('scan_sec'),
+        })
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            pd.DataFrame(rows).to_sql("daily_signals", conn, if_exists="append", index=False)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_signals_df(limit: int = 500) -> pd.DataFrame:
+    """Return recent daily signals as a DataFrame sorted by scan_timestamp ASC.
+
+    Args:
+        limit: Maximum number of rows returned (default 500, newest first then re-sorted ASC).
+               Pass 0 to return all rows (use only for maintenance/migration tasks).
+    """
+    conn = _get_conn()
+    try:
+        if limit and limit > 0:
+            # Fetch newest N rows then sort ascending so callers see chronological order
+            df = pd.read_sql(
+                "SELECT * FROM daily_signals ORDER BY id DESC LIMIT ?",
+                conn,
+                params=(int(limit),),
+            )
+            df = df.sort_values("scan_timestamp", ascending=True).reset_index(drop=True)
+        else:
+            df = pd.read_sql("SELECT * FROM daily_signals ORDER BY scan_timestamp ASC", conn)
+    finally:
+        conn.close()
+    return df
+
+
+# ──────────────────────────────────────────────
+# BACKTEST TRADES
+# ──────────────────────────────────────────────
+def save_backtest_trades(trades: list, run_id: str):
+    """Persist a full backtest run's trades. run_id groups them together."""
+    if not trades:
+        return
+    df = pd.DataFrame(trades)
+    df['run_id'] = run_id
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            df.to_sql("backtest_trades", conn, if_exists="append", index=False)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_backtest_df(run_id: str = None) -> pd.DataFrame:
+    """
+    Return trades for a specific run_id, or the latest run if run_id is None.
+    Drops the auto-added 'id' and 'run_id' columns so callers get the same
+    shape as the old backtest_summary.csv.
+    """
+    conn = _get_conn()
+    try:
+        if run_id:
+            df = pd.read_sql(
+                "SELECT * FROM backtest_trades WHERE run_id=? ORDER BY id ASC",
+                conn, params=[run_id]
+            )
+        else:
+            row = conn.execute(
+                "SELECT run_id FROM backtest_trades ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return pd.DataFrame()
+            df = pd.read_sql(
+                "SELECT * FROM backtest_trades WHERE run_id=? ORDER BY id ASC",
+                conn, params=[row['run_id']]
+            )
+    finally:
+        conn.close()
+    return df.drop(columns=['id', 'run_id'], errors='ignore')
+
+
+def get_all_backtest_runs() -> pd.DataFrame:
+    """Returns a summary of every backtest run stored in the DB."""
+    conn = _get_conn()
+    try:
+        df = pd.read_sql("""
+            SELECT run_id,
+                   COUNT(*)  AS trades,
+                   MIN(timestamp) AS started_at,
+                   ROUND(AVG(pnl_pct), 2) AS avg_pnl_pct,
+                   SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins
+            FROM backtest_trades
+            GROUP BY run_id
+            ORDER BY started_at DESC
+        """, conn)
+    finally:
+        conn.close()
+    return df
+
+
+# ──────────────────────────────────────────────
+# PAPER TRADES (closed positions log)
+# ──────────────────────────────────────────────
+def log_closed_trade(trade: dict):
+    """Append one closed paper trade. Thread-safe."""
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO paper_trades
+                    (pair, entry_time, close_time, direction, entry, exit, pnl_pct, size_pct, reason)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                trade.get('pair'),       trade.get('entry_time'),
+                trade.get('close_time'), trade.get('direction'),
+                trade.get('entry'),      trade.get('exit'),
+                trade.get('pnl_pct'),    trade.get('size_pct'),
+                trade.get('reason')
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_paper_trades_df() -> pd.DataFrame:
+    conn = _get_conn()
+    try:
+        df = pd.read_sql("SELECT * FROM paper_trades ORDER BY close_time ASC", conn)
+    finally:
+        conn.close()
+    return df.drop(columns=['id'], errors='ignore')
+
+
+# ──────────────────────────────────────────────
+# OPEN POSITIONS
+# ──────────────────────────────────────────────
+def load_positions() -> dict:
+    """Return open positions as {pair: {direction, entry, target, stop, ...}}."""
+    conn = _get_conn()
+    try:
+        df = pd.read_sql("SELECT * FROM positions", conn)
+    finally:
+        conn.close()
+    if df.empty:
+        return {}
+    cols = [c for c in df.columns if c != 'pair']
+    return {row['pair']: {k: row[k] for k in cols} for _, row in df.iterrows()}
+
+
+def save_positions(positions: dict):
+    """Overwrite the positions table atomically.
+
+    BUG-R13: pd.DataFrame.to_sql() issues its own internal commit in pandas >= 2.0,
+    which commits the manual BEGIN transaction early.  If to_sql then raises, the
+    subsequent conn.rollback() can't undo the already-committed DELETE, leaving the
+    positions table empty.  Fix: use conn.executemany() with raw SQL so DELETE and
+    INSERTs share the same transaction without any auto-commit interference.
+    """
+    _POSITION_COLS = ['pair', 'direction', 'entry', 'target', 'stop',
+                      'entry_time', 'size_pct', 'current_pnl_pct']
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM positions")
+            if positions:
+                rows_data = []
+                for pair, pos in positions.items():
+                    row = {'pair': pair}
+                    row.update({k: v for k, v in pos.items() if k in _POSITION_COLS})
+                    rows_data.append(row)
+                if rows_data:
+                    # Determine actual columns present across all rows
+                    all_cols = list(dict.fromkeys(c for r in rows_data for c in r))
+                    placeholders = ', '.join(['?'] * len(all_cols))
+                    col_names = ', '.join(all_cols)
+                    conn.executemany(
+                        f"INSERT INTO positions ({col_names}) VALUES ({placeholders})",
+                        [tuple(r.get(c) for c in all_cols) for r in rows_data]
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
+# DYNAMIC WEIGHTS
+# ──────────────────────────────────────────────
+def load_weights() -> dict:
+    """Return the most recently saved indicator weights dict."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT weights_json FROM dynamic_weights ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if row:
+        try:
+            return json.loads(row['weights_json'])
+        except Exception:
+            pass
+    return {}
+
+
+def save_weights(weights: dict, source: str = 'manual'):
+    """Append a new weights snapshot (keeps full version history)."""
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
+                (datetime.now().isoformat(), source, json.dumps(weights))
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def clear_weights(seed_weights: dict = None):
+    """Delete all weight history and optionally seed with a fresh snapshot.
+
+    Args:
+        seed_weights: If provided, inserts this dict as the new baseline weights
+                      (source='reset'). Useful after a config reset.
+    """
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("DELETE FROM dynamic_weights")
+            if seed_weights:
+                conn.execute(
+                    "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
+                    (datetime.now().isoformat(), 'reset', json.dumps(seed_weights))
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_weights_history() -> pd.DataFrame:
+    """Return recent weight versions (id, saved_at, source)."""
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            "SELECT id, saved_at, source FROM dynamic_weights ORDER BY id DESC LIMIT 50",
+            conn
+        )
+    finally:
+        conn.close()
+    return df
+
+
+# ──────────────────────────────────────────────
+# WEIGHTS EVALUATION LOG
+# ──────────────────────────────────────────────
+def log_weights_eval(avg_pnl: float, accuracy_pct: float):
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO weights_log (timestamp, avg_pnl, accuracy_pct) VALUES (?,?,?)",
+                (datetime.now().isoformat(), float(avg_pnl), float(accuracy_pct))
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+
+
+
+# ──────────────────────────────────────────────
+# SCAN CACHE
+# ──────────────────────────────────────────────
+def _numpy_clean(obj):
+    """Convert numpy types → native Python so json.dumps doesn't fail."""
+    if isinstance(obj, np.integer):  return int(obj)
+    if isinstance(obj, np.floating): return float(obj)
+    if isinstance(obj, np.bool_):    return bool(obj)
+    if isinstance(obj, np.ndarray):  return obj.tolist()
+    return str(obj)
+
+
+def write_scan_results(results: list):
+    """Persist latest scan results (upsert into singleton row id=1)."""
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO scan_cache (id, saved_at, results_json)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE
+                    SET saved_at=excluded.saved_at,
+                        results_json=excluded.results_json
+            """, (datetime.now().isoformat(), json.dumps(results, default=_numpy_clean)))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def read_scan_results() -> list:
+    """Return the most recent scan results list, or [] if none."""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT results_json FROM scan_cache WHERE id=1").fetchone()
+    finally:
+        conn.close()
+    if row:
+        try:
+            return json.loads(row['results_json'])
+        except Exception:
+            pass
+    return []
+
+
+# ──────────────────────────────────────────────
+# SCAN STATUS
+# ──────────────────────────────────────────────
+def write_scan_status(running: bool, timestamp=None, error=None,
+                      progress: float = 0, pair: str = ""):
+    """Upsert scan progress state (singleton row id=1)."""
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO scan_status (id, running, timestamp, error, progress, pair)
+                VALUES (1, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE
+                    SET running=excluded.running,
+                        timestamp=excluded.timestamp,
+                        error=excluded.error,
+                        progress=excluded.progress,
+                        pair=excluded.pair
+            """, (1 if running else 0, timestamp, error, float(progress), pair or ""))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def read_scan_status() -> dict:
+    """Return current scan status dict."""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM scan_status WHERE id=1").fetchone()
+    finally:
+        conn.close()
+    if row:
+        return {
+            'running':   bool(row['running']),
+            'timestamp': row['timestamp'],
+            'error':     row['error'],
+            'progress':  row['progress'],
+            'pair':      row['pair'],
+        }
+    return {"running": False, "timestamp": None, "error": None, "progress": 0, "pair": ""}
+
+
+# ──────────────────────────────────────────────
+# DRAWDOWN CIRCUIT BREAKER
+# ──────────────────────────────────────────────
+def check_drawdown_circuit_breaker(portfolio_size: float,
+                                   threshold_pct: float) -> dict:
+    """
+    Compute portfolio drawdown from the paper_trades table.
+    Mirrors the logic in crypto_model_core.check_drawdown_circuit_breaker()
+    but reads from SQLite instead of CSV.
+    """
+    base = {
+        'triggered':    False,
+        'drawdown_pct': 0.0,
+        'threshold_pct': threshold_pct,
+        'peak_equity':  portfolio_size,
+    }
+    try:
+        df = get_paper_trades_df()
+        if df.empty or 'pnl_pct' not in df.columns:
+            return base
+        df['pnl_pct'] = pd.to_numeric(df['pnl_pct'], errors='coerce').fillna(0)
+        size = pd.to_numeric(
+            df['size_pct'] if 'size_pct' in df.columns else pd.Series([10.0] * len(df), index=df.index),
+            errors='coerce'
+        ).fillna(10.0)
+        pnl_usd      = df['pnl_pct'] / 100 * (portfolio_size * size / 100)
+        equity_curve = portfolio_size + pnl_usd.cumsum()
+        peak         = equity_curve.cummax()
+        dd_pct       = ((equity_curve - peak) / peak * 100).iloc[-1]
+        return {
+            'triggered':    bool(dd_pct < -threshold_pct),
+            'drawdown_pct': round(float(dd_pct), 2),
+            'threshold_pct': threshold_pct,
+            'peak_equity':  round(float(peak.iloc[-1]), 2),
+        }
+    except Exception as e:
+        logger.warning(f"Circuit breaker check failed: {e}")
+        return base
+
+
+# ──────────────────────────────────────────────
+# ALERTS AUDIT LOG
+# ──────────────────────────────────────────────
+def log_alert_sent(channel: str, pair: str, direction: str,
+                   confidence: float, status: str = 'sent', error_msg: str = None):
+    """Record that an alert was dispatched (or failed)."""
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO alerts_log (sent_at, channel, pair, direction, confidence, status, error_msg)
+                VALUES (?,?,?,?,?,?,?)
+            """, (datetime.now().isoformat(), channel, pair, direction,
+                  float(confidence or 0), status, error_msg))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_alerts_log_df() -> pd.DataFrame:
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM alerts_log ORDER BY sent_at DESC LIMIT 500", conn
+        )
+    finally:
+        conn.close()
+    return df.drop(columns=['id'], errors='ignore')
+
+
+# ──────────────────────────────────────────────
+# EXECUTION LOG  (paper + live orders)
+# ──────────────────────────────────────────────
+def log_execution(placed_at: str, pair: str, direction: str, side: str,
+                  size_usd: float, order_type: str, price: float,
+                  order_id: str, status: str, mode: str,
+                  error_msg: str = None):
+    """Append one execution record. Thread-safe."""
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO execution_log
+                    (placed_at, pair, direction, side, size_usd, order_type,
+                     price, order_id, status, mode, error_msg)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (placed_at, pair, direction, side, float(size_usd or 0),
+                  order_type, float(price or 0), order_id or "",
+                  status, mode, error_msg))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_execution_log_df(limit: int = 200) -> pd.DataFrame:
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM execution_log ORDER BY placed_at DESC LIMIT ?",
+            conn,
+            params=(int(limit),),
+        )
+    finally:
+        conn.close()
+    return df.drop(columns=['id'], errors='ignore')
+
+
+# ──────────────────────────────────────────────
+# ARBITRAGE LOG
+# ──────────────────────────────────────────────
+
+def log_arb_opportunity(
+    pair: str,
+    arb_type: str,
+    buy_exchange: str,
+    sell_exchange: str,
+    gross_spread_pct: float,
+    net_spread_pct: float,
+    buy_price: Optional[float],
+    sell_price: Optional[float],
+    signal: str,
+):
+    """Insert one arbitrage opportunity record. Thread-safe."""
+    detected_at = datetime.now(timezone.utc).isoformat()
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO arb_opportunities
+                    (detected_at, pair, arb_type, buy_exchange, sell_exchange,
+                     gross_spread_pct, net_spread_pct, buy_price, sell_price, signal)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                detected_at, pair, arb_type, buy_exchange or "", sell_exchange or "",
+                float(gross_spread_pct or 0), float(net_spread_pct or 0),
+                float(buy_price) if buy_price is not None else None,
+                float(sell_price) if sell_price is not None else None,
+                signal,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_arb_opportunities_df(limit: int = 200, arb_type: str = None) -> pd.DataFrame:
+    """
+    Return recent arbitrage opportunities as a DataFrame.
+    Optional arb_type filter: 'SPOT' or 'FUNDING'.
+    """
+    conn = _get_conn()
+    try:
+        if arb_type:
+            df = pd.read_sql(
+                "SELECT * FROM arb_opportunities WHERE arb_type=? ORDER BY detected_at DESC LIMIT ?",
+                conn,
+                params=(arb_type, int(limit)),
+            )
+        else:
+            df = pd.read_sql(
+                "SELECT * FROM arb_opportunities ORDER BY detected_at DESC LIMIT ?",
+                conn,
+                params=(int(limit),),
+            )
+    finally:
+        conn.close()
+    return df.drop(columns=["id"], errors="ignore")
+
+
+# ──────────────────────────────────────────────
+# AGENT LOG
+# ──────────────────────────────────────────────
+
+def log_agent_decision(
+    pair: str,
+    direction: str,
+    confidence: float,
+    claude_decision: str,
+    claude_rationale: str,
+    action_taken: str,
+    execution_result: str,
+    notes: str = "",
+):
+    """Persist one agent decision cycle to agent_log. Thread-safe."""
+    logged_at = datetime.now(timezone.utc).isoformat()
+    with _write_lock:
+        conn = _get_conn()
+        try:
+            conn.execute(
+                """INSERT INTO agent_log
+                       (logged_at, pair, direction, confidence, claude_decision,
+                        claude_rationale, action_taken, execution_result, notes)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    logged_at, pair, direction, float(confidence or 0),
+                    claude_decision, claude_rationale, action_taken,
+                    execution_result, notes,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_agent_log_df(limit: int = 200) -> "pd.DataFrame":
+    """Return recent agent decision records as a DataFrame."""
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM agent_log ORDER BY logged_at DESC LIMIT ?",
+            conn,
+            params=(int(limit),),
+        )
+    finally:
+        conn.close()
+    return df.drop(columns=["id"], errors="ignore")
+
+
+# ──────────────────────────────────────────────
+# DB STATS  (used by Config Editor / health check)
+# ──────────────────────────────────────────────
+def get_db_stats() -> dict:
+    """Return row counts for all tables — displayed in Config Editor."""
+    # Whitelist table names — never interpolate user input into SQL (SEC-CRITICAL-01)
+    _ALLOWED_TABLES = frozenset([
+        'feedback_log', 'daily_signals', 'backtest_trades', 'paper_trades',
+        'positions', 'dynamic_weights', 'weights_log', 'scan_cache',
+        'scan_status', 'alerts_log', 'execution_log', 'arb_opportunities',
+        'agent_log',
+    ])
+    conn = _get_conn()
+    stats = {}
+    try:
+        for t in _ALLOWED_TABLES:
+            try:
+                stats[t] = conn.execute(_TABLE_COUNT_SQL.get(t, f"SELECT COUNT(*) FROM {t}")).fetchone()[0]
+            except Exception:
+                stats[t] = 0
+    finally:
+        conn.close()
+    try:
+        size_bytes = os.path.getsize(DB_FILE)
+        stats['db_size_kb'] = round(size_bytes / 1024, 1)
+    except Exception:
+        stats['db_size_kb'] = 0
+    return stats
+
+
+# ──────────────────────────────────────────────
+# STARTUP — runs automatically on import
+# ──────────────────────────────────────────────
+init_db()
+migrate_csv_to_db()

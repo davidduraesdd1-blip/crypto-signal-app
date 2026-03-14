@@ -1,0 +1,39 @@
+version: "3.9"
+
+# Shared named volume so both services read/write the same crypto_model.db
+volumes:
+  crypto_data:
+
+services:
+
+  # ── Streamlit UI ─────────────────────────────────────────────────────────
+  streamlit:
+    build: .
+    container_name: crypto_streamlit
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      - crypto_data:/app
+    env_file:
+      - .env
+    # Default CMD from Dockerfile runs Streamlit — no override needed
+
+  # ── FastAPI / uvicorn REST + WebSocket server ─────────────────────────────
+  api:
+    build: .
+    container_name: crypto_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - crypto_data:/app
+    env_file:
+      - .env
+    command:
+      - uvicorn
+      - api:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"

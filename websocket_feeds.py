@@ -1,0 +1,239 @@
+"""
+websocket_feeds.py — Real-time price feeds via OKX public WebSocket
+Runs a persistent background thread; auto-reconnects on disconnect.
+No API key required — uses OKX public tickers channel (SWAP instruments).
+
+Usage:
+    import websocket_feeds as _ws
+    _ws.start(["BTC/USDT", "ETH/USDT"])   # idempotent — safe to call on every Streamlit rerun
+    price_data = _ws.get_price("BTC/USDT") # {"price", "change_24h_pct", "bid", "ask", ...}
+    all_prices = _ws.get_all_prices()
+    status     = _ws.get_status()
+"""
+from __future__ import annotations
+
+import json
+import logging
+import math
+import threading
+import time
+from typing import Optional
+
+try:
+    import websocket  # websocket-client package
+    _WS_AVAILABLE = True
+except ImportError:
+    _WS_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ──────────────────────────────────────────────────
+_OKX_WS_URL      = "wss://ws.okx.com:8443/ws/v5/public"
+_RECONNECT_DELAY = 5    # seconds between reconnect attempts
+_PING_INTERVAL   = 25   # seconds between OKX keepalive pings
+_STALE_THRESHOLD = 60   # seconds before a price is considered stale
+
+# ── Shared state (thread-safe via _lock) ───────────────────────
+_lock   = threading.Lock()
+_prices: dict[str, dict] = {}
+_status: dict = {
+    "connected":          False,
+    "last_message_at":    None,
+    "reconnects":         0,
+    "subscribed_pairs":   [],
+    "error":              None,
+    "available":          _WS_AVAILABLE,
+}
+
+# ── Singleton thread handles ───────────────────────────────────
+_ws_thread: Optional[threading.Thread] = None
+_ws_app:    Optional[object]           = None  # websocket.WebSocketApp
+_running   = False
+_pairs_key: Optional[frozenset] = None  # detect pair changes
+_session_id: int = 0  # incremented on each start(); old thread checks its own session
+
+
+# ── Pair format helpers ────────────────────────────────────────
+def _to_okx(pair: str) -> str:
+    """BTC/USDT → BTC-USDT-SWAP"""
+    base, quote = pair.split("/")
+    return f"{base}-{quote}-SWAP"
+
+
+def _from_okx(inst_id: str) -> str:
+    """BTC-USDT-SWAP → BTC/USDT"""
+    parts = inst_id.split("-")
+    if len(parts) < 2:
+        return "UNKNOWN/UNKNOWN"
+    return f"{parts[0]}/{parts[1]}"
+
+
+# ── WebSocket callbacks ────────────────────────────────────────
+def _on_open(ws, pairs: list[str]) -> None:
+    with _lock:
+        _status["connected"]        = True
+        _status["error"]            = None
+        _status["subscribed_pairs"] = list(pairs)
+    args = [{"channel": "tickers", "instId": _to_okx(p)} for p in pairs]
+    ws.send(json.dumps({"op": "subscribe", "args": args}))
+    logger.info(f"[WS] Subscribed to tickers for {pairs}")
+
+
+def _on_message(ws, message: str) -> None:
+    # Update last_message_at on every frame, before parsing, so is_stale()
+    # never false-positives while the connection is actually alive.
+    with _lock:
+        _status["last_message_at"] = time.time()
+    try:
+        data = json.loads(message)
+        # Ignore event confirmations and pongs
+        if "event" in data or "data" not in data:
+            return
+        for item in data["data"]:
+            inst_id   = item.get("instId", "")
+            last_str   = item.get("last", "").strip()
+            open24_str = str(item.get("open24h") or "0").strip()  # BUG-R25: .get() returns None when key exists with JSON null; str(…or"0") handles that
+            if not last_str or not inst_id.endswith("-SWAP"):
+                continue
+            last   = float(last_str)
+            open24 = float(open24_str) if open24_str else last
+            # BUG-WS01: reject ticks with NaN/Inf in core price fields —
+            # these propagate silently into signal calculations and charts.
+            if not (math.isfinite(last) and math.isfinite(open24)):
+                logger.debug("[WS] skipping tick with non-finite price: %s last=%s", inst_id, last_str)
+                continue
+            change = ((last - open24) / open24 * 100) if open24 else 0.0
+            pair   = _from_okx(inst_id)
+            entry  = {
+                "price":           last,
+                "change_24h_pct":  round(change, 3),
+                "bid":             float(str(item.get("bidPx",  last)).strip() or last),
+                "ask":             float(str(item.get("askPx",  last)).strip() or last),
+                "high_24h":        float(str(item.get("high24h", last)).strip() or last),
+                "low_24h":         float(str(item.get("low24h",  last)).strip() or last),
+                "volume_24h":      float(str(item.get("vol24h",  0)).strip()   or 0),
+                "timestamp":       time.time(),
+            }
+            with _lock:
+                _prices[pair] = entry
+    except Exception as exc:
+        logger.debug(f"[WS] message parse error: {exc}")
+
+
+def _on_error(ws, error) -> None:
+    with _lock:
+        _status["connected"] = False
+        _status["error"]     = str(error)
+    logger.warning(f"[WS] error: {error}")
+
+
+def _on_close(ws, close_code, close_msg) -> None:
+    with _lock:
+        _status["connected"] = False
+    logger.info(f"[WS] closed (code={close_code})")
+
+
+# ── Background loop ────────────────────────────────────────────
+def _run_loop(pairs: list[str], session: int) -> None:
+    """Loop only while _running AND our session_id hasn't been superseded."""
+    global _ws_app
+    while _running and _session_id == session:
+        try:
+            _ws_app = websocket.WebSocketApp(
+                _OKX_WS_URL,
+                on_open=lambda ws: _on_open(ws, pairs),
+                on_message=_on_message,
+                on_error=_on_error,
+                on_close=_on_close,
+            )
+            _ws_app.run_forever(ping_interval=_PING_INTERVAL, ping_timeout=10)
+        except Exception as exc:
+            logger.warning(f"[WS] loop exception: {exc}")
+        if _running and _session_id == session:
+            with _lock:
+                _status["reconnects"] += 1
+                _status["connected"]   = False
+            time.sleep(_RECONNECT_DELAY)
+
+
+# ── Public API ─────────────────────────────────────────────────
+def start(pairs: list[str]) -> None:
+    """Start the WebSocket feed (idempotent — safe to call on every Streamlit rerun)."""
+    global _ws_thread, _running, _pairs_key, _ws_app, _session_id
+    if not _WS_AVAILABLE:
+        return
+    new_key = frozenset(pairs)
+    ws_to_close = None
+    with _lock:
+        if _running and _pairs_key == new_key:
+            return  # already running for these exact pairs
+        # Bump session_id BEFORE setting _running=True so the old thread
+        # sees the invalidation on its next `_session_id == session` check.
+        _session_id += 1
+        my_session = _session_id
+        if _running:
+            ws_to_close = _ws_app
+            _status["connected"] = False
+        _running   = True
+        _pairs_key = new_key
+    # Close the old socket outside the lock — may block briefly
+    if ws_to_close:
+        try:
+            ws_to_close.close()
+        except Exception:
+            pass
+    _ws_thread = threading.Thread(
+        target=_run_loop,
+        args=(pairs, my_session),
+        daemon=True,
+        name="ws-okx-tickers",
+    )
+    _ws_thread.start()
+    logger.info(f"[WS] Started feed for {pairs}")
+
+
+def stop() -> None:
+    """Gracefully stop the WebSocket feed."""
+    global _running, _ws_app
+    ws_to_close = None
+    with _lock:
+        _running = False
+        ws_to_close = _ws_app
+        _status["connected"] = False
+    # Close outside the lock to avoid blocking other readers
+    if ws_to_close:
+        try:
+            ws_to_close.close()
+        except Exception:
+            pass
+
+
+def get_price(pair: str) -> Optional[dict]:
+    """Return the latest tick for `pair`, or None if unavailable / stale."""
+    with _lock:
+        entry = _prices.get(pair)
+    if entry and (time.time() - entry["timestamp"]) < _STALE_THRESHOLD:
+        return entry
+    return None
+
+
+def get_all_prices() -> dict[str, dict]:
+    """Return all non-stale live prices."""
+    now = time.time()
+    with _lock:
+        return {
+            p: dict(v)
+            for p, v in _prices.items()
+            if (now - v["timestamp"]) < _STALE_THRESHOLD
+        }
+
+
+def get_status() -> dict:
+    """Return connection status dict (safe copy)."""
+    with _lock:
+        return dict(_status)
+
+
+def is_stale(pair: str) -> bool:
+    """True if no fresh tick received for `pair` within _STALE_THRESHOLD seconds."""
+    return get_price(pair) is None
