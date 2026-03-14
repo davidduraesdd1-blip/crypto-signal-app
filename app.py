@@ -175,9 +175,15 @@ st.set_page_config(
 # ── Professional CSS design system (must come before any st.* calls) ──
 _ui.inject_css()
 
+# ── Beginner / Advanced mode toggle (persisted in session state) ──────────────
+if "beginner_mode" not in st.session_state:
+    st.session_state["beginner_mode"] = True   # default: Simple view for new users
+
 # ── Import model (after page config) ──
 import sys
-sys.path.insert(0, os.path.dirname(__file__))
+_app_dir = os.path.dirname(os.path.abspath(__file__))
+if _app_dir not in sys.path:
+    sys.path.insert(0, _app_dir)
 import crypto_model_core as model
 
 # ──────────────────────────────────────────────
@@ -214,12 +220,72 @@ if _agent is not None:
 # SIDEBAR NAVIGATION
 # ──────────────────────────────────────────────
 _ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
+
+# ── Paper / Live mode persistent badge ───────────────────────────────────────
+try:
+    _exec_mode_cfg = _alerts.load_alerts_config()
+    _is_live_mode  = _exec_mode_cfg.get("live_trading_enabled", False)
+    if _is_live_mode:
+        st.sidebar.markdown(
+            '<div style="background:rgba(246,70,93,0.15);border:1px solid rgba(246,70,93,0.4);'
+            'border-radius:8px;padding:7px 12px;text-align:center;margin-bottom:8px">'
+            '<span style="color:#f6465d;font-size:11px;font-weight:800;letter-spacing:0.8px">'
+            '🔴 LIVE TRADING ACTIVE — Real money at risk</span></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.sidebar.markdown(
+            '<div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);'
+            'border-radius:8px;padding:6px 12px;text-align:center;margin-bottom:8px">'
+            '<span style="color:#818cf8;font-size:11px;font-weight:700;letter-spacing:0.5px">'
+            '📄 Paper Mode — Simulated trades only</span></div>',
+            unsafe_allow_html=True,
+        )
+except Exception:
+    pass
+
+# ── Simple / Advanced mode toggle ────────────────────────────────────────────
+_bm_col1, _bm_col2 = st.sidebar.columns([3, 2])
+with _bm_col1:
+    st.sidebar.markdown(
+        '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
+        'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
+        'View Mode</span>',
+        unsafe_allow_html=True,
+    )
+_bm_val = st.sidebar.toggle(
+    "Simple View",
+    value=st.session_state.get("beginner_mode", True),
+    key="beginner_mode_toggle",
+    help="Simple View hides technical jargon and advanced indicators — ideal for beginners. "
+         "Turn off for full technical detail.",
+)
+st.session_state["beginner_mode"] = _bm_val
+_ui.inject_beginner_mode_js(_bm_val)
+
+# ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
+st.sidebar.markdown("")
+_ui.glossary_popover()
+st.sidebar.markdown("---")
+
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard", "Market Overview", "Config Editor", "Backtest Viewer",
-     "Trade Log & History", "Arbitrage", "Agent"],
+    ["📊 Dashboard", "🌍 Market Overview", "⚙️ Settings",
+     "📈 Performance History", "📋 My Trades", "⚡ Arbitrage", "🤖 AI Agent"],
     label_visibility="collapsed",
 )
+
+# Normalise page name — strip emoji prefix for existing if/elif comparisons
+_PAGE_MAP = {
+    "📊 Dashboard":         "Dashboard",
+    "🌍 Market Overview":   "Market Overview",
+    "⚙️ Settings":          "Config Editor",
+    "📈 Performance History": "Backtest Viewer",
+    "📋 My Trades":         "Trade Log & History",
+    "⚡ Arbitrage":          "Arbitrage",
+    "🤖 AI Agent":          "Agent",
+}
+page = _PAGE_MAP.get(page, page)
 
 # ──────────────────────────────────────────────
 # SIDEBAR: AUTO-SCAN
@@ -592,7 +658,8 @@ def page_dashboard():
         # BUG-R28: use .get() for all session_state accesses — prevents KeyError if
         # init_state() is ever bypassed (e.g. session reset mid-run).
         scan_disabled = st.session_state.get("scan_running", False) or _scan_running_now
-        if st.button("▶ Run Scan", disabled=scan_disabled, type="primary", use_container_width=True):
+        _btn_label = "⏳ Analyzing..." if scan_disabled else "🔍 Analyze Market Now"
+        if st.button(_btn_label, disabled=scan_disabled, type="primary", use_container_width=True):
             st.session_state["scan_results"] = []
             st.session_state["scan_error"] = None
             _start_scan()
@@ -600,11 +667,22 @@ def page_dashboard():
         if st.session_state.get("scan_results"):
             r0 = st.session_state["scan_results"][0]
             fv, fc = r0.get("fng_value", 50), r0.get("fng_category", "Neutral")
-            color = "#00c076" if fv < 40 else "#f6465d" if fv > 60 else "#f0a500"
+            if fv <= 20:
+                _fng_emoji = "😱"
+            elif fv <= 40:
+                _fng_emoji = "😟"
+            elif fv <= 60:
+                _fng_emoji = "😐"
+            elif fv <= 80:
+                _fng_emoji = "🤩"
+            else:
+                _fng_emoji = "🤑"
+            _fng_color = "#00c076" if fv < 40 else "#f6465d" if fv > 60 else "#f0a500"
             st.markdown(
                 f'<span style="color:rgba(255,255,255,0.4);font-size:11px;'
-                f'text-transform:uppercase;letter-spacing:0.8px">F&G Index</span><br/>'
-                f'<span style="color:{color};font-weight:700;font-size:16px">'
+                f'text-transform:uppercase;letter-spacing:0.8px">Market Mood</span><br/>'
+                f'<span style="font-size:20px">{_fng_emoji}</span> '
+                f'<span style="color:{_fng_color};font-weight:700;font-size:16px">'
                 f'{fv}</span> '
                 f'<span style="color:rgba(255,255,255,0.55);font-size:13px">{fc}</span>',
                 unsafe_allow_html=True,
@@ -666,7 +744,7 @@ def page_dashboard():
 
     results = st.session_state.get("scan_results", [])
     if not results:
-        st.info("Click **▶ Run Scan** to fetch live signals for all pairs.")
+        st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         return
 
     if st.session_state.get("scan_timestamp"):
@@ -699,21 +777,18 @@ def page_dashboard():
     cb = results[0].get('circuit_breaker', {}) if results else {}
     if cb.get('triggered'):
         st.error(
-            f"DRAWDOWN CIRCUIT BREAKER ACTIVE — Portfolio drawdown {cb['drawdown_pct']:.1f}% "
-            f"exceeds {cb['threshold_pct']:.0f}% threshold. "
-            f"All new entry signals suppressed. Peak equity: ${cb['peak_equity']:,.0f}"
+            f"🛑 **Safety Stop Active** — The portfolio has dropped {cb['drawdown_pct']:.1f}% from its peak "
+            f"(threshold: {cb['threshold_pct']:.0f}%). To protect your account, all new trade signals are paused. "
+            f"Consider reviewing your positions before resuming. Peak equity was ${cb['peak_equity']:,.0f}."
         )
 
     # F6/F7: Concept drift warning banner — shown when recent win rate decays vs historical baseline
     _drift = model.get_drift_status()
     if _drift.get('drift_detected'):
         st.warning(
-            f"CONCEPT DRIFT DETECTED — Recent model accuracy has degraded. "
-            f"30d win rate: {_drift['win_rate_30d']:.1%} vs "
-            f"90d baseline: {_drift['win_rate_90d']:.1%} "
-            f"(ratio {_drift['ratio']:.2f} < 0.75 threshold, "
-            f"{_drift['n_resolved_30d']} recent / {_drift['n_resolved_90d']} total resolved signals). "
-            f"Optuna auto-reoptimization triggered after this scan."
+            f"⚠️ **Model Accuracy Alert** — The model's recent win rate ({_drift['win_rate_30d']:.0%} last 30 days) "
+            f"has dropped below its historical baseline ({_drift['win_rate_90d']:.0%} over 90 days). "
+            f"Signals may be less reliable than usual. The model is auto-retuning. Use extra caution."
         )
 
     # High-confidence alert banner
@@ -722,27 +797,43 @@ def page_dashboard():
         pairs_str = ", ".join(r["pair"] for r in hc)
         st.success(f"⚡ Top Picks this scan — the model's highest-confidence opportunities: **{pairs_str}**")
 
-    # Summary metrics row
-    mc = st.columns(5)
-    mc[0].metric("Coins Scanned", len(results),
-                 help=_ui.HELP_PAIRS_SCANNED)
-    mc[1].metric("Top Picks", len(hc),
-                 help=_ui.HELP_HIGH_CONF)
-    avg_conf = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
-    mc[2].metric("Avg Signal Strength", f"{avg_conf}%",
-                 help=_ui.HELP_AVG_CONF)
-    buy_count = sum(1 for r in results if "BUY" in r.get("direction", ""))
-    sell_count = sum(1 for r in results if "SELL" in r.get("direction", ""))
-    mc[3].metric("Bullish Signals", buy_count,
-                 help=_ui.HELP_BUY_SIGNALS)
-    mc[4].metric("Bearish Signals", sell_count,
-                 help=_ui.HELP_SELL_SIGNALS)
+    # ── F&G visual gauge + summary metrics ────────────────────────────────────
+    _fng_r0     = results[0]
+    _fng_val    = _fng_r0.get("fng_value", 50)
+    _fng_cat    = _fng_r0.get("fng_category", "Neutral")
+    avg_conf    = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
+    buy_count   = sum(1 for r in results if "BUY"  in r.get("direction", ""))
+    sell_count  = sum(1 for r in results if "SELL" in r.get("direction", ""))
+
+    _fng_col, _metrics_col = st.columns([2, 3])
+    with _fng_col:
+        st.markdown(_ui.fng_gauge_html(_fng_val, _fng_cat), unsafe_allow_html=True)
+    with _metrics_col:
+        mc = st.columns(4)
+        mc[0].metric("Coins Scanned", len(results), help=_ui.HELP_PAIRS_SCANNED)
+        mc[1].metric("Top Picks ⚡", len(hc),       help=_ui.HELP_HIGH_CONF)
+        mc[2].metric("Avg Strength", f"{avg_conf}%", help=_ui.HELP_AVG_CONF)
+        _signal_label = f"▲{buy_count} Buy · ▼{sell_count} Sell"
+        mc[3].metric("Signals", _signal_label,
+                     help=_ui.HELP_BUY_SIGNALS + " " + _ui.HELP_SELL_SIGNALS)
+
+    # ── Action CTA — best opportunity card (beginner-focused) ─────────────────
+    if hc:
+        _best = hc[0]
+        _ui.scan_action_cta(
+            pair      = _best["pair"],
+            direction = _best.get("direction", ""),
+            conf      = _best.get("confidence_avg_pct", 0),
+            entry     = _best.get("entry"),
+            stop      = _best.get("stop_loss"),
+            exit_     = _best.get("exit"),
+        )
 
     st.markdown("---")
 
     # ── Signal Heatmap — pairs × timeframes ──
     _ui.section_header("Signal Heatmap",
-                       "Quick overview — green = buy signal, red = sell signal, grey = no clear signal. Numbers show how confident the model is.",
+                       "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",
                        icon="🗺️")
     _tf_list = model.TIMEFRAMES  # e.g. ["15m","1h","4h","1d","1w"]
     _hm_pairs = [r["pair"] for r in results]
@@ -846,7 +937,15 @@ def page_dashboard():
         _ic = direction_color(_d)
         _hc = "  ⚡ TOP PICK" if r.get("high_conf") else ""
         _tr = "  🔥" if r.get("trending") else ""
-        return f"{_ic}  {r['pair']}  ·  {_c:.0f}% strength  ·  {_d}{_hc}{_tr}"
+        # Risk indicator for the dropdown label
+        _pos = r.get("position_size_pct") or 10
+        if _c >= 70 and _pos <= 15:
+            _risk = "🟢 Low Risk"
+        elif _c >= 55 and _pos <= 25:
+            _risk = "🟡 Med Risk"
+        else:
+            _risk = "🔴 Higher Risk"
+        return f"{_ic}  {r['pair']}  ·  {_c:.0f}% strength  ·  {_d}  ·  {_risk}{_hc}{_tr}"
 
     _pair_labels  = [_pair_label(r) for r in sorted_results]
     _label_to_r   = dict(zip(_pair_labels, sorted_results))
@@ -879,6 +978,18 @@ def page_dashboard():
         bias=bias, regime=r.get("regime", "N/A"), is_hc=is_hc,
     )
 
+    # Signal strength visual dots + risk badge — beginner at-a-glance indicators
+    _str_dots  = _ui.signal_strength_stars(conf)
+    _risk_chip = _ui.risk_level_badge_html(conf, pos_pct)
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:16px;margin:-6px 0 10px 0">'
+        f'{_str_dots}'
+        f'<span style="opacity:0.3">|</span>'
+        f'{_risk_chip}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
     # Plain English summary — designed for users unfamiliar with trading terms
     _plain_summary = _ui.signal_plain_english(
         pair=pair, direction=direction, conf=conf, mtf=mtf,
@@ -898,7 +1009,7 @@ def page_dashboard():
     # ── Row 1: Price · Entry · Stop Loss ──────────────────────────────────────
     top_cols = st.columns(3)
     _live_tick = _ws.get_price(pair)
-    if _live_tick:
+    if _live_tick and "price" in _live_tick and "change_24h_pct" in _live_tick:
         top_cols[0].metric(
             "Current Price ⬤ LIVE",
             f"${_live_tick['price']:,.4f}",
@@ -922,6 +1033,24 @@ def page_dashboard():
                        help="How confident the model is. 70%+ = strong signal, below 50% = weak.")
     bot_cols[2].metric("Suggested Trade Size", f"{pos_pct}% of funds" if pos_pct else "N/A",
                        help="How much of your total funds to use for this trade. Keep it small.")
+
+    # Confidence progress bar — visual bar is more intuitive than a raw % for beginners
+    st.progress(
+        min(conf / 100.0, 1.0),
+        text=f"Signal strength: {conf:.0f}% confident",
+    )
+
+    # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
+    _consensus     = r.get("consensus", 0.0)
+    _agents_agree  = round(_consensus * 6)   # consensus = fraction of 6 agents with abs(vote)>70
+    _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#f6465d")
+    st.markdown(
+        f'<div style="font-size:12px;color:rgba(168,180,200,0.6);margin:-4px 0 10px 0">'
+        f'<span style="color:{_agree_color};font-weight:700">{_agents_agree} of 6</span>'
+        f' AI models agree on this signal'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     # ── Advanced Details (collapsed by default) ────────────────────────────────
     with st.expander("📊 More Details — Timeframes & Technicals", expanded=False):
@@ -1003,6 +1132,7 @@ def page_dashboard():
 
     # ── Order Execution ────────────────────────────────────────────────────────
     st.markdown("---")
+    _ui.risk_disclaimer_banner()
     if not _exec_status.get("ccxt_available", False):
         st.caption("ccxt not installed — run: pip install ccxt")
     else:
@@ -2205,33 +2335,35 @@ def page_backtest():
     if metrics:
         m = metrics
         mc = st.columns(6)
-        mc[0].metric("Total Trades", m["total_trades"],
+        mc[0].metric("Trades Simulated", m["total_trades"],
                      help=_ui.HELP_TOTAL_TRADES)
-        mc[1].metric("Win Rate", f"{m['win_rate']}%",
+        _wr = m['win_rate']
+        mc[1].metric(f"Profitable Trades", f"{_wr}%",
+                     delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip",
                      help=_ui.HELP_WIN_RATE)
-        mc[2].metric("Avg PnL/Trade", f"{m['avg_pnl']}%",
+        mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%",
                      help=_ui.HELP_AVG_PNL)
-        mc[3].metric("Profit Factor", m["profit_factor"],
+        mc[3].metric("Profit vs Loss Ratio", m["profit_factor"],
                      help=_ui.HELP_PROFIT_FACTOR)
-        mc[4].metric("Sharpe Ratio", m["sharpe"],
+        mc[4].metric("Performance Quality", m["sharpe"],
                      help=_ui.HELP_SHARPE)
-        mc[5].metric("Max Drawdown", f"{m['max_drawdown']}%",
+        mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%",
                      help=_ui.HELP_MAX_DRAWDOWN)
 
         mc2 = st.columns(5)
         mc2[0].metric("Total Return", f"{m['total_return']}%")
-        mc2[1].metric("Sortino Ratio", m.get("sortino", "N/A"),
+        mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
                       help=_ui.HELP_SORTINO)
-        mc2[2].metric("Calmar Ratio", m.get("calmar", "N/A"),
+        mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
                       help=_ui.HELP_CALMAR)
-        mc2[3].metric("Max Consec Losses", m.get("max_consec_losses", "N/A"),
-                      help="Longest consecutive losing streak in the backtest. High values indicate drawdown risk from clustering losses.")
-        mc2[4].metric("Expectancy/Trade", f"{m.get('expectancy', 0)}%",
+        mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"),
+                      help="How many trades in a row lost money at worst. Lower = more consistent.")
+        mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%",
                       help=_ui.HELP_EXPECTANCY)
 
         mc3 = st.columns(3)
-        mc3[0].metric("VaR (95%)", f"{m.get('var_95', 'N/A')}%",
-                      help="Value at Risk: worst single-trade loss in the worst 5% of trades.")
+        mc3[0].metric("Bad-Day Loss (VaR)", f"{m.get('var_95', 'N/A')}%",
+                      help="On a bad day (worst 5% of trades), how much could you lose on a single trade?")
         mc3[1].metric("CVaR (95%)", f"{m.get('cvar_95', 'N/A')}%",
                       help="Conditional VaR: average loss when VaR threshold is breached (expected shortfall).")
         trailing_label = "Trailing Stops" if model.TRAILING_STOP_ENABLED else "Fixed Stops"
@@ -2616,7 +2748,7 @@ def page_backtest():
             y=_cal_summary["win_rate_pct"],
             name="Actual Win Rate",
             marker_color=[
-                "#00d4aa" if r["win_rate_pct"] >= r["conf_bucket"] + 5 else "#ff4b4b"
+                "#00d4aa" if float(r["win_rate_pct"]) >= float(r["conf_bucket"]) + 5 else "#ff4b4b"
                 for _, r in _cal_summary.iterrows()
             ],
             text=_cal_summary.apply(lambda r: f"{r['win_rate_pct']:.0f}%<br>n={int(r['count'])}", axis=1),

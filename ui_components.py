@@ -580,6 +580,29 @@ footer    { visibility: hidden; }
 .muted { color: var(--text-3) !important; }
 .upper { text-transform: uppercase; letter-spacing: 0.8px; font-size: 10px; font-weight: 600; }
 
+/* ═══════════════════════════════════════════════
+   BEGINNER MODE — hide advanced elements
+   Toggle via st.session_state["beginner_mode"]
+   Inject class "advanced-only" on elements to hide in simple view.
+   JS reads session state cookie to apply/remove body class.
+═══════════════════════════════════════════════ */
+body.beginner-mode .advanced-only {
+    display: none !important;
+}
+
+/* Beginner mode — larger signal pills for readability */
+body.beginner-mode .signal-pill {
+    font-size: 15px !important;
+    padding: 6px 18px !important;
+}
+
+/* Beginner mode — increase metric value font size slightly */
+body.beginner-mode [data-testid="stMetricValue"] > div {
+    font-size: clamp(22px, 1.8vw, 30px) !important;
+}
+
+/* Beginner mode body tag injected by inject_beginner_mode_js() */
+
 </style>
 """
 
@@ -587,6 +610,18 @@ footer    { visibility: hidden; }
 def inject_css():
     """Inject the full premium CSS design system into the Streamlit app."""
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def inject_beginner_mode_js(beginner_mode: bool) -> None:
+    """
+    Toggle 'beginner-mode' class on <body> so CSS can hide .advanced-only elements.
+    Call once per page render, after inject_css().
+    """
+    action = "add" if beginner_mode else "remove"
+    st.markdown(
+        f'<script>document.body.classList.{action}("beginner-mode");</script>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Section header — gradient text accent ─────────────────────────────────────
@@ -1140,3 +1175,304 @@ HELP_EXPECTANCY       = "On average, how much do you make per trade? Positive me
 HELP_COMPOSITE_SCORE  = "Overall market mood score. Positive = more coins are bullish, Negative = more are bearish. Range −100 to +100. Above +20 = broadly bullish market, below −20 = broadly bearish."
 HELP_MTF_HEATMAP      = "Color grid showing each coin's signal across different timeframes. Green = buy signal, Red = sell signal, Grey = no clear signal. Darker colors = stronger signals."
 HELP_FNG              = "The Crypto Fear & Greed Index — measures overall market emotion (0 = Extreme Fear, 100 = Extreme Greed). Historically, extreme fear can signal buying opportunities and extreme greed can signal tops."
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BEGINNER-FRIENDLY UI COMPONENTS
+#  Designed for rookie financial advisors and first-time retail investors.
+#  Core philosophy: plain English, visual cues, progressive disclosure.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Fear & Greed visual gauge ─────────────────────────────────────────────────
+
+def fng_gauge_html(fng_value: int, fng_category: str) -> str:
+    """
+    Return HTML for a visual Fear & Greed gauge bar with emoji + label.
+    fng_value: 0–100. Categories: Extreme Fear / Fear / Neutral / Greed / Extreme Greed.
+    """
+    pct = max(0, min(100, fng_value))
+
+    # Emoji that matches the mood
+    if pct <= 20:
+        emoji, mood_color, advice = "😱", "#f6465d", "Markets are very fearful — historically a buying opportunity, but use caution."
+    elif pct <= 40:
+        emoji, mood_color, advice = "😟", "#f59e0b", "Markets are fearful — some may see this as a buying opportunity."
+    elif pct <= 60:
+        emoji, mood_color, advice = "😐", "#64748b", "Markets are neutral — no strong emotion either way. Wait for a clearer signal."
+    elif pct <= 80:
+        emoji, mood_color, advice = "🤩", "#00d4aa", "Markets are greedy — prices may be elevated. Be careful chasing gains."
+    else:
+        emoji, mood_color, advice = "🤑", "#f6465d", "Extreme Greed — the market may be overheated. Historically a warning sign."
+
+    # Track fill color gradient
+    bar_gradient = f"linear-gradient(90deg, #f6465d 0%, #f59e0b 25%, #64748b 50%, #00c076 75%, #00d4aa 100%)"
+    marker_left  = pct  # 0–100%
+
+    return f"""
+    <div style="background:rgba(14,18,30,0.7);border:1px solid rgba(255,255,255,0.08);
+                border-radius:12px;padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+            <span style="font-size:26px;line-height:1">{emoji}</span>
+            <div>
+                <div style="font-size:11px;color:rgba(168,180,200,0.5);text-transform:uppercase;
+                            letter-spacing:0.9px;font-weight:600">Market Mood (Fear &amp; Greed)</div>
+                <div style="font-size:18px;font-weight:800;color:{mood_color};
+                            letter-spacing:-0.3px">{fng_value} — {fng_category}</div>
+            </div>
+        </div>
+        <!-- Track bar -->
+        <div style="position:relative;height:8px;border-radius:4px;
+                    background:{bar_gradient};margin:6px 0 4px 0;overflow:visible">
+            <!-- Marker dot -->
+            <div style="position:absolute;top:50%;left:{marker_left}%;
+                        transform:translate(-50%,-50%);width:14px;height:14px;
+                        border-radius:50%;background:#fff;
+                        box-shadow:0 0 6px rgba(0,0,0,0.6);z-index:2"></div>
+        </div>
+        <!-- Scale labels -->
+        <div style="display:flex;justify-content:space-between;
+                    font-size:9px;color:rgba(168,180,200,0.35);margin-top:6px">
+            <span>😱 Extreme Fear</span><span>😐 Neutral</span><span>🤑 Extreme Greed</span>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:rgba(168,180,200,0.55);
+                    border-top:1px solid rgba(255,255,255,0.05);padding-top:8px">
+            💡 {advice}
+        </div>
+    </div>"""
+
+
+# ── Signal strength visual (5-dot meter) ─────────────────────────────────────
+
+def signal_strength_stars(conf: float) -> str:
+    """
+    Return HTML for a 5-dot visual confidence meter.
+    conf: 0–100. Maps to 0–5 filled dots.
+    Used as a plain-English alternative to a raw percentage.
+    """
+    filled = round(conf / 20)       # 0–5 dots
+    filled = max(0, min(5, filled))
+
+    if conf >= 75:
+        label, dot_color = "Very Strong", "#00d4aa"
+    elif conf >= 60:
+        label, dot_color = "Strong", "#00c076"
+    elif conf >= 45:
+        label, dot_color = "Moderate", "#f59e0b"
+    elif conf >= 30:
+        label, dot_color = "Weak", "#f6465d"
+    else:
+        label, dot_color = "Very Weak", "#f6465d"
+
+    dots = ""
+    for i in range(5):
+        color = dot_color if i < filled else "rgba(255,255,255,0.1)"
+        dots += f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};margin-right:3px"></span>'
+
+    return (
+        f'<div style="display:flex;align-items:center;gap:8px">'
+        f'{dots}'
+        f'<span style="font-size:11px;color:{dot_color};font-weight:700">{label} ({conf:.0f}%)</span>'
+        f'</div>'
+    )
+
+
+# ── Risk level badge ──────────────────────────────────────────────────────────
+
+def risk_level_badge_html(conf: float, pos_pct: float = None) -> str:
+    """
+    Return HTML for a color-coded risk level chip.
+    Risk is LOW when confidence is high and position size is small.
+    """
+    # Determine risk: low conf or large position = higher risk
+    size = pos_pct if pos_pct else 10.0
+    if conf >= 70 and size <= 15:
+        label, bg, border, tc = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "#00d4aa"
+    elif conf >= 55 and size <= 25:
+        label, bg, border, tc = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "#f59e0b"
+    else:
+        label, bg, border, tc = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "#f6465d"
+
+    return (
+        f'<span style="display:inline-block;background:{bg};border:1px solid {border};'
+        f'color:{tc};border-radius:999px;padding:2px 10px;font-size:10px;'
+        f'font-weight:700;letter-spacing:0.5px">{label}</span>'
+    )
+
+
+# ── Welcome / getting started banner (shown when no scan has been run) ─────────
+
+def beginner_welcome_html() -> str:
+    """Return HTML for a welcome card shown before the first scan."""
+    return """
+    <div style="background:linear-gradient(rgba(14,18,30,0.85),rgba(14,18,30,0.85)) padding-box,
+                linear-gradient(135deg,rgba(0,212,170,0.25),rgba(99,102,241,0.18)) border-box;
+                border:1px solid transparent;border-radius:16px;
+                padding:28px 32px;margin:8px 0 24px 0;
+                box-shadow:0 4px 32px rgba(0,0,0,0.4)">
+        <div style="font-size:28px;margin-bottom:10px">👋</div>
+        <div style="font-size:20px;font-weight:800;color:#e8ecf4;margin-bottom:6px">
+            Welcome to CryptoSignal
+        </div>
+        <div style="font-size:13px;color:rgba(168,180,200,0.75);line-height:1.7;margin-bottom:18px">
+            This tool scans cryptocurrency markets and tells you which coins may be worth buying,
+            selling, or avoiding — in plain English, no trading experience needed.
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
+            <div style="background:rgba(0,212,170,0.07);border:1px solid rgba(0,212,170,0.15);
+                        border-radius:10px;padding:14px 16px">
+                <div style="font-size:20px;margin-bottom:6px">1️⃣</div>
+                <div style="font-size:12px;font-weight:700;color:#e8ecf4;margin-bottom:4px">Run the Scan</div>
+                <div style="font-size:11px;color:rgba(168,180,200,0.6)">
+                    Click <strong style="color:#00d4aa">▶ Analyze Market Now</strong> above.
+                    The model will fetch live market data for all coins (~1–3 min).
+                </div>
+            </div>
+            <div style="background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.15);
+                        border-radius:10px;padding:14px 16px">
+                <div style="font-size:20px;margin-bottom:6px">2️⃣</div>
+                <div style="font-size:12px;font-weight:700;color:#e8ecf4;margin-bottom:4px">Read the Results</div>
+                <div style="font-size:11px;color:rgba(168,180,200,0.6)">
+                    Each coin gets a <strong style="color:#e8ecf4">BUY / SELL / HOLD</strong> signal
+                    with a plain-English explanation. Look for ⚡ Top Picks.
+                </div>
+            </div>
+            <div style="background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.15);
+                        border-radius:10px;padding:14px 16px">
+                <div style="font-size:20px;margin-bottom:6px">3️⃣</div>
+                <div style="font-size:12px;font-weight:700;color:#e8ecf4;margin-bottom:4px">Do Your Research</div>
+                <div style="font-size:11px;color:rgba(168,180,200,0.6)">
+                    This model is a research tool — <strong style="color:#f59e0b">not financial advice.</strong>
+                    Always do your own due diligence before trading.
+                </div>
+            </div>
+        </div>
+        <div style="background:rgba(246,70,93,0.07);border:1px solid rgba(246,70,93,0.18);
+                    border-radius:10px;padding:10px 14px;font-size:11px;color:rgba(168,180,200,0.65)">
+            ⚠️ <strong style="color:#f6465d">Risk Warning:</strong>
+            Cryptocurrency trading carries a <strong>high level of risk</strong> and may not be
+            suitable for all investors. Only invest money you can afford to lose.
+            Past model performance does not guarantee future results.
+        </div>
+    </div>"""
+
+
+# ── Scan action summary CTA (best opportunity card) ───────────────────────────
+
+def scan_action_cta(pair: str, direction: str, conf: float,
+                    entry: float = None, stop: float = None, exit_: float = None) -> None:
+    """
+    Render a prominent 'Today's Best Opportunity' action card after scan completes.
+    Shown only when there is a high-confidence signal. Designed for beginners.
+    """
+    d = direction.upper()
+    if "BUY" in d:
+        action_verb = "Consider Buying"
+        accent      = "#00d4aa"
+        bg          = "rgba(0,212,170,0.07)"
+        border      = "rgba(0,212,170,0.25)"
+        arrow       = "▲"
+    elif "SELL" in d:
+        action_verb = "Consider Reducing / Selling"
+        accent      = "#f6465d"
+        bg          = "rgba(246,70,93,0.07)"
+        border      = "rgba(246,70,93,0.25)"
+        arrow       = "▼"
+    else:
+        return  # No CTA for neutral
+
+    base    = pair.split("/")[0]
+    rr_str  = ""
+    if entry and stop and exit_:
+        risk   = abs(entry - stop) / entry * 100 if entry > 0 else 0
+        reward = abs(exit_ - entry) / entry * 100 if entry > 0 else 0
+        rr     = reward / risk if risk > 0 else 0
+        rr_str = f" · Risk/Reward {rr:.1f}×"
+
+    st.markdown(
+        f"""
+        <div style="background:{bg};border:1px solid {border};border-radius:14px;
+                    padding:18px 22px;margin:12px 0 16px 0">
+            <div style="font-size:10px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+                        letter-spacing:1.1px;font-weight:600;margin-bottom:6px">
+                ⚡ Today's Best Opportunity
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <span style="font-size:22px;font-weight:800;color:#e8ecf4;
+                             font-family:'JetBrains Mono',monospace">{base}</span>
+                <span style="background:{accent};color:#060f18;border-radius:999px;
+                             padding:4px 14px;font-size:13px;font-weight:800;
+                             letter-spacing:0.3px">{arrow} {direction}</span>
+                <span style="font-size:13px;color:rgba(168,180,200,0.7)">
+                    {conf:.0f}% confidence{rr_str}
+                </span>
+            </div>
+            <div style="margin-top:8px;font-size:12px;color:rgba(168,180,200,0.6)">
+                Suggested action: <strong style="color:{accent}">{action_verb} {base}</strong>
+                {"· Entry ~$" + f"{entry:,.4g}" if entry else ""}
+                {"· Stop $" + f"{stop:,.4g}" if stop else ""}
+                {"· Target $" + f"{exit_:,.4g}" if exit_ else ""}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ── Risk disclaimer (shown before execute buttons) ────────────────────────────
+
+def risk_disclaimer_banner() -> None:
+    """Render a compact risk warning above the execute buttons."""
+    st.markdown(
+        '<div style="background:rgba(246,70,93,0.06);border:1px solid rgba(246,70,93,0.2);'
+        'border-radius:10px;padding:10px 14px;margin:4px 0 10px 0;font-size:11px;'
+        'color:rgba(200,160,160,0.85)">'
+        '⚠️ <strong>Risk Warning</strong> — Placing orders involves real financial risk. '
+        'Paper mode simulates trades with no real money. '
+        'In Live mode, real funds are used. Never invest more than you can afford to lose. '
+        'This is not financial advice.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Crypto glossary popover ───────────────────────────────────────────────────
+
+_GLOSSARY_MD = """
+| Term | Plain English |
+|------|--------------|
+| **BUY / BULLISH** | The model thinks the price may go UP. |
+| **SELL / BEARISH** | The model thinks the price may go DOWN. |
+| **NEUTRAL / HOLD** | No clear signal. Best to wait and do nothing. |
+| **Signal Strength** | How confident the model is (0–100%). 70%+ = strong. |
+| **Top Pick (⚡)** | The model's highest-confidence opportunity this scan. |
+| **Entry Price** | The suggested price to start your trade. |
+| **Stop Loss** | The price where you exit if you're wrong — limits your loss. |
+| **Take Profit** | The price where you take your gains. |
+| **Risk/Reward** | For every $1 you risk, how much could you gain. 2× = gain $2 per $1 risk. |
+| **Timeframe** | The time period of each candle: 15m, 1h, 4h, 1d, 1w. |
+| **MTF Alignment** | How many timeframes agree on the same direction. More = stronger. |
+| **RSI** | Momentum indicator: above 70 = may be overheated, below 30 = may be oversold. |
+| **ADX** | Trend strength: above 25 = strong trend, below 20 = choppy/sideways. |
+| **MACD** | Moving average indicator — tracks trend momentum. |
+| **SuperTrend** | BULL = uptrend, BEAR = downtrend (simple trend tracker). |
+| **Bollinger Bands** | Measures how stretched price is. Near upper = extended up, lower = extended down. |
+| **Ichimoku Cloud** | Above cloud = bullish, below cloud = bearish. |
+| **Fear & Greed** | 0 = Extreme Fear (market panicking), 100 = Extreme Greed (market euphoric). |
+| **Open Interest** | Total number of open futures contracts. HIGH = big move possible. |
+| **Funding Rate** | Cost of holding a futures position. Positive = longs paying. |
+| **On-Chain** | Data from the actual blockchain (wallets, transactions, flows). |
+| **TVL** | Total Value Locked in DeFi — higher = more activity and confidence in the protocol. |
+| **Options IV** | Implied Volatility — how big a price move the options market expects. |
+| **Kelly Criterion** | A math formula for how much of your account to risk per trade. |
+| **Sharpe Ratio** | Performance vs risk score. Above 1.0 = good, above 2.0 = very good. |
+| **Drawdown** | The biggest drop from a high point. The worst losing streak in the backtest. |
+| **Paper Trade** | A simulated trade using fake money — safe for learning and testing. |
+| **Circuit Breaker** | Auto-protection: if losses exceed a threshold, all new signals are suppressed. |
+"""
+
+
+def glossary_popover() -> None:
+    """Render a sidebar-friendly 'Crypto Glossary' popover button."""
+    with st.popover("📖 Crypto Glossary — 28 terms explained"):
+        st.markdown("### Crypto & Trading Terms — Plain English")
+        st.markdown(_GLOSSARY_MD)
+        st.caption("Tip: hover over any metric card in the app for a tooltip explanation.")

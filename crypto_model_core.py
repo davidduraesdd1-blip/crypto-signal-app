@@ -23,7 +23,6 @@ logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s -
 
 VERSION = "v5.9.13-phase9-complete"
 
-_log_lock     = threading.Lock()  # Protects CSV file writes from parallel scan workers
 _weights_lock = threading.Lock()  # Protects global weights dict from parallel scan workers
 _last_drift_result: dict = {}     # F6/F7: last concept drift check result; read by UI via get_drift_status()
 
@@ -771,7 +770,7 @@ def compute_macd(series, fast=12, slow=26, signal=9):
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     hist = macd_line - signal_line
-    prev_hist = hist.iloc[-2] if len(hist) > 1 else hist.iloc[-1]
+    prev_hist = hist.iloc[-2] if len(hist) > 1 else (hist.iloc[-1] if len(hist) > 0 else 0.0)
     return float(macd_line.iloc[-1]), float(signal_line.iloc[-1]), float(hist.iloc[-1]), float(prev_hist)
 
 def compute_bollinger(series, window=20, std_mult=2):
@@ -1971,8 +1970,17 @@ def run_backtest():
         except Exception:
             return ts
 
+    # BUG-TZ01: pd.Timestamp.timestamp() treats naive timestamps as LOCAL time, giving wrong
+    # UTC epoch on non-UTC machines. pd.Timestamp.value is always UTC nanoseconds → divide
+    # by 1_000_000 to get UTC milliseconds, correct for both tz-aware and tz-naive timestamps.
+    def _ts_to_utc_ms(ts):
+        try:
+            return int(ts.value // 1_000_000)
+        except Exception:
+            return int(_to_naive_ts(ts).timestamp() * 1000)
+
     fetch_keys = [
-        (row['pair'], int(_to_naive_ts(row['scan_timestamp']).timestamp() * 1000))
+        (row['pair'], _ts_to_utc_ms(row['scan_timestamp']))
         for _, row in df_valid.iterrows()
     ]
     unique_fetch_keys = list(dict.fromkeys(fetch_keys))  # deduplicate while preserving order
@@ -1997,7 +2005,7 @@ def run_backtest():
             if direction in ['SELL', 'STRONG SELL'] and target >= entry:
                 continue
 
-            since_ms = int(signal_time.timestamp() * 1000)
+            since_ms = _ts_to_utc_ms(row['scan_timestamp'])  # BUG-TZ02: use UTC-safe helper
             ohlcv = _ohlcv_cache.get((pair, since_ms))
             if not ohlcv or len(ohlcv) < 2:
                 continue
@@ -2085,7 +2093,7 @@ def run_backtest():
     profit_factor = min(wins['pnl_usd'].sum() / _loss_sum, 99.0) if len(losses) > 0 and _loss_sum > 1.0 else 99.0
     returns = pd.Series(equity).pct_change().dropna()
     n_returns = len(returns)
-    sharpe = returns.mean() / returns.std() * np.sqrt(n_returns) if returns.std() != 0 else 0
+    sharpe = returns.mean() / returns.std() * np.sqrt(n_returns) if n_returns > 1 and returns.std() != 0 else 0
     drawdowns = (pd.Series(equity) / pd.Series(equity).cummax() - 1) * 100
     max_dd = drawdowns.min()
     total_return = (equity[-1] / equity[0] - 1) * 100
@@ -2096,7 +2104,7 @@ def run_backtest():
                if len(downside) > 1 and downside.std() != 0 else 0)
 
     # Calmar — annualized return / max drawdown (higher = better risk-adjusted return)
-    calmar = abs(total_return / max_dd) if max_dd != 0 else 0.0
+    calmar = abs(total_return / max_dd) if max_dd != 0 else 99.0  # 99 = no drawdown (perfect)
 
     # Max consecutive losses
     loss_flags = (df_trades['pnl_pct'] <= 0).astype(int).tolist()
@@ -2533,7 +2541,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
             onchain_str = (
                 f"SOPR {onchain_data['sopr']:.3f} | "
                 f"MVRV-Z {onchain_data['mvrv_z']:.2f} | "
-                f"Vol/MCap {onchain_data['vol_mcap_ratio']:.3f}"
+                f"Vol/MCap {onchain_data.get('vol_mcap_ratio', 0.0):.3f}"
             )
 
         # Deribit IV (BTC/ETH only; show on first TF only)
@@ -2710,7 +2718,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
 
     # Apply circuit breaker: if portfolio drawdown exceeds threshold, suppress new entries
     effective_direction = direction_avg
-    _cb_triggered = circuit_breaker['triggered']
+    _cb_triggered = circuit_breaker.get('triggered', False)
     if _cb_triggered and direction_avg not in ('NEUTRAL', 'LOW VOL', 'NO DATA'):
         effective_direction = 'NEUTRAL'  # Downgrade — no new entries during drawdown protection
 

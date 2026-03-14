@@ -378,11 +378,11 @@ def migrate_csv_to_db():
                         df = df[MASTER_COLS]
                         if 'high_conf' in df.columns:
                             df['high_conf'] = df['high_conf'].apply(
-                                lambda x: 1 if str(x).lower() in ('true', '1', 'yes') else 0
+                                lambda x: 1 if str(x).strip().lower() in ('true', '1', 'yes') else 0
                             )
                         if 'circuit_breaker_triggered' in df.columns:
                             df['circuit_breaker_triggered'] = df['circuit_breaker_triggered'].apply(
-                                lambda x: 1 if str(x).lower() in ('true', '1', 'yes') else 0
+                                lambda x: 1 if str(x).strip().lower() in ('true', '1', 'yes') else 0
                             )
                         df.to_sql("daily_signals", conn, if_exists="append", index=False)
                         conn.commit()

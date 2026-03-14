@@ -423,6 +423,9 @@ def get_backtest_summary():
             return {"metrics": _serialize(_backtest_cache["result"].get("metrics", {}))}
     result = model.run_backtest()
     if result is None:
+        with _backtest_cache_lock:
+            _backtest_cache["result"] = None  # invalidate stale cache
+            _backtest_cache["ts"] = 0
         raise HTTPException(
             status_code=404,
             detail="No backtest data available. Run a scan first.",
