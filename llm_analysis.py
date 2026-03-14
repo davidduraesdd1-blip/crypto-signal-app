@@ -29,6 +29,12 @@ def get_signal_explanation(pair: str, result: dict) -> str:
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "").strip()
+        except Exception:
+            pass
+    if not api_key:
         return (
             "AI Analysis unavailable — ANTHROPIC_API_KEY not set. "
             "Add it to your environment variables to enable this feature."
