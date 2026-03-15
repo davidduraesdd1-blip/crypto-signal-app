@@ -811,6 +811,7 @@ def _no_key_result(service: str, description: str) -> dict:
 # ──────────────────────────────────────────────
 
 _LC_CACHE: dict = {}
+_LC_CACHE_LOCK = threading.Lock()
 _LC_TTL = 600  # 10-minute cache
 
 _LC_COIN_MAP = {
@@ -838,9 +839,10 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
         return _no_key_result("lunarcrush", "Social sentiment: galaxy score, alt rank, social volume")
 
     now = time.time()
-    cached = _LC_CACHE.get(pair)
-    if cached and (now - cached.get("_ts", 0)) < _LC_TTL:
-        return cached
+    with _LC_CACHE_LOCK:
+        cached = _LC_CACHE.get(pair)
+        if cached and (now - cached.get("_ts", 0)) < _LC_TTL:
+            return cached
 
     coin = _LC_COIN_MAP.get(pair)
     if not coin:
@@ -868,7 +870,8 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
                 "alt_rank": alt_rank, "social_volume": social_volume,
                 "source": "lunarcrush", "error": None, "_ts": now,
             }
-            _LC_CACHE[pair] = result
+            with _LC_CACHE_LOCK:
+                _LC_CACHE[pair] = result
             return result
         return _no_key_result("lunarcrush", f"HTTP {resp.status_code}")
     except Exception as e:
@@ -884,6 +887,7 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
 # ──────────────────────────────────────────────
 
 _CG_LIQ_CACHE: dict = {}
+_CG_LIQ_LOCK = threading.Lock()
 _CG_LIQ_TTL = 300  # 5-minute cache
 
 
@@ -903,9 +907,10 @@ def get_coinglass_liquidations(pair: str) -> dict:
         return _no_key_result("coinglass", "Liquidations: 24h long/short liquidation volume")
 
     now = time.time()
-    cached = _CG_LIQ_CACHE.get(pair)
-    if cached and (now - cached.get("_ts", 0)) < _CG_LIQ_TTL:
-        return cached
+    with _CG_LIQ_LOCK:
+        cached = _CG_LIQ_CACHE.get(pair)
+        if cached and (now - cached.get("_ts", 0)) < _CG_LIQ_TTL:
+            return cached
 
     symbol = pair.split("/")[0]  # BTC/USDT → BTC
     try:
@@ -928,7 +933,8 @@ def get_coinglass_liquidations(pair: str) -> dict:
                 "short_liq_usd": short_liq, "dominant_side": dominant,
                 "source": "coinglass", "error": None, "_ts": now,
             }
-            _CG_LIQ_CACHE[pair] = result
+            with _CG_LIQ_LOCK:
+                _CG_LIQ_CACHE[pair] = result
             return result
         return _no_key_result("coinglass", f"HTTP {resp.status_code}")
     except Exception as e:
@@ -945,6 +951,7 @@ def get_coinglass_liquidations(pair: str) -> dict:
 # ──────────────────────────────────────────────
 
 _CQ_CACHE: dict = {}
+_CQ_LOCK = threading.Lock()
 _CQ_TTL = 600  # 10-minute cache
 _CQ_PAIRS = {'BTC/USDT', 'ETH/USDT'}
 
@@ -970,9 +977,10 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
         return result
 
     now = time.time()
-    cached = _CQ_CACHE.get(pair)
-    if cached and (now - cached.get("_ts", 0)) < _CQ_TTL:
-        return cached
+    with _CQ_LOCK:
+        cached = _CQ_CACHE.get(pair)
+        if cached and (now - cached.get("_ts", 0)) < _CQ_TTL:
+            return cached
 
     asset = pair.split("/")[0].lower()  # btc or eth
     try:
@@ -997,7 +1005,8 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
                     "inflow_usd": round(inflow, 0), "outflow_usd": round(outflow, 0),
                     "source": "cryptoquant", "error": None, "_ts": now,
                 }
-                _CQ_CACHE[pair] = result
+                with _CQ_LOCK:
+                    _CQ_CACHE[pair] = result
                 return result
         return _no_key_result("cryptoquant", f"HTTP {resp.status_code}")
     except Exception as e:
@@ -1014,6 +1023,7 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
 # ──────────────────────────────────────────────
 
 _GN_CACHE: dict = {}
+_GN_LOCK = threading.Lock()
 _GN_TTL = 3600  # 1-hour cache (on-chain is daily resolution)
 _GN_PAIRS = {'BTC/USDT': 'BTC', 'ETH/USDT': 'ETH'}
 
@@ -1039,9 +1049,10 @@ def get_glassnode_onchain(pair: str) -> dict:
         return result
 
     now = time.time()
-    cached = _GN_CACHE.get(pair)
-    if cached and (now - cached.get("_ts", 0)) < _GN_TTL:
-        return cached
+    with _GN_LOCK:
+        cached = _GN_CACHE.get(pair)
+        if cached and (now - cached.get("_ts", 0)) < _GN_TTL:
+            return cached
 
     try:
         base = "https://api.glassnode.com/v1/metrics"
@@ -1073,7 +1084,8 @@ def get_glassnode_onchain(pair: str) -> dict:
             "signal": signal, "sopr": sopr, "mvrv_z": mvrv_z,
             "source": "glassnode", "error": None, "_ts": now,
         }
-        _GN_CACHE[pair] = result
+        with _GN_LOCK:
+            _GN_CACHE[pair] = result
         return result
     except Exception as e:
         logging.warning(f"Glassnode fetch failed for {pair}: {e}")
@@ -1088,6 +1100,7 @@ def get_glassnode_onchain(pair: str) -> dict:
 # ──────────────────────────────────────────────
 
 _UNLOCK_CACHE: dict = {}
+_UNLOCK_CACHE_LOCK = threading.Lock()
 _UNLOCK_TTL = 3600  # 1-hour cache
 
 
@@ -1195,9 +1208,10 @@ def get_token_unlock_schedule(pair: str) -> dict:
         }
 
     now = time.time()
-    cached = _UNLOCK_CACHE.get(pair)
-    if cached and (now - cached.get("_ts", 0)) < _UNLOCK_TTL:
-        return cached
+    with _UNLOCK_CACHE_LOCK:
+        cached = _UNLOCK_CACHE.get(pair)
+        if cached and (now - cached.get("_ts", 0)) < _UNLOCK_TTL:
+            return cached
 
     # Map to Tokenomist project slugs (best-effort)
     _SLUG_MAP = {
@@ -1213,7 +1227,8 @@ def get_token_unlock_schedule(pair: str) -> dict:
             "signal": "N/A", "next_unlock_days": None, "unlock_pct_supply": None,
             "source": "tokenomist", "error": f"No unlock data for {pair}", "_ts": now,
         }
-        _UNLOCK_CACHE[pair] = result
+        with _UNLOCK_CACHE_LOCK:
+            _UNLOCK_CACHE[pair] = result
         return result
 
     try:
@@ -1243,7 +1258,8 @@ def get_token_unlock_schedule(pair: str) -> dict:
                     "unlock_pct_supply": round(pct_supply, 2),
                     "source": "tokenomist", "error": None, "_ts": now,
                 }
-            _UNLOCK_CACHE[pair] = result
+            with _UNLOCK_CACHE_LOCK:
+                _UNLOCK_CACHE[pair] = result
             return result
 
         # Tokenomist may not cover all tokens — return neutral not error
@@ -1251,7 +1267,8 @@ def get_token_unlock_schedule(pair: str) -> dict:
             "signal": "N/A", "next_unlock_days": None, "unlock_pct_supply": None,
             "source": "tokenomist", "error": f"HTTP {resp.status_code}", "_ts": now,
         }
-        _UNLOCK_CACHE[pair] = result
+        with _UNLOCK_CACHE_LOCK:
+            _UNLOCK_CACHE[pair] = result
         return result
     except Exception as e:
         logging.warning(f"Token unlock fetch failed for {pair}: {e}")
@@ -1259,7 +1276,8 @@ def get_token_unlock_schedule(pair: str) -> dict:
             "signal": "N/A", "next_unlock_days": None, "unlock_pct_supply": None,
             "source": "tokenomist", "error": str(e), "_ts": now,
         }
-        _UNLOCK_CACHE[pair] = result
+        with _UNLOCK_CACHE_LOCK:
+            _UNLOCK_CACHE[pair] = result
         return result
 
 

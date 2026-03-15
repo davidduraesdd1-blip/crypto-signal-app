@@ -1,0 +1,303 @@
+"""
+news_sentiment.py — Real-time crypto news sentiment scoring
+
+Sources:
+  - CryptoPanic free API (no auth token needed for public posts)
+  - CoinDesk RSS feed
+  - Cointelegraph RSS feed
+Analysis: Claude Haiku via Anthropic SDK for fast NLP classification
+Cache: 15-minute TTL per pair
+"""
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+import xml.etree.ElementTree as ET
+from typing import Optional
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+# ─── Cache ─────────────────────────────────────────────────────────────────────
+_cache: dict = {}          # {pair: result_dict}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 900           # 15 minutes
+
+# ─── Coin → currency ticker mapping ────────────────────────────────────────────
+_PAIR_TO_CURRENCIES: dict[str, list[str]] = {
+    "BTC/USDT":  ["BTC", "bitcoin"],
+    "ETH/USDT":  ["ETH", "ethereum"],
+    "SOL/USDT":  ["SOL", "solana"],
+    "XRP/USDT":  ["XRP", "ripple"],
+    "DOGE/USDT": ["DOGE", "dogecoin"],
+    "BNB/USDT":  ["BNB", "binance"],
+}
+
+_CRYPTOPANIC_BASE = "https://cryptopanic.com/api/v1/posts/"
+_COINDESK_RSS     = "https://feeds.feedburner.com/CoinDesk"
+_COINTELEGRAPH_RSS = "https://cointelegraph.com/rss"
+
+_REQUEST_TIMEOUT = 8  # seconds
+
+
+# ─── Helpers ────────────────────────────────────────────────────────────────────
+
+def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
+    """Fetch recent headlines from CryptoPanic for given currency tickers."""
+    ticker = currencies[0]  # use the short ticker (e.g. BTC)
+    try:
+        resp = requests.get(
+            _CRYPTOPANIC_BASE,
+            params={"public": "true", "currencies": ticker, "kind": "news"},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        results = data.get("results", [])
+        headlines = []
+        for item in results[:15]:
+            title = item.get("title", "")
+            # CryptoPanic includes its own sentiment; use as hint
+            votes = item.get("votes", {})
+            sentiment_hint = ""
+            if votes.get("positive", 0) > votes.get("negative", 0):
+                sentiment_hint = " [positive votes]"
+            elif votes.get("negative", 0) > votes.get("positive", 0):
+                sentiment_hint = " [negative votes]"
+            if title:
+                headlines.append(f"{title}{sentiment_hint}")
+        return headlines
+    except Exception as e:
+        logger.debug("CryptoPanic fetch failed for %s: %s", ticker, e)
+        return []
+
+
+def _fetch_rss(url: str, keywords: list[str], max_items: int = 10) -> list[str]:
+    """Fetch and filter RSS headlines by keyword relevance."""
+    try:
+        resp = requests.get(url, timeout=_REQUEST_TIMEOUT,
+                            headers={"User-Agent": "CryptoBot/1.0"})
+        if resp.status_code != 200:
+            return []
+        root = ET.fromstring(resp.text)
+        headlines = []
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            if title_el is None or not title_el.text:
+                continue
+            title = title_el.text.strip()
+            lower = title.lower()
+            if any(kw.lower() in lower for kw in keywords):
+                headlines.append(title)
+            if len(headlines) >= max_items:
+                break
+        return headlines
+    except Exception as e:
+        logger.debug("RSS fetch failed %s: %s", url, e)
+        return []
+
+
+def _classify_with_claude(headlines: list[str], pair: str) -> dict:
+    """
+    Send headlines to Claude Haiku for fast sentiment classification.
+    Returns {'sentiment': str, 'score': float, 'bullish': int, 'bearish': int, 'neutral': int}
+    Falls back to rule-based if API key missing.
+    """
+    if not headlines:
+        return {"sentiment": "NEUTRAL", "score": 0.0, "bullish": 0, "bearish": 0, "neutral": 0,
+                "articles_analyzed": 0, "source": "no_headlines"}
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return _rule_based_classify(headlines, pair)
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        headlines_text = "\n".join(f"- {h}" for h in headlines[:20])
+        prompt = (
+            f"You are a crypto market analyst. Analyze these recent news headlines about {pair.split('/')[0]} "
+            f"and classify the overall market sentiment.\n\nHeadlines:\n{headlines_text}\n\n"
+            "Respond in exactly this JSON format (no extra text):\n"
+            '{"bullish": <count>, "bearish": <count>, "neutral": <count>, '
+            '"overall": "<BULLISH|BEARISH|NEUTRAL>", "confidence": <0.0-1.0>, '
+            '"key_theme": "<one short phrase summarizing the dominant story>"}'
+        )
+        msg = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        import json
+        raw = msg.content[0].text.strip()
+        # strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw)
+        total = result["bullish"] + result["bearish"] + result["neutral"]
+        if total == 0:
+            total = 1
+        score = (result["bullish"] - result["bearish"]) / total
+        return {
+            "sentiment":         result["overall"],
+            "score":             round(score, 3),
+            "bullish":           result["bullish"],
+            "bearish":           result["bearish"],
+            "neutral":           result["neutral"],
+            "key_theme":         result.get("key_theme", ""),
+            "confidence":        result.get("confidence", 0.5),
+            "articles_analyzed": len(headlines),
+            "source":            "claude_haiku",
+        }
+    except Exception as e:
+        logger.warning("Claude sentiment classification failed: %s", e)
+        return _rule_based_classify(headlines, pair)
+
+
+_BEARISH_WORDS = {
+    "crash", "dump", "collapse", "ban", "hack", "exploit", "scam", "fraud",
+    "sell", "sell-off", "bearish", "warning", "risk", "concern", "fear",
+    "regulation", "crackdown", "lawsuit", "sec", "fine", "penalty", "decline",
+    "plunge", "drop", "fall", "sink", "tumble", "slide", "loss", "losses",
+}
+_BULLISH_WORDS = {
+    "rally", "surge", "bull", "bullish", "breakout", "adoption", "etf",
+    "approval", "record", "ath", "all-time high", "institutional", "buy",
+    "accumulate", "upgrade", "partnership", "launch", "integration", "growth",
+    "rising", "gains", "profit", "positive", "strong", "bounce", "recover",
+}
+
+
+def _rule_based_classify(headlines: list[str], pair: str) -> dict:
+    """Keyword-based fallback when Claude API is unavailable."""
+    bullish = bearish = neutral = 0
+    for h in headlines:
+        lower = h.lower()
+        b_hits = sum(1 for w in _BULLISH_WORDS if w in lower)
+        bear_hits = sum(1 for w in _BEARISH_WORDS if w in lower)
+        if b_hits > bear_hits:
+            bullish += 1
+        elif bear_hits > b_hits:
+            bearish += 1
+        else:
+            neutral += 1
+    total = bullish + bearish + neutral or 1
+    score = (bullish - bearish) / total
+    if score > 0.15:
+        sentiment = "BULLISH"
+    elif score < -0.15:
+        sentiment = "BEARISH"
+    else:
+        sentiment = "NEUTRAL"
+    return {
+        "sentiment":         sentiment,
+        "score":             round(score, 3),
+        "bullish":           bullish,
+        "bearish":           bearish,
+        "neutral":           neutral,
+        "key_theme":         "",
+        "confidence":        abs(score),
+        "articles_analyzed": len(headlines),
+        "source":            "rule_based",
+    }
+
+
+# ─── Public API ─────────────────────────────────────────────────────────────────
+
+_NEUTRAL_RESULT = {
+    "sentiment": "NEUTRAL",
+    "score": 0.0,
+    "bullish": 0,
+    "bearish": 0,
+    "neutral": 0,
+    "key_theme": "",
+    "confidence": 0.0,
+    "articles_analyzed": 0,
+    "source": "unavailable",
+    "error": None,
+}
+
+
+def get_news_sentiment(pair: str) -> dict:
+    """
+    Fetch and score recent news sentiment for a trading pair.
+
+    Returns:
+        dict with keys:
+          sentiment  : 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+          score      : float in [-1, +1] (positive = bullish)
+          bullish    : count of bullish headlines
+          bearish    : count of bearish headlines
+          key_theme  : dominant story phrase (from Claude)
+          confidence : float [0, 1]
+          source     : 'claude_haiku' | 'rule_based' | 'unavailable'
+    """
+    now = time.time()
+    with _cache_lock:
+        cached = _cache.get(pair)
+        if cached and now - cached.get("_ts", 0) < _CACHE_TTL:
+            return {k: v for k, v in cached.items() if k != "_ts"}
+
+    currencies = _PAIR_TO_CURRENCIES.get(pair, [pair.split("/")[0]])
+    keywords   = currencies + [pair.split("/")[0]]
+
+    headlines: list[str] = []
+
+    # Source 1: CryptoPanic (most relevant, crypto-specific)
+    cp_headlines = _fetch_cryptopanic(currencies)
+    headlines.extend(cp_headlines)
+
+    # Source 2: CoinDesk RSS (fallback / supplement)
+    if len(headlines) < 10:
+        cd = _fetch_rss(_COINDESK_RSS, keywords, max_items=8)
+        headlines.extend(cd)
+
+    # Source 3: Cointelegraph RSS
+    if len(headlines) < 10:
+        ct = _fetch_rss(_COINTELEGRAPH_RSS, keywords, max_items=8)
+        headlines.extend(ct)
+
+    if not headlines:
+        result = {**_NEUTRAL_RESULT, "error": "No headlines found"}
+        with _cache_lock:
+            _cache[pair] = {**result, "_ts": now}
+        return result
+
+    result = _classify_with_claude(headlines, pair)
+    result["error"] = None
+    result["pair"]  = pair
+
+    with _cache_lock:
+        _cache[pair] = {**result, "_ts": now}
+
+    return result
+
+
+def get_news_sentiment_batch(pairs: list[str]) -> dict[str, dict]:
+    """Fetch sentiment for multiple pairs concurrently."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pair: pool.submit(get_news_sentiment, pair) for pair in pairs}
+    return {pair: f.result() for pair, f in futures.items()}
+
+
+def get_sentiment_score_bias(pair: str) -> float:
+    """
+    Returns a confidence score bias in points (-10 to +10) based on news sentiment.
+    Positive = bullish bias, negative = bearish bias.
+    Used in calculate_signal_confidence() as an additive adjustment.
+    """
+    try:
+        data = get_news_sentiment(pair)
+        score = data.get("score", 0.0)
+        confidence = data.get("confidence", 0.0)
+        # Scale: strong confident sentiment → ±10 pts, weak → near 0
+        return round(score * confidence * 10.0, 1)
+    except Exception:
+        return 0.0

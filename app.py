@@ -28,6 +28,22 @@ import ui_components as _ui
 import arbitrage as _arb
 import data_feeds
 try:
+    import news_sentiment as _news_mod
+except Exception:
+    _news_mod = None
+try:
+    import whale_tracker as _whale_mod
+except Exception:
+    _whale_mod = None
+try:
+    import ml_predictor as _ml_mod
+except Exception:
+    _ml_mod = None
+try:
+    import stress_test as _stress_mod
+except Exception:
+    _stress_mod = None
+try:
     import agent as _agent
 except Exception:
     _agent = None
@@ -1099,23 +1115,65 @@ def page_dashboard():
             st.dataframe(pd.DataFrame(_tf_rows).set_index("Timeframe"), use_container_width=True)
 
     # ── News Sentiment ─────────────────────────────────────────────────────────
-    _news = data_feeds.get_news_sentiment(pair)
-    if _news.get("signal") not in (None, "N/A"):
-        with st.expander("📰 Recent News", expanded=False):
-            _nsig       = _news.get("signal", "NEUTRAL")
-            _bpct       = _news.get("bullish_pct", 50.0)
-            _negpct     = _news.get("bearish_pct", 50.0)
+    if _news_mod is not None:
+        try:
+            _news = _news_mod.get_news_sentiment(pair)
+            _nsig = _news.get("sentiment", "NEUTRAL")
+            _nscore = _news.get("score", 0.0)
             _nsig_color = "🟢" if _nsig == "BULLISH" else "🔴" if _nsig == "BEARISH" else "⚪"
-            _nc0, _nc1, _nc2 = st.columns(3)
-            _nc0.metric("News Sentiment", f"{_nsig_color} {_nsig}")
-            _nc1.metric("Bullish Votes", f"{_bpct:.0f}%")
-            _nc2.metric("Bearish Votes", f"{_negpct:.0f}%")
-            for _art in _news.get("articles", []):
+            with st.expander(f"📰 News Sentiment — {_nsig_color} {_nsig}", expanded=False):
+                _nc0, _nc1, _nc2, _nc3 = st.columns(4)
+                _nc0.metric("Sentiment", f"{_nsig_color} {_nsig}")
+                _nc1.metric("Score", f"{_nscore:+.2f}")
+                _nc2.metric("Bullish Headlines", _news.get("bullish", 0))
+                _nc3.metric("Bearish Headlines", _news.get("bearish", 0))
+                _theme = _news.get("key_theme", "")
+                if _theme:
+                    st.caption(f"Key theme: {_theme}")
+                st.caption(f"Source: {_news.get('source','—')} · {_news.get('articles_analyzed',0)} articles analyzed")
+        except Exception as _ne:
+            st.caption(f"News fetch unavailable: {_ne}")
+
+    # ── Whale Tracker ───────────────────────────────────────────────────────────
+    if _whale_mod is not None:
+        try:
+            _whale = _whale_mod.get_whale_activity(pair, price)
+            _wsig = _whale.get("signal", "NEUTRAL")
+            if _wsig != "NEUTRAL" or _whale.get("whale_count", 0) > 0:
+                _wemoji = "🐋" if "ACCUMULATION" in _wsig else "🔴" if "DISTRIBUTION" in _wsig else "⚪"
+                with st.expander(f"{_wemoji} Whale Activity — {_wsig}", expanded=False):
+                    _wc1, _wc2, _wc3, _wc4 = st.columns(4)
+                    _wc1.metric("Signal", _wsig.replace("_", " ").title())
+                    _wc2.metric("Whale Txns", _whale.get("whale_count", 0))
+                    _wc3.metric("Large Whales", _whale.get("large_whale_count", 0))
+                    _total_usd = _whale.get("total_usd", 0)
+                    _wc4.metric("Total Volume", f"${_total_usd/1e6:.1f}M" if _total_usd >= 1e6 else f"${_total_usd:,.0f}")
+        except Exception:
+            pass
+
+    # ── ML Price Prediction ─────────────────────────────────────────────────────
+    if _ml_mod is not None:
+        try:
+            _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
+            _ml_df = model.robust_fetch_ohlcv(model.get_exchange_instance(model.TA_EXCHANGE), pair, _ml_tf)
+            if not _ml_df.empty:
+                _ml_df = model._enrich_df(_ml_df)
+                _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
+                _ml_pred = _ml.get("prediction", "UNCERTAIN")
+                _ml_prob = _ml.get("probability", 0.5)
+                _ml_acc  = _ml.get("model_accuracy", 0.0)
+                _ml_sig  = _ml.get("signal", "NEUTRAL")
+                _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ff4b4b" if _ml_sig == "SELL" else "#888"
                 st.markdown(
-                    f"- [{_art['title']}]({_art['url']})  "
-                    f"<small>{_art['published_at']} · {_art['domain']}</small>",
+                    f'<div style="background:#1a1f2e;border-radius:8px;padding:10px 14px;'
+                    f'margin:6px 0;border-left:3px solid {_ml_col}">'
+                    f'<b>🤖 ML Prediction ({_ml_tf}):</b> {_ml_pred} '
+                    f'| P(up)={_ml_prob:.1%} | Accuracy={_ml_acc:.1%} | Signal: <b>{_ml_sig}</b>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
+        except Exception:
+            pass
 
     # ── AI Analysis ────────────────────────────────────────────────────────────
     ai_key = f"ai_explanation_{pair}"
@@ -1176,6 +1234,43 @@ def page_dashboard():
                         st.error(f"Close failed: {_res['error']}")
             else:
                 st.caption("No open position")
+
+        # ── Advanced Order Types (T3-9/T3-10) ────────────────────────────────
+        with st.expander("⚙ Advanced Orders", expanded=False):
+            _adv_c1, _adv_c2 = st.columns(2)
+            with _adv_c1:
+                st.caption("**TWAP** — split into equal time slices")
+                _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"twap_dir_{pair}")
+                _twap_slices = st.number_input("Slices", 2, 20, 5, key=f"twap_slices_{pair}")
+                _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key=f"twap_int_{pair}")
+                if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{pair}", use_container_width=True):
+                    _tr = _exec.place_twap_order(
+                        pair, _twap_dir, _exec_size,
+                        n_slices=int(_twap_slices),
+                        interval_seconds=int(_twap_interval),
+                        current_price=_cur_price,
+                        expected_price=r.get("entry"),
+                    )
+                    st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
+            with _adv_c2:
+                st.caption("**Iceberg** — hide order size in OB")
+                _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"ice_dir_{pair}")
+                _ice_vis  = st.slider("Visible %", 10, 50, 20, step=5, key=f"ice_vis_{pair}") / 100.0
+                _ice_limit = st.number_input("Limit Price (0=market)", 0.0, 1e9,
+                                             float(r.get("entry") or 0), step=0.01, format="%.4f",
+                                             key=f"ice_lim_{pair}")
+                if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{pair}", use_container_width=True):
+                    _ir = _exec.place_iceberg_order(
+                        pair, _ice_dir, _exec_size,
+                        visible_pct=_ice_vis,
+                        current_price=_cur_price,
+                        limit_price=_ice_limit if _ice_limit > 0 else None,
+                        expected_price=r.get("entry"),
+                    )
+                    if _ir["ok"]:
+                        st.success(f"Iceberg placed — ID: {_ir['order_id']}")
+                    else:
+                        st.error(f"Iceberg failed: {_ir['error']}")
 
     st.markdown("---")
 
@@ -2862,6 +2957,90 @@ def page_backtest():
             st.dataframe(_coin_grp, hide_index=True, use_container_width=True, height=220)
             st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
 
+    # ── Stress Test ────────────────────────────────────────────────────────────
+    _render_stress_test()
+
+
+def _render_stress_test():
+    """Render the historical stress test section inside Backtest Viewer."""
+    if _stress_mod is None:
+        st.caption("stress_test.py not available")
+        return
+
+    st.markdown("---")
+    _ui.section_header("Historical Stress Test", "Replay actual crisis periods to estimate portfolio performance", icon="🔥")
+
+    _sc1, _sc2, _sc3 = st.columns([3, 2, 2])
+    with _sc1:
+        _scenario_opts = list(_stress_mod.STRESS_SCENARIOS.keys())
+        _scenario_labels = {k: v["label"] for k, v in _stress_mod.STRESS_SCENARIOS.items()}
+        _sel_scenario = st.selectbox(
+            "Select Scenario",
+            options=_scenario_opts,
+            format_func=lambda k: _scenario_labels[k],
+            key="stress_scenario_select",
+        )
+    with _sc2:
+        _stress_pos_pct = st.number_input(
+            "Position Size (%)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
+            key="stress_pos_pct",
+        )
+    with _sc3:
+        _stress_dir = st.selectbox("Assumed Direction", ["BUY", "SELL"], key="stress_dir")
+
+    _sc_meta = _stress_mod.STRESS_SCENARIOS.get(_sel_scenario, {})
+    st.caption(
+        f"**Period:** {_sc_meta.get('start','')} → {_sc_meta.get('end','')}  |  "
+        f"**Known BTC DD:** {_sc_meta.get('known_btc_drawdown',0):.1f}%  |  "
+        f"{_sc_meta.get('description','')}"
+    )
+
+    if st.button("▶ Run Stress Test", key="run_stress_btn", type="primary"):
+        with st.spinner("Fetching historical OHLCV and simulating..."):
+            try:
+                import crypto_model_core as _cm
+                _stress_res = _stress_mod.run_stress_test(
+                    pairs=_cm.PAIRS,
+                    scenario_key=_sel_scenario,
+                    position_pct=_stress_pos_pct,
+                    default_direction=_stress_dir,
+                )
+                st.session_state["stress_results"] = _stress_res
+            except Exception as _se:
+                st.error(f"Stress test failed: {_se}")
+
+    _stress_data = st.session_state.get("stress_results")
+    if _stress_data and isinstance(_stress_data, dict) and "portfolio" in _stress_data:
+        _p = _stress_data["portfolio"]
+        _s = _stress_data.get("scenario", {})
+        st.subheader(f"Results: {_s.get('label', _sel_scenario)}")
+
+        _sp1, _sp2, _sp3, _sp4, _sp5 = st.columns(5)
+        _sp1.metric("Portfolio Return", f"{_p.get('portfolio_return', 0):+.2f}%")
+        _sp2.metric("Total P&L", f"${_p.get('total_pnl_usd', 0):+,.0f}")
+        _sp3.metric("Worst Drawdown", f"{_p.get('worst_drawdown_pct', 0):.2f}%")
+        _sp4.metric("Win Rate", f"{_p.get('win_rate', 0):.1f}%")
+        _sp5.metric("Pairs Tested", _p.get("total_pairs", 0))
+
+        # Per-pair results table
+        _pair_rows = []
+        for _pr, _metrics in _stress_data.get("results", {}).items():
+            if _metrics.get("error"):
+                _pair_rows.append({"Pair": _pr, "Return %": "N/A", "P&L $": "N/A",
+                                   "Max DD %": "N/A", "Vol Ann %": "N/A", "Status": "No data"})
+            else:
+                _pair_rows.append({
+                    "Pair": _pr,
+                    "Return %": round(_metrics.get("price_return_pct", 0), 2),
+                    "P&L $": round(_metrics.get("pnl_usd", 0), 2),
+                    "Max DD %": round(_metrics.get("max_drawdown_pct", 0), 2),
+                    "Vol Ann %": round(_metrics.get("vol_ann_pct", 0), 2),
+                    "Status": "OK",
+                })
+        if _pair_rows:
+            _stress_df = pd.DataFrame(_pair_rows)
+            st.dataframe(_stress_df, hide_index=True, use_container_width=True)
+
 
 def _run_backtest_thread():
     """Background backtest thread — writes only to _bt_state (never st.session_state)."""
@@ -2897,8 +3076,8 @@ def page_trade_log():
         unsafe_allow_html=True,
     )
 
-    tab_master, tab_paper, tab_feedback, tab_exec = st.tabs([
-        "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log"
+    tab_master, tab_paper, tab_feedback, tab_exec, tab_slip = st.tabs([
+        "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log", "Slippage Analytics"
     ])
 
     # ── Tab 1: Master Log ──
@@ -3228,6 +3407,56 @@ def page_trade_log():
                 file_name=f"execution_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
+
+    # ── Tab 5: Slippage Analytics ─────────────────────────────────────────────
+    with tab_slip:
+        st.subheader("Post-Trade Slippage Analytics")
+        st.caption("Tracks fill price vs. expected signal entry price. Lower slippage = better execution quality.")
+        df_slip = _db.get_execution_log_df(limit=500)
+        if df_slip.empty or "slippage_pct" not in df_slip.columns:
+            st.info("No slippage data yet. Slippage is tracked after each order fill.")
+        else:
+            df_slip_valid = df_slip[df_slip["slippage_pct"].notna()].copy()
+            if df_slip_valid.empty:
+                st.info("Orders recorded but no slippage data yet. Make sure expected_price is passed when placing orders.")
+            else:
+                sm1, sm2, sm3, sm4 = st.columns(4)
+                _avg_slip = df_slip_valid["slippage_pct"].mean()
+                _max_slip = df_slip_valid["slippage_pct"].max()
+                _med_slip = df_slip_valid["slippage_pct"].median()
+                _orders_n = len(df_slip_valid)
+                sm1.metric("Orders Tracked", _orders_n)
+                sm2.metric("Avg Slippage", f"{_avg_slip:.4f}%")
+                sm3.metric("Median Slippage", f"{_med_slip:.4f}%")
+                sm4.metric("Max Slippage", f"{_max_slip:.4f}%")
+
+                # Slippage distribution histogram
+                fig_slip = px.histogram(
+                    df_slip_valid, x="slippage_pct", nbins=30,
+                    title="Slippage Distribution (%)",
+                    color_discrete_sequence=["#00d4aa"],
+                    labels={"slippage_pct": "Slippage (%)"},
+                )
+                fig_slip.update_layout(height=280, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig_slip, use_container_width=True)
+
+                # Slippage by pair
+                if "pair" in df_slip_valid.columns:
+                    _slip_by_pair = (
+                        df_slip_valid.groupby("pair")["slippage_pct"]
+                        .agg(["mean", "max", "count"])
+                        .reset_index()
+                        .rename(columns={"mean": "Avg %", "max": "Max %", "count": "Orders"})
+                        .sort_values("Avg %", ascending=True)
+                    )
+                    st.dataframe(_slip_by_pair, hide_index=True, use_container_width=True)
+
+                st.download_button(
+                    "⬇ Download Slippage Data",
+                    data=df_slip_valid.to_csv(index=False),
+                    file_name=f"slippage_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                )
 
 # ──────────────────────────────────────────────
 # PAGE: MARKET OVERVIEW

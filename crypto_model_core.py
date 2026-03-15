@@ -83,6 +83,20 @@ STAT_ARB_LOOKBACK = 100
 STAT_ARB_Z_THRESHOLD = 2.0
 STAT_ARB_Z_EXIT = 0.5
 
+# ── Position Sizing Enhancements ──────────────────────────────────────────────
+MAX_OB_IMPACT_PCT     = 0.15   # T2-6: cap position at 15% of visible OB depth
+MAX_SECTOR_EXPOSURE_PCT = 40.0  # T2-7: max % of portfolio allocated to any one sector
+ATR_SCALE_MIN         = 0.5    # T2-8: min ATR scaling factor (high vol → smaller position)
+ATR_SCALE_MAX         = 2.0    # T2-8: max ATR scaling factor (low vol → larger position)
+SECTOR_MAP: dict = {
+    'BTC/USDT':  'store_of_value',
+    'ETH/USDT':  'store_of_value',
+    'SOL/USDT':  'layer1',
+    'XRP/USDT':  'payments',
+    'DOGE/USDT': 'payments',
+    'BNB/USDT':  'exchange',
+}
+
 KRAKEN_TESTNET_KEYS = "kraken_testnet_keys.json"
 CSV_FILENAME_BASE = "crypto_scan_v5.9.13-phase9"
 EXCEL_FILENAME_BASE = "crypto_dashboard_v5.9.13"
@@ -1343,6 +1357,11 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             except Exception as e:
                 logging.warning(f"StatArb failed {pair} {tf}: {e}")
 
+        # T1-2: RL Regime Adapter — scale score based on historical per-regime win rate
+        rl_mult = get_rl_regime_multiplier(regime)
+        if rl_mult != 1.0:
+            score = score * rl_mult
+
         score = max(0, min(100, score))
         # T2-A: Sigmoid calibration — converts raw score to a more decisive probability-like value.
         # Maps: 50→50, 65→72, 75→80, 45→28, 35→20. Scale=20 keeps changes moderate.
@@ -1434,6 +1453,54 @@ def reset_agent_acc_cache():
 
 
 # ──────────────────────────────────────────────
+# T1-2: RL REGIME ADAPTER
+# ──────────────────────────────────────────────
+_rl_cache: dict = {"adjustments": {}, "ts": 0.0}
+_RL_CACHE_TTL = 6 * 3600  # 6 hours
+
+
+def _compute_rl_adjustments() -> dict:
+    """
+    RL Regime Adapter: reads last 90 days of resolved feedback, groups by regime,
+    computes per-regime win rate, returns score multipliers.
+
+    Returns dict: {regime_name: multiplier} where multiplier ∈ [0.75, 1.25].
+    Regimes with < 10 resolved trades are excluded (not enough data).
+    """
+    try:
+        resolved = _db.get_resolved_feedback_df(days=90)
+        if len(resolved) < 30:
+            return {}
+        if 'snap_regime' not in resolved.columns or 'was_correct' not in resolved.columns:
+            return {}
+        resolved = resolved.copy()
+        resolved['was_correct'] = pd.to_numeric(resolved['was_correct'], errors='coerce').fillna(0)
+        adjustments = {}
+        for regime, grp in resolved.groupby('snap_regime'):
+            if not regime or len(grp) < 10:
+                continue
+            win_rate = grp['was_correct'].mean()
+            # Deviation from 0.5 → multiplier in [0.75, 1.25]
+            deviation = win_rate - 0.5       # range [-0.5, +0.5]
+            multiplier = 1.0 + deviation * 0.5  # range [0.75, 1.25]
+            adjustments[str(regime)] = round(max(0.75, min(1.25, multiplier)), 3)
+        return adjustments
+    except Exception as exc:
+        logging.warning(f"RL regime adjustment failed: {exc}")
+        return {}
+
+
+def get_rl_regime_multiplier(regime: str) -> float:
+    """Return RL regime score multiplier for the current regime. Thread-safe cache."""
+    now = time.time()
+    if now - _rl_cache["ts"] > _RL_CACHE_TTL or not _rl_cache["adjustments"]:
+        adj = _compute_rl_adjustments()
+        _rl_cache["adjustments"] = adj
+        _rl_cache["ts"] = now
+    return _rl_cache["adjustments"].get(regime, 1.0)
+
+
+# ──────────────────────────────────────────────
 # ENTRY / EXIT / POSITION SIZING
 # ──────────────────────────────────────────────
 def recommend_leverage(confidence: float, atr_pct: float) -> dict:
@@ -1470,7 +1537,7 @@ def recommend_leverage(confidence: float, atr_pct: float) -> dict:
     }
 
 
-def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"):
+def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL", ob_data=None):
     if df is None or len(df) < 50:
         return None, None, None
     price = df['close'].iloc[-1]
@@ -1543,10 +1610,55 @@ def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"
         else PORTFOLIO_SIZE_USD * _KELLY_RISK_OFF_PCT / 100
     )
 
+    # T2-8: Dynamic ATR Scaling — scale position inversely with current ATR vs historical avg
+    try:
+        _atr_series = compute_atr(df)
+        _atr_hist_avg = float(_atr_series.tail(90).mean())
+        if np.isfinite(_atr_hist_avg) and _atr_hist_avg > 0:
+            _atr_ratio = atr / _atr_hist_avg
+            atr_scale = max(ATR_SCALE_MIN, min(ATR_SCALE_MAX, 1.0 / _atr_ratio))
+        else:
+            atr_scale = 1.0
+    except Exception:
+        atr_scale = 1.0
+
+    # T2-6: Liquidity-Adjusted Position Sizing — cap at MAX_OB_IMPACT_PCT of visible OB depth
+    ob_cap_usd = float('inf')
+    if ob_data and ob_data.get('error') is None:
+        _depth_vol = (ob_data.get('bid_vol', 0.0)
+                      if direction in ('BUY', 'STRONG BUY')
+                      else ob_data.get('ask_vol', 0.0))
+        if _depth_vol > 0 and price > 0:
+            _depth_usd = _depth_vol * price   # contract units → USD
+            ob_cap_usd = _depth_usd * MAX_OB_IMPACT_PCT
+
+    # T2-7: Sector Exposure Limits — reduce position if sector already near max
+    sector_scale = 1.0
+    try:
+        _pair_sector = SECTOR_MAP.get(pair, 'other')
+        # load_positions() returns {pair: {...}}; convert to list of dicts with 'pair' key
+        _pos_dict = _db.load_positions()
+        _positions = [{'pair': k, **v} for k, v in _pos_dict.items()] if _pos_dict else []
+        if _positions:
+            _sector_usd = sum(
+                float(p.get('size_usd', 0) or 0)
+                for p in _positions
+                if SECTOR_MAP.get(p.get('pair', ''), 'other') == _pair_sector
+            )
+            _sector_max = PORTFOLIO_SIZE_USD * MAX_SECTOR_EXPOSURE_PCT / 100
+            if _sector_usd >= _sector_max:
+                sector_scale = 0.0   # sector maxed out
+            elif _sector_usd > 0:
+                _remaining = _sector_max - _sector_usd
+                sector_scale = min(1.0, _remaining / (_sector_max * 0.25))
+    except Exception:
+        sector_scale = 1.0
+
     final_usd = min(
-        base_usd * corr_adjust * pos_scale,
+        base_usd * corr_adjust * pos_scale * atr_scale * sector_scale,
         PORTFOLIO_SIZE_USD * MAX_POSITION_PCT_CAP / 100,
         kelly_cap_usd,
+        ob_cap_usd,
     )
     final_pct = min((final_usd / PORTFOLIO_SIZE_USD) * 100, MAX_POSITION_PCT_CAP)
 
@@ -1566,6 +1678,9 @@ def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"
         'risk_mode':             regime_from_1h,
         'corr_with_btc':         round(corr_val, 3) if corr_val is not None and not np.isnan(corr_val) else None,
         'corr_adjusted_size_pct': round(final_pct, 1),
+        'atr_scale':             round(atr_scale, 3),
+        'sector':                SECTOR_MAP.get(pair, 'other'),
+        'sector_scale':          round(sector_scale, 3),
         'leverage_rec':          lev_rec,   # updated with real conf in _scan_pair
     }
 
@@ -2679,7 +2794,10 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
 
     entry, exit_, risk_info = (None, None, None)
     if last_df is not None:
-        entry, exit_, risk_info = generate_entry_exit(last_df, regime_1h, pair, master_df, direction_avg)
+        entry, exit_, risk_info = generate_entry_exit(
+            last_df, regime_1h, pair, master_df, direction_avg,
+            ob_data=ob_map.get(pair) if ob_map else None
+        )
 
     # Override leverage_rec with actual confidence now that we have it.
     # Re-derive ATR% from stop distance / entry (more accurate than the placeholder).

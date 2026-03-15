@@ -214,18 +214,19 @@ def init_db():
 
                 -- Execution log (paper + live orders)
                 CREATE TABLE IF NOT EXISTS execution_log (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    placed_at  TEXT NOT NULL,
-                    pair       TEXT,
-                    direction  TEXT,
-                    side       TEXT,
-                    size_usd   REAL,
-                    order_type TEXT DEFAULT 'market',
-                    price      REAL,
-                    order_id   TEXT,
-                    status     TEXT DEFAULT 'ok',
-                    mode       TEXT DEFAULT 'paper',
-                    error_msg  TEXT
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    placed_at     TEXT NOT NULL,
+                    pair          TEXT,
+                    direction     TEXT,
+                    side          TEXT,
+                    size_usd      REAL,
+                    order_type    TEXT DEFAULT 'market',
+                    price         REAL,
+                    order_id      TEXT,
+                    status        TEXT DEFAULT 'ok',
+                    mode          TEXT DEFAULT 'paper',
+                    error_msg     TEXT,
+                    slippage_pct  REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_exec_pair ON execution_log(pair);
                 CREATE INDEX IF NOT EXISTS idx_exec_ts   ON execution_log(placed_at);
@@ -295,6 +296,9 @@ def init_db():
                 ('snap_regime',    'TEXT'),
             ]:
                 _add_col('feedback_log', col, dfn)
+
+            # T3-11: slippage tracking column in execution_log
+            _add_col('execution_log', 'slippage_pct', 'REAL')
 
             # Index for resolved lookups (may already exist on fresh DBs from executescript)
             conn.execute(
@@ -1018,7 +1022,7 @@ def save_weights(weights: dict, source: str = 'manual'):
         try:
             conn.execute(
                 "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
-                (datetime.now().isoformat(), source, json.dumps(weights))
+                (datetime.now(timezone.utc).isoformat(), source, json.dumps(weights))
             )
             conn.commit()
         finally:
@@ -1039,7 +1043,7 @@ def clear_weights(seed_weights: dict = None):
             if seed_weights:
                 conn.execute(
                     "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
-                    (datetime.now().isoformat(), 'reset', json.dumps(seed_weights))
+                    (datetime.now(timezone.utc).isoformat(), 'reset', json.dumps(seed_weights))
                 )
             conn.commit()
         finally:
@@ -1068,7 +1072,7 @@ def log_weights_eval(avg_pnl: float, accuracy_pct: float):
         try:
             conn.execute(
                 "INSERT INTO weights_log (timestamp, avg_pnl, accuracy_pct) VALUES (?,?,?)",
-                (datetime.now().isoformat(), float(avg_pnl), float(accuracy_pct))
+                (datetime.now(timezone.utc).isoformat(), float(avg_pnl), float(accuracy_pct))
             )
             conn.commit()
         finally:
@@ -1240,7 +1244,7 @@ def get_alerts_log_df() -> pd.DataFrame:
 def log_execution(placed_at: str, pair: str, direction: str, side: str,
                   size_usd: float, order_type: str, price: float,
                   order_id: str, status: str, mode: str,
-                  error_msg: str = None):
+                  error_msg: str = None, slippage_pct: float = None):
     """Append one execution record. Thread-safe."""
     with _write_lock:
         conn = _get_conn()
@@ -1248,11 +1252,12 @@ def log_execution(placed_at: str, pair: str, direction: str, side: str,
             conn.execute("""
                 INSERT INTO execution_log
                     (placed_at, pair, direction, side, size_usd, order_type,
-                     price, order_id, status, mode, error_msg)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     price, order_id, status, mode, error_msg, slippage_pct)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (placed_at, pair, direction, side, float(size_usd or 0),
                   order_type, float(price or 0), order_id or "",
-                  status, mode, error_msg))
+                  status, mode, error_msg,
+                  float(slippage_pct) if slippage_pct is not None else None))
             conn.commit()
         finally:
             conn.close()

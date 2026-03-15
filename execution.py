@@ -126,7 +126,9 @@ def _to_swap_symbol(pair: str) -> str:
     """BTC/USDT → BTC/USDT:USDT  (ccxt OKX perpetual swap format)."""
     if ":" in pair:
         return pair
-    base, quote = pair.split("/")
+    if "/" not in pair:
+        raise ValueError(f"Invalid pair format (missing '/'): {pair!r}")
+    base, quote = pair.split("/", 1)
     return f"{base}/{quote}:{quote}"
 
 
@@ -171,6 +173,7 @@ def place_order(
     order_type: str = "market",
     limit_price: Optional[float] = None,
     current_price: Optional[float] = None,
+    expected_price: Optional[float] = None,
 ) -> dict:
     """
     Place a buy or sell order.
@@ -223,17 +226,18 @@ def place_order(
     symbol = _to_swap_symbol(pair)
 
     result: dict = {
-        "ok":         False,
-        "mode":       "live" if live else "paper",
-        "pair":       pair,
-        "direction":  direction,
-        "side":       side,
-        "size_usd":   size_usd,
-        "order_type": order_type,
-        "price":      current_price,
-        "order_id":   None,
-        "error":      None,
-        "placed_at":  datetime.now().isoformat(),
+        "ok":           False,
+        "mode":         "live" if live else "paper",
+        "pair":         pair,
+        "direction":    direction,
+        "side":         side,
+        "size_usd":     size_usd,
+        "order_type":   order_type,
+        "price":        current_price,
+        "order_id":     None,
+        "error":        None,
+        "placed_at":    datetime.now().isoformat(),
+        "slippage_pct": None,
     }
 
     # ── PAPER MODE ────────────────────────────────────────────────────────────
@@ -257,6 +261,10 @@ def place_order(
         result["ok"]       = True
         result["order_id"] = f"PAPER-{uuid.uuid4().hex[:12]}-{pair.replace('/', '')}"
         result["price"]    = fill_price
+        # T3-11: slippage vs expected (for paper, expected_price is the signal entry price)
+        _ref = expected_price or fill_price
+        if _ref and _ref > 0:
+            result["slippage_pct"] = round(abs(fill_price - _ref) / _ref * 100, 4)
         logger.info(
             "[EXEC] PAPER %s %s $%.0f @ $%.4f",
             side.upper(), pair, size_usd, fill_price,
@@ -298,9 +306,14 @@ def place_order(
         if not _fill_price:
             logger.warning("[EXEC] Fill price missing from exchange response — falling back to ticker price %.4f", price_now)
         result["price"]    = float(_fill_price or price_now)
+        # T3-11: slippage vs expected entry price
+        _ref = expected_price or current_price
+        if _ref and _ref > 0 and result["price"] > 0:
+            result["slippage_pct"] = round(abs(result["price"] - _ref) / _ref * 100, 4)
         logger.info(
-            "[EXEC] LIVE %s %s %d ct @ %.4f | id=%s",
+            "[EXEC] LIVE %s %s %d ct @ %.4f | id=%s | slip=%.4f%%",
             side.upper(), pair, qty, result["price"], result["order_id"],
+            result.get("slippage_pct") or 0.0,
         )
     except Exception as exc:
         result["error"] = str(exc)
@@ -379,20 +392,199 @@ def _log_to_db(result: dict) -> None:
     """Persist execution result to database.execution_log (best-effort)."""
     try:
         db.log_execution(
-            placed_at  = result.get("placed_at", datetime.now().isoformat()),
-            pair       = result.get("pair", ""),
-            direction  = result.get("direction", ""),
-            side       = result.get("side", ""),
-            size_usd   = float(result.get("size_usd") or 0),
-            order_type = result.get("order_type", "market"),
-            price      = float(result.get("price") or 0),
-            order_id   = result.get("order_id") or "",
-            status     = "ok" if result.get("ok") else "failed",
-            mode       = result.get("mode", "paper"),
-            error_msg  = result.get("error"),
+            placed_at    = result.get("placed_at", datetime.now().isoformat()),
+            pair         = result.get("pair", ""),
+            direction    = result.get("direction", ""),
+            side         = result.get("side", ""),
+            size_usd     = float(result.get("size_usd") or 0),
+            order_type   = result.get("order_type", "market"),
+            price        = float(result.get("price") or 0),
+            order_id     = result.get("order_id") or "",
+            status       = "ok" if result.get("ok") else "failed",
+            mode         = result.get("mode", "paper"),
+            error_msg    = result.get("error"),
+            slippage_pct = result.get("slippage_pct"),
         )
     except Exception as exc:
         logger.warning("[EXEC] DB log failed: %s", exc)
+
+
+# ─── T3-9: TWAP / VWAP Order Slicing ────────────────────────────────────────────
+
+def place_twap_order(
+    pair: str,
+    direction: str,
+    size_usd: float,
+    n_slices: int = 5,
+    interval_seconds: int = 60,
+    current_price: Optional[float] = None,
+    expected_price: Optional[float] = None,
+) -> dict:
+    """
+    Execute a TWAP (Time-Weighted Average Price) order by splitting size_usd
+    into n_slices child orders executed every interval_seconds in a daemon thread.
+
+    Returns immediately with a tracking ID. Each child order is logged to
+    execution_log. The parent tracking dict is returned to the caller.
+
+    Parameters
+    ----------
+    pair             : "BTC/USDT"
+    direction        : "BUY" | "SELL" etc.
+    size_usd         : total notional to execute
+    n_slices         : number of equal child orders (default 5)
+    interval_seconds : seconds between child orders (default 60)
+    current_price    : current market price for paper fills
+    expected_price   : signal entry price for slippage tracking
+    """
+    n_slices         = max(1, int(n_slices))
+    interval_seconds = max(5, int(interval_seconds))
+    slice_usd        = size_usd / n_slices
+    twap_id          = f"TWAP-{uuid.uuid4().hex[:8]}"
+
+    logger.info(
+        "[TWAP] Start %s %s $%.0f → %d slices × $%.0f every %ds | id=%s",
+        direction, pair, size_usd, n_slices, slice_usd, interval_seconds, twap_id,
+    )
+
+    def _run():
+        results = []
+        for i in range(n_slices):
+            res = place_order(
+                pair=pair,
+                direction=direction,
+                size_usd=slice_usd,
+                order_type="market",
+                current_price=current_price,
+                expected_price=expected_price,
+            )
+            results.append(res)
+            logger.info("[TWAP] Slice %d/%d %s %s $%.0f → ok=%s",
+                        i + 1, n_slices, direction, pair, slice_usd, res.get("ok"))
+            if i < n_slices - 1:
+                time.sleep(interval_seconds)
+        filled = sum(1 for r in results if r.get("ok"))
+        logger.info("[TWAP] Done %s | %d/%d slices filled", twap_id, filled, n_slices)
+
+    t = threading.Thread(target=_run, daemon=True, name=f"twap-{twap_id}")
+    t.start()
+
+    return {
+        "ok":            True,
+        "twap_id":       twap_id,
+        "pair":          pair,
+        "direction":     direction,
+        "total_usd":     size_usd,
+        "n_slices":      n_slices,
+        "slice_usd":     round(slice_usd, 2),
+        "interval_sec":  interval_seconds,
+        "mode":          "live" if get_exec_config()["live_trading"] else "paper",
+        "error":         None,
+    }
+
+
+# ─── T3-10: Iceberg Orders ───────────────────────────────────────────────────────
+
+def place_iceberg_order(
+    pair: str,
+    direction: str,
+    size_usd: float,
+    visible_pct: float = 0.20,
+    current_price: Optional[float] = None,
+    limit_price: Optional[float] = None,
+    expected_price: Optional[float] = None,
+) -> dict:
+    """
+    Place an iceberg order — shows only visible_pct of the total size in the OB.
+
+    Live mode: uses OKX native iceberg via ccxt `{'iceberg': True, 'visibleSize': qty}`.
+    Paper mode: falls back to a single simulated fill (no OB impact simulation).
+
+    Parameters
+    ----------
+    pair         : "BTC/USDT"
+    direction    : "BUY" | "SELL" etc.
+    size_usd     : total notional
+    visible_pct  : fraction shown in order book (0.20 = 20% visible)
+    current_price: current market price for qty calculation / paper fill
+    limit_price  : limit price; uses current_price if None
+    expected_price: signal entry price for slippage tracking
+    """
+    cfg  = get_exec_config()
+    live = cfg["live_trading"]
+    side = "buy" if "BUY" in direction.upper() else "sell"
+
+    result: dict = {
+        "ok":          False,
+        "mode":        "live" if live else "paper",
+        "pair":        pair,
+        "direction":   direction,
+        "side":        side,
+        "size_usd":    size_usd,
+        "order_type":  "iceberg",
+        "visible_pct": visible_pct,
+        "price":       current_price,
+        "order_id":    None,
+        "error":       None,
+        "placed_at":   datetime.now().isoformat(),
+        "slippage_pct": None,
+    }
+
+    if not live:
+        # Paper: simulate fill like a regular order
+        if current_price is None or current_price <= 0:
+            result["error"] = "No price available for paper iceberg fill"
+            _log_to_db(result)
+            return result
+        result["ok"]       = True
+        result["order_id"] = f"ICE-PAPER-{uuid.uuid4().hex[:10]}"
+        result["price"]    = current_price
+        _ref = expected_price or current_price
+        if _ref and _ref > 0:
+            result["slippage_pct"] = round(abs(current_price - _ref) / _ref * 100, 4)
+        logger.info("[ICEBERG] PAPER %s %s $%.0f (%.0f%% visible)", side.upper(), pair, size_usd, visible_pct * 100)
+        _log_to_db(result)
+        return result
+
+    if not _CCXT_AVAILABLE:
+        result["error"] = "ccxt not installed"
+        _log_to_db(result)
+        return result
+    if not cfg["keys_configured"]:
+        result["error"] = "OKX API keys not configured"
+        _log_to_db(result)
+        return result
+
+    try:
+        ex     = _get_exchange(authenticated=True)
+        _load_markets_cached(ex)
+        symbol = _to_swap_symbol(pair)
+        ticker = ex.fetch_ticker(symbol)
+        price_now = float(ticker.get("last") or current_price or 1.0)
+        market    = ex.market(symbol)
+        ct_size   = float(market.get("contractSize") or 1.0)
+        total_qty = max(1, round(size_usd / (price_now * ct_size)))
+        visible_qty = max(1, round(total_qty * visible_pct))
+        p = float(limit_price or price_now)
+        order = ex.create_limit_order(
+            symbol, side, total_qty, p,
+            params={"iceberg": True, "visibleSize": str(visible_qty)},
+        )
+        result["ok"]       = True
+        result["order_id"] = str(order.get("id", "unknown"))
+        _fill_price = order.get("price") or p
+        result["price"] = float(_fill_price)
+        _ref = expected_price or current_price
+        if _ref and _ref > 0 and result["price"] > 0:
+            result["slippage_pct"] = round(abs(result["price"] - _ref) / _ref * 100, 4)
+        logger.info("[ICEBERG] LIVE %s %s %d ct (visible %d) @ %.4f | id=%s",
+                    side.upper(), pair, total_qty, visible_qty, result["price"], result["order_id"])
+    except Exception as exc:
+        result["error"] = str(exc)
+        logger.error("[ICEBERG] Order failed %s: %s", pair, exc)
+
+    _log_to_db(result)
+    return result
 
 
 # ─── Status ─────────────────────────────────────────────────────────────────────
