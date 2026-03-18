@@ -142,8 +142,18 @@ DEFAULT_WEIGHTS = {
     'adx': 0.08, 'vwap_ich': 0.08, 'fib': 0.08,
     'div': 0.05, 'supertrend': 0.667, 'sr_breakout': 0.667,
     'regime': 0.667, 'bonus': 0.5, 'fng': 0.10,
-    'onchain': 0.12, 'agents': 0.25, 'stat_arb': 0.15
+    'onchain': 0.12, 'agents': 0.25, 'stat_arb': 0.15,
+    'gaussian_ch': 0.15,  # GC-01: Gaussian Channel — 3-period multi-TF bands
 }
+
+# Gaussian Channel multipliers per timeframe (wider bands on higher timeframes)
+_GC_MULT = {
+    '1h': (1.6, 1.8, 2.0),   # (fast, base, slow) — tighter on 1h (noisier)
+    '4h': (1.8, 2.0, 2.3),
+    '1d': (2.0, 2.2, 2.6),
+    '1w': (2.2, 2.5, 3.0),   # wider on weekly (larger candle ranges)
+}
+_GC_LENGTHS = (50, 100, 200)  # fast=50, base=100, slow=200 bars
 
 def _load_weights():
     loaded = _db.load_weights()
@@ -929,6 +939,85 @@ def compute_adx(df, period=14):
     val = result.iloc[-1]
     return float(val) if not pd.isna(val) else 20.0
 
+
+# ──────────────────────────────────────────────
+# GAUSSIAN CHANNEL
+# ──────────────────────────────────────────────
+def _gaussian_weights(length: int) -> np.ndarray:
+    """One-sided causal Gaussian kernel.
+    weights[0] applies to the most recent bar (highest weight),
+    weights[length-1] applies to the oldest bar (lowest weight).
+    Sigma = length/6 so ±3σ covers the full window.
+    """
+    sigma = length / 6.0
+    x = np.arange(length, dtype=np.float64)
+    w = np.exp(-0.5 * (x / sigma) ** 2)
+    return w / w.sum()
+
+
+def compute_gaussian_channel(
+    df: pd.DataFrame,
+    length: int = 100,
+    mult: float = 2.0,
+) -> tuple:
+    """Compute Gaussian Channel bands on OHLCV data.
+
+    Uses a causal Gaussian kernel (recent bars weighted more) to smooth both
+    price and True Range, then forms upper/lower bands as:
+        gc_upper = gc_mid + mult × gaussian_smoothed_TR
+        gc_lower = gc_mid − mult × gaussian_smoothed_TR
+
+    Compared to Bollinger Bands: less reactive to single-bar spikes, smoother
+    dynamic support/resistance, better regime identification.
+
+    Parameters
+    ----------
+    df     : OHLCV DataFrame (must have 'close', 'high', 'low')
+    length : kernel window in bars (50=fast, 100=base, 200=slow)
+    mult   : band width multiplier applied to smoothed TR
+
+    Returns
+    -------
+    (gc_mid, gc_upper, gc_lower) — three pd.Series aligned to df.index.
+    Values before the warmup period (first length-1 bars) are NaN.
+    """
+    _nan = pd.Series(np.nan, index=df.index, dtype=np.float64)
+    if len(df) < length:
+        return _nan.copy(), _nan.copy(), _nan.copy()
+
+    close = df['close'].values.astype(np.float64)
+    high  = df['high'].values.astype(np.float64)
+    low   = df['low'].values.astype(np.float64)
+
+    prev_close      = np.empty_like(close)
+    prev_close[0]   = close[0]
+    prev_close[1:]  = close[:-1]
+    tr = np.maximum(high - low,
+                    np.maximum(np.abs(high - prev_close),
+                               np.abs(low  - prev_close)))
+
+    weights = _gaussian_weights(length)
+
+    # np.convolve with the kernel causally:
+    # full[i] = Σ weights[j] * close[i-j]  (i-j ≥ 0)
+    # Valid full-window sum starts at index length-1.
+    n = len(df)
+    full_mid = np.convolve(close, weights)[:n]
+    full_tr  = np.convolve(tr,    weights)[:n]
+
+    valid = np.arange(n) >= (length - 1)
+    gc_mid_arr   = np.where(valid, full_mid,                   np.nan)
+    gc_upper_arr = np.where(valid, full_mid + mult * full_tr,  np.nan)
+    gc_lower_arr = np.where(valid, full_mid - mult * full_tr,  np.nan)
+
+    idx = df.index
+    return (
+        pd.Series(gc_mid_arr,   index=idx, dtype=np.float64),
+        pd.Series(gc_upper_arr, index=idx, dtype=np.float64),
+        pd.Series(gc_lower_arr, index=idx, dtype=np.float64),
+    )
+
+
 def compute_support_resistance(df, lookback=20):
     if len(df) < lookback:
         return None, None, "N/A", "N/A"
@@ -1115,8 +1204,12 @@ def detect_candlestick_patterns(df: pd.DataFrame) -> tuple:
 # ──────────────────────────────────────────────
 # INDICATOR ENRICHMENT HELPER
 # ──────────────────────────────────────────────
-def _enrich_df(df):
-    """Add all indicator columns to a df copy. Required before signal calculation."""
+def _enrich_df(df, tf: str = None):
+    """Add all indicator columns to a df copy. Required before signal calculation.
+
+    tf : timeframe string ('1h','4h','1d','1w') — selects Gaussian Channel multipliers.
+         Defaults to '1d' scaling when None.
+    """
     df = df.copy()
     # MACD
     ema_fast = df['close'].ewm(span=12, adjust=False).mean()
@@ -1163,6 +1256,14 @@ def _enrich_df(df):
     _mdi  = 100 * _mdm.rolling(14).mean() / _atr
     _dx   = 100 * (_pdi - _mdi).abs() / (_pdi + _mdi + 1e-6)
     df['adx'] = _dx.rolling(14).mean().fillna(20.0)
+    # Gaussian Channels — fast(50), base(100), slow(200) bars
+    # GC-01: 3-period multi-timeframe bands using causal Gaussian kernel
+    _gc_mults = _GC_MULT.get(tf, _GC_MULT['1d'])  # (fast_mult, base_mult, slow_mult)
+    for _tier, _gc_len, _gc_mult in zip(('fast', 'base', 'slow'), _GC_LENGTHS, _gc_mults):
+        _gc_mid, _gc_upper, _gc_lower = compute_gaussian_channel(df, _gc_len, _gc_mult)
+        df[f'gc_{_tier}_mid']   = _gc_mid
+        df[f'gc_{_tier}_upper'] = _gc_upper
+        df[f'gc_{_tier}_lower'] = _gc_lower
     return df
 
 # ──────────────────────────────────────────────
@@ -1179,7 +1280,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         w = _get_weights()  # thread-safe snapshot — parallel workers each get their own copy
         # Skip re-enrichment if _scan_pair already enriched this df (PERF-01)
         if 'rsi' not in df.columns:
-            df = _enrich_df(df)
+            df = _enrich_df(df, tf)  # GC-01: pass tf so GC uses correct per-TF multipliers
         price = df['close'].iloc[-1]
         rsi = float(df['rsi'].iloc[-1]) if not pd.isna(df['rsi'].iloc[-1]) else 50.0
         macd_line = float(df['macd'].iloc[-1]) if not pd.isna(df['macd'].iloc[-1]) else 0.0
@@ -1278,6 +1379,41 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         if "Bearish" in macd_div and rsi > 60:
             div_score -= 15 if div_strength == "Strong" else 10
         score += div_score * w.get('div', 0.05)
+
+        # ── Gaussian Channel — 3-period multi-TF analysis ──────────────────
+        # GC-01: fast(50), base(100), slow(200) bands computed in _enrich_df.
+        # Each tier scores independently; alignment across all 3 = strongest signal.
+        # Max raw contribution: fast ±8, base ±12, slow ±15 = ±35 total.
+        # At weight 0.15: max = ±5.25 pts (meaningful but not dominant).
+        gc_score = 0.0
+        _gc_tiers_scored = 0
+        for _gc_tier, _gc_max in (('fast', 8), ('base', 12), ('slow', 15)):
+            _gm = df[f'gc_{_gc_tier}_mid'].iloc[-1]
+            _gu = df[f'gc_{_gc_tier}_upper'].iloc[-1]
+            _gl = df[f'gc_{_gc_tier}_lower'].iloc[-1]
+            if pd.isna(_gm) or pd.isna(_gu) or pd.isna(_gl):
+                continue                          # skip warmup period
+            _gm, _gu, _gl = float(_gm), float(_gu), float(_gl)
+            _gc_tiers_scored += 1
+            if price >= _gu:
+                gc_score += _gc_max               # above upper: bullish breakout / strong trend
+            elif price <= _gl:
+                gc_score -= _gc_max               # below lower: bearish breakdown
+            elif price >= _gm:
+                gc_score += _gc_max * 0.4         # above midline: mild bullish bias
+            else:
+                gc_score -= _gc_max * 0.4         # below midline: mild bearish bias
+        # Mean-reversion dampener: at fast-channel extremes, fade the extension
+        if strategy_bias == 'Mean-Reversion' and _gc_tiers_scored > 0:
+            _gm_f = df['gc_fast_mid'].iloc[-1]
+            _gu_f = df['gc_fast_upper'].iloc[-1]
+            _gl_f = df['gc_fast_lower'].iloc[-1]
+            if not any(pd.isna(v) for v in (_gm_f, _gu_f, _gl_f)):
+                if price >= float(_gu_f):
+                    gc_score -= 10  # fast-channel upper = overextended, reduce bull
+                elif price <= float(_gl_f):
+                    gc_score += 10  # fast-channel lower = oversold, reduce bear
+        score += gc_score * w.get('gaussian_ch', 0.15)
 
         # SuperTrend (T1-A: normalized — raw ±15 multiplied by weight, same scale as continuous weights)
         super_raw = 0
@@ -1901,6 +2037,7 @@ def update_dynamic_weights():
             if _update_w('vwap_ich',   wr_hc, default=0.08, scale=0.16): updated = True
             if _update_w('fib',        wr_hc, default=0.08, scale=0.16): updated = True
             if _update_w('div',        wr_hc, default=0.05, scale=0.10): updated = True
+            if _update_w('gaussian_ch', wr_hc, default=0.15, scale=0.20): updated = True  # GC-01
             if _update_w('bonus',      wr_hc, default=0.50, scale=0.5):  updated = True
 
             # Macro / ensemble weights
@@ -2463,7 +2600,7 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 continue
 
             try:
-                df_enriched = _enrich_df(df_slice)
+                df_enriched = _enrich_df(df_slice, tf)  # GC-01: pass tf
                 conf, vol_ok, *_ = calculate_signal_confidence(  # CM-19: neutral onchain avoids TypeError
                     df_enriched, tf, 50, 'N/A',
                     {'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0, 'whale_activity': False}
@@ -2704,7 +2841,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
             continue
 
         # Enrich once here — calculate_signal_confidence will detect and skip re-enrichment (PERF-01)
-        df = _enrich_df(df)
+        df = _enrich_df(df, tf)  # GC-01: pass tf for correct GC multipliers
 
         (conf, vol_passed, macd_div, div_strength, supertrend_str,
          sr_str, regime_str, strategy_bias, agent_score, consensus, stat_arb,
@@ -3315,7 +3452,7 @@ def run_optuna_weight_optimization(n_trials: int = 50, pair: str = 'BTC/USDT',
         return {'error': f'Insufficient data: {len(df_all)} bars'}
 
     # ── Pre-compute all indicators ONCE (fast numpy arrays) ──
-    df_e = _enrich_df(df_all.copy())
+    df_e = _enrich_df(df_all.copy(), tf)  # GC-01: pass tf
 
     # ADX series (inline to get full series, not just last value)
     _tr = pd.concat([df_e['high'] - df_e['low'],
