@@ -187,6 +187,9 @@ def update_positions(current_prices):
     positions = load_positions()
     closed = []
     for pair, pos in list(positions.items()):
+        # CM-06: guard against corrupt/partial position dicts in DB
+        if not isinstance(pos, dict) or not all(k in pos for k in ('entry', 'direction', 'target', 'stop', 'entry_time', 'size_pct')):
+            continue
         real_price = current_prices.get(pair)
         if not real_price:
             continue
@@ -918,8 +921,9 @@ def compute_adx(df, period=14):
     down = df['low'].shift() - df['low']
     plus_dm = np.where((up > down) & (up > 0), up, 0)
     minus_dm = np.where((down > up) & (down > 0), down, 0)
-    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period).mean() / atr
-    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period).mean() / atr
+    atr_safe = atr.replace(0, np.nan)  # CM-01/02: avoid inf/NaN when price has zero range
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period).mean() / atr_safe
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period).mean() / atr_safe
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-6)
     result = dx.rolling(period).mean()
     val = result.iloc[-1]
@@ -1124,7 +1128,7 @@ def _enrich_df(df):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
-    df['rsi'] = 100 - (100 / (1 + gain / loss.replace(0, 1e-10)))
+    df['rsi'] = 100 - (100 / (1 + gain / loss.replace(0, 1e-10).fillna(1e-10)))  # CM-16: NaN loss → neutral
     df['rsi'] = df['rsi'].fillna(50)  # BUG-DC01: NaN during 14-bar warmup → neutral 50
     # Bollinger
     df['bb_mid'] = df['close'].rolling(20).mean()
@@ -1187,7 +1191,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         bb_pos = (price - bb_lower) / (bb_upper - bb_lower + 1e-6)
         stoch_k = float(df['stoch_k'].iloc[-1]) if not pd.isna(df['stoch_k'].iloc[-1]) else 50.0
         stoch_d = float(df['stoch_d'].iloc[-1]) if not pd.isna(df['stoch_d'].iloc[-1]) else 50.0
-        adx = float(df['adx'].iloc[-1]) if 'adx' in df.columns else float(compute_adx(df).iloc[-1])
+        adx = float(df['adx'].iloc[-1]) if 'adx' in df.columns else compute_adx(df)  # CM-45: already returns float
         vwap = float(df['vwap'].iloc[-1]) if 'vwap' in df.columns and not pd.isna(df['vwap'].iloc[-1]) else price
         senkou_a = float(df['senkou_span_a'].iloc[-1]) if not pd.isna(df['senkou_span_a'].iloc[-1]) else price
         senkou_b = float(df['senkou_span_b'].iloc[-1]) if not pd.isna(df['senkou_span_b'].iloc[-1]) else price
@@ -1475,7 +1479,7 @@ def _compute_kelly_fraction() -> float | None:
         p = len(wins) / len(bt)
         avg_win = wins['pnl_pct'].mean() / 100
         avg_loss = abs(losses['pnl_pct'].mean()) / 100
-        if avg_loss == 0:
+        if avg_loss == 0 or avg_win == 0:  # CM-17: b=0 → kelly denominator div/0
             return None
         b = avg_win / avg_loss
         kelly = (b * p - (1 - p)) / b
@@ -1547,6 +1551,7 @@ def reset_agent_acc_cache():
 # T1-2: RL REGIME ADAPTER
 # ──────────────────────────────────────────────
 _rl_cache: dict = {"adjustments": {}, "ts": 0.0}
+_rl_lock = threading.Lock()  # CM-09: protect _rl_cache from concurrent ThreadPoolExecutor writers
 _RL_CACHE_TTL = 6 * 3600  # 6 hours
 
 
@@ -1584,11 +1589,12 @@ def _compute_rl_adjustments() -> dict:
 def get_rl_regime_multiplier(regime: str) -> float:
     """Return RL regime score multiplier for the current regime. Thread-safe cache."""
     now = time.time()
-    if now - _rl_cache["ts"] > _RL_CACHE_TTL or not _rl_cache["adjustments"]:
-        adj = _compute_rl_adjustments()
-        _rl_cache["adjustments"] = adj
-        _rl_cache["ts"] = now
-    return _rl_cache["adjustments"].get(regime, 1.0)
+    with _rl_lock:  # CM-09: prevent torn read-check-write under ThreadPoolExecutor
+        if now - _rl_cache["ts"] > _RL_CACHE_TTL or not _rl_cache["adjustments"]:
+            adj = _compute_rl_adjustments()
+            _rl_cache["adjustments"] = adj
+            _rl_cache["ts"] = now
+        return _rl_cache["adjustments"].get(regime, 1.0)
 
 
 # ──────────────────────────────────────────────
@@ -1923,9 +1929,8 @@ def update_dynamic_weights():
                 if _update_w('supertrend', balance_wr): updated = True
             if _update_w('regime', balance_wr, scale=0.667): updated = True
 
-            breakouts = master_df[master_df.get('sr_status', pd.Series(dtype=str)).astype(str)
-                                  .str.contains("Breakout", na=False)] \
-                if 'sr_status' in master_df.columns else pd.DataFrame()
+            breakouts = master_df[master_df['sr_status'].astype(str).str.contains("Breakout", na=False)] \
+                if 'sr_status' in master_df.columns else pd.DataFrame()  # CM-21: avoid misaligned default Series
             if len(breakouts) >= 10:
                 if _update_w('sr_breakout', balance_wr): updated = True
 
@@ -2189,7 +2194,11 @@ def run_backtest():
         try:
             return int(ts.value // 1_000_000)
         except Exception:
-            return int(_to_naive_ts(ts).timestamp() * 1000)
+            # CM-35: .timestamp() on naive datetime uses local time; force UTC
+            t = pd.Timestamp(ts)
+            if t.tzinfo is None:
+                t = t.tz_localize('UTC')
+            return int(t.value // 1_000_000)
 
     fetch_keys = [
         (row['pair'], _ts_to_utc_ms(row['scan_timestamp']))
@@ -2316,7 +2325,8 @@ def run_backtest():
                if len(downside) > 1 and downside.std() != 0 else 0)
 
     # Calmar — annualized return / max drawdown (higher = better risk-adjusted return)
-    calmar = abs(total_return / max_dd) if max_dd != 0 else 99.0  # 99 = no drawdown (perfect)
+    # CM-33: divide by abs(max_dd) to preserve sign — losing strategies must produce negative Calmar
+    calmar = total_return / abs(max_dd) if max_dd != 0 else 99.0  # 99 = no drawdown (perfect)
 
     # Max consecutive losses
     loss_flags = (df_trades['pnl_pct'] <= 0).astype(int).tolist()
@@ -2454,7 +2464,10 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
 
             try:
                 df_enriched = _enrich_df(df_slice)
-                conf, vol_ok, *_ = calculate_signal_confidence(df_enriched, tf, 50, 'N/A', {})
+                conf, vol_ok, *_ = calculate_signal_confidence(  # CM-19: neutral onchain avoids TypeError
+                    df_enriched, tf, 50, 'N/A',
+                    {'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0, 'whale_activity': False}
+                )
             except Exception:
                 continue
 
@@ -2510,8 +2523,8 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
             else:
                 pnl_pct = (entry_price - exit_price) / entry_price * 100
 
-            # Realistic fees: 0.1% round-trip taker
-            fee_pct = 0.10
+            # CM-32: 0.10% each side = 0.20% round-trip taker cost
+            fee_pct = 0.20
             pnl_pct -= fee_pct
             pnl_usd = size_usd * pnl_pct / 100
             equity += pnl_usd
@@ -2717,7 +2730,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         rsi_val = df_enriched['rsi'].iloc[-1] if 'rsi' in df_enriched.columns else 'N/A'
         stoch_k = df_enriched['stoch_k'].iloc[-1] if 'stoch_k' in df_enriched.columns else 'N/A'
         stoch_d = df_enriched['stoch_d'].iloc[-1] if 'stoch_d' in df_enriched.columns else 'N/A'
-        adx_val = float(df_enriched['adx'].iloc[-1]) if 'adx' in df_enriched.columns else float(compute_adx(df).iloc[-1])
+        adx_val = float(df_enriched['adx'].iloc[-1]) if 'adx' in df_enriched.columns else compute_adx(df)  # CM-45: already returns float
         vwap_val = df_enriched['vwap'].iloc[-1] if 'vwap' in df_enriched.columns else 'N/A'
         sa = df_enriched['senkou_span_a'].iloc[-1] if 'senkou_span_a' in df_enriched.columns else 'N/A'
         sb = df_enriched['senkou_span_b'].iloc[-1] if 'senkou_span_b' in df_enriched.columns else 'N/A'
