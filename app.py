@@ -659,10 +659,10 @@ def conf_badge(c):
 # ──────────────────────────────────────────────
 # PAGE 1: DASHBOARD
 # ──────────────────────────────────────────────
-@st.fragment(run_every=10)
+@st.fragment(run_every=30)
 def _live_ticker_bar():
     """
-    Auto-refreshing live price ticker bar — updates every 10 seconds independently
+    Auto-refreshing live price ticker bar — updates every 30 seconds independently
     of the rest of the page (Streamlit fragments, v1.37+). This eliminates full-page
     reruns for price updates, achieving up to 5000x performance improvement per
     Streamlit 2025 benchmarks.
@@ -731,13 +731,35 @@ def _ws_health_fragment():
         st.caption(f"Last tick: {age:.0f}s ago")
 
 
+@st.fragment(run_every=1)
+def _auto_refresh_fragment():
+    """
+    Fragment-based auto-refresh countdown — runs every 1s as a fragment so only
+    this tiny widget re-renders each second. The main page only gets a full rerun
+    when the actual interval expires. This replaces the old time.sleep(1)+st.rerun()
+    pattern that caused a full page reload every second (constant price flickering).
+    """
+    if not st.session_state.get("auto_refresh_enabled"):
+        return
+    interval = st.session_state.get("auto_refresh_interval", 30)
+    _ar_key = "auto_refresh_last_run"
+    _last = st.session_state.get(_ar_key, 0.0)
+    _now = time.time()
+    _elapsed = _now - _last
+    _remaining = max(0, interval - int(_elapsed))
+    st.caption(f"Auto-refresh in {_remaining}s  |  toggle off in sidebar to pause")
+    if _elapsed >= interval:
+        st.session_state[_ar_key] = _now
+        st.rerun(scope="app")   # full page rerun only when the interval actually expires
+
+
 def page_dashboard():
     st.markdown(
         '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
         'letter-spacing:-0.5px;margin-bottom:0">Signal Dashboard</h1>',
         unsafe_allow_html=True,
     )
-    # Live ticker bar — auto-refreshes every 10s via Streamlit fragment
+    # Live ticker bar — auto-refreshes every 30s via Streamlit fragment
     _live_ticker_bar()
 
     # FNG chip + scan controls
@@ -1221,7 +1243,12 @@ def page_dashboard():
         rr        = r.get("rr_ratios") or {}
 
         adv_cols = st.columns(4)
-        adv_cols[0].metric("Timeframes Agreeing", f"{mtf}%", help=_ui.HELP_MTF_ALIGN)
+        # Show "N/A" when mtf_alignment is 0 and no valid timeframes had data
+        _mtf_display = "N/A" if mtf == 0 and not any(
+            td.get("direction") not in ("NO DATA", "N/A", "LOW VOL")
+            for td in r.get("timeframes", {}).values()
+        ) else f"{mtf}%"
+        adv_cols[0].metric("Timeframes Agreeing", _mtf_display, help=_ui.HELP_MTF_ALIGN)
         adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "N/A",
                            delta=rr.get("tp2", ""), help="Second profit target — sell another 40% here.")
         adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "N/A",
@@ -1244,10 +1271,14 @@ def page_dashboard():
                 _ui.tf_column_guide_popover()
             _tf_rows = []
             for tf, td in tf_data.items():
+                _td_dir = td.get("direction", "N/A")
+                _no_data = _td_dir in ("NO DATA", "N/A")
+                _td_conf = td.get("confidence", 0)
                 _tf_rows.append({
                     "Timeframe": tf,
-                    "Signal": td.get("direction", "N/A"),
-                    "Strength": f"{td.get('confidence', 0)}%",
+                    "Signal": _td_dir,
+                    # Show "—" instead of "0%" when a timeframe returned no data
+                    "Strength": "—" if _no_data else f"{_td_conf}%",
                     "Momentum (RSI)": td.get("rsi", "N/A"),
                     "Trend Strength (ADX)": td.get("adx", "N/A"),
                     "Trend Direction": td.get("supertrend", "N/A"),
@@ -1578,23 +1609,11 @@ def page_dashboard():
         except Exception:
             pass
 
-    # ── Auto-refresh trigger (non-blocking) ──
+    # ── Auto-refresh trigger (fragment-based, non-blocking) ──
+    # Uses a 1s fragment for the countdown so the main page only reruns at the real interval,
+    # not every second (which caused constant full-page reruns and price flickering).
     if st.session_state.get("auto_refresh_enabled"):
-        interval = st.session_state.get("auto_refresh_interval", 30)
-        _ar_key = "auto_refresh_last_run"
-        _last = st.session_state.get(_ar_key, 0.0)
-        _now = time.time()
-        _elapsed = _now - _last
-        _remaining = max(0, interval - int(_elapsed))
-        st.caption(f"Auto-refresh in {_remaining}s  |  toggle off in sidebar to pause")
-        if _elapsed >= interval:
-            st.session_state[_ar_key] = _now
-            st.rerun()
-        else:
-            # Sleep 1s then rerun to decrement the countdown — avoids blocking the UI
-            # for the full interval while keeping server-side polling lightweight.
-            time.sleep(1)
-            st.rerun()
+        _auto_refresh_fragment()
 
 
 def _progress_cb(done, total, pair_name):
