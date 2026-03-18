@@ -1700,3 +1700,116 @@ def get_news_sentiment(pair: str, max_articles: int = 5) -> dict:
         with _NEWS_CACHE_LOCK:
             _NEWS_CACHE[pair] = {**result, "_ts": now}
         return result
+
+
+# ──────────────────────────────────────────────
+# FEAR & GREED INDEX — Free, no API key
+# Source: alternative.me — updates daily, contrarian signal
+# ──────────────────────────────────────────────
+
+_FNG_CACHE: dict = {"value": None, "label": None, "_ts": 0.0}
+_FNG_LOCK = threading.Lock()
+_FNG_TTL  = 3600  # 1-hour cache (index updates daily — no need to hammer)
+
+
+def get_fear_greed() -> dict:
+    """
+    Fetch the current Crypto Fear & Greed Index from Alternative.me (free, no auth).
+    Returns {'value': int, 'label': str, 'bias': float, 'signal': str, 'error': str|None}
+
+    Contrarian interpretation (research-backed):
+      - Extreme Fear (0-20)  → market oversold → BUY bias
+      - Fear (21-40)         → mild BUY bias
+      - Neutral (41-59)      → no bias
+      - Greed (60-79)        → mild SELL bias
+      - Extreme Greed (80+)  → market overbought → SELL bias
+
+    bias: float in [-10, +10] for confidence score adjustment.
+    Positive = bullish bias, negative = bearish bias.
+    """
+    now = time.time()
+    with _FNG_LOCK:
+        if _FNG_CACHE["value"] is not None and now - _FNG_CACHE["_ts"] < _FNG_TTL:
+            c = _FNG_CACHE
+            return {
+                "value":  c["value"],
+                "label":  c["label"],
+                "bias":   c["bias"],
+                "signal": c["signal"],
+                "error":  None,
+            }
+
+    try:
+        resp = requests.get(
+            "https://api.alternative.me/fng/",
+            params={"limit": 1},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return {"value": 50, "label": "Neutral", "bias": 0.0, "signal": "NEUTRAL",
+                    "error": f"HTTP {resp.status_code}"}
+        data  = resp.json()["data"][0]
+        value = int(data["value"])
+        label = data["value_classification"]
+
+        # Contrarian bias calculation
+        if value <= 20:
+            bias, signal = +10.0, "EXTREME_FEAR_BUY"
+        elif value <= 40:
+            bias, signal = +5.0,  "FEAR_BUY"
+        elif value <= 59:
+            bias, signal = 0.0,   "NEUTRAL"
+        elif value <= 79:
+            bias, signal = -5.0,  "GREED_SELL"
+        else:
+            bias, signal = -10.0, "EXTREME_GREED_SELL"
+
+        result = {"value": value, "label": label, "bias": bias, "signal": signal, "error": None}
+        with _FNG_LOCK:
+            _FNG_CACHE.update({**result, "_ts": now})
+        return result
+    except Exception as e:
+        logging.warning("Fear & Greed fetch failed: %s", e)
+        return {"value": 50, "label": "Neutral", "bias": 0.0, "signal": "NEUTRAL", "error": str(e)}
+
+
+def get_fear_greed_bias() -> float:
+    """
+    Returns a confidence score bias in points (-10 to +10) from the Fear & Greed Index.
+    Positive = bullish contrarian bias (extreme fear → buy), negative = bearish (extreme greed → sell).
+    Used as an additive adjustment in calculate_signal_confidence() and agent scoring.
+    """
+    try:
+        return get_fear_greed()["bias"]
+    except Exception:
+        return 0.0
+
+
+# ──────────────────────────────────────────────
+# EXPONENTIAL BACKOFF RETRY WRAPPER
+# ──────────────────────────────────────────────
+
+def _with_retry(fn, *args, max_attempts: int = 3, base_delay: float = 1.0, **kwargs):
+    """
+    Call fn(*args, **kwargs) with exponential backoff on exception.
+    Retries up to max_attempts times: delays 1s, 2s, 4s, ...
+
+    Use this wrapper on any external API call that needs resilience:
+      result = _with_retry(requests.get, url, params=params, timeout=8)
+
+    Raises the last exception if all attempts fail.
+    Circuit-breaker note: callers should handle None / error dicts from their own
+    functions instead of using this for functions that return neutral fallbacks.
+    """
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                logging.debug("_with_retry: attempt %d/%d failed (%s) — retrying in %.1fs",
+                              attempt + 1, max_attempts, e, delay)
+                time.sleep(delay)
+    raise last_exc

@@ -28,10 +28,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────
-_OKX_WS_URL      = "wss://ws.okx.com:8443/ws/v5/public"
-_RECONNECT_DELAY = 5    # seconds between reconnect attempts
-_PING_INTERVAL   = 25   # seconds between OKX keepalive pings
-_STALE_THRESHOLD = 60   # seconds before a price is considered stale
+_OKX_WS_URL        = "wss://ws.okx.com:8443/ws/v5/public"
+_RECONNECT_DELAY   = 5    # seconds between reconnect attempts
+_PING_INTERVAL     = 25   # seconds between OKX keepalive pings
+_STALE_THRESHOLD   = 60   # seconds before a price is considered stale
+_WATCHDOG_INTERVAL = 30   # heartbeat check every 30 seconds
+_WATCHDOG_TIMEOUT  = 45   # force reconnect if no message in 45 seconds
 
 # ── Shared state (thread-safe via _lock) ───────────────────────
 _lock   = threading.Lock()
@@ -189,6 +191,7 @@ def start(pairs: list[str]) -> None:
         name="ws-okx-tickers",
     )
     _ws_thread.start()
+    _start_watchdog(pairs)   # ensure heartbeat watchdog is running
     logger.info(f"[WS] Started feed for {pairs}")
 
 
@@ -237,3 +240,60 @@ def get_status() -> dict:
 def is_stale(pair: str) -> bool:
     """True if no fresh tick received for `pair` within _STALE_THRESHOLD seconds."""
     return get_price(pair) is None
+
+
+# ── Heartbeat Watchdog ────────────────────────────────────────
+_watchdog_thread: Optional[threading.Thread] = None
+_watchdog_running = False
+
+
+def _watchdog_loop(pairs: list[str]) -> None:
+    """
+    Background thread that monitors WebSocket message recency.
+    If no message has been received in _WATCHDOG_TIMEOUT seconds, forces a
+    full reconnect by closing the current socket (the _run_loop will restart it).
+
+    This provides a second layer of resilience beyond the built-in reconnect:
+    the WS library may consider the connection "open" while messages have silently stopped
+    (e.g. OKX server-side issue). The watchdog catches this silent-stale state.
+    Research: 99.99% uptime requires detecting silent feed failures, not just disconnects.
+    """
+    global _watchdog_running
+    while _watchdog_running:
+        time.sleep(_WATCHDOG_INTERVAL)
+        if not _watchdog_running:
+            break
+        with _lock:
+            last_msg = _status.get("last_message_at")
+            connected = _status.get("connected", False)
+        if connected and last_msg is not None:
+            elapsed = time.time() - last_msg
+            if elapsed > _WATCHDOG_TIMEOUT:
+                logger.warning(
+                    "[WS-Watchdog] No message in %.0fs (threshold=%ds) — forcing reconnect",
+                    elapsed, _WATCHDOG_TIMEOUT,
+                )
+                with _lock:
+                    ws_to_close = _ws_app
+                if ws_to_close:
+                    try:
+                        ws_to_close.close()
+                    except Exception:
+                        pass
+
+
+def _start_watchdog(pairs: list[str]) -> None:
+    """Start the heartbeat watchdog thread (idempotent)."""
+    global _watchdog_thread, _watchdog_running
+    if _watchdog_thread and _watchdog_thread.is_alive():
+        return
+    _watchdog_running = True
+    _watchdog_thread = threading.Thread(
+        target=_watchdog_loop,
+        args=(pairs,),
+        daemon=True,
+        name="ws-watchdog",
+    )
+    _watchdog_thread.start()
+    logger.info("[WS-Watchdog] Started heartbeat monitor (check every %ds, timeout %ds)",
+                _WATCHDOG_INTERVAL, _WATCHDOG_TIMEOUT)

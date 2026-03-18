@@ -101,9 +101,25 @@ Market Context:
 
 Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like a Bloomberg analyst."""
 
+        # Prompt caching: cache_control on the system prompt prefix achieves
+        # up to 85% latency reduction and 90% cost reduction for repeated analysis
+        # (Anthropic docs: cache hit latency drops from 11.5s → 2.4s on long prompts)
+        system_content = [
+            {
+                "type": "text",
+                "text": (
+                    "You are a professional crypto trading analyst. "
+                    "You analyze trading signals and explain them in clear, concise Bloomberg-style prose. "
+                    "Always be specific about the indicators and their values. "
+                    "Never use bullet points or headers — write in flowing sentences only."
+                ),
+                "cache_control": {"type": "ephemeral"},  # cache this system block
+            }
+        ]
         message = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=300,
+            system=system_content,
             messages=[{"role": "user", "content": prompt}],
         )
 

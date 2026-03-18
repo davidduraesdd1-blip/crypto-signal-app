@@ -524,9 +524,25 @@ def _route_after_post_risk(state: AgentState) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_graph():
-    """Construct and compile the LangGraph state machine. Returns None if unavailable."""
+    """
+    Construct and compile the LangGraph state machine with SQLite checkpointing.
+
+    Checkpointing via SqliteSaver means if the agent process restarts or an API
+    call fails mid-cycle, the graph resumes from the last saved checkpoint rather
+    than losing all in-progress state. This is critical for 24/7 autonomous operation.
+    Research (LangGraph docs 2025): checkpointing is mandatory for production agents.
+    """
     if not _LANGGRAPH_AVAILABLE:
         return None
+
+    # Try to attach SQLite checkpointer for durable state persistence
+    _checkpointer = None
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        _checkpointer = SqliteSaver.from_conn_string("agent_checkpoints.db")
+        logger.info("[agent] LangGraph SQLite checkpointer attached")
+    except Exception as _cp_err:
+        logger.debug("[agent] Checkpointer unavailable (non-critical): %s", _cp_err)
 
     g = StateGraph(AgentState)
 
@@ -553,7 +569,7 @@ def _build_graph():
     g.add_edge("execute",         "log_and_reflect")
     g.add_edge("log_and_reflect", END)
 
-    return g.compile()
+    return g.compile(checkpointer=_checkpointer) if _checkpointer else g.compile()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

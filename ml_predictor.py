@@ -121,8 +121,15 @@ def _build_labels(df: pd.DataFrame, feat_index) -> Optional[pd.Series]:
 
 def _train_model(df: pd.DataFrame):
     """
-    Train a GradientBoostingClassifier on the last TRAIN_BARS of data.
-    Returns fitted model or None if insufficient data.
+    Train an ensemble of GradientBoostingClassifier + XGBoost on the last TRAIN_BARS.
+
+    Ensemble strategy (2025 research consensus):
+    - XGBoost on technical indicators is the strongest single published model for
+      crypto price direction (Springer Nature, 2025). GBM provides complementary
+      regularization. Averaged probabilities outperform either alone.
+    - Falls back to GBM-only if XGBoost is not installed.
+
+    Returns a dict {'gbm': model, 'xgb': model|None} or None if insufficient data.
     """
     try:
         from sklearn.ensemble import GradientBoostingClassifier
@@ -153,7 +160,7 @@ def _train_model(df: pd.DataFrame):
     if len(np.unique(y)) < 2:
         return None  # degenerate: all same class
 
-    model = Pipeline([
+    gbm = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", GradientBoostingClassifier(
             n_estimators=60,
@@ -164,8 +171,32 @@ def _train_model(df: pd.DataFrame):
             random_state=42,
         )),
     ])
-    model.fit(X, y)
-    return model
+    gbm.fit(X, y)
+
+    # XGBoost — optional but strongly preferred (best 2025 crypto direction model)
+    xgb_model = None
+    try:
+        import xgboost as xgb
+        xgb_model = xgb.XGBClassifier(
+            n_estimators=80,
+            max_depth=4,
+            learning_rate=0.07,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            use_label_encoder=False,
+            eval_metric="logloss",
+            verbosity=0,
+            random_state=42,
+            n_jobs=1,
+        )
+        xgb_model.fit(X, y)
+    except ImportError:
+        logger.debug("xgboost not installed — using GBM only (pip install xgboost)")
+    except Exception as _xe:
+        logger.debug("XGBoost training failed: %s — using GBM only", _xe)
+        xgb_model = None
+
+    return {"gbm": gbm, "xgb": xgb_model, "X_train": X, "y_train": y}
 
 
 def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
@@ -182,9 +213,14 @@ def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
 
 
 def _compute_accuracy(model, df: pd.DataFrame) -> float:
-    """Estimate model accuracy on the holdout portion of training data."""
+    """Estimate model accuracy on the holdout portion of training data.
+    Accepts either a raw sklearn model or the ensemble dict returned by _train_model().
+    """
     try:
         from sklearn.metrics import accuracy_score
+        # Resolve the underlying GBM if passed the ensemble dict
+        if isinstance(model, dict):
+            model = model["gbm"]
         # Use last 40 bars as quasi-holdout
         holdout = df.iloc[-40 - LOOKAHEAD_BARS:-LOOKAHEAD_BARS]
         feat = _build_features(holdout)
@@ -264,8 +300,21 @@ def get_ml_prediction(pair: str, tf: str, df: pd.DataFrame) -> dict:
             return result
 
         X_latest = feat.iloc[[-1]].values  # last row = current bar
-        prob_up = float(model.predict_proba(X_latest)[0][1])
-        accuracy = _compute_accuracy(model, df)
+
+        # Ensemble prediction: average GBM + XGBoost probabilities
+        # XGBoost on crypto technical indicators outperforms GBM alone (Springer 2025)
+        if isinstance(model, dict):
+            gbm_prob = float(model["gbm"].predict_proba(X_latest)[0][1])
+            if model.get("xgb") is not None:
+                xgb_prob = float(model["xgb"].predict_proba(X_latest)[0][1])
+                prob_up = (gbm_prob + xgb_prob) / 2.0   # equal-weight ensemble
+            else:
+                prob_up = gbm_prob
+            accuracy = _compute_accuracy(model["gbm"], df)
+        else:
+            # Legacy single-model path (shouldn't happen with current code)
+            prob_up = float(model.predict_proba(X_latest)[0][1])
+            accuracy = _compute_accuracy(model, df)
 
         # Classify
         if prob_up >= 0.60:

@@ -261,22 +261,49 @@ def root():
     }
 
 
-@app.get("/health", tags=["System"], summary="Health check + DB stats")
+@app.get("/health", tags=["System"], summary="Health check + DB stats + feed status")
 def health():
     """
-    Returns database table row counts, DB file size, and current scan status.
-    No authentication required — safe to use as a load-balancer health probe.
+    Comprehensive health check: DB stats, scan status, WebSocket feed health,
+    and data source freshness. Safe for load-balancer / UptimeRobot probes.
+    No authentication required.
     """
+    import time as _time
     try:
         stats = db.get_db_stats()
     except Exception as _e:
         logger.warning(f"DB stats unavailable: {_e}")
         stats = {"error": "unavailable"}
     status = db.read_scan_status()
+
+    # WebSocket feed health
+    try:
+        ws_status   = ws_feeds.get_status()
+        ws_prices   = ws_feeds.get_all_prices()
+        feed_health = {
+            "connected":        ws_status.get("connected", False),
+            "reconnects":       ws_status.get("reconnects", 0),
+            "pairs_live":       list(ws_prices.keys()),
+            "pairs_stale":      [p for p in model.PAIRS if ws_feeds.is_stale(p)],
+            "last_message_age": (
+                round(_time.time() - ws_status["last_message_at"], 1)
+                if ws_status.get("last_message_at") else None
+            ),
+        }
+        feed_health["status"] = "OK" if not feed_health["pairs_stale"] else "DEGRADED"
+    except Exception as _fe:
+        feed_health = {"status": "ERROR", "error": str(_fe)}
+
+    overall_status = "ok"
+    if feed_health.get("status") not in ("OK", None):
+        overall_status = "degraded"
+
     return {
-        "status": "ok",
-        "db": _serialize(stats),
-        "scan": _serialize(status),
+        "status":    overall_status,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "db":        _serialize(stats),
+        "scan":      _serialize(status),
+        "feeds":     feed_health,
     }
 
 

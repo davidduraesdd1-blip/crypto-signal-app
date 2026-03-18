@@ -36,9 +36,16 @@ _PAIR_TO_CURRENCIES: dict[str, list[str]] = {
     "BNB/USDT":  ["BNB", "binance"],
 }
 
-_CRYPTOPANIC_BASE = "https://cryptopanic.com/api/v1/posts/"
-_COINDESK_RSS     = "https://feeds.feedburner.com/CoinDesk"
+_CRYPTOPANIC_BASE  = "https://cryptopanic.com/api/v1/posts/"
+_COINDESK_RSS      = "https://feeds.feedburner.com/CoinDesk"
 _COINTELEGRAPH_RSS = "https://cointelegraph.com/rss"
+_LUNARCRUSH_BASE   = "https://lunarcrush.com/api4/public/coins"
+
+# Ticker → LunarCrush coin slug mapping
+_LC_SLUG_MAP: dict[str, str] = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "XRP": "xrp",     "DOGE": "dogecoin", "BNB": "bnb",
+}
 
 _REQUEST_TIMEOUT = 8  # seconds
 
@@ -73,6 +80,66 @@ def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
         return headlines
     except Exception as e:
         logger.debug("CryptoPanic fetch failed for %s: %s", ticker, e)
+        return []
+
+
+def _fetch_lunarcrush(ticker: str) -> list[str]:
+    """
+    Fetch social sentiment headlines/signals from LunarCrush free public API.
+    LunarCrush Galaxy Score blends social volume + sentiment + market momentum.
+    A Galaxy Score > 60 is bullish social momentum; < 40 is bearish.
+    Research: LunarCrush social signals front-run price moves by 4-12 hours.
+    """
+    slug = _LC_SLUG_MAP.get(ticker.upper())
+    if not slug:
+        return []
+    try:
+        url  = f"{_LUNARCRUSH_BASE}/{slug}/v1"
+        resp = requests.get(url, timeout=_REQUEST_TIMEOUT,
+                            headers={"User-Agent": "CryptoBot/1.0"})
+        if resp.status_code != 200:
+            return []
+        data = resp.json().get("data", {})
+        if not data:
+            return []
+
+        galaxy_score = data.get("galaxy_score", 50)
+        alt_rank     = data.get("alt_rank", 500)
+        sentiment    = data.get("sentiment", 3)       # 1-5 scale (3=neutral)
+        social_vol   = data.get("social_volume_24h", 0)
+
+        headlines = []
+        # Galaxy Score signals
+        if galaxy_score >= 65:
+            headlines.append(f"{ticker} LunarCrush Galaxy Score {galaxy_score}/100 — strong bullish social momentum [positive votes]")
+        elif galaxy_score >= 55:
+            headlines.append(f"{ticker} LunarCrush Galaxy Score {galaxy_score}/100 — mild positive social sentiment")
+        elif galaxy_score <= 35:
+            headlines.append(f"{ticker} LunarCrush Galaxy Score {galaxy_score}/100 — bearish social momentum [negative votes]")
+        elif galaxy_score <= 45:
+            headlines.append(f"{ticker} LunarCrush Galaxy Score {galaxy_score}/100 — mild negative social sentiment")
+
+        # AltRank signals (lower = better social ranking relative to market cap)
+        if isinstance(alt_rank, (int, float)):
+            if alt_rank <= 10:
+                headlines.append(f"{ticker} AltRank #{alt_rank} — top social/market momentum [positive votes]")
+            elif alt_rank >= 200:
+                headlines.append(f"{ticker} AltRank #{alt_rank} — low social traction [negative votes]")
+
+        # Raw sentiment score (1-5)
+        if isinstance(sentiment, (int, float)):
+            if sentiment >= 4.0:
+                headlines.append(f"{ticker} crowd sentiment {sentiment:.1f}/5 — bullish community mood [positive votes]")
+            elif sentiment <= 2.0:
+                headlines.append(f"{ticker} crowd sentiment {sentiment:.1f}/5 — bearish community mood [negative votes]")
+
+        # High social volume = unusual activity
+        if isinstance(social_vol, (int, float)) and social_vol > 10000:
+            headlines.append(f"{ticker} social volume {social_vol:,} posts/24h — elevated community activity")
+
+        return headlines
+    except Exception as e:
+        logger.debug("LunarCrush fetch failed for %s: %s", ticker, e)
         return []
 
 
@@ -262,6 +329,11 @@ def get_news_sentiment(pair: str) -> dict:
     if len(headlines) < 10:
         ct = _fetch_rss(_COINTELEGRAPH_RSS, keywords, max_items=8)
         headlines.extend(ct)
+
+    # Source 4: LunarCrush social sentiment (front-runs price 4-12h per research)
+    # Always fetch regardless of headline count — social signals are independent alpha
+    lc_headlines = _fetch_lunarcrush(currencies[0])
+    headlines.extend(lc_headlines)
 
     if not headlines:
         result = {**_NEUTRAL_RESULT, "error": "No headlines found"}
