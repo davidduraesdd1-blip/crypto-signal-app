@@ -1755,6 +1755,16 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
 
         regime_str = f"Regime: {regime} (ADX {round(adx, 1)}, H={hurst_val:.2f})"
 
+        # BUG-CMC01: pre-compute strategy_bias here so GC dampener (below) can reference it.
+        # Without this, the first use at the GC scoring block raises NameError — every signal
+        # calculation silently falls through to the except and returns zeros.
+        if regime == "Trending":
+            strategy_bias = "Trend-Follow"
+        elif regime == "Ranging":
+            strategy_bias = "Mean-Reversion"
+        else:
+            strategy_bias = "Balanced"
+
         score = 0.0
 
         # Core
