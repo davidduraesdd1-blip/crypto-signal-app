@@ -2938,7 +2938,6 @@ def page_backtest():
             df_dbt = deep_r.get("trades", pd.DataFrame())
             if not df_dbt.empty:
                 # Equity curve chart
-                import plotly.graph_objects as go
                 fig_dbt = go.Figure()
                 fig_dbt.add_trace(go.Scatter(
                     x=df_dbt['timestamp'], y=df_dbt['equity'],
