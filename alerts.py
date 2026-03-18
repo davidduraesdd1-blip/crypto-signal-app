@@ -76,7 +76,7 @@ def load_alerts_config():
     config = dict(_DEFAULTS)
     if os.path.exists(_ALERTS_CONFIG_FILE):
         try:
-            with open(_ALERTS_CONFIG_FILE, "r") as f:
+            with open(_ALERTS_CONFIG_FILE, "r", encoding="utf-8") as f:
                 config.update(json.load(f))
         except Exception as e:
             logging.error(f"[alerts] Failed to load config from {_ALERTS_CONFIG_FILE}: {e}")
@@ -89,7 +89,7 @@ def save_alerts_config(config: dict):
     try:
         # Write to a temp file in the same directory, then atomically rename
         dir_ = os.path.dirname(os.path.abspath(_ALERTS_CONFIG_FILE)) or "."
-        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp", delete=False, encoding="utf-8") as tmp:
             json.dump(config, tmp, indent=2)
             tmp_path = tmp.name
         # BUG-ALERTS01: restrict permissions before rename so API keys aren't

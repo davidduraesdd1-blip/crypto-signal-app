@@ -104,7 +104,7 @@ def _on_message(ws, message: str) -> None:
             return
         for item in data["data"]:
             inst_id   = item.get("instId", "")
-            last_str   = item.get("last", "").strip()
+            last_str   = str(item.get("last") or "").strip()  # str(…or"") handles JSON null same as open24h below
             open24_str = str(item.get("open24h") or "0").strip()  # BUG-R25: .get() returns None when key exists with JSON null; str(…or"0") handles that
             if not last_str or not inst_id.endswith("-SWAP"):
                 continue
