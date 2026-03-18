@@ -3699,48 +3699,39 @@ def run_scan(progress_callback=None):
     circuit_breaker = check_drawdown_circuit_breaker()
 
     # Fetch funding rates, open interest, and on-chain data once per scan
+    # PERF-08: run all 7 pre-scan data fetches in parallel — was sequential (up to 56s of blocking)
     import data_feeds as _data_feeds
-    try:
-        funding_map = _data_feeds.get_funding_rates_batch(PAIRS)
-    except Exception as e:
-        logging.warning(f"Funding rates batch fetch failed: {e}")
-        funding_map = {}
 
-    try:
-        oi_map = _data_feeds.get_open_interest_batch(PAIRS)
-    except Exception as e:
-        logging.warning(f"Open interest batch fetch failed: {e}")
-        oi_map = {}
+    def _safe(fn, *args, default=None, label=""):
+        try:
+            return fn(*args)
+        except Exception as e:
+            logging.warning(f"{label} fetch failed: {e}")
+            return default
 
-    try:
-        iv_map = _data_feeds.get_options_iv_batch(PAIRS)
-    except Exception as e:
-        logging.warning(f"Options IV batch fetch failed: {e}")
-        iv_map = {}
+    _pre_scan_tasks = {
+        "funding":  (lambda: _safe(_data_feeds.get_funding_rates_batch,  PAIRS, default={}, label="Funding rates")),
+        "oi":       (lambda: _safe(_data_feeds.get_open_interest_batch,   PAIRS, default={}, label="Open interest")),
+        "iv":       (lambda: _safe(_data_feeds.get_options_iv_batch,      PAIRS, default={}, label="Options IV")),
+        "ob":       (lambda: _safe(_data_feeds.get_orderbook_batch,       PAIRS, default={}, label="Order book")),
+        "cvd":      (lambda: _safe(_data_feeds.get_cvd_batch,             PAIRS, default={}, label="CVD")),
+        "trending": (lambda: _safe(_data_feeds.get_trending_coins,               default=[], label="Trending coins")),
+        "global":   (lambda: _safe(_data_feeds.get_global_market,                default={}, label="Global market")),
+    }
 
-    try:
-        ob_map = _data_feeds.get_orderbook_batch(PAIRS)
-    except Exception as e:
-        logging.warning(f"Order book batch fetch failed: {e}")
-        ob_map = {}
+    _pre_results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(_pre_scan_tasks)) as _pre_ex:
+        _pre_futures = {_pre_ex.submit(fn): key for key, fn in _pre_scan_tasks.items()}
+        for _f in concurrent.futures.as_completed(_pre_futures):
+            _pre_results[_pre_futures[_f]] = _f.result()
 
-    try:
-        cvd_map = _data_feeds.get_cvd_batch(PAIRS)
-    except Exception as e:
-        logging.warning(f"CVD batch fetch failed: {e}")
-        cvd_map = {}
-
-    try:
-        trending_coins = _data_feeds.get_trending_coins()
-    except Exception as e:
-        logging.warning(f"Trending coins fetch failed: {e}")
-        trending_coins = []
-
-    try:
-        global_mkt = _data_feeds.get_global_market()
-    except Exception as e:
-        logging.warning(f"Global market fetch failed: {e}")
-        global_mkt = {}
+    funding_map    = _pre_results.get("funding",  {})
+    oi_map         = _pre_results.get("oi",       {})
+    iv_map         = _pre_results.get("iv",       {})
+    ob_map         = _pre_results.get("ob",       {})
+    cvd_map        = _pre_results.get("cvd",      {})
+    trending_coins = _pre_results.get("trending", [])
+    global_mkt     = _pre_results.get("global",   {})
 
     # PERF-02: limit to recent 200 rows — only used for BTC correlation; full table scan is wasteful
     master_df = _db.get_signals_df(limit=200)
@@ -3771,7 +3762,7 @@ def run_scan(progress_callback=None):
                 progress_callback(completed[0], len(PAIRS), pair)
         return result
 
-    max_workers = min(len(PAIRS), 4)  # cap at 4 to respect exchange rate limits
+    max_workers = min(len(PAIRS), 6)  # PERF-08: raised from 4→6 — Kraken allows ≥6 concurrent requests
     pair_results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_scan_with_progress, pair): pair for pair in PAIRS}
