@@ -31,7 +31,7 @@ import hmac
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -300,7 +300,7 @@ def health():
 
     return {
         "status":    overall_status,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "db":        _serialize(stats),
         "scan":      _serialize(status),
         "feeds":     feed_health,

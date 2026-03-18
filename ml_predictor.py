@@ -183,7 +183,7 @@ def _train_model(df: pd.DataFrame):
             learning_rate=0.07,
             subsample=0.8,
             colsample_bytree=0.8,
-            use_label_encoder=False,
+            # use_label_encoder removed in XGBoost >= 2.0 — omit to avoid TypeError
             eval_metric="logloss",
             verbosity=0,
             random_state=42,

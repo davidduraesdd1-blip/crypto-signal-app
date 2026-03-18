@@ -14,7 +14,7 @@ import os
 import threading
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 import alerts as _alerts
@@ -1647,7 +1647,7 @@ def _scheduled_scan():
     """Entry point for APScheduler — enforces quiet hours, then delegates to _run_scan_thread."""
     cfg = _alerts.load_alerts_config()
     if cfg.get("autoscan_quiet_hours_enabled"):
-        now_str = datetime.utcnow().strftime("%H:%M")
+        now_str = datetime.now(timezone.utc).strftime("%H:%M")
         qs = cfg.get("autoscan_quiet_start", "22:00")
         qe = cfg.get("autoscan_quiet_end", "06:00")
         if _in_quiet_hours(now_str, qs, qe):

@@ -585,7 +585,14 @@ def place_iceberg_order(
         _load_markets_cached(ex)
         symbol = _to_swap_symbol(pair)
         ticker = ex.fetch_ticker(symbol)
-        price_now = float(ticker.get("last") or current_price or 1.0)
+        # EXEC-03: never fall back to 1.0 for iceberg orders — same guard as place_order().
+        # At BTC prices a price_now of 1.0 would produce an absurdly large contract qty.
+        _raw_price = ticker.get("last") or current_price
+        if not _raw_price or float(_raw_price) <= 0:
+            raise ValueError(
+                f"Cannot determine current price for {pair} — ticker returned {ticker.get('last')!r}"
+            )
+        price_now = float(_raw_price)
         market    = ex.market(symbol)
         ct_size   = float(market.get("contractSize") or 1.0)
         total_qty = max(1, round(size_usd / (price_now * ct_size)))
