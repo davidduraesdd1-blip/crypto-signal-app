@@ -284,7 +284,8 @@ def get_news_sentiment_batch(pairs: list[str]) -> dict[str, dict]:
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pair: pool.submit(get_news_sentiment, pair) for pair in pairs}
-    return {pair: f.result() for pair, f in futures.items()}
+        # Collect results inside the context so exceptions surface before pool shuts down
+        return {pair: f.result() for pair, f in futures.items()}
 
 
 def get_sentiment_score_bias(pair: str) -> float:

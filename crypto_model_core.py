@@ -814,7 +814,7 @@ def compute_supertrend(df, period=10, multiplier=3.0):
     hl2 = (df['high'] + df['low']) / 2
     upper_band = hl2 + multiplier * atr_series
     lower_band = hl2 - multiplier * atr_series
-    in_uptrend = pd.array([True] * len(df), dtype=bool)
+    in_uptrend = np.ones(len(df), dtype=bool)
     ub = upper_band.values.copy()
     lb = lower_band.values.copy()
     close_vals = df['close'].values
@@ -1399,9 +1399,10 @@ def _compute_kelly_fraction() -> float | None:
         if bt.empty:
             return None
         bt = bt[~bt['direction'].str.contains('NEUTRAL|LOW VOL', na=False, regex=True)]
-        buy_mask = bt['direction'].isin(['BUY', 'STRONG BUY']) & (bt['exit'] > bt['entry'])
-        sell_mask = bt['direction'].isin(['SELL', 'STRONG SELL']) & (bt['exit'] < bt['entry'])
-        bt = bt[buy_mask | sell_mask].copy()
+        # Keep ALL directional trades (wins AND losses) — Kelly requires both sides to be
+        # meaningful. The old buy_mask/sell_mask filtered to only price-correct trades,
+        # which excluded all losses and inflated the Kelly fraction to be overconfident.
+        bt = bt[bt['direction'].isin(['BUY', 'STRONG BUY', 'SELL', 'STRONG SELL'])].copy()
         if len(bt) < 20:
             return None
         wins = bt[bt['pnl_pct'] > 0]

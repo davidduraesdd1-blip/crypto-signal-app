@@ -223,7 +223,8 @@ def _fetch_xrp_whales(price_usd: float) -> list[dict]:
             amt = tx.get("Amount", "0")
             if isinstance(amt, str):
                 # XRP drops (1 XRP = 1,000,000 drops)
-                xrp_amount = int(amt) / 1e6
+                # Use int(float()) to handle both "1000000" and "1000000.0" formats
+                xrp_amount = int(float(amt)) / 1e6
                 amount_usd = xrp_amount * price_usd
                 if amount_usd >= WHALE_THRESHOLD_USD:
                     moves.append({
@@ -455,4 +456,5 @@ def get_whale_batch(pairs: list[str], price_map: Optional[dict] = None) -> dict[
             pair: pool.submit(get_whale_activity, pair, price_map.get(pair, 0.0))
             for pair in pairs
         }
-    return {pair: f.result() for pair, f in futures.items()}
+        # Collect results inside the context so exceptions surface before pool shuts down
+        return {pair: f.result() for pair, f in futures.items()}

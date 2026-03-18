@@ -227,7 +227,7 @@ def run_stress_test(
         winning_pairs   = 0
 
     portfolio_final   = initial_equity + total_pnl_usd
-    portfolio_return  = (portfolio_final - initial_equity) / initial_equity * 100
+    portfolio_return  = (portfolio_final - initial_equity) / initial_equity * 100 if initial_equity else 0.0
 
     portfolio = {
         "initial_equity":    initial_equity,

@@ -618,18 +618,18 @@ def tradingview_webhook(
         error_msg=payload.message or "",
     )
 
-    # Build human-readable notification
+    # Build human-readable notification using HTML (send_telegram uses parse_mode="HTML")
     lines = [
-        "📡 *TradingView Alert*",
-        f"Pair: `{pair}`",
-        f"Action: `{action}`",
+        "📡 <b>TradingView Alert</b>",
+        f"Pair: <code>{pair}</code>",
+        f"Action: <code>{action}</code>",
     ]
     if payload.price is not None:
-        lines.append(f"Price: `{payload.price:,.4f}`")
+        lines.append(f"Price: <code>{payload.price:,.4f}</code>")
     if payload.timeframe:
-        lines.append(f"TF: `{payload.timeframe}`")
+        lines.append(f"TF: <code>{payload.timeframe}</code>")
     if payload.strategy:
-        lines.append(f"Strategy: `{payload.strategy}`")
+        lines.append(f"Strategy: <code>{payload.strategy}</code>")
     if payload.message:
         lines.append(f"Note: {payload.message}")
 
