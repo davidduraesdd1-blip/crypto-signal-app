@@ -31,7 +31,7 @@ _last_drift_result: dict = {}     # F6/F7: last concept drift check result; read
 # ──────────────────────────────────────────────
 PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT']
 TIMEFRAMES = ['1h', '4h', '1d', '1w']
-OHLCV_LIMIT = 500  # Increased from 200 — Ichimoku needs 52-bar warmup, 500 gives 448 usable bars on 1h (~18.7 days)
+OHLCV_LIMIT = 500  # Ichimoku (10/30/60) needs 60-bar warmup; 500 gives 440 usable bars on 1h (~18.3 days)
 TA_EXCHANGE = 'kraken'
 PAPER_EXCHANGE = 'krakenfutures'
 
@@ -144,6 +144,8 @@ DEFAULT_WEIGHTS = {
     'regime': 0.667, 'bonus': 0.5, 'fng': 0.10,
     'onchain': 0.12, 'agents': 0.25, 'stat_arb': 0.15,
     'gaussian_ch': 0.15,  # GC-01: Gaussian Channel — 3-period multi-TF bands
+    'rsi_div':    0.08,   # RSI-DIV: standalone RSI divergence with 200 EMA trend filter
+    'funding_rate': 0.10, # FR-01: perpetual funding rate crowding signal
 }
 
 # Gaussian Channel multipliers per timeframe (wider bands on higher timeframes)
@@ -588,6 +590,76 @@ def agent_vote_lgbm(df, hold_bars: int = 5):
         return 0.0, "LightGBM: error"
 
 
+def agent_vote_lstm(df, hold_bars: int = 5):
+    """
+    7th ensemble agent: windowed neural-network sequence model for direction prediction.
+    Uses sklearn MLPClassifier on 20-bar flattened feature windows to capture temporal
+    patterns. Architecture inspired by LSTM research (2024): sequence models achieved
+    65.23% cumulative return vs LightGBM 53.38% on BTC.
+
+    Falls back to sklearn MLP (always available) rather than requiring TensorFlow.
+    Returns (score: float in [-100, 100], reason: str).
+    score > 0 → bullish, score < 0 → bearish, score ≈ 0 → no edge.
+    """
+    try:
+        from sklearn.neural_network import MLPClassifier
+        from sklearn.preprocessing import StandardScaler
+
+        if len(df) < 100 or 'rsi' not in df.columns:
+            return 0.0, "LSTM-MLP: insufficient data"
+
+        close  = df['close'].values.astype(np.float64)
+        rsi_v  = df['rsi'].fillna(50).values.astype(np.float64) / 100.0
+        hist_v = df['macd_hist'].fillna(0).values.astype(np.float64)
+        sk_v   = df['stoch_k'].fillna(50).values.astype(np.float64) / 100.0
+        bbu    = df['bb_upper'].fillna(close).values.astype(np.float64)
+        bbl    = df['bb_lower'].fillna(close).values.astype(np.float64)
+        bb_pos_v = np.clip((close - bbl) / (bbu - bbl + 1e-8), 0.0, 1.0)
+        log_ret  = np.concatenate([[0.0], np.log(close[1:] / (close[:-1] + 1e-10))])
+        hist_std = np.std(hist_v) + 1e-8
+        features = np.column_stack([log_ret, rsi_v, hist_v / hist_std, sk_v, bb_pos_v])
+
+        seq_len = 20
+        n_train = len(features) - seq_len - hold_bars
+        if n_train < 30:
+            return 0.0, "LSTM-MLP: insufficient training samples"
+
+        X_list, y_list = [], []
+        for i in range(n_train):
+            seq = features[i:i + seq_len]
+            if np.any(~np.isfinite(seq)):
+                continue
+            future_ret = (close[i + seq_len + hold_bars] - close[i + seq_len]) / (close[i + seq_len] + 1e-10)
+            X_list.append(seq.flatten())
+            y_list.append(1 if future_ret > 0.001 else 0)
+
+        if len(X_list) < 30 or len(set(y_list)) < 2:
+            return 0.0, "LSTM-MLP: class imbalance or too few samples"
+
+        X = np.array(X_list, dtype=np.float32)
+        y = np.array(y_list, dtype=np.int32)
+        scaler = StandardScaler()
+        X = scaler.fit_transform(X)
+
+        model = MLPClassifier(
+            hidden_layer_sizes=(32, 16), activation='tanh', max_iter=100,
+            random_state=42, warm_start=False, early_stopping=False,
+        )
+        model.fit(X, y)
+
+        x_last = features[-seq_len:].flatten()
+        if not np.all(np.isfinite(x_last)):
+            return 0.0, "LSTM-MLP: NaN in latest features"
+        x_last = scaler.transform(x_last.reshape(1, -1))
+        prob_buy = float(model.predict_proba(x_last)[0][1])
+        score = (prob_buy - 0.5) * 200
+        return round(score, 1), f"LSTM-MLP: P(up)={prob_buy:.2f}"
+
+    except Exception as e:
+        logging.debug(f"LSTM-MLP agent failed: {e}")
+        return 0.0, f"LSTM-MLP: error ({type(e).__name__})"
+
+
 # ──────────────────────────────────────────────
 # LIGHTGBM FEEDBACK-RETRAINED MODEL (F-RETRAIN)
 # ──────────────────────────────────────────────
@@ -713,7 +785,7 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
         votes_dict: {'trend': v, 'momentum': v, 'meanrev': v, 'sentiment': v, 'risk': v, 'lgbm': v}
         Used by F4 to store per-agent votes in feedback_log for rolling accuracy tracking.
     """
-    _empty = {'trend': 0.0, 'momentum': 0.0, 'meanrev': 0.0, 'sentiment': 0.0, 'risk': 0.0, 'lgbm': 0.0}
+    _empty = {'trend': 0.0, 'momentum': 0.0, 'meanrev': 0.0, 'sentiment': 0.0, 'risk': 0.0, 'lgbm': 0.0, 'lstm': 0.0}
     if df is None or len(df) < 50:
         return 0.0, ["No data"], 0.0, _empty
     if onchain_data is None:
@@ -771,6 +843,14 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
             votes.append(lgbm_score)
             reasons.append(lgbm_reason)
             vote_weights.append(max(0.1, agent_accuracy.get('lgbm', 0.5)))
+
+        # T3-B: LSTM-MLP 7th agent — windowed sequence model for temporal pattern capture
+        lstm_score, lstm_reason = agent_vote_lstm(df)
+        votes_dict['lstm'] = round(float(lstm_score), 1)
+        if lstm_score != 0.0:
+            votes.append(lstm_score)
+            reasons.append(lstm_reason)
+            vote_weights.append(max(0.1, agent_accuracy.get('lstm', 0.5)))
 
         # F4: accuracy-weighted average — agents that have been more directionally accurate
         # over the last 30 days get more influence; falls back to equal weighting when
@@ -898,7 +978,7 @@ def compute_vwap(df):
     typical = (df['high'] + df['low'] + df['close']) / 3
     return (typical * df['volume']).cumsum() / df['volume'].cumsum().replace(0, np.nan)
 
-def compute_ichimoku(df, tenkan=9, kijun=26, senkou=52):
+def compute_ichimoku(df, tenkan=10, kijun=30, senkou=60):
     tenkan_sen = (df['high'].rolling(tenkan).max() + df['low'].rolling(tenkan).min()) / 2
     kijun_sen = (df['high'].rolling(kijun).max() + df['low'].rolling(kijun).min()) / 2
     senkou_a = (tenkan_sen + kijun_sen) / 2
@@ -1061,6 +1141,51 @@ def detect_macd_divergence_improved(df):
         if ltp.iloc[-1] > ltp.iloc[-2] and ltm.iloc[-1] < ltm.iloc[-2]:
             return "Bullish (hidden)", "Strong" if abs(ltm.iloc[-1] - ltm.iloc[-2]) > 0.5 * ltm.std() else "Mild"
     return "None", "N/A"
+
+
+def detect_rsi_divergence(df):
+    """
+    Standalone RSI divergence detection with 200 EMA trend filter.
+    Research (2024): hidden divergence is ~14% more reliable than regular in crypto;
+    60-70% win rate when filtered by 200 EMA trend direction.
+
+    Returns (divergence_type: str, strength: str)
+    Types: 'Bullish (regular)', 'Bullish (hidden)', 'Bearish (regular)',
+           'Bearish (hidden)', 'None'
+    """
+    if 'rsi' not in df.columns or len(df) < 20:
+        return "None", "N/A"
+    rsi   = df['rsi'].iloc[-100:]
+    price = df['close'].iloc[-100:]
+    # 200 EMA trend filter — take divergences aligned with the dominant trend
+    ema200    = df['close'].ewm(span=200, adjust=False).mean()
+    trend_up  = bool(df['close'].iloc[-1] > ema200.iloc[-1]) if len(ema200) > 0 else True
+    peaks_rsi    = (rsi.shift(1) < rsi)   & (rsi.shift(-1) < rsi)
+    troughs_rsi  = (rsi.shift(1) > rsi)   & (rsi.shift(-1) > rsi)
+    peaks_price  = (price.shift(1) < price) & (price.shift(-1) < price)
+    troughs_price = (price.shift(1) > price) & (price.shift(-1) > price)
+    lpr = rsi[peaks_rsi].tail(3)
+    ltr = rsi[troughs_rsi].tail(3)
+    lpp = price[peaks_price].tail(3)
+    ltp = price[troughs_price].tail(3)
+    # Bearish divergences
+    if len(lpr) >= 2 and len(lpp) >= 2:
+        if lpp.iloc[-1] > lpp.iloc[-2] and lpr.iloc[-1] < lpr.iloc[-2]:
+            st = "Strong" if abs(lpr.iloc[-1] - lpr.iloc[-2]) > 0.5 * lpr.std() else "Mild"
+            return "Bearish (regular)", st
+        if lpp.iloc[-1] < lpp.iloc[-2] and lpr.iloc[-1] > lpr.iloc[-2] and not trend_up:
+            st = "Strong" if abs(lpr.iloc[-1] - lpr.iloc[-2]) > 0.5 * lpr.std() else "Mild"
+            return "Bearish (hidden)", st
+    # Bullish divergences
+    if len(ltr) >= 2 and len(ltp) >= 2:
+        if ltp.iloc[-1] < ltp.iloc[-2] and ltr.iloc[-1] > ltr.iloc[-2]:
+            st = "Strong" if abs(ltr.iloc[-1] - ltr.iloc[-2]) > 0.5 * ltr.std() else "Mild"
+            return "Bullish (regular)", st
+        if ltp.iloc[-1] > ltp.iloc[-2] and ltr.iloc[-1] < ltr.iloc[-2] and trend_up:
+            st = "Strong" if abs(ltr.iloc[-1] - ltr.iloc[-2]) > 0.5 * ltr.std() else "Mild"
+            return "Bullish (hidden)", st
+    return "None", "N/A"
+
 
 # ──────────────────────────────────────────────
 # PHASE 4: STATISTICAL ARBITRAGE
@@ -1237,10 +1362,11 @@ def _enrich_df(df, tf: str = None):
     typical = (df['high'] + df['low'] + df['close']) / 3
     df['vwap'] = (typical * df['volume']).cumsum() / df['volume'].cumsum().replace(0, np.nan)
     # Ichimoku
-    df['tenkan_sen'] = (df['high'].rolling(9).max() + df['low'].rolling(9).min()) / 2
-    df['kijun_sen'] = (df['high'].rolling(26).max() + df['low'].rolling(26).min()) / 2
+    # Ichimoku (10,30,60): 24/7 crypto-adjusted periods (vs traditional 9,26,52 for 6-day weeks)
+    df['tenkan_sen'] = (df['high'].rolling(10).max() + df['low'].rolling(10).min()) / 2
+    df['kijun_sen'] = (df['high'].rolling(30).max() + df['low'].rolling(30).min()) / 2
     df['senkou_span_a'] = (df['tenkan_sen'] + df['kijun_sen']) / 2
-    df['senkou_span_b'] = (df['high'].rolling(52).max() + df['low'].rolling(52).min()) / 2
+    df['senkou_span_b'] = (df['high'].rolling(60).max() + df['low'].rolling(60).min()) / 2
     # ATR + ADX (PERF-07 / BUG-R26: compute TR once, derive both ATR and ADX from it so
     # calculate_signal_confidence reads df['atr'] and df['adx'] without re-computing)
     _tr = pd.concat([df['high'] - df['low'],
@@ -1271,7 +1397,8 @@ def _enrich_df(df, tf: str = None):
 # ──────────────────────────────────────────────
 def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                                  onchain_data=None, pair='', corr_value=None, position_pct=0,
-                                 iv_data=None, ob_data=None, btc_df=None, cvd_data=None):
+                                 iv_data=None, ob_data=None, btc_df=None, cvd_data=None,
+                                 funding_data=None, oi_data=None):
     if df is None or len(df) < 50:
         return 0, False, "None", "N/A", "N/A", "N/A", "N/A", "Balanced", 0.0, 0.0, "NEUTRAL", {}
     if onchain_data is None:
@@ -1372,13 +1499,28 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         _, candle_score = detect_candlestick_patterns(df)
         score += candle_score
 
-        # Divergence
+        # MACD Divergence
         div_score = 0
         if "Bullish" in macd_div and rsi < 40:
             div_score += 15 if div_strength == "Strong" else 10
         if "Bearish" in macd_div and rsi > 60:
             div_score -= 15 if div_strength == "Strong" else 10
         score += div_score * w.get('div', 0.05)
+
+        # RSI-DIV: standalone RSI divergence with 200 EMA trend filter (RSI-DIV-01)
+        # Hidden divergence (+4 pts bonus) is more reliable than regular per 2024 research.
+        # Uses separate weight so feedback loop can tune independently of MACD div.
+        rsi_div, rsi_div_str = detect_rsi_divergence(df)
+        rsi_div_score = 0
+        if "Bullish" in rsi_div:
+            rsi_div_score += 12 if rsi_div_str == "Strong" else 7
+            if "hidden" in rsi_div:
+                rsi_div_score += 4   # hidden divergence reliability bonus
+        elif "Bearish" in rsi_div:
+            rsi_div_score -= 12 if rsi_div_str == "Strong" else 7
+            if "hidden" in rsi_div:
+                rsi_div_score -= 4
+        score += rsi_div_score * w.get('rsi_div', 0.08)
 
         # ── Gaussian Channel — 3-period multi-TF analysis ──────────────────
         # GC-01: fast(50), base(100), slow(200) bands computed in _enrich_df.
@@ -1414,6 +1556,18 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                 elif price <= float(_gl_f):
                     gc_score += 10  # fast-channel lower = oversold, reduce bear
         score += gc_score * w.get('gaussian_ch', 0.15)
+
+        # GC × StochRSI confluence bonus (GC-02)
+        # When fast GC extreme aligns with StochRSI extreme → +8 pts (filtered signal).
+        # Research: 68% win rate when GC lower + StochRSI <20 on 4H crypto.
+        if 'gc_fast_upper' in df.columns and 'gc_fast_lower' in df.columns:
+            _gc_fu = df['gc_fast_upper'].iloc[-1]
+            _gc_fl = df['gc_fast_lower'].iloc[-1]
+            if not any(pd.isna(v) for v in (_gc_fu, _gc_fl)):
+                if price <= float(_gc_fl) and stoch_k < 20:
+                    score += 8    # GC lower + StochRSI oversold → long confluence
+                elif price >= float(_gc_fu) and stoch_k > 80:
+                    score -= 8    # GC upper + StochRSI overbought → short confluence
 
         # SuperTrend (T1-A: normalized — raw ±15 multiplied by weight, same scale as continuous weights)
         super_raw = 0
@@ -1525,6 +1679,34 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                 score += cvd_base + (_cvd_mom_bonus if cvd_momentum > 0 else 0)
             elif cvd_signal == 'SELL_PRESSURE':
                 score -= cvd_base + (_cvd_mom_bonus if cvd_momentum < 0 else 0)
+
+        # FR-01: Funding rate bias — perpetual futures crowding signal (FR-01)
+        # Positive funding = longs pay shorts (market overlong = contrarian bearish signal)
+        # Negative funding = shorts pay longs (market overshorted = potential squeeze/rally)
+        # Thresholds derived from research: 0.01% ≈ 11% annualized, used as bullish/bearish pivot
+        if funding_data and funding_data.get('funding_rate_pct') is not None:
+            fr_pct = float(funding_data['funding_rate_pct'])
+            if fr_pct > 0.05:
+                _fr_score = -15.0   # extreme longs — crowded, high squeeze risk
+                if adx < 30:        # ranging market makes overcrowded longs more dangerous
+                    score = min(score, 60.0)
+            elif fr_pct > 0.01:
+                _fr_score = -5.0    # slightly overlong — mild headwind
+            elif fr_pct < -0.005:
+                _fr_score = 15.0    # shorts crowded — squeeze risk, contrarian bullish
+            else:
+                _fr_score = 5.0     # neutral-to-bullish (modest or negative funding)
+            score += _fr_score * w.get('funding_rate', 0.10)
+
+        # OI-01: Open Interest conviction multiplier — OI level filters noise from weak moves
+        # HIGH OI (>$500M) with strong signal = institutional conviction, amplify score
+        # LOW OI (<$50M) = thin market, reduce conviction
+        if oi_data and not oi_data.get('error') and oi_data.get('oi_usd'):
+            oi_signal = oi_data.get('signal', 'NORMAL')
+            if oi_signal == 'HIGH':
+                score *= 1.07   # institutional-level OI confirms signal strength
+            elif oi_signal == 'LOW':
+                score *= 0.92   # thin market reduces reliability of all other signals
 
         # Multi-agent (F4: unpack 4th value — per-agent votes dict)
         # df['atr'] already computed by _enrich_df — avoid double computation
@@ -1842,6 +2024,18 @@ def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"
     # markets are turbulent, up slightly when calm)
     _vol_scale = _get_vol_kelly_scale(df)
     _kelly_scaled = kelly_f * _vol_scale if kelly_f is not None and kelly_f > 0 else None
+    # KELLY-Q: Quarter-Kelly in crisis regimes — when 20-bar vol > 2× historical baseline
+    # Research: at σ>100%/yr the optimal Kelly fraction is often <0.10; halving again brings
+    # half-Kelly → quarter-Kelly, matching empirical crypto risk management best practice.
+    try:
+        if _kelly_scaled is not None and df is not None and len(df) >= 30:
+            _lr = np.log(df['close'] / df['close'].shift(1)).dropna()
+            _cv = float(_lr.tail(20).std())
+            _hv = float(_lr.tail(min(90, len(_lr))).std())
+            if _hv > 0 and _cv > 2.0 * _hv:   # crisis: current vol > 2× historical
+                _kelly_scaled *= 0.5             # effectively quarter-Kelly
+    except Exception:
+        pass
     kelly_cap_usd = (
         PORTFOLIO_SIZE_USD * _kelly_scaled
         if _kelly_scaled is not None and _kelly_scaled > 0
@@ -2038,13 +2232,15 @@ def update_dynamic_weights():
             if _update_w('fib',        wr_hc, default=0.08, scale=0.16): updated = True
             if _update_w('div',        wr_hc, default=0.05, scale=0.10): updated = True
             if _update_w('gaussian_ch', wr_hc, default=0.15, scale=0.20): updated = True  # GC-01
+            if _update_w('rsi_div',    wr_hc, default=0.08, scale=0.16): updated = True  # RSI-DIV-01
             if _update_w('bonus',      wr_hc, default=0.50, scale=0.5):  updated = True
 
             # Macro / ensemble weights
-            if _update_w('fng',        wr_all, default=0.15, scale=0.3):  updated = True
-            if _update_w('onchain',    wr_all, default=0.12, scale=0.24): updated = True
-            if _update_w('agents',     wr_all, default=0.25, scale=0.5):  updated = True
-            if _update_w('stat_arb',   wr_all, default=0.15, scale=0.3):  updated = True
+            if _update_w('fng',          wr_all, default=0.15, scale=0.3):  updated = True
+            if _update_w('onchain',      wr_all, default=0.12, scale=0.24): updated = True
+            if _update_w('agents',       wr_all, default=0.25, scale=0.5):  updated = True
+            if _update_w('stat_arb',     wr_all, default=0.15, scale=0.3):  updated = True
+            if _update_w('funding_rate', wr_all, default=0.10, scale=0.20): updated = True  # FR-01
 
         else:
             # ── Fallback: use signal-distribution heuristics ─────────────
@@ -2582,7 +2778,7 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
         df_full = df_full.set_index('timestamp')
         n_bars = len(df_full)
 
-        # Minimum warmup bars for indicators (Ichimoku = 52, BB = 20, etc.)
+        # Minimum warmup bars for indicators (Ichimoku = 60, BB = 20, etc.)
         warmup = 100
         if n_bars < warmup + hold_bars + 10:
             return {"error": f"Need >{warmup + hold_bars} bars, got {n_bars}",
@@ -2849,6 +3045,8 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
             df, tf, fng_value, fng_category, onchain_data, pair,
             iv_data=iv_map.get(pair), ob_data=ob_map.get(pair),
             btc_df=btc_df, cvd_data=(cvd_map or {}).get(pair),
+            funding_data=funding_map.get(pair),
+            oi_data=oi_map.get(pair),
         )
 
         # Skip timeframes where calculation completely failed (returned 0 conf AND no volume)
