@@ -79,8 +79,8 @@ def _write_scan_status(running, timestamp=None, error=None, progress=0, pair="")
     try:
         _db.write_scan_status(running, timestamp=timestamp, error=error,
                               progress=progress, pair=pair or "")
-    except Exception:
-        pass
+    except Exception as _e:
+        logging.warning("[App] scan status write failed: %s", _e)  # APP-17: log DB errors
 
 def _read_scan_status():
     try:
@@ -767,7 +767,7 @@ def page_dashboard():
                 _fng_emoji = "🤩"
             else:
                 _fng_emoji = "🤑"
-            _fng_color = "#00c076" if fv < 40 else "#f6465d" if fv > 60 else "#f0a500"
+            _fng_color = "#f6465d" if fv < 40 else "#00c076" if fv > 60 else "#f0a500"  # APP-05: fear=red, greed=green
             st.markdown(
                 f'<span style="color:rgba(255,255,255,0.4);font-size:11px;'
                 f'text-transform:uppercase;letter-spacing:0.8px">Market Mood</span><br/>'
@@ -846,7 +846,8 @@ def page_dashboard():
         _fv = results[0].get("fng_value", 50)
         _fc = results[0].get("fng_category", "Neutral")
         _stat_bar_data["Fear & Greed"] = f"{_fv} — {_fc}"
-        _avg_c = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
+        _avg_c_raw = sum(r.get("confidence_avg_pct") or 0 for r in results) / len(results)
+        _avg_c = round(_avg_c_raw if _avg_c_raw == _avg_c_raw else 0.0, 1)  # APP-21: NaN guard
         _stat_bar_data["Avg Confidence"] = f"{_avg_c}%"
         _buy_n  = sum(1 for r in results if "BUY"  in r.get("direction", ""))
         _sell_n = sum(1 for r in results if "SELL" in r.get("direction", ""))
@@ -867,17 +868,19 @@ def page_dashboard():
     cb = results[0].get('circuit_breaker', {}) if results else {}
     if cb.get('triggered'):
         st.error(
-            f"🛑 **Safety Stop Active** — The portfolio has dropped {cb['drawdown_pct']:.1f}% from its peak "
-            f"(threshold: {cb['threshold_pct']:.0f}%). To protect your account, all new trade signals are paused. "
-            f"Consider reviewing your positions before resuming. Peak equity was ${cb['peak_equity']:,.0f}."
+            f"🛑 **Safety Stop Active** — The portfolio has dropped "
+            f"{cb.get('drawdown_pct', 0):.1f}% from its peak "  # APP-26: .get() avoids KeyError on schema mismatch
+            f"(threshold: {cb.get('threshold_pct', 0):.0f}%). To protect your account, all new trade signals are paused. "
+            f"Consider reviewing your positions before resuming. Peak equity was ${cb.get('peak_equity', 0):,.0f}."
         )
 
     # F6/F7: Concept drift warning banner — shown when recent win rate decays vs historical baseline
-    _drift = model.get_drift_status()
+    _drift = model.get_drift_status() or {}  # APP-25: guard None return when no feedback data
     if _drift.get('drift_detected'):
         st.warning(
-            f"⚠️ **Model Accuracy Alert** — The model's recent win rate ({_drift['win_rate_30d']:.0%} last 30 days) "
-            f"has dropped below its historical baseline ({_drift['win_rate_90d']:.0%} over 90 days). "
+            f"⚠️ **Model Accuracy Alert** — The model's recent win rate "
+            f"({_drift.get('win_rate_30d', 0):.0%} last 30 days) "  # APP-27: .get() avoids KeyError
+            f"has dropped below its historical baseline ({_drift.get('win_rate_90d', 0):.0%} over 90 days). "
             f"Signals may be less reliable than usual. The model is auto-retuning. Use extra caution."
         )
 
@@ -891,7 +894,8 @@ def page_dashboard():
     _fng_r0     = results[0]
     _fng_val    = _fng_r0.get("fng_value", 50)
     _fng_cat    = _fng_r0.get("fng_category", "Neutral")
-    avg_conf    = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
+    _ac_raw  = sum(r.get("confidence_avg_pct") or 0 for r in results) / len(results)
+    avg_conf = round(_ac_raw if _ac_raw == _ac_raw else 0.0, 1)  # APP-21: NaN guard
     buy_count   = sum(1 for r in results if "BUY"  in r.get("direction", ""))
     sell_count  = sum(1 for r in results if "SELL" in r.get("direction", ""))
 
@@ -1325,7 +1329,10 @@ def page_dashboard():
                         current_price=_cur_price,
                         expected_price=r.get("entry"),
                     )
-                    st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
+                    if _tr.get("ok"):  # APP-24: mirror iceberg pattern — check ok before accessing keys
+                        st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
+                    else:
+                        st.error(f"TWAP failed: {_tr.get('error', 'unknown error')}")
             with _adv_c2:
                 st.caption("**Iceberg** — hide order size in OB")
                 _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"ice_dir_{pair}")
@@ -1420,16 +1427,23 @@ def page_dashboard():
         with col_pdf:
             ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
-            if st.session_state.get("_scan_pdf_ts") != ts_str:
-                st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
-                st.session_state["_scan_pdf_ts"] = ts_str
-            st.download_button(
-                "⬇ Download PDF",
-                data=st.session_state["_scan_pdf_bytes"],
-                file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+            try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
+                if st.session_state.get("_scan_pdf_ts") != ts_str:
+                    st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
+                    st.session_state["_scan_pdf_ts"] = ts_str
+                _pdf_data = st.session_state.get("_scan_pdf_bytes")
+                if _pdf_data:
+                    st.download_button(
+                        "⬇ Download PDF",
+                        data=_pdf_data,
+                        file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                else:
+                    st.caption("PDF unavailable")
+            except Exception as _pdf_err:
+                st.caption(f"PDF generation failed: {_pdf_err}")
 
     # ── Autonomous Agent Status Panel ─────────────────────────────────────────
     _agent_cfg = _alerts.load_alerts_config()
@@ -2038,8 +2052,9 @@ def page_config():
         except Exception:
             pass
         _delta = _next_t - datetime.now()
-        _m = max(0, int(_delta.total_seconds() // 60))
-        _s = max(0, int(_delta.total_seconds() % 60))
+        _total_secs_cfg = max(0.0, _delta.total_seconds())  # APP-04: clamp before modulo to avoid -1%60=59
+        _m = int(_total_secs_cfg // 60)
+        _s = int(_total_secs_cfg % 60)
         st.info(f"Scheduler active — next auto-scan fires in **{_m}m {_s}s**")
     else:
         st.caption("Scheduler inactive — enable via the sidebar ⏰ Auto-Scan toggle.")
@@ -2322,12 +2337,15 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                 st.rerun()
 
         # Live status summary
-        _ag_live = _agent.supervisor.status()
+        try:  # APP-10: status() may raise or return partial dict during agent init
+            _ag_live = _agent.supervisor.status() or {}
+        except Exception:
+            _ag_live = {}
         st.markdown(
-            f"**Agent status:** {'🟢 Running' if _ag_live['running'] else '🔴 Stopped'} "
-            f"| Cycles: {_ag_live['cycles_total']} "
-            f"| Last decision: {_ag_live['last_decision'] or '—'} "
-            f"| Restarts: {_ag_live['restart_count']} "
+            f"**Agent status:** {'🟢 Running' if _ag_live.get('running') else '🔴 Stopped'} "
+            f"| Cycles: {_ag_live.get('cycles_total', 0)} "
+            f"| Last decision: {_ag_live.get('last_decision') or '—'} "
+            f"| Restarts: {_ag_live.get('restart_count', 0)} "
             f"| Engine: {'LangGraph' if _ag_live.get('langgraph') else 'Fallback pipeline'}"
         )
 
@@ -2568,7 +2586,7 @@ def page_backtest():
 
         # Compute running peak and drawdown %
         _peak = np.maximum.accumulate(_eq)
-        _dd   = (_eq - _peak) / _peak * 100  # negative values = drawdown
+        _dd   = np.where(_peak != 0, (_eq - _peak) / _peak * 100, 0.0)  # APP-22: guard zero equity start
 
         # Win/loss markers from trade log
         _win_x, _win_y, _loss_x, _loss_y = [], [], [], []
@@ -3270,7 +3288,7 @@ def page_trade_log():
         st.subheader("Open Positions")
         if positions:
             # ── Price resolution: WS first, scan fallback ──────────────────
-            _live_ticks  = _ws.get_all_prices()
+            _live_ticks  = _ws.get_all_prices() or {}  # APP-03/15: guard None return when WS not connected
             _scan_prices = {
                 r['pair']: r.get('price_usd')
                 for r in st.session_state.get("scan_results", [])
@@ -3393,7 +3411,7 @@ def page_trade_log():
                 import time as _time_pos
                 _pos_ts_key = "_pos_live_ts"
                 _now_pos    = _time_pos.time()
-                if _now_pos - st.session_state.get(_pos_ts_key, 0) >= 5:
+                if _now_pos - st.session_state.setdefault(_pos_ts_key, _now_pos - 4.9) >= 5:  # APP-14: default near-now prevents immediate fire
                     st.session_state[_pos_ts_key] = _now_pos
                     _time_pos.sleep(0.1)
                     st.rerun()
@@ -4476,14 +4494,17 @@ def page_agent():
         return
 
     # ── Live status ──
-    status = _agent.supervisor.status()
-    is_running = status["running"]
+    try:  # APP-09: status() may raise or return partial dict during startup
+        status = _agent.supervisor.status() or {}
+    except Exception:
+        status = {}
+    is_running = status.get("running", False)
 
     col_status, col_start, col_stop, col_spacer = st.columns([2, 1, 1, 3])
     with col_status:
         if is_running:
             st.success("● RUNNING")
-        elif status["kill_requested"]:
+        elif status.get("kill_requested", False):  # APP-20: .get() avoids KeyError
             st.warning("◌ STOPPING…")
         else:
             st.error("● STOPPED")
@@ -4508,9 +4529,9 @@ def page_agent():
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        st.metric("Total Cycles", status["cycles_total"])
+        st.metric("Total Cycles", status.get("cycles_total", 0))
     with m2:
-        last_ts = status["last_run_ts"]
+        last_ts = status.get("last_run_ts")
         if last_ts:
             age_s = int(time.time() - last_ts)
             age_str = f"{age_s // 60}m {age_s % 60}s ago" if age_s >= 60 else f"{age_s}s ago"
@@ -4518,16 +4539,16 @@ def page_agent():
             age_str = "Never"
         st.metric("Last Cycle", age_str)
     with m3:
-        st.metric("Last Pair", status["last_pair"] or "—")
+        st.metric("Last Pair", status.get("last_pair") or "—")
     with m4:
         _dec_icon = {"approve": "🟢", "reject": "🔴", "skip": "⚪"}.get(
-            status["last_decision"], "⚪"
+            status.get("last_decision"), "⚪"
         )
-        st.metric("Last Decision", f"{_dec_icon} {status['last_decision'] or '—'}")
+        st.metric("Last Decision", f"{_dec_icon} {status.get('last_decision') or '—'}")
 
     m5, m6 = st.columns([1, 3])
     with m5:
-        st.metric("Crash Restarts", status["restart_count"])
+        st.metric("Crash Restarts", status.get("restart_count", 0))
     with m6:
         _lg = "LangGraph state machine" if status.get("langgraph") else "Sequential pipeline (LangGraph not installed)"
         st.metric("Engine", _lg)
