@@ -366,7 +366,7 @@ def migrate_csv_to_db():
             # ── feedback_log.csv ──────────────────────
             if os.path.exists("feedback_log.csv") and _row_count(conn, "feedback_log") == 0:
                 try:
-                    df = pd.read_csv("feedback_log.csv")
+                    df = pd.read_csv("feedback_log.csv", encoding="utf-8")
                     if not df.empty:
                         # BUG-21: filter to known schema columns to avoid OperationalError
                         # on CSVs with extra/legacy columns
@@ -381,7 +381,7 @@ def migrate_csv_to_db():
             # ── daily_signals_master.csv ──────────────
             if os.path.exists("daily_signals_master.csv") and _row_count(conn, "daily_signals") == 0:
                 try:
-                    df = pd.read_csv("daily_signals_master.csv")
+                    df = pd.read_csv("daily_signals_master.csv", encoding="utf-8")
                     if not df.empty:
                         # Keep only known columns; fill missing with None
                         for col in MASTER_COLS:
@@ -405,7 +405,7 @@ def migrate_csv_to_db():
             # ── backtest_summary.csv ──────────────────
             if os.path.exists("backtest_summary.csv") and _row_count(conn, "backtest_trades") == 0:
                 try:
-                    df = pd.read_csv("backtest_summary.csv")
+                    df = pd.read_csv("backtest_summary.csv", encoding="utf-8")
                     if not df.empty:
                         df['run_id'] = 'migrated_' + datetime.now().strftime('%Y%m%d_%H%M%S')
                         # BUG-21: filter to known schema columns
@@ -420,7 +420,7 @@ def migrate_csv_to_db():
             # ── paper_trades_log.csv ──────────────────
             if os.path.exists("paper_trades_log.csv") and _row_count(conn, "paper_trades") == 0:
                 try:
-                    df = pd.read_csv("paper_trades_log.csv")
+                    df = pd.read_csv("paper_trades_log.csv", encoding="utf-8")
                     if not df.empty:
                         # BUG-21: filter to known schema columns
                         known_cols = [r[1] for r in conn.execute("PRAGMA table_info(paper_trades)").fetchall()]
@@ -434,7 +434,7 @@ def migrate_csv_to_db():
             # ── positions.json ────────────────────────
             if os.path.exists("positions.json") and _row_count(conn, "positions") == 0:
                 try:
-                    with open("positions.json") as f:
+                    with open("positions.json", encoding="utf-8") as f:
                         positions = json.load(f)
                     if positions:
                         cols = {'pair', 'direction', 'entry', 'target', 'stop',
@@ -453,7 +453,7 @@ def migrate_csv_to_db():
             # ── dynamic_weights.json ──────────────────
             if os.path.exists("dynamic_weights.json") and _row_count(conn, "dynamic_weights") == 0:
                 try:
-                    with open("dynamic_weights.json") as f:
+                    with open("dynamic_weights.json", encoding="utf-8") as f:
                         w = json.load(f)
                     conn.execute(
                         "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
@@ -467,7 +467,7 @@ def migrate_csv_to_db():
             # ── weights_log.csv ───────────────────────
             if os.path.exists("weights_log.csv") and _row_count(conn, "weights_log") == 0:
                 try:
-                    df = pd.read_csv("weights_log.csv")
+                    df = pd.read_csv("weights_log.csv", encoding="utf-8")
                     if not df.empty:
                         df.to_sql("weights_log", conn, if_exists="append", index=False)
                         conn.commit()
@@ -478,7 +478,7 @@ def migrate_csv_to_db():
             # ── scan_results_cache.json ───────────────
             if os.path.exists("scan_results_cache.json") and _row_count(conn, "scan_cache") == 0:
                 try:
-                    with open("scan_results_cache.json") as f:
+                    with open("scan_results_cache.json", encoding="utf-8") as f:
                         results = json.load(f)
                     if results:
                         conn.execute(
