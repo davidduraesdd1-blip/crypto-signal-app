@@ -58,7 +58,11 @@ _session_id: int = 0  # incremented on each start(); old thread checks its own s
 # ── Pair format helpers ────────────────────────────────────────
 def _to_okx(pair: str) -> str:
     """BTC/USDT → BTC-USDT-SWAP"""
-    base, quote = pair.split("/")
+    # WS-02: guard against malformed pair strings (no slash)
+    parts = pair.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"Invalid pair format for WebSocket subscription: {pair!r}")
+    base, quote = parts
     return f"{base}-{quote}-SWAP"
 
 
@@ -76,8 +80,15 @@ def _on_open(ws, pairs: list[str]) -> None:
         _status["connected"]        = True
         _status["error"]            = None
         _status["subscribed_pairs"] = list(pairs)
-    args = [{"channel": "tickers", "instId": _to_okx(p)} for p in pairs]
-    ws.send(json.dumps({"op": "subscribe", "args": args}))
+    # WS-02: skip any pairs that fail format conversion rather than crashing the connection
+    args = []
+    for p in pairs:
+        try:
+            args.append({"channel": "tickers", "instId": _to_okx(p)})
+        except ValueError as e:
+            logger.warning("[WS] Skipping malformed pair %r: %s", p, e)
+    if args:
+        ws.send(json.dumps({"op": "subscribe", "args": args}))
     logger.info(f"[WS] Subscribed to tickers for {pairs}")
 
 
@@ -104,16 +115,19 @@ def _on_message(ws, message: str) -> None:
             if not (math.isfinite(last) and math.isfinite(open24)):
                 logger.debug("[WS] skipping tick with non-finite price: %s last=%s", inst_id, last_str)
                 continue
-            change = ((last - open24) / open24 * 100) if open24 else 0.0
+            # WS-03: require open24 > 0 to avoid divide-by-zero and negative-price corruption
+            change = ((last - open24) / open24 * 100) if open24 > 0 else 0.0
             pair   = _from_okx(inst_id)
+            # WS-03: use `or last` pattern — handles None (JSON null) and empty string safely
+            # without calling float("None") which raises ValueError
             entry  = {
                 "price":           last,
                 "change_24h_pct":  round(change, 3),
-                "bid":             float(str(item.get("bidPx",  last)).strip() or last),
-                "ask":             float(str(item.get("askPx",  last)).strip() or last),
-                "high_24h":        float(str(item.get("high24h", last)).strip() or last),
-                "low_24h":         float(str(item.get("low24h",  last)).strip() or last),
-                "volume_24h":      float(str(item.get("vol24h",  0)).strip()   or 0),
+                "bid":             float(item.get("bidPx")  or last),
+                "ask":             float(item.get("askPx")  or last),
+                "high_24h":        float(item.get("high24h") or last),
+                "low_24h":         float(item.get("low24h")  or last),
+                "volume_24h":      float(item.get("vol24h")  or 0),
                 "timestamp":       time.time(),
             }
             with _lock:
@@ -141,13 +155,17 @@ def _run_loop(pairs: list[str], session: int) -> None:
     global _ws_app
     while _running and _session_id == session:
         try:
-            _ws_app = websocket.WebSocketApp(
+            # WS-04: protect the write to _ws_app with the shared lock so the watchdog
+            # thread (which reads _ws_app under _lock) cannot see a partial write
+            new_app = websocket.WebSocketApp(
                 _OKX_WS_URL,
                 on_open=lambda ws: _on_open(ws, pairs),
                 on_message=_on_message,
                 on_error=_on_error,
                 on_close=_on_close,
             )
+            with _lock:
+                _ws_app = new_app
             _ws_app.run_forever(ping_interval=_PING_INTERVAL, ping_timeout=10)
         except Exception as exc:
             logger.warning(f"[WS] loop exception: {exc}")
@@ -197,12 +215,14 @@ def start(pairs: list[str]) -> None:
 
 def stop() -> None:
     """Gracefully stop the WebSocket feed."""
-    global _running, _ws_app
+    global _running, _ws_app, _watchdog_running
     ws_to_close = None
     with _lock:
         _running = False
         ws_to_close = _ws_app
         _status["connected"] = False
+    # WS-06: stop the watchdog so it doesn't keep running after stop()
+    _watchdog_running = False
     # Close outside the lock to avoid blocking other readers
     if ws_to_close:
         try:

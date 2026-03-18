@@ -673,6 +673,8 @@ _PILL_CFG = {
 
 def signal_pill(direction: str) -> str:
     """Return an HTML colored pill badge for a signal direction."""
+    # UI-06: guard against None direction to prevent TypeError in `key in direction`
+    direction = direction or ""
     for key, (bg, fg, glow) in _PILL_CFG.items():
         if key in direction:
             return (

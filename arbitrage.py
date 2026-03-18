@@ -346,7 +346,8 @@ def scan_funding_arb(pairs: list) -> list:
     Logs STRONG_CARRY / CARRY results to DB.
     Returns list sorted by annualized_yield desc.
     """
-    opportunities = _df.get_carry_trade_opportunities(pairs)
+    # ARB-05: guard against None return from data_feeds on error
+    opportunities = _df.get_carry_trade_opportunities(pairs) or []
     for opp in opportunities:
         ann_yield = opp.get("annualized_yield", 0)
         sig = "STRONG_CARRY" if ann_yield >= 50 else "CARRY"

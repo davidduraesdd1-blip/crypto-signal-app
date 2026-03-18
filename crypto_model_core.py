@@ -376,7 +376,7 @@ def agent_vote_risk(adx, atr_val, corr_value, position_pct):
     score = 0
     if adx < 20: score -= 25
     if position_pct > 60: score -= 20
-    if corr_value and corr_value > 0.9: score -= 15
+    if corr_value is not None and corr_value > 0.9: score -= 15
     reason = f"Risk: ADX {adx:.1f}, Corr {corr_value or 'N/A'}, Pos {position_pct}%"
     return round(score, 1), reason
 
@@ -715,7 +715,11 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
         stoch_d = df['stoch_d'].iloc[-1] if 'stoch_d' in df.columns else 50
         bb_upper = df['bb_upper'].iloc[-1] if 'bb_upper' in df.columns else df['close'].iloc[-1]
         bb_lower = df['bb_lower'].iloc[-1] if 'bb_lower' in df.columns else df['close'].iloc[-1]
-        bb_pos = (df['close'].iloc[-1] - bb_lower) / (bb_upper - bb_lower + 1e-6)
+        # CM-43: guard against NaN bb values from warmup period
+        if pd.isna(bb_upper) or pd.isna(bb_lower):
+            bb_pos = 0.5
+        else:
+            bb_pos = (df['close'].iloc[-1] - bb_lower) / (bb_upper - bb_lower + 1e-6)
         fib_closest, _ = compute_fib_levels(df)
         supertrend_up = compute_supertrend_multi(df)['consensus'] == "Uptrend"
         regime = "Ranging" if adx < ADX_RANGE_THRESHOLD else "Trending" if adx > ADX_TREND_THRESHOLD else "Neutral"
@@ -1183,7 +1187,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         bb_pos = (price - bb_lower) / (bb_upper - bb_lower + 1e-6)
         stoch_k = float(df['stoch_k'].iloc[-1]) if not pd.isna(df['stoch_k'].iloc[-1]) else 50.0
         stoch_d = float(df['stoch_d'].iloc[-1]) if not pd.isna(df['stoch_d'].iloc[-1]) else 50.0
-        adx = float(df['adx'].iloc[-1]) if 'adx' in df.columns else compute_adx(df)
+        adx = float(df['adx'].iloc[-1]) if 'adx' in df.columns else float(compute_adx(df).iloc[-1])
         vwap = float(df['vwap'].iloc[-1]) if 'vwap' in df.columns and not pd.isna(df['vwap'].iloc[-1]) else price
         senkou_a = float(df['senkou_span_a'].iloc[-1]) if not pd.isna(df['senkou_span_a'].iloc[-1]) else price
         senkou_b = float(df['senkou_span_b'].iloc[-1]) if not pd.isna(df['senkou_span_b'].iloc[-1]) else price
@@ -1432,7 +1436,7 @@ def get_signal_direction(confidence):
     if confidence >= 75: return "STRONG BUY"
     if confidence >= 55: return "BUY"
     if confidence >= 45: return "NEUTRAL"   # BUG-R14: was > 45, excluded exactly 45.0 → SELL
-    if confidence > 25:  return "SELL"
+    if confidence >= 25: return "SELL"      # CM-38: was > 25, excluded exactly 25.0 → STRONG SELL
     return "STRONG SELL"
 
 # ──────────────────────────────────────────────
@@ -1828,9 +1832,10 @@ def update_dynamic_weights():
         # Exponential recency decay: weight_i = lambda ^ days_ago
         # lambda=0.98/day so 30d-ago row weighs 0.98^30 ≈ 0.55
         resolved_df = resolved_df.copy()
-        resolved_df['timestamp'] = pd.to_datetime(resolved_df['timestamp'], errors='coerce')
-        now = pd.Timestamp.utcnow().tz_localize(None)
-        resolved_df['days_ago'] = (now - resolved_df['timestamp'].dt.tz_localize(None)).dt.days.clip(lower=0)
+        # CM-16: parse with utc=True so mixed tz-aware/naive strings don't raise TypeError
+        resolved_df['timestamp'] = pd.to_datetime(resolved_df['timestamp'], errors='coerce', utc=True)
+        now = pd.Timestamp.utcnow()
+        resolved_df['days_ago'] = (now - resolved_df['timestamp']).dt.days.clip(lower=0)
         resolved_df['recency_w'] = np.power(0.98, resolved_df['days_ago'].fillna(30))
         resolved_df['was_correct'] = pd.to_numeric(resolved_df['was_correct'], errors='coerce').fillna(0)
 
@@ -2712,7 +2717,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         rsi_val = df_enriched['rsi'].iloc[-1] if 'rsi' in df_enriched.columns else 'N/A'
         stoch_k = df_enriched['stoch_k'].iloc[-1] if 'stoch_k' in df_enriched.columns else 'N/A'
         stoch_d = df_enriched['stoch_d'].iloc[-1] if 'stoch_d' in df_enriched.columns else 'N/A'
-        adx_val = float(df_enriched['adx'].iloc[-1]) if 'adx' in df_enriched.columns else compute_adx(df)
+        adx_val = float(df_enriched['adx'].iloc[-1]) if 'adx' in df_enriched.columns else float(compute_adx(df).iloc[-1])
         vwap_val = df_enriched['vwap'].iloc[-1] if 'vwap' in df_enriched.columns else 'N/A'
         sa = df_enriched['senkou_span_a'].iloc[-1] if 'senkou_span_a' in df_enriched.columns else 'N/A'
         sb = df_enriched['senkou_span_b'].iloc[-1] if 'senkou_span_b' in df_enriched.columns else 'N/A'

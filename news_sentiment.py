@@ -54,6 +54,9 @@ _REQUEST_TIMEOUT = 8  # seconds
 
 def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
     """Fetch recent headlines from CryptoPanic for given currency tickers."""
+    # NEWS-04: guard against empty list to prevent IndexError
+    if not currencies:
+        return []
     ticker = currencies[0]  # use the short ticker (e.g. BTC)
     try:
         resp = requests.get(
@@ -150,6 +153,10 @@ def _fetch_rss(url: str, keywords: list[str], max_items: int = 10) -> list[str]:
                             headers={"User-Agent": "CryptoBot/1.0"})
         if resp.status_code != 200:
             return []
+        # NEWS-05: reject oversized responses to prevent memory exhaustion
+        if len(resp.content) > 512 * 1024:
+            logger.debug("RSS response from %s too large (%d bytes), skipping", url, len(resp.content))
+            return []
         root = ET.fromstring(resp.text)
         headlines = []
         for item in root.iter("item"):
@@ -184,7 +191,8 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
 
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        # NEWS-07: add timeout to prevent hung Haiku call blocking the thread
+        client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
         headlines_text = "\n".join(f"- {h}" for h in headlines[:20])
         prompt = (
             f"You are a crypto market analyst. Analyze these recent news headlines about {pair.split('/')[0]} "
@@ -202,21 +210,26 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
         import json
         raw = msg.content[0].text.strip()
         # strip markdown code fences if present
+        # NEWS-03: case-insensitive check for ```json fence
         if raw.startswith("```"):
             raw = raw.split("```")[1]
-            if raw.startswith("json"):
+            if raw.lower().startswith("json"):
                 raw = raw[4:]
         result = json.loads(raw)
-        total = result["bullish"] + result["bearish"] + result["neutral"]
+        # NEWS-02: use .get() with defaults to avoid KeyError on incomplete Claude response
+        bullish = result.get("bullish", 0) or 0
+        bearish = result.get("bearish", 0) or 0
+        neutral = result.get("neutral", 0) or 0
+        total = bullish + bearish + neutral
         if total == 0:
             total = 1
-        score = (result["bullish"] - result["bearish"]) / total
+        score = (bullish - bearish) / total
         return {
-            "sentiment":         result["overall"],
+            "sentiment":         result.get("overall", "NEUTRAL"),
             "score":             round(score, 3),
-            "bullish":           result["bullish"],
-            "bearish":           result["bearish"],
-            "neutral":           result["neutral"],
+            "bullish":           bullish,
+            "bearish":           bearish,
+            "neutral":           neutral,
             "key_theme":         result.get("key_theme", ""),
             "confidence":        result.get("confidence", 0.5),
             "articles_analyzed": len(headlines),
@@ -356,8 +369,15 @@ def get_news_sentiment_batch(pairs: list[str]) -> dict[str, dict]:
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pair: pool.submit(get_news_sentiment, pair) for pair in pairs}
-        # Collect results inside the context so exceptions surface before pool shuts down
-        return {pair: f.result() for pair, f in futures.items()}
+        # NEWS-06: catch per-pair exceptions individually so one failure does not abort all
+        results = {}
+        for pair, f in futures.items():
+            try:
+                results[pair] = f.result()
+            except Exception as e:
+                logger.warning("Batch sentiment failed for %s: %s", pair, e)
+                results[pair] = {**_NEUTRAL_RESULT, "error": str(e)}
+        return results
 
 
 def get_sentiment_score_bias(pair: str) -> float:

@@ -125,6 +125,10 @@ def _compute_scenario_metrics(
     entry_price = float(df["close"].iloc[0])
     exit_price  = float(df["close"].iloc[-1])
 
+    # STRESS-03: guard against zero entry price (ccxt returns 0 for missing data)
+    if entry_price == 0:
+        return {"error": "Zero entry price — invalid OHLCV data for this scenario period"}
+
     price_return = (exit_price - entry_price) / entry_price
     if direction in ("SELL", "STRONG SELL"):
         price_return = -price_return   # short position
@@ -139,7 +143,9 @@ def _compute_scenario_metrics(
         cumulative_returns = 2 - cumulative_returns   # approximate inverse for short
     equity_curve = initial_equity + position_usd * (cumulative_returns - 1)
     rolling_max  = equity_curve.cummax()
-    drawdowns    = (equity_curve - rolling_max) / rolling_max
+    # STRESS-04: avoid division by zero if rolling_max hits 0 (invalid equity/position inputs)
+    rolling_max_safe = rolling_max.replace(0, float('nan'))
+    drawdowns    = (equity_curve - rolling_max) / rolling_max_safe
     max_drawdown = float(drawdowns.min()) * 100
 
     # Peak equity, trough equity

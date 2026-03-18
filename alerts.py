@@ -147,6 +147,9 @@ def _fmt_price(val) -> str:
 
 
 def _signal_emoji(direction: str) -> str:
+    # ALERTS-01: guard against None direction (key exists but value is None)
+    if not direction:
+        return "🟡"
     if "STRONG BUY" in direction:   return "🟢🟢"
     if "BUY" in direction:           return "🟢"
     if "STRONG SELL" in direction:  return "🔴🔴"

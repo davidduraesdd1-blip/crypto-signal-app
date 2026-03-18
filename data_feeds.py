@@ -260,7 +260,7 @@ def get_onchain_metrics(pair: str) -> dict:
         price_24h = md.get('price_change_percentage_24h') or 0.0
         price_200d = md.get('price_change_percentage_200d') or 0.0
         volume = (md.get('total_volume') or {}).get('usd') or 0.0
-        mcap = (md.get('market_cap') or {}).get('usd') or 1.0
+        mcap = (md.get('market_cap') or {}).get('usd') or 0.0
 
         # SOPR proxy: normalised 24h return, centred on 1.0
         sopr = round(max(0.85, min(1.15, 1.0 + price_24h / 100)), 3)
@@ -784,9 +784,10 @@ def _load_api_keys() -> dict:
             if _os.path.exists(_API_KEYS_FILE):
                 with open(_API_KEYS_FILE, "r") as f:
                     _paid_key_cache = _json.load(f)
-                    _paid_key_cache_ts = now
+            # DF-14: update timestamp regardless of file presence so TTL applies
+            _paid_key_cache_ts = now
         except Exception:
-            pass
+            _paid_key_cache_ts = now  # DF-14: also stamp on parse error
         return dict(_paid_key_cache)
 
 
@@ -873,10 +874,17 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
             with _LC_CACHE_LOCK:
                 _LC_CACHE[pair] = result
             return result
-        return _no_key_result("lunarcrush", f"HTTP {resp.status_code}")
+        # DF-15: cache non-200 to avoid hammering API on repeated calls
+        err_result = {**_no_key_result("lunarcrush", f"HTTP {resp.status_code}"), "_ts": now}
+        with _LC_CACHE_LOCK:
+            _LC_CACHE[pair] = err_result
+        return err_result
     except Exception as e:
         logging.warning(f"LunarCrush fetch failed for {pair}: {e}")
-        return _no_key_result("lunarcrush", str(e))
+        err_result = {**_no_key_result("lunarcrush", str(e)), "_ts": now}
+        with _LC_CACHE_LOCK:
+            _LC_CACHE[pair] = err_result
+        return err_result
 
 
 # ──────────────────────────────────────────────
@@ -936,10 +944,17 @@ def get_coinglass_liquidations(pair: str) -> dict:
             with _CG_LIQ_LOCK:
                 _CG_LIQ_CACHE[pair] = result
             return result
-        return _no_key_result("coinglass", f"HTTP {resp.status_code}")
+        # DF-16: cache non-200 to avoid hammering API on repeated calls
+        err_result = {**_no_key_result("coinglass", f"HTTP {resp.status_code}"), "_ts": now}
+        with _CG_LIQ_LOCK:
+            _CG_LIQ_CACHE[pair] = err_result
+        return err_result
     except Exception as e:
         logging.warning(f"Coinglass liquidation fetch failed for {pair}: {e}")
-        return _no_key_result("coinglass", str(e))
+        err_result = {**_no_key_result("coinglass", str(e)), "_ts": now}
+        with _CG_LIQ_LOCK:
+            _CG_LIQ_CACHE[pair] = err_result
+        return err_result
 
 
 # ──────────────────────────────────────────────
@@ -991,7 +1006,8 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
             timeout=10,
         )
         if resp.status_code == 200:
-            items = resp.json().get("result", {}).get("data", [])
+            _body = resp.json()
+            items = (_body.get("result", {}) if isinstance(_body, dict) else {}).get("data", [])
             if items:
                 row = items[-1]
                 inflow  = float(row.get("inflow_usd", 0))
@@ -1008,10 +1024,17 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
                 with _CQ_LOCK:
                     _CQ_CACHE[pair] = result
                 return result
-        return _no_key_result("cryptoquant", f"HTTP {resp.status_code}")
+        # DF-17: cache non-200 / missing-data responses
+        err_result = {**_no_key_result("cryptoquant", f"HTTP {resp.status_code}"), "_ts": now}
+        with _CQ_LOCK:
+            _CQ_CACHE[pair] = err_result
+        return err_result
     except Exception as e:
         logging.warning(f"CryptoQuant flow fetch failed for {pair}: {e}")
-        return _no_key_result("cryptoquant", str(e))
+        err_result = {**_no_key_result("cryptoquant", str(e)), "_ts": now}
+        with _CQ_LOCK:
+            _CQ_CACHE[pair] = err_result
+        return err_result
 
 
 # ──────────────────────────────────────────────
@@ -1063,12 +1086,20 @@ def get_glassnode_onchain(pair: str) -> dict:
         mvrv_resp = requests.get(f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
 
         sopr = mvrv_z = None
-        if sopr_resp.status_code == 200:
-            d = sopr_resp.json()
-            if d: sopr = round(float(d[-1]["v"]), 3)
-        if mvrv_resp.status_code == 200:
-            d = mvrv_resp.json()
-            if d: mvrv_z = round(float(d[-1]["v"]), 2)
+        try:
+            if sopr_resp.status_code == 200:
+                d = sopr_resp.json()
+                if d and isinstance(d, list) and d[-1].get("v") is not None:
+                    sopr = round(float(d[-1]["v"]), 3)
+        except Exception as _e:
+            logging.warning("Glassnode SOPR parse error: %s", _e)
+        try:
+            if mvrv_resp.status_code == 200:
+                d = mvrv_resp.json()
+                if d and isinstance(d, list) and d[-1].get("v") is not None:
+                    mvrv_z = round(float(d[-1]["v"]), 2)
+        except Exception as _e:
+            logging.warning("Glassnode MVRV-Z parse error: %s", _e)
 
         # Composite signal: SOPR < 1 (capitulation) + MVRV-Z < 0 (undervalued) = BULLISH
         if sopr is not None and mvrv_z is not None:
@@ -1161,11 +1192,11 @@ def get_defillama_tvl(pair: str) -> dict:
                 _TVL_CACHE[pair] = result
             return result
 
-        current_tvl = float(history[-1]['tvl'])
+        current_tvl = float(history[-1].get('tvl') or 0.0)
         # Find the data point closest to 7 days ago
         target_ts = now - 7 * 86400
-        week_ago = min(history, key=lambda x: abs(x['date'] - target_ts))
-        tvl_7d_ago = float(week_ago['tvl'])
+        week_ago = min(history, key=lambda x: abs((x.get('date') or 0) - target_ts))
+        tvl_7d_ago = float(week_ago.get('tvl') or 0.0)
         change_7d = ((current_tvl - tvl_7d_ago) / tvl_7d_ago * 100) if tvl_7d_ago > 0 else 0.0
 
         if change_7d > 5:    signal = 'GROWING'
@@ -1748,9 +1779,14 @@ def get_fear_greed() -> dict:
         if resp.status_code != 200:
             return {"value": 50, "label": "Neutral", "bias": 0.0, "signal": "NEUTRAL",
                     "error": f"HTTP {resp.status_code}"}
-        data  = resp.json()["data"][0]
-        value = int(data["value"])
-        label = data["value_classification"]
+        # DF-03: guard against missing/empty "data" key from malformed API response
+        _fng_items = resp.json().get("data", [])
+        if not _fng_items:
+            return {"value": 50, "label": "Neutral", "bias": 0.0, "signal": "NEUTRAL",
+                    "error": "Empty data from alternative.me"}
+        data  = _fng_items[0]
+        value = int(data.get("value", 50))
+        label = data.get("value_classification", "Neutral")
 
         # Contrarian bias calculation
         if value <= 20:

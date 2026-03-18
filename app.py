@@ -1587,10 +1587,11 @@ def _run_scan_thread():
         _write_scan_results(results)
         _write_scan_status(running=False, timestamp=ts, error=None)
         # Check paper position exits using fresh scan prices
+        _scan_closed = []  # APP-01: initialize before try so it's always defined
         try:
             _scan_px = {r["pair"]: r.get("price_usd", 0) for r in results if r.get("price_usd")}
             if _scan_px:
-                _scan_closed = model.update_positions(_scan_px)
+                _scan_closed = model.update_positions(_scan_px) or []
                 if _scan_closed:
                     logging.info("[App] Auto-closed %d position(s) from scan prices", len(_scan_closed))
         except Exception as _pos_err:
@@ -3985,13 +3986,15 @@ def page_market_overview():
             resp = requests.get("https://api.alternative.me/fng/?limit=30", timeout=8)
             resp.raise_for_status()
             fng_raw = resp.json().get("data", [])
+            # APP-02: use .get() to avoid KeyError on missing F&G fields
             fng_rows = [
                 {
-                    "date":  pd.to_datetime(int(d["timestamp"]), unit="s"),
-                    "value": int(d["value"]),
-                    "label": d["value_classification"],
+                    "date":  pd.to_datetime(int(d.get("timestamp", 0)), unit="s"),
+                    "value": int(d.get("value", 50)),
+                    "label": d.get("value_classification", "Neutral"),
                 }
                 for d in fng_raw
+                if d.get("timestamp") and d.get("value")
             ]
             st.session_state["fng_history_df"] = (
                 pd.DataFrame(fng_rows).sort_values("date").reset_index(drop=True)
@@ -4601,7 +4604,11 @@ def page_agent():
             if v == "reject":
                 return "background-color: #ffd6d6"
             return ""
-        _styled = _log_df.style.map(_dec_color, subset=["claude_decision"])
+        # APP-07: guard column existence before Styler to avoid KeyError
+        if "claude_decision" in _log_df.columns:
+            _styled = _log_df.style.map(_dec_color, subset=["claude_decision"])
+        else:
+            _styled = _log_df.style
         st.dataframe(_styled, use_container_width=True, hide_index=True)
         st.download_button(
             "⬇ Download Agent Log CSV",

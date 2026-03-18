@@ -145,7 +145,9 @@ def _get_portfolio_state() -> dict:
         paper_df  = _db.get_paper_trades_df()
         cfg       = get_agent_config()
         balance   = _exec.get_balance()
-        equity    = balance["total"] if balance["total"] > 0 else cfg["portfolio_size_usd"]
+        # AG-06: use .get() to avoid KeyError if execution module returns non-standard dict
+        _bal_total = balance.get("total", 0) or 0
+        equity    = _bal_total if _bal_total > 0 else cfg["portfolio_size_usd"]
         today     = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         daily_pnl = 0.0
         if not paper_df.empty and "close_time" in paper_df.columns:
@@ -381,7 +383,9 @@ Call reject_trade if indicators conflict, momentum is weak, or risk is too high.
 You MUST call exactly one tool."""
 
     try:
-        client   = _anthropic.Anthropic(api_key=api_key)
+        # AG-14: add timeout to prevent a hung API call from stalling the agent
+        # loop for up to 10 minutes (SDK default) — 45s is sufficient for Claude
+        client   = _anthropic.Anthropic(api_key=api_key, timeout=45.0)
         response = client.messages.create(
             model      = "claude-sonnet-4-6",
             max_tokens = 512,
@@ -401,7 +405,8 @@ You MUST call exactly one tool."""
         elif tool_call.name == "approve_trade":
             inp       = tool_call.input
             direction = str(inp.get("direction", sig.get("direction", "BUY"))).upper()
-            size_pct  = float(inp.get("size_pct", 5.0))
+            # AG-04: use `or 5.0` to safely handle None (null field in tool response)
+            size_pct  = float(inp.get("size_pct") or 5.0)
             size_pct  = max(0.5, min(size_pct, 50.0))   # hard cap — never >50%
             size_usd  = (size_pct / 100.0) * pf["equity_usd"]
             state["claude_decision"]    = "approve"
@@ -489,8 +494,9 @@ def _node_log_and_reflect(state: AgentState) -> AgentState:
 
         _db.log_agent_decision(
             pair             = state["pair"],
-            direction        = state["signal_result"].get("direction", ""),
-            confidence       = state["signal_result"].get("confidence_avg_pct", 0),
+            # AG-11: use .get() on signal_result in case checkpoint restored None
+            direction        = state.get("signal_result", {}).get("direction", ""),
+            confidence       = state.get("signal_result", {}).get("confidence_avg_pct", 0),
             claude_decision  = dec,
             claude_rationale = state.get("claude_rationale", ""),
             action_taken     = action,
@@ -508,13 +514,15 @@ def _node_log_and_reflect(state: AgentState) -> AgentState:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _route_after_pre_risk(state: AgentState) -> str:
-    if state.get("error") or not state["risk_pre_passed"]:
+    # AG-08: use .get() to avoid KeyError if checkpoint restored without this key
+    if state.get("error") or not state.get("risk_pre_passed", False):
         return "log_and_reflect"
     return "claude_reason"
 
 
 def _route_after_post_risk(state: AgentState) -> str:
-    if not state["risk_post_passed"]:
+    # AG-09: use .get() to avoid KeyError if checkpoint restored without this key
+    if not state.get("risk_post_passed", False):
         return "log_and_reflect"
     return "execute"
 
@@ -539,8 +547,10 @@ def _build_graph():
     _checkpointer = None
     try:
         from langgraph.checkpoint.sqlite import SqliteSaver
-        _checkpointer = SqliteSaver.from_conn_string("agent_checkpoints.db")
-        logger.info("[agent] LangGraph SQLite checkpointer attached")
+        # AG-13: use absolute path so checkpoints survive cwd changes (e.g. Streamlit)
+        _ckpt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_checkpoints.db")
+        _checkpointer = SqliteSaver.from_conn_string(_ckpt_path)
+        logger.info("[agent] LangGraph SQLite checkpointer attached at %s", _ckpt_path)
     except Exception as _cp_err:
         logger.debug("[agent] Checkpointer unavailable (non-critical): %s", _cp_err)
 
@@ -727,15 +737,36 @@ class AgentSupervisor:
             logger.info("[agent] Cycle start — %d pairs | equity=$%.0f | open=%d",
                         len(pairs), portfolio_state["equity_usd"], portfolio_state["open_count"])
 
+            # AG-16: track open count increments within the cycle so max_concurrent_positions
+            # is not bypassed when multiple pairs are approved in the same cycle
+            cycle_open_delta = 0
+
             for pair in pairs:
                 if self._kill_event.is_set():
                     break
                 try:
+                    # Reflect any positions opened earlier in this cycle
+                    if cycle_open_delta:
+                        portfolio_state = dict(portfolio_state)
+                        portfolio_state["open_count"] = portfolio_state["open_count"] + cycle_open_delta
+
                     if self._graph is not None:
                         initial: AgentState = _empty_state(pair, portfolio_state)
-                        final = self._graph.invoke(initial)
+                        # AG-03: pass thread_id so SqliteSaver checkpointer is actually used
+                        _invoke_config = {"configurable": {"thread_id": f"{pair}-{int(time.time())}"}}
+                        final = self._graph.invoke(initial, config=_invoke_config)
                     else:
                         final = _run_pipeline_fallback(pair, portfolio_state)
+
+                    # AG-12: guard against None final state from LangGraph early termination
+                    if not isinstance(final, dict):
+                        final = {}
+
+                    # AG-16: if this pair resulted in an executed order, count it
+                    if (final.get("claude_decision") == "approve"
+                            and final.get("risk_post_passed")
+                            and final.get("execution_result", {}).get("ok")):
+                        cycle_open_delta += 1
 
                     with self._lock:
                         self._last_run_ts  = time.time()

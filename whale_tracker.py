@@ -95,7 +95,8 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
         )
         if resp.status_code != 200:
             return []
-        hex_block = resp.json().get("result", "0x0")
+        # WHALE-01: use `or "0x0"` to handle JSON null (None) from Etherscan
+        hex_block = resp.json().get("result") or "0x0"
         block_num = int(hex_block, 16)
 
         # Fetch recent large internal txs — use Etherscan's free account transfer endpoint
@@ -224,6 +225,9 @@ def _fetch_xrp_whales(price_usd: float) -> list[dict]:
             if isinstance(amt, str):
                 # XRP drops (1 XRP = 1,000,000 drops)
                 # Use int(float()) to handle both "1000000" and "1000000.0" formats
+                # WHALE-03: guard against empty string raising ValueError
+                if not amt.strip():
+                    continue
                 xrp_amount = int(float(amt)) / 1e6
                 amount_usd = xrp_amount * price_usd
                 if amount_usd >= WHALE_THRESHOLD_USD:
@@ -259,7 +263,9 @@ def _fetch_bnb_whales(price_usd: float) -> list[dict]:
         txs = block.get("transactions", [])[:30]
         moves = []
         for tx in txs:
-            val_bnb = int(tx.get("value", "0x0"), 16) / 1e18
+            # WHALE-02: use `or "0x0"` to handle None value (key exists with JSON null)
+            val_hex = tx.get("value") or "0x0"
+            val_bnb = int(val_hex, 16) / 1e18
             amount_usd = val_bnb * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 direction = "distribution" if len(tx.get("input", "0x")) > 10 else "accumulation"
@@ -396,9 +402,12 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
                 params={"ids": coin_id, "vs_currencies": "usd"},
                 timeout=_TIMEOUT,
             )
-            price_usd = r.json().get(coin_id, {}).get("usd", 1.0)
+            fetched = r.json().get(coin_id, {}).get("usd")
+            # WHALE-05: never fall back to 1.0 — for BTC that's ~$80k off and
+            # causes every transaction to fail the whale threshold check
+            price_usd = float(fetched) if fetched and float(fetched) > 0 else 0.0
         except Exception:
-            price_usd = 1.0
+            price_usd = 0.0
 
     moves: list[dict] = []
     try:
@@ -456,5 +465,12 @@ def get_whale_batch(pairs: list[str], price_map: Optional[dict] = None) -> dict[
             pair: pool.submit(get_whale_activity, pair, price_map.get(pair, 0.0))
             for pair in pairs
         }
-        # Collect results inside the context so exceptions surface before pool shuts down
-        return {pair: f.result() for pair, f in futures.items()}
+        # WHALE-08: catch per-pair exceptions so one failure doesn't abort the whole batch
+        results = {}
+        for pair, f in futures.items():
+            try:
+                results[pair] = f.result()
+            except Exception as e:
+                logger.warning("get_whale_batch failed for %s: %s", pair, e)
+                results[pair] = {**_NEUTRAL_RESULT, "error": str(e), "pair": pair}
+        return results

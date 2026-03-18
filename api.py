@@ -285,8 +285,9 @@ def health():
             "reconnects":       ws_status.get("reconnects", 0),
             "pairs_live":       list(ws_prices.keys()),
             "pairs_stale":      [p for p in model.PAIRS if ws_feeds.is_stale(p)],
+            # API-07: use .get() consistently in both condition and value expression
             "last_message_age": (
-                round(_time.time() - ws_status["last_message_at"], 1)
+                round(_time.time() - ws_status.get("last_message_at"), 1)
                 if ws_status.get("last_message_at") else None
             ),
         }
@@ -294,9 +295,8 @@ def health():
     except Exception as _fe:
         feed_health = {"status": "ERROR", "error": str(_fe)}
 
-    overall_status = "ok"
-    if feed_health.get("status") not in ("OK", None):
-        overall_status = "degraded"
+    # API-08: only treat explicit "OK" as healthy; None/missing/unknown → degraded
+    overall_status = "ok" if feed_health.get("status") == "OK" else "degraded"
 
     return {
         "status":    overall_status,
@@ -385,7 +385,8 @@ def get_signal_pair(pair: str):
         normalized = _normalize_pair(pair)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    results = db.read_scan_results()
+    # API-02: guard against read_scan_results() returning None on DB error
+    results = db.read_scan_results() or []
     for r in results:
         if r.get("pair", "") == normalized:
             return _serialize(r)
@@ -616,6 +617,13 @@ def tradingview_webhook(
     # Uses hmac.compare_digest for both paths to prevent timing attacks.
     # NOTE: sync def — FastAPI runs it in a thread pool, so blocking I/O (sqlite3,
     # requests.post) is safe here and will not block the event loop.
+
+    # API-03: enforce authentication — this was accepted but never validated
+    _expected = _get_configured_api_key()
+    _provided = x_api_key or token
+    if _expected and not hmac.compare_digest(_provided, _expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
     try:
         pair = _normalize_pair(payload.pair)
     except ValueError as exc:

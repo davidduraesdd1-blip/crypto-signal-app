@@ -4,6 +4,7 @@ Uses claude-sonnet-4-6 to generate natural language rationale for each trading s
 Requires ANTHROPIC_API_KEY environment variable (same key used by Claude Code).
 """
 
+import math
 import os
 import time
 import logging
@@ -41,7 +42,10 @@ def get_signal_explanation(pair: str, result: dict) -> str:
         )
 
     # Cache key: pair + direction + 5-point confidence bucket
-    conf = result.get("confidence_avg_pct", 0)
+    # LLM-02/03: guard against None and NaN in confidence value
+    conf = result.get("confidence_avg_pct") or 0.0
+    if not math.isfinite(conf):
+        conf = 0.0
     direction = result.get("direction", "")
     cache_key = f"{pair}|{direction}|{int(conf // 5)}"
     with _CACHE_LOCK:
@@ -55,10 +59,12 @@ def get_signal_explanation(pair: str, result: dict) -> str:
         return "AI Analysis unavailable — run: pip install anthropic"
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        # LLM-04: add timeout to prevent hung connection blocking the thread
+        client = anthropic.Anthropic(api_key=api_key, timeout=30.0)
 
         # Build timeframe summary
-        tf_data = result.get("timeframes", {})
+        # LLM-01: use `or {}` so None value (not just missing key) is handled
+        tf_data = result.get("timeframes") or {}
         tf_lines = []
         for tf, td in tf_data.items():
             if td.get("direction") in ("NO DATA", "LOW VOL"):

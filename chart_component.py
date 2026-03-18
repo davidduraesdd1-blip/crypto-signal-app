@@ -128,18 +128,30 @@ def build_chart_html(
     candles: list = []
     volumes: list = []
 
-    valid_bars = [b for b in ohlcv if isinstance(b, (list, tuple)) and len(b) >= 5]
+    # CHART-02/03: filter bars with None fields before conversion to prevent TypeError
+    valid_bars = [
+        b for b in ohlcv
+        if isinstance(b, (list, tuple)) and len(b) >= 5
+        and b[0] is not None
+        and all(x is not None for x in b[1:5])
+    ]
     for bar in sorted(valid_bars, key=lambda b: b[0]):
-        ts_ms = int(bar[0])
+        try:
+            ts_ms = int(bar[0])
+        except (TypeError, ValueError):
+            continue
         if ts_ms in seen:
             continue
         seen.add(ts_ms)
 
-        o = float(bar[1])
-        h = float(bar[2])
-        l = float(bar[3])
-        c = float(bar[4])
-        v = float(bar[5]) if len(bar) > 5 else 0.0
+        try:
+            o = float(bar[1])
+            h = float(bar[2])
+            l = float(bar[3])
+            c = float(bar[4])
+            v = float(bar[5]) if len(bar) > 5 else 0.0
+        except (TypeError, ValueError):
+            continue
         t = ts_ms // 1000  # ms → seconds
 
         candles.append({"time": t, "open": o, "high": h, "low": l, "close": c})

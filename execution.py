@@ -289,10 +289,23 @@ def place_order(
 
         # Resolve price → contract quantity
         ticker    = ex.fetch_ticker(symbol)
-        price_now = float(ticker.get("last") or current_price or 1.0)
+        # EXEC-01: never fall back to 1.0 — at BTC prices that calculates an
+        # absurdly large contract qty and could place a catastrophic live order
+        _raw_price = ticker.get("last") or current_price
+        if not _raw_price or float(_raw_price) <= 0:
+            raise ValueError(
+                f"Cannot determine current price for {pair} — ticker returned {ticker.get('last')!r}"
+            )
+        price_now = float(_raw_price)
         market    = ex.market(symbol)
         ct_size   = float(market.get("contractSize") or 1.0)
         qty       = max(1, round(size_usd / (price_now * ct_size)))
+        # EXEC-02: hard cap on contract qty to prevent runaway orders from bad data
+        if qty > 1000:
+            raise ValueError(
+                f"Calculated qty {qty} exceeds safety limit of 1000 contracts "
+                f"(size_usd={size_usd}, price={price_now}, ct_size={ct_size})"
+            )
 
         if order_type == "market":
             order = ex.create_market_order(symbol, side, qty)
@@ -366,12 +379,18 @@ def auto_execute_signals(
 
     min_conf = cfg["auto_min_conf"]
     executed = []
+    executed_pairs: set = set()  # EXEC-07: prevent duplicate orders for same pair
     for r in results:
         conf      = r.get("confidence_avg_pct", 0)
         direction = r.get("direction", "")
         pair      = r.get("pair", "")
         if conf < min_conf or "NEUTRAL" in direction or not direction:
             continue
+        # EXEC-07: skip if we already placed an order for this pair this cycle
+        if pair in executed_pairs:
+            logger.debug("[EXEC] Skipping duplicate auto-execute for %s", pair)
+            continue
+        executed_pairs.add(pair)
         if not r.get("high_conf"):
             continue  # only execute HIGH_CONF signals automatically
         size_usd = (float(r.get("position_size_pct") or 10) / 100) * portfolio_size_usd
@@ -450,14 +469,20 @@ def place_twap_order(
     def _run():
         results = []
         for i in range(n_slices):
-            res = place_order(
-                pair=pair,
-                direction=direction,
-                size_usd=slice_usd,
-                order_type="market",
-                current_price=current_price,
-                expected_price=expected_price,
-            )
+            # EXEC-03: catch any unhandled exception per slice so the thread
+            # doesn't die silently and return a false-positive ok=True to the caller
+            try:
+                res = place_order(
+                    pair=pair,
+                    direction=direction,
+                    size_usd=slice_usd,
+                    order_type="market",
+                    current_price=current_price,
+                    expected_price=expected_price,
+                )
+            except Exception as _e:
+                logger.error("[TWAP] Slice %d/%d unhandled error: %s", i + 1, n_slices, _e)
+                res = {"ok": False, "error": str(_e)}
             results.append(res)
             logger.info("[TWAP] Slice %d/%d %s %s $%.0f → ok=%s",
                         i + 1, n_slices, direction, pair, slice_usd, res.get("ok"))

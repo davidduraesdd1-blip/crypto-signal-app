@@ -300,6 +300,10 @@ def init_db():
             # T3-11: slippage tracking column in execution_log
             _add_col('execution_log', 'slippage_pct', 'REAL')
 
+            # BUG-02: commit ALTER TABLE additions before index creation so a
+            # crash between the two steps does not leave both uncommitted
+            conn.commit()
+
             # Index for resolved lookups (may already exist on fresh DBs from executescript)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_fb_resolved ON feedback_log(resolved_at)"
@@ -364,6 +368,10 @@ def migrate_csv_to_db():
                 try:
                     df = pd.read_csv("feedback_log.csv")
                     if not df.empty:
+                        # BUG-21: filter to known schema columns to avoid OperationalError
+                        # on CSVs with extra/legacy columns
+                        known_cols = [r[1] for r in conn.execute("PRAGMA table_info(feedback_log)").fetchall()]
+                        df = df[[c for c in df.columns if c in known_cols]]
                         df.to_sql("feedback_log", conn, if_exists="append", index=False)
                         conn.commit()
                         logger.info(f"DB migration: imported {len(df)} rows → feedback_log")
@@ -400,6 +408,9 @@ def migrate_csv_to_db():
                     df = pd.read_csv("backtest_summary.csv")
                     if not df.empty:
                         df['run_id'] = 'migrated_' + datetime.now().strftime('%Y%m%d_%H%M%S')
+                        # BUG-21: filter to known schema columns
+                        known_cols = [r[1] for r in conn.execute("PRAGMA table_info(backtest_trades)").fetchall()]
+                        df = df[[c for c in df.columns if c in known_cols]]
                         df.to_sql("backtest_trades", conn, if_exists="append", index=False)
                         conn.commit()
                         logger.info(f"DB migration: imported {len(df)} rows → backtest_trades")
@@ -411,6 +422,9 @@ def migrate_csv_to_db():
                 try:
                     df = pd.read_csv("paper_trades_log.csv")
                     if not df.empty:
+                        # BUG-21: filter to known schema columns
+                        known_cols = [r[1] for r in conn.execute("PRAGMA table_info(paper_trades)").fetchall()]
+                        df = df[[c for c in df.columns if c in known_cols]]
                         df.to_sql("paper_trades", conn, if_exists="append", index=False)
                         conn.commit()
                         logger.info(f"DB migration: imported {len(df)} rows → paper_trades")
@@ -510,7 +524,8 @@ def log_feedback(pair: str, direction: str, entry: float,
                 " snap_rsi, snap_macd_hist, snap_bb_pos, snap_adx, snap_stoch_k,"
                 " snap_volume_ok, snap_regime)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (datetime.now().isoformat(), pair, direction, float(entry or 0),
+                # BUG-09: use UTC-aware timestamp so resolution cutoff comparisons are correct
+                (datetime.now(timezone.utc).isoformat(), pair, direction, float(entry or 0),
                  float(exit_ or 0), float(confidence or 0),
                  v.get('trend'), v.get('momentum'), v.get('meanrev'),
                  v.get('sentiment'), v.get('risk'), v.get('lgbm'),
@@ -546,7 +561,8 @@ def get_resolved_feedback_df(days: int = 90) -> pd.DataFrame:
             "AND timestamp > datetime('now', ?) "
             "ORDER BY timestamp ASC",
             conn,
-            params=(f"-{days} days",),
+            # BUG-19: cast to int to prevent float producing invalid SQLite modifier like "-90.0 days"
+            params=(f"-{int(days)} days",),
         )
     finally:
         conn.close()
@@ -617,7 +633,9 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
                         "UPDATE feedback_log "
                         "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
                         "    was_correct=?, resolved_at=? "
-                        "WHERE id=?",
+                        # BUG-07/08: AND resolved_at IS NULL prevents double-resolution
+                        # when two threads read the same unresolved rows concurrently
+                        "WHERE id=? AND resolved_at IS NULL",
                         (float(actual_price), round(float(pnl_pct), 4),
                          outcome, was_correct, datetime.now(timezone.utc).isoformat(),
                          row['id']),
@@ -627,7 +645,8 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
                     conn2.close()
             resolved += 1
         except Exception as e:
-            logger.warning(f"resolve_feedback_outcomes failed for row {row['id']}: {e}")
+            # BUG-28: use .get() to avoid KeyError inside exception handler
+            logger.warning(f"resolve_feedback_outcomes failed for row {row.get('id', '?')}: {e}")
 
     return resolved
 
@@ -701,7 +720,8 @@ def quick_resolve_feedback(fetch_ohlcv_fn, hold_hours: int = 72, batch: int = 10
                         "UPDATE feedback_log "
                         "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
                         "    was_correct=?, resolved_at=? "
-                        "WHERE id=?",
+                        # BUG-07/08: AND resolved_at IS NULL prevents double-resolution
+                        "WHERE id=? AND resolved_at IS NULL",
                         (actual_price, round(float(pnl_pct), 4),
                          outcome, was_correct,
                          datetime.now(timezone.utc).isoformat(),
@@ -740,11 +760,12 @@ def get_agent_accuracy_weights(days: int = 30) -> dict:
     try:
         df = pd.read_sql(
             "SELECT vote_trend, vote_momentum, vote_meanrev, vote_sentiment, vote_risk, vote_lgbm, "
-            "       was_correct FROM feedback_log "
+            "       was_correct, direction FROM feedback_log "
             "WHERE resolved_at IS NOT NULL AND was_correct IS NOT NULL "
             "AND timestamp > datetime('now', ?)",
             conn,
-            params=(f"-{days} days",),
+            # BUG-20: cast to int to prevent float producing invalid SQLite modifier
+            params=(f"-{int(days)} days",),
         )
     finally:
         conn.close()
@@ -758,14 +779,20 @@ def get_agent_accuracy_weights(days: int = 30) -> dict:
         if col not in df.columns:
             result[agent] = 0.5
             continue
-        sub = df[[col, 'was_correct']].dropna()
+        sub = df[[col, 'was_correct', 'direction']].dropna()
         sub = sub[sub[col] != 0]  # exclude neutral/abstain votes
         if len(sub) < 10:
             result[agent] = 0.5
             continue
+        # BUG-11: vote sign must match trade direction — a bullish vote is correct
+        # only when a BUY trade wins; a bearish vote is correct only when a SELL wins.
+        # The old two-branch OR both required was_correct==1, making vote sign irrelevant
+        # and giving all agents identical accuracy scores.
+        is_buy  = sub['direction'].str.contains('BUY',  na=False, case=False)
+        is_sell = sub['direction'].str.contains('SELL', na=False, case=False)
         correct = (
-            ((sub[col] > 0) & (sub['was_correct'] == 1)) |
-            ((sub[col] < 0) & (sub['was_correct'] == 1))  # BUG-DB01 fix: bearish correct when SELL wins
+            ((sub[col] > 0) & (sub['was_correct'] == 1) & is_buy) |
+            ((sub[col] < 0) & (sub['was_correct'] == 1) & is_sell)
         )
         result[agent] = round(float(correct.mean()), 4)
 
@@ -812,8 +839,15 @@ def append_to_master(results: list):
     with _write_lock:
         conn = _get_conn()
         try:
-            pd.DataFrame(rows).to_sql("daily_signals", conn, if_exists="append", index=False)
+            # BUG-23: restrict to MASTER_COLS so extra keys in result dicts never
+            # cause OperationalError from unknown columns
+            df = pd.DataFrame(rows)
+            df = df[[c for c in MASTER_COLS if c in df.columns]]
+            df.to_sql("daily_signals", conn, if_exists="append", index=False)
             conn.commit()
+        except Exception as e:
+            logger.error("append_to_master failed: %s", e)
+            raise
         finally:
             conn.close()
 
@@ -845,17 +879,28 @@ def get_signals_df(limit: int = 500) -> pd.DataFrame:
 # ──────────────────────────────────────────────
 # BACKTEST TRADES
 # ──────────────────────────────────────────────
+_BACKTEST_COLS = [
+    'run_id', 'timestamp', 'pair', 'direction', 'entry', 'exit', 'exit_reason',
+    'pnl_pct', 'pnl_usd', 'pos_pct', 'gross_pnl_pct', 'fee_usd', 'slippage_usd',
+]
+
+
 def save_backtest_trades(trades: list, run_id: str):
     """Persist a full backtest run's trades. run_id groups them together."""
     if not trades:
         return
     df = pd.DataFrame(trades)
     df['run_id'] = run_id
+    # BUG-22: filter to known schema columns to prevent OperationalError on extra keys
+    df = df[[c for c in _BACKTEST_COLS if c in df.columns]]
     with _write_lock:
         conn = _get_conn()
         try:
             df.to_sql("backtest_trades", conn, if_exists="append", index=False)
             conn.commit()
+        except Exception as e:
+            logger.error("save_backtest_trades failed: %s", e)
+            raise
         finally:
             conn.close()
 
@@ -1010,8 +1055,9 @@ def load_weights() -> dict:
     if row:
         try:
             return json.loads(row['weights_json'])
-        except Exception:
-            pass
+        except Exception as e:
+            # BUG-14: log corrupt weights so operator is alerted, not silently degraded
+            logger.error("load_weights: corrupt JSON in DB — returning empty weights: %s", e)
     return {}
 
 
@@ -1121,8 +1167,9 @@ def read_scan_results() -> list:
     if row:
         try:
             return json.loads(row['results_json'])
-        except Exception:
-            pass
+        except Exception as e:
+            # BUG-15: log corrupt scan cache so data loss is visible, not silently empty
+            logger.error("read_scan_results: corrupt JSON in DB — returning []: %s", e)
     return []
 
 
@@ -1190,9 +1237,11 @@ def check_drawdown_circuit_breaker(portfolio_size: float,
             return base
         df['pnl_pct'] = pd.to_numeric(df['pnl_pct'], errors='coerce').fillna(0)
         size = pd.to_numeric(
-            df['size_pct'] if 'size_pct' in df.columns else pd.Series([10.0] * len(df), index=df.index),
+            df['size_pct'] if 'size_pct' in df.columns else pd.Series([0.0] * len(df), index=df.index),
             errors='coerce'
-        ).fillna(10.0)
+        # BUG-17: fillna(0) not fillna(10) — fabricating 10% size for NULL rows overstates
+        # equity swings and can prevent the circuit breaker from triggering when it should
+        ).fillna(0.0)
         pnl_usd      = df['pnl_pct'] / 100 * (portfolio_size * size / 100)
         equity_curve = portfolio_size + pnl_usd.cumsum()
         peak         = equity_curve.cummax()
@@ -1403,7 +1452,13 @@ def get_db_stats() -> dict:
     try:
         for t in _ALLOWED_TABLES:
             try:
-                stats[t] = conn.execute(_TABLE_COUNT_SQL.get(t, f"SELECT COUNT(*) FROM {t}")).fetchone()[0]
+                # BUG-13: remove unsafe f-string fallback; _TABLE_COUNT_SQL covers all tables in _VALID_TABLES
+                sql = _TABLE_COUNT_SQL.get(t)
+                if sql is None:
+                    logger.error("get_db_stats: no pre-built COUNT query for table %r — skipping", t)
+                    stats[t] = 0
+                    continue
+                stats[t] = conn.execute(sql).fetchone()[0]
             except Exception:
                 stats[t] = 0
     finally:
