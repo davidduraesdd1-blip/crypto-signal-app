@@ -123,7 +123,7 @@ def load_config_overrides():
     if not os.path.exists(_CONFIG_FILE):
         return
     try:
-        with open(_CONFIG_FILE, 'r') as f:
+        with open(_CONFIG_FILE, 'r', encoding='utf-8') as f:
             overrides = json.load(f)
         g = globals()
         for key, val in overrides.items():
@@ -164,7 +164,7 @@ def _load_weights():
     # Fallback: read legacy JSON file if DB is empty (e.g. first run before migration)
     if os.path.exists(DYNAMIC_WEIGHTS_FILE):
         try:
-            with open(DYNAMIC_WEIGHTS_FILE, 'r') as f:
+            with open(DYNAMIC_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             logging.debug(f"Could not load dynamic weights from file: {e}")

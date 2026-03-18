@@ -2526,7 +2526,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
 def _save_config(overrides):
     weights_override = overrides.pop("_weights", {})
     try:
-        with open(model._CONFIG_FILE, 'w') as f:
+        with open(model._CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(overrides, f, indent=4)
         # Save weights separately
         if weights_override:

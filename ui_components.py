@@ -762,6 +762,7 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
     Glass-style card header with gradient left accent + signal pill + HC badge.
     Shows plain English regime/bias labels for non-trader readability.
     """
+    direction = direction or ""
     if "BUY" in direction:
         accent_gradient = "linear-gradient(180deg,#00d4aa,#00b08e)"
         regime_color    = "rgba(0,212,170,0.12)"
@@ -1039,7 +1040,7 @@ def signal_plain_english(
         agree_desc = "timeframes are mixed"
 
     # Direction line
-    d = direction.upper()
+    d = (direction or "").upper()
     if "STRONG BUY" in d:
         line1 = f"{base} is showing a strong potential buy opportunity right now."
     elif "BUY" in d:
@@ -1078,7 +1079,7 @@ def plain_english_box(text: str, direction: str) -> None:
     Render a styled plain-English summary box inside a pair card.
     direction determines the accent color (buy=teal, sell=red, neutral=amber).
     """
-    d = direction.upper()
+    d = (direction or "").upper()
     if "BUY" in d:
         accent = "#00d4aa"
         bg     = "rgba(0,212,170,0.05)"
@@ -1192,7 +1193,7 @@ def fng_gauge_html(fng_value: int, fng_category: str) -> str:
     Return HTML for a visual Fear & Greed gauge bar with emoji + label.
     fng_value: 0–100. Categories: Extreme Fear / Fear / Neutral / Greed / Extreme Greed.
     """
-    pct = max(0, min(100, fng_value))
+    pct = max(0, min(100, float(fng_value or 50)))
 
     # Emoji that matches the mood
     if pct <= 20:
@@ -1366,7 +1367,7 @@ def scan_action_cta(pair: str, direction: str, conf: float,
     Render a prominent 'Today's Best Opportunity' action card after scan completes.
     Shown only when there is a high-confidence signal. Designed for beginners.
     """
-    d = direction.upper()
+    d = (direction or "").upper()
     if "BUY" in d:
         action_verb = "Consider Buying"
         accent      = "#00d4aa"

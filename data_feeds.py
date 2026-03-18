@@ -788,7 +788,7 @@ def _load_api_keys() -> dict:
             return dict(_paid_key_cache)
         try:
             if _os.path.exists(_API_KEYS_FILE):
-                with open(_API_KEYS_FILE, "r") as f:
+                with open(_API_KEYS_FILE, "r", encoding="utf-8") as f:
                     _paid_key_cache = _json.load(f)
             # DF-14: update timestamp regardless of file presence so TTL applies
             _paid_key_cache_ts = now
