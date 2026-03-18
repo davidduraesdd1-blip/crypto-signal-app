@@ -1585,10 +1585,10 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
     if components:
         rows = []
         _comp_labels = {
-            "funding": "Funding Rate",
-            "oi":      "Open Interest",
-            "orderbook": "Book Imbalance",
-            "iv":      "Options IV",
+            "funding_score": "Funding Rate",
+            "oi_score":      "Open Interest",
+            "ob_score":      "Book Imbalance",
+            "iv_score":      "Options IV",
         }
         for k, lbl in _comp_labels.items():
             val = components.get(k, 0) or 0

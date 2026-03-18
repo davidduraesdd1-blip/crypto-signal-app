@@ -350,6 +350,8 @@ def get_open_interest(pair: str) -> dict:
 
 def get_open_interest_batch(pairs: list) -> dict:
     """Fetch open interest for all pairs in parallel. Returns {pair: oi_dict}."""
+    if not pairs:
+        return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_open_interest, pair) for pair in pairs}
     return {pair: f.result() for pair, f in futures.items()}
@@ -427,6 +429,8 @@ def get_options_iv(pair: str) -> dict:
 
 def get_options_iv_batch(pairs: list) -> dict:
     """Fetch Deribit DVOL for all pairs in parallel. Returns {pair: iv_dict}. Non-BTC/ETH return N/A."""
+    if not pairs:
+        return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_options_iv, pair) for pair in pairs}
     return {pair: f.result() for pair, f in futures.items()}
@@ -495,6 +499,8 @@ def get_orderbook_depth(pair: str, levels: int = 20) -> dict:
 
 def get_orderbook_batch(pairs: list) -> dict:
     """Fetch OB depth for all pairs in parallel. Returns {pair: ob_dict}."""
+    if not pairs:
+        return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_orderbook_depth, pair) for pair in pairs}
     return {pair: f.result() for pair, f in futures.items()}
@@ -1597,6 +1603,8 @@ def get_cvd(pair: str, limit: int = 500) -> dict:
 
 def get_cvd_batch(pairs: list) -> dict:
     """Fetch CVD for all pairs in parallel. Returns {pair: cvd_dict}."""
+    if not pairs:
+        return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_cvd, pair) for pair in pairs}
     return {pair: f.result() for pair, f in futures.items()}
@@ -1844,6 +1852,8 @@ def get_liquidation_cascade_risk(pair: str) -> dict:
 
 def get_cascade_risk_batch(pairs: list) -> dict:
     """Fetch liquidation cascade risk for all pairs in parallel."""
+    if not pairs:
+        return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_liquidation_cascade_risk, pair) for pair in pairs}
     return {pair: f.result() for pair, f in futures.items()}
@@ -2071,9 +2081,9 @@ def get_news_sentiment(pair: str, max_articles: int = 5) -> dict:
 # Source: alternative.me — updates daily, contrarian signal
 # ──────────────────────────────────────────────
 
-_FNG_CACHE: dict = {"value": None, "label": None, "_ts": 0.0}
-_FNG_LOCK = threading.Lock()
-_FNG_TTL  = 3600  # 1-hour cache (index updates daily — no need to hammer)
+_FNG2_CACHE: dict = {"value": None, "label": None, "_ts": 0.0}
+_FNG2_LOCK = threading.Lock()
+_FNG2_TTL  = 3600  # 1-hour cache (index updates daily — no need to hammer)
 
 
 def get_fear_greed() -> dict:
@@ -2092,9 +2102,9 @@ def get_fear_greed() -> dict:
     Positive = bullish bias, negative = bearish bias.
     """
     now = time.time()
-    with _FNG_LOCK:
-        if _FNG_CACHE["value"] is not None and now - _FNG_CACHE["_ts"] < _FNG_TTL:
-            c = _FNG_CACHE
+    with _FNG2_LOCK:
+        if _FNG2_CACHE["value"] is not None and now - _FNG2_CACHE["_ts"] < _FNG2_TTL:
+            c = _FNG2_CACHE
             return {
                 "value":  c["value"],
                 "label":  c["label"],
@@ -2134,8 +2144,8 @@ def get_fear_greed() -> dict:
             bias, signal = -10.0, "EXTREME_GREED_SELL"
 
         result = {"value": value, "label": label, "bias": bias, "signal": signal, "error": None}
-        with _FNG_LOCK:
-            _FNG_CACHE.update({**result, "_ts": now})
+        with _FNG2_LOCK:
+            _FNG2_CACHE.update({**result, "_ts": now})
         return result
     except Exception as e:
         logging.warning("Fear & Greed fetch failed: %s", e)
