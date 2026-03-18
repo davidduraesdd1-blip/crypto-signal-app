@@ -3247,9 +3247,9 @@ def page_trade_log():
 
         # ── Portfolio Heat Strip ──────────────────────────────────────────────
         if positions:
-            _total_exp  = sum(float(p.get("size_pct", 0)) for p in positions.values())
-            _buy_exp    = sum(float(p.get("size_pct", 0)) for p in positions.values() if "BUY"  in str(p.get("direction", "")))
-            _sell_exp   = sum(float(p.get("size_pct", 0)) for p in positions.values() if "SELL" in str(p.get("direction", "")))
+            _total_exp  = sum(float(p.get("size_pct") or 0) for p in positions.values())  # APP-16: or 0 handles explicit None
+            _buy_exp    = sum(float(p.get("size_pct") or 0) for p in positions.values() if "BUY"  in str(p.get("direction", "")))
+            _sell_exp   = sum(float(p.get("size_pct") or 0) for p in positions.values() if "SELL" in str(p.get("direction", "")))
             _n_pos      = len(positions)
             # Heat color: green < 30%, amber 30–60%, red > 60%
             _heat_color = "#00d4aa" if _total_exp < 30 else ("#f59e0b" if _total_exp < 60 else "#f6465d")
@@ -4134,7 +4134,9 @@ def page_market_overview():
                 valid = {
                     exch: multi[exch]["funding_rate_pct"]
                     for exch in multi
-                    if not multi[exch].get("error") and multi[exch].get("source")
+                    if not multi[exch].get("error")
+                    and multi[exch].get("source")
+                    and multi[exch].get("funding_rate_pct") is not None  # APP-27: None → abs(None) TypeError
                 }
                 if valid:
                     best_exch = max(valid, key=lambda e: abs(valid[e]))
