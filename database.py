@@ -1472,6 +1472,108 @@ def get_db_stats() -> dict:
 
 
 # ──────────────────────────────────────────────
+# SIGNAL ACCURACY  (for UI accuracy badge)
+# ──────────────────────────────────────────────
+
+def get_signal_win_rate(pair: str = None, direction: str = None,
+                        days: int = 90) -> dict:
+    """
+    Compute historical win rate (accuracy) for signals, optionally filtered
+    by pair and/or direction.  Powers the ui_components.signal_accuracy_badge_html().
+
+    Returns:
+        {'win_rate': float [0,1], 'sample_size': int, 'pair': pair, 'direction': direction}
+
+    Win = trade where was_correct == 1 (pnl_pct > 0).
+    Requires at least 5 resolved trades to return a meaningful estimate.
+    Falls back to {'win_rate': 0.5, 'sample_size': 0} when insufficient data.
+    """
+    conn = _get_conn()
+    try:
+        conditions = [
+            "resolved_at IS NOT NULL",
+            "was_correct IS NOT NULL",
+            f"timestamp > datetime('now', '-{int(days)} days')",
+        ]
+        params: list = []
+
+        if pair:
+            conditions.append("pair = ?")
+            params.append(pair)
+
+        if direction:
+            # Match BUY/STRONG BUY or SELL/STRONG SELL
+            conditions.append("direction LIKE ?")
+            params.append(f"%{direction.upper()}%")
+
+        where = " AND ".join(conditions)
+        df = pd.read_sql(
+            f"SELECT was_correct FROM feedback_log WHERE {where}",
+            conn,
+            params=params if params else None,
+        )
+    except Exception as exc:
+        logger.warning("get_signal_win_rate failed: %s", exc)
+        return {"win_rate": 0.5, "sample_size": 0, "pair": pair, "direction": direction}
+    finally:
+        conn.close()
+
+    if len(df) < 5:
+        return {"win_rate": 0.5, "sample_size": len(df), "pair": pair, "direction": direction}
+
+    win_rate = float(df["was_correct"].mean())
+    return {
+        "win_rate":    round(win_rate, 4),
+        "sample_size": len(df),
+        "pair":        pair,
+        "direction":   direction,
+    }
+
+
+def get_top_signals_by_accuracy(n: int = 5, days: int = 60) -> list[dict]:
+    """
+    Return the top N most accurate (pair, direction) combinations by win rate,
+    requiring at least 10 resolved trades each.  Used in UI performance leaderboard.
+    """
+    conn = _get_conn()
+    try:
+        df = pd.read_sql(
+            f"""
+            SELECT pair,
+                   direction,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END) as wins
+            FROM feedback_log
+            WHERE resolved_at IS NOT NULL
+              AND was_correct IS NOT NULL
+              AND timestamp > datetime('now', '-{int(days)} days')
+            GROUP BY pair, direction
+            HAVING total >= 10
+            ORDER BY (wins * 1.0 / total) DESC
+            LIMIT {int(n)}
+            """,
+            conn,
+        )
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+    if df.empty:
+        return []
+
+    result = []
+    for _, row in df.iterrows():
+        result.append({
+            "pair":        row["pair"],
+            "direction":   row["direction"],
+            "win_rate":    round(float(row["wins"]) / float(row["total"]), 4),
+            "sample_size": int(row["total"]),
+        })
+    return result
+
+
+# ──────────────────────────────────────────────
 # STARTUP — runs automatically on import
 # ──────────────────────────────────────────────
 init_db()

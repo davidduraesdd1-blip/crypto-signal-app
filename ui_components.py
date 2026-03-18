@@ -1478,3 +1478,473 @@ def glossary_popover() -> None:
         st.markdown("### Crypto & Trading Terms — Plain English")
         st.markdown(_GLOSSARY_MD)
         st.caption("Tip: hover over any metric card in the app for a tooltip explanation.")
+
+
+# ─── Top Movers Card ────────────────────────────────────────────────────────────
+
+def top_movers_card_html(gainers: list, losers: list) -> str:
+    """
+    Render a bento-style Top Movers card showing top 3 gainers and losers.
+
+    Parameters
+    ----------
+    gainers : list of dicts with keys: symbol, name, price_change_24h_pct, current_price
+    losers  : list of dicts (same structure, negative price_change_24h_pct)
+
+    Returns HTML string for use with st.markdown(..., unsafe_allow_html=True).
+    """
+    def _row(coin: dict, is_gainer: bool) -> str:
+        sym    = coin.get("symbol", "?").upper()
+        pct    = coin.get("price_change_24h_pct", 0.0) or 0.0
+        price  = coin.get("current_price", 0.0) or 0.0
+        arrow  = "▲" if is_gainer else "▼"
+        color  = "#00e676" if is_gainer else "#ff5252"
+        sign   = "+" if pct >= 0 else ""
+        price_fmt = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+        return (
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">'
+            f'<span style="font-weight:600;color:#e2e8f0;font-size:0.88rem;">{sym}</span>'
+            f'<span style="color:#94a3b8;font-size:0.78rem;">{price_fmt}</span>'
+            f'<span style="color:{color};font-weight:700;font-size:0.88rem;">'
+            f'{arrow} {sign}{pct:.2f}%</span>'
+            f'</div>'
+        )
+
+    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:#64748b;font-size:0.82rem;padding:8px 0;">No data</div>'
+    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:#64748b;font-size:0.82rem;padding:8px 0;">No data</div>'
+
+    return f"""
+<div style="
+    background:rgba(15,23,42,0.7);
+    border:1px solid rgba(255,255,255,0.08);
+    border-radius:16px;
+    padding:16px 18px;
+    backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);
+    box-shadow:0 4px 24px rgba(0,0,0,0.3);
+    margin-bottom:12px;
+">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+    <span style="font-size:1.1rem;">🔥</span>
+    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;letter-spacing:0.02em;">Top Movers — 24h</span>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div>
+      <div style="color:#00e676;font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
+                  text-transform:uppercase;margin-bottom:6px;">▲ Gainers</div>
+      {gainer_rows}
+    </div>
+    <div>
+      <div style="color:#ff5252;font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
+                  text-transform:uppercase;margin-bottom:6px;">▼ Losers</div>
+      {loser_rows}
+    </div>
+  </div>
+</div>
+"""
+
+
+# ─── Liquidation Cascade Risk Card ─────────────────────────────────────────────
+
+def cascade_risk_card_html(score: float, risk_level: str, direction: str,
+                           components: dict | None = None) -> str:
+    """
+    Render a liquidation cascade risk gauge card.
+
+    Parameters
+    ----------
+    score      : 0-100 composite risk score
+    risk_level : 'LOW' | 'MODERATE' | 'HIGH' | 'EXTREME'
+    direction  : 'LONG_CASCADE' | 'SHORT_CASCADE' | 'NEUTRAL'
+    components : optional dict with sub-scores (funding, oi, orderbook, iv)
+
+    Returns HTML string.
+    """
+    _LEVEL_COLORS = {
+        "LOW":      ("#00e676", "#1a3a2a"),
+        "MODERATE": ("#ffd740", "#3a320a"),
+        "HIGH":     ("#ff9100", "#3a1f00"),
+        "EXTREME":  ("#ff5252", "#3a0a0a"),
+    }
+    _LEVEL_ICONS = {"LOW": "🟢", "MODERATE": "🟡", "HIGH": "🟠", "EXTREME": "🔴"}
+    _DIR_LABELS = {
+        "LONG_CASCADE":  "⚡ Long Squeeze Risk",
+        "SHORT_CASCADE": "⚡ Short Squeeze Risk",
+        "NEUTRAL":       "⚖ Balanced",
+    }
+
+    color, bg = _LEVEL_COLORS.get(risk_level, ("#94a3b8", "#1e293b"))
+    icon  = _LEVEL_ICONS.get(risk_level, "⚪")
+    label = _DIR_LABELS.get(direction, direction)
+
+    # Progress bar fill (score 0-100)
+    bar_pct = min(max(float(score), 0), 100)
+
+    comp_html = ""
+    if components:
+        rows = []
+        _comp_labels = {
+            "funding": "Funding Rate",
+            "oi":      "Open Interest",
+            "orderbook": "Book Imbalance",
+            "iv":      "Options IV",
+        }
+        for k, lbl in _comp_labels.items():
+            val = components.get(k, 0) or 0
+            rows.append(
+                f'<div style="display:flex;justify-content:space-between;'
+                f'font-size:0.78rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
+                f'<span style="color:#94a3b8;">{lbl}</span>'
+                f'<span style="color:{color};font-weight:600;">{val:.0f}</span>'
+                f'</div>'
+            )
+        comp_html = (
+            '<div style="margin-top:10px;">'
+            + "".join(rows)
+            + "</div>"
+        )
+
+    return f"""
+<div style="
+    background:rgba(15,23,42,0.7);
+    border:1px solid {color}33;
+    border-radius:16px;
+    padding:16px 18px;
+    backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);
+    box-shadow:0 4px 24px rgba(0,0,0,0.3);
+    margin-bottom:12px;
+">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="font-size:1.1rem;">⚡</span>
+      <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Liquidation Cascade Risk</span>
+    </div>
+    <span style="background:{bg};color:{color};border:1px solid {color}66;border-radius:20px;
+                 padding:3px 10px;font-size:0.78rem;font-weight:700;">{icon} {risk_level}</span>
+  </div>
+
+  <!-- Score gauge bar -->
+  <div style="background:rgba(255,255,255,0.06);border-radius:8px;height:10px;margin-bottom:8px;overflow:hidden;">
+    <div style="width:{bar_pct}%;height:100%;border-radius:8px;
+                background:linear-gradient(90deg,#00e676,{color});
+                transition:width 0.5s ease;"></div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.82rem;">
+    <span style="color:{color};font-weight:700;font-size:1.1rem;">{score:.0f}<span style="font-size:0.75rem;color:#94a3b8;">/100</span></span>
+    <span style="color:#94a3b8;">{label}</span>
+  </div>
+  {comp_html}
+</div>
+"""
+
+
+# ─── Signal Accuracy Badge ──────────────────────────────────────────────────────
+
+def signal_accuracy_badge_html(win_rate: float, sample_size: int,
+                                signal_type: str = "") -> str:
+    """
+    Render a small badge showing historical signal accuracy.
+
+    Parameters
+    ----------
+    win_rate    : float [0, 1] — fraction of signals that were correct
+    sample_size : int — number of historical signals
+    signal_type : optional label (e.g. 'BUY', 'SELL')
+
+    Returns HTML string.
+    """
+    pct = win_rate * 100
+    if pct >= 70:
+        color, label = "#00e676", "High Accuracy"
+    elif pct >= 55:
+        color, label = "#ffd740", "Moderate"
+    elif pct >= 45:
+        color, label = "#94a3b8", "Neutral"
+    else:
+        color, label = "#ff5252", "Below Average"
+
+    suffix = f" {signal_type}" if signal_type else ""
+    n_text = f"{sample_size} signals" if sample_size >= 10 else "New signal"
+
+    return (
+        f'<span title="Historical accuracy of{suffix} signals over last {sample_size} trades" '
+        f'style="display:inline-flex;align-items:center;gap:5px;'
+        f'background:rgba(15,23,42,0.8);border:1px solid {color}44;border-radius:20px;'
+        f'padding:3px 9px;font-size:0.76rem;cursor:help;">'
+        f'<span style="color:{color};font-weight:700;">{pct:.0f}%</span>'
+        f'<span style="color:#94a3b8;">{label} · {n_text}</span>'
+        f'</span>'
+    )
+
+
+# ─── Market Regime Banner ───────────────────────────────────────────────────────
+
+def regime_banner_html(regime: str, hurst: float | None = None,
+                       squeeze_active: bool = False) -> str:
+    """
+    Full-width market regime banner with Hurst exponent and squeeze indicator.
+
+    Parameters
+    ----------
+    regime         : 'BULL' | 'BEAR' | 'RANGING' | 'CRISIS'
+    hurst          : Hurst exponent [0,1] — >0.5 = trending, <0.5 = mean-reverting
+    squeeze_active : True if Bollinger Band is inside Keltner Channel (volatility squeeze)
+    """
+    _REGIME_META = {
+        "BULL":    ("🐂", "#00e676", "rgba(0,230,118,0.08)", "Bull Market",    "Trend-following strategies preferred"),
+        "BEAR":    ("🐻", "#ff5252", "rgba(255,82,82,0.08)",  "Bear Market",    "Reduce size, defensive positioning"),
+        "RANGING": ("↔",  "#ffd740", "rgba(255,215,64,0.08)", "Ranging Market", "Mean-reversion strategies preferred"),
+        "CRISIS":  ("🚨", "#ff9100", "rgba(255,145,0,0.08)",  "Crisis / High Volatility", "Extreme caution — reduce all exposure"),
+    }
+    icon, color, bg, title, advice = _REGIME_META.get(
+        regime, ("❓", "#94a3b8", "rgba(148,163,184,0.08)", "Unknown Regime", "")
+    )
+
+    hurst_html = ""
+    if hurst is not None:
+        h_color = "#00e676" if hurst > 0.55 else ("#ff5252" if hurst < 0.45 else "#ffd740")
+        h_label = "Trending" if hurst > 0.55 else ("Mean-Reverting" if hurst < 0.45 else "Random Walk")
+        hurst_html = (
+            f'<span style="background:rgba(255,255,255,0.05);border-radius:8px;'
+            f'padding:3px 8px;font-size:0.78rem;margin-left:10px;">'
+            f'Hurst: <span style="color:{h_color};font-weight:700;">{hurst:.2f}</span>'
+            f' <span style="color:#64748b;">({h_label})</span></span>'
+        )
+
+    squeeze_html = ""
+    if squeeze_active:
+        squeeze_html = (
+            '<span style="background:rgba(255,215,64,0.15);border:1px solid #ffd74066;'
+            'border-radius:8px;padding:3px 8px;font-size:0.78rem;margin-left:10px;'
+            'animation:pulse 1.5s ease-in-out infinite;">'
+            '🗜 <span style="color:#ffd740;font-weight:700;">SQUEEZE</span>'
+            ' <span style="color:#94a3b8;">— breakout imminent</span></span>'
+        )
+
+    return f"""
+<div style="
+    background:{bg};
+    border:1px solid {color}33;
+    border-left:4px solid {color};
+    border-radius:12px;
+    padding:12px 18px;
+    margin-bottom:14px;
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:6px;
+">
+  <span style="font-size:1.2rem;">{icon}</span>
+  <span style="color:{color};font-weight:700;font-size:0.95rem;">{title}</span>
+  <span style="color:#64748b;font-size:0.82rem;">— {advice}</span>
+  {hurst_html}
+  {squeeze_html}
+</div>
+"""
+
+
+# ─── Position Size Recommendation Card ─────────────────────────────────────────
+
+def position_size_card_html(recommended_pct: float, rationale: str,
+                             circuit_breaker_active: bool = False,
+                             daily_pnl_pct: float = 0.0) -> str:
+    """
+    Display a volatility-adjusted position size recommendation.
+
+    Parameters
+    ----------
+    recommended_pct        : float [0, 100] — % of account to risk
+    rationale              : short explanation string
+    circuit_breaker_active : True if daily/weekly loss limit hit
+    daily_pnl_pct          : today's running P&L %
+    """
+    if circuit_breaker_active:
+        bg_color    = "rgba(255,82,82,0.08)"
+        border_col  = "#ff5252"
+        size_color  = "#ff5252"
+        status_html = (
+            '<div style="background:rgba(255,82,82,0.15);border:1px solid #ff525266;'
+            'border-radius:8px;padding:8px 12px;margin-top:10px;font-size:0.82rem;">'
+            '🚨 <span style="color:#ff5252;font-weight:700;">Circuit Breaker ACTIVE</span>'
+            ' — all new signals suppressed until daily/weekly loss limit resets.</div>'
+        )
+    else:
+        bg_color    = "rgba(15,23,42,0.7)"
+        border_col  = "rgba(255,255,255,0.08)"
+        size_color  = "#00e676" if recommended_pct >= 1.0 else "#ffd740"
+        pnl_color   = "#00e676" if daily_pnl_pct >= 0 else "#ff5252"
+        pnl_sign    = "+" if daily_pnl_pct >= 0 else ""
+        status_html = (
+            f'<div style="font-size:0.8rem;color:#94a3b8;margin-top:8px;">'
+            f'Today\'s P&L: <span style="color:{pnl_color};font-weight:600;">'
+            f'{pnl_sign}{daily_pnl_pct:.2f}%</span>'
+            f'</div>'
+        )
+
+    bar_pct = min(max(recommended_pct * 4, 0), 100)  # 0-25% maps to 0-100% bar
+
+    return f"""
+<div style="
+    background:{bg_color};
+    border:1px solid {border_col};
+    border-radius:16px;
+    padding:16px 18px;
+    backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);
+    box-shadow:0 4px 24px rgba(0,0,0,0.3);
+    margin-bottom:12px;
+">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+    <span style="font-size:1.1rem;">⚖</span>
+    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Position Size (Vol-Adjusted)</span>
+  </div>
+  <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:8px;">
+    <span style="color:{size_color};font-weight:800;font-size:2rem;">{recommended_pct:.1f}%</span>
+    <span style="color:#64748b;font-size:0.85rem;">of account</span>
+  </div>
+  <div style="background:rgba(255,255,255,0.06);border-radius:6px;height:6px;margin-bottom:8px;overflow:hidden;">
+    <div style="width:{bar_pct}%;height:100%;border-radius:6px;
+                background:linear-gradient(90deg,#6366f1,{size_color});"></div>
+  </div>
+  <div style="color:#94a3b8;font-size:0.8rem;">{rationale}</div>
+  {status_html}
+</div>
+"""
+
+
+# ─── Agent Confidence Breakdown ─────────────────────────────────────────────────
+
+def agent_confidence_breakdown_html(agents: list[dict]) -> str:
+    """
+    Show per-agent signal votes with Sharpe-weighted confidence bars.
+
+    Parameters
+    ----------
+    agents : list of dicts, each with:
+        name    : str  — agent name
+        signal  : str  — 'BUY' | 'SELL' | 'NEUTRAL'
+        weight  : float [0,1] — rolling Sharpe-based weight
+        contrib : float — contribution to final score
+
+    Returns HTML string.
+    """
+    _SIG_COLORS = {"BUY": "#00e676", "SELL": "#ff5252", "NEUTRAL": "#94a3b8"}
+    _SIG_ICONS  = {"BUY": "▲", "SELL": "▼", "NEUTRAL": "—"}
+
+    rows = []
+    for ag in agents:
+        name    = ag.get("name", "Agent")
+        signal  = ag.get("signal", "NEUTRAL").upper()
+        weight  = float(ag.get("weight", 0.5))
+        contrib = float(ag.get("contrib", 0.0))
+        color   = _SIG_COLORS.get(signal, "#94a3b8")
+        icon    = _SIG_ICONS.get(signal, "—")
+        bar_w   = int(weight * 100)
+        c_sign  = "+" if contrib >= 0 else ""
+        rows.append(f"""
+<div style="margin-bottom:8px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+    <span style="font-size:0.82rem;color:#cbd5e1;font-weight:500;">{name}</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="color:{color};font-size:0.8rem;font-weight:700;">{icon} {signal}</span>
+      <span style="color:#64748b;font-size:0.75rem;">contrib: <span style="color:{color};">{c_sign}{contrib:.1f}</span></span>
+    </div>
+  </div>
+  <div style="background:rgba(255,255,255,0.05);border-radius:4px;height:4px;overflow:hidden;">
+    <div style="width:{bar_w}%;height:100%;border-radius:4px;background:{color};opacity:0.7;"></div>
+  </div>
+  <div style="text-align:right;font-size:0.7rem;color:#475569;margin-top:1px;">weight {weight:.0%}</div>
+</div>""")
+
+    rows_html = "".join(rows) if rows else '<div style="color:#64748b;font-size:0.82rem;">No agent data</div>'
+
+    return f"""
+<div style="
+    background:rgba(15,23,42,0.7);
+    border:1px solid rgba(255,255,255,0.08);
+    border-radius:16px;
+    padding:16px 18px;
+    backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);
+    box-shadow:0 4px 24px rgba(0,0,0,0.3);
+    margin-bottom:12px;
+">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+    <span style="font-size:1.1rem;">🤖</span>
+    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">AI Agent Votes</span>
+    <span style="color:#475569;font-size:0.75rem;">(Sharpe-weighted)</span>
+  </div>
+  {rows_html}
+</div>
+"""
+
+
+# ─── Live Price Ticker Strip ────────────────────────────────────────────────────
+
+_PRICE_TICKER_CSS = """
+<style>
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.price-ticker-wrap {
+  overflow: hidden;
+  background: rgba(8,11,18,0.9);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 6px 0;
+  margin-bottom: 12px;
+}
+.price-ticker-track {
+  display: flex;
+  gap: 32px;
+  width: max-content;
+  animation: ticker-scroll 40s linear infinite;
+  white-space: nowrap;
+}
+.price-ticker-track:hover { animation-play-state: paused; }
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+</style>
+"""
+
+
+def price_ticker_strip_html(prices: list[dict]) -> str:
+    """
+    Animated horizontal price ticker strip (pauses on hover).
+
+    Parameters
+    ----------
+    prices : list of dicts with keys: symbol, price, change_pct
+    """
+    items = []
+    for p in prices:
+        sym    = p.get("symbol", "?").upper()
+        price  = p.get("price", 0.0) or 0.0
+        chg    = p.get("change_pct", 0.0) or 0.0
+        color  = "#00e676" if chg >= 0 else "#ff5252"
+        arrow  = "▲" if chg >= 0 else "▼"
+        sign   = "+" if chg >= 0 else ""
+        pf     = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+        items.append(
+            f'<span class="ticker-item">'
+            f'<span style="color:#94a3b8;">{sym}</span>'
+            f'<span style="color:#e2e8f0;">{pf}</span>'
+            f'<span style="color:{color};">{arrow} {sign}{chg:.2f}%</span>'
+            f'</span>'
+        )
+
+    # Duplicate items for seamless loop
+    track = "".join(items * 2)
+
+    return (
+        _PRICE_TICKER_CSS
+        + f'<div class="price-ticker-wrap"><div class="price-ticker-track">{track}</div></div>'
+    )

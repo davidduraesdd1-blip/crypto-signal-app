@@ -1021,6 +1021,261 @@ def compute_adx(df, period=14):
 
 
 # ──────────────────────────────────────────────
+# HURST EXPONENT  (DFA method)
+# ──────────────────────────────────────────────
+def compute_hurst_exponent(series: pd.Series, min_window: int = 10,
+                            max_window: int = 100) -> float:
+    """
+    Detrended Fluctuation Analysis (DFA) estimate of the Hurst exponent.
+
+    H > 0.55 → persistent / trending market (trend-following favoured)
+    H < 0.45 → anti-persistent / mean-reverting (mean-reversion favoured)
+    0.45–0.55 → random walk (no edge from either strategy)
+
+    Uses log–log regression of DFA fluctuation vs window size.
+    Requires at least 50 bars; returns 0.5 (random walk) on failure.
+    """
+    try:
+        prices = series.dropna().values.astype(np.float64)
+        if len(prices) < 50:
+            return 0.5
+        # Integrate the zero-mean series
+        mean_p = np.mean(prices)
+        y = np.cumsum(prices - mean_p)
+        windows = np.logspace(
+            np.log10(min_window),
+            np.log10(min(max_window, len(prices) // 2)),
+            num=15, dtype=int,
+        )
+        windows = np.unique(windows)
+        if len(windows) < 4:
+            return 0.5
+        fluctuations = []
+        for w in windows:
+            n_segs = len(y) // w
+            if n_segs < 2:
+                continue
+            seg_fluct = []
+            for i in range(n_segs):
+                seg = y[i * w: (i + 1) * w]
+                # Detrend each segment by subtracting linear fit
+                t = np.arange(len(seg))
+                coef = np.polyfit(t, seg, 1)
+                trend = np.polyval(coef, t)
+                seg_fluct.append(np.sqrt(np.mean((seg - trend) ** 2)))
+            fluctuations.append(np.mean(seg_fluct))
+        if len(fluctuations) < 4:
+            return 0.5
+        log_w = np.log(windows[:len(fluctuations)])
+        log_f = np.log(np.array(fluctuations) + 1e-12)
+        slope, _ = np.polyfit(log_w, log_f, 1)
+        return float(np.clip(slope, 0.0, 1.0))
+    except Exception:
+        return 0.5
+
+
+# ──────────────────────────────────────────────
+# SQUEEZE MOMENTUM  (BB inside Keltner Channel)
+# ──────────────────────────────────────────────
+def compute_squeeze_momentum(df: pd.DataFrame,
+                              bb_period: int = 20, bb_mult: float = 2.0,
+                              kc_period: int = 20, kc_mult: float = 1.5) -> dict:
+    """
+    Lazybear-style Squeeze Momentum Indicator.
+
+    A 'squeeze' occurs when Bollinger Bands (BB) contract inside Keltner Channels (KC),
+    indicating compressed volatility — historically precedes explosive breakouts.
+
+    Returns dict with:
+      squeeze_on   : bool   — True when BB is inside KC (compression active)
+      momentum     : float  — current momentum histogram value (+= bullish, -= bearish)
+      increasing   : bool   — momentum rising (breakout likely starting)
+      signal       : 'BULL_SQUEEZE'|'BEAR_SQUEEZE'|'NO_SQUEEZE'
+    """
+    try:
+        if len(df) < max(bb_period, kc_period) + 10:
+            return {"squeeze_on": False, "momentum": 0.0, "increasing": False, "signal": "NO_SQUEEZE"}
+
+        close = df["close"]
+        high  = df["high"]
+        low   = df["low"]
+
+        # Bollinger Bands
+        bb_mid = close.rolling(bb_period).mean()
+        bb_std = close.rolling(bb_period).std()
+        bb_upper = bb_mid + bb_mult * bb_std
+        bb_lower = bb_mid - bb_mult * bb_std
+
+        # Keltner Channels (EMA + ATR)
+        tr = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low  - close.shift()).abs(),
+        ], axis=1).max(axis=1)
+        kc_mid   = close.ewm(span=kc_period, adjust=False).mean()
+        kc_atr   = tr.rolling(kc_period).mean()
+        kc_upper = kc_mid + kc_mult * kc_atr
+        kc_lower = kc_mid - kc_mult * kc_atr
+
+        # Squeeze: BB is completely inside KC on BOTH sides
+        squeeze = (bb_upper < kc_upper) & (bb_lower > kc_lower)
+        squeeze_on = bool(squeeze.iloc[-1])
+
+        # Momentum: distance from mid-price to highest/lowest midpoint
+        highest_high = high.rolling(kc_period).max()
+        lowest_low   = low.rolling(kc_period).min()
+        mid_high_low = (highest_high + lowest_low) / 2
+        delta = close - (mid_high_low + kc_mid) / 2
+        momentum = float(delta.ewm(span=kc_period, adjust=False).mean().iloc[-1])
+
+        # Increasing = current momentum bar > previous
+        prev_mom = float(delta.ewm(span=kc_period, adjust=False).mean().iloc[-2]) if len(df) > kc_period + 1 else momentum
+        increasing = momentum > prev_mom
+
+        if squeeze_on:
+            signal = "BULL_SQUEEZE" if momentum > 0 else "BEAR_SQUEEZE"
+        else:
+            signal = "NO_SQUEEZE"
+
+        return {
+            "squeeze_on": squeeze_on,
+            "momentum":   round(momentum, 6),
+            "increasing": increasing,
+            "signal":     signal,
+        }
+    except Exception:
+        return {"squeeze_on": False, "momentum": 0.0, "increasing": False, "signal": "NO_SQUEEZE"}
+
+
+# ──────────────────────────────────────────────
+# ATR CHANDELIER EXIT  (adaptive trailing stop)
+# ──────────────────────────────────────────────
+def compute_chandelier_exit(df: pd.DataFrame,
+                             atr_period: int = 22,
+                             multiplier: float = 3.0) -> dict:
+    """
+    ATR-based Chandelier Exit — adaptive trailing stop that moves with price.
+
+    Long  stop = highest(high, atr_period) − multiplier × ATR
+    Short stop = lowest(low,  atr_period) + multiplier × ATR
+
+    When price crosses from above the long-stop → bearish flip signal.
+    When price crosses from below the short-stop → bullish flip signal.
+
+    Returns dict with:
+      long_stop   : float — current long trailing stop level
+      short_stop  : float — current short trailing stop level
+      direction   : 'LONG' | 'SHORT' — current chandelier direction
+      flip_signal : bool  — True if direction changed on this bar
+    """
+    try:
+        if len(df) < atr_period + 5:
+            return {"long_stop": None, "short_stop": None, "direction": "LONG", "flip_signal": False}
+
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - df["close"].shift()).abs(),
+            (df["low"]  - df["close"].shift()).abs(),
+        ], axis=1).max(axis=1)
+        atr_series = tr.rolling(atr_period).mean()
+
+        long_stop  = df["high"].rolling(atr_period).max() - multiplier * atr_series
+        short_stop = df["low"].rolling(atr_period).min()  + multiplier * atr_series
+
+        close = df["close"]
+        ls_val = float(long_stop.iloc[-1])
+        ss_val = float(short_stop.iloc[-1])
+        price  = float(close.iloc[-1])
+        prev   = float(close.iloc[-2]) if len(df) > 1 else price
+
+        # Direction: are we above the long stop?
+        direction_now  = "LONG" if price  > ls_val else "SHORT"
+        direction_prev = "LONG" if prev   > float(long_stop.iloc[-2]) else "SHORT"
+        flip_signal = direction_now != direction_prev
+
+        return {
+            "long_stop":   round(ls_val, 6),
+            "short_stop":  round(ss_val, 6),
+            "direction":   direction_now,
+            "flip_signal": flip_signal,
+        }
+    except Exception:
+        return {"long_stop": None, "short_stop": None, "direction": "LONG", "flip_signal": False}
+
+
+# ──────────────────────────────────────────────
+# CVD DIVERGENCE  (price vs cumulative volume delta)
+# ──────────────────────────────────────────────
+def compute_cvd_divergence(df: pd.DataFrame, lookback: int = 20) -> dict:
+    """
+    Detects divergence between price action and Cumulative Volume Delta (CVD).
+
+    CVD approximation from OHLCV: each candle's delta ≈ volume × sign(close − open).
+    True CVD uses tick data; this approximation captures 70–80% of the signal.
+
+    Bullish divergence: price makes lower low but CVD makes higher low
+      → sell-side absorption, likely reversal higher.
+    Bearish divergence: price makes higher high but CVD makes lower high
+      → buy-side exhaustion, likely reversal lower.
+
+    Returns dict with:
+      divergence : 'BULLISH' | 'BEARISH' | 'NONE'
+      strength   : 'STRONG' | 'WEAK' | 'NONE'
+      cvd_slope  : float  — recent CVD trend (positive = accumulation)
+    """
+    try:
+        if len(df) < lookback + 5:
+            return {"divergence": "NONE", "strength": "NONE", "cvd_slope": 0.0}
+
+        # Estimate candle delta: positive when close > open (buying pressure)
+        candle_delta = df["volume"] * np.sign(df["close"] - df["open"])
+        cvd = candle_delta.cumsum()
+
+        window = df.tail(lookback)
+        cvd_w  = cvd.tail(lookback)
+
+        price_min_idx = window["close"].idxmin()
+        price_max_idx = window["close"].idxmax()
+        cvd_at_price_min = float(cvd_w.loc[price_min_idx]) if price_min_idx in cvd_w.index else None
+        cvd_at_price_max = float(cvd_w.loc[price_max_idx]) if price_max_idx in cvd_w.index else None
+
+        # Compare half-window to detect divergence
+        half = lookback // 2
+        price_first_half  = window["close"].iloc[:half]
+        price_second_half = window["close"].iloc[half:]
+        cvd_first_half    = cvd_w.iloc[:half]
+        cvd_second_half   = cvd_w.iloc[half:]
+
+        divergence = "NONE"
+        strength   = "NONE"
+
+        # Bearish divergence: price higher high, CVD lower high
+        if price_second_half.max() > price_first_half.max() and cvd_second_half.max() < cvd_first_half.max():
+            divergence = "BEARISH"
+            price_diff = (price_second_half.max() - price_first_half.max()) / (price_first_half.max() + 1e-9)
+            cvd_diff   = abs(cvd_second_half.max() - cvd_first_half.max()) / (abs(cvd_first_half.max()) + 1e-9)
+            strength = "STRONG" if price_diff > 0.02 and cvd_diff > 0.1 else "WEAK"
+
+        # Bullish divergence: price lower low, CVD higher low
+        elif price_second_half.min() < price_first_half.min() and cvd_second_half.min() > cvd_first_half.min():
+            divergence = "BULLISH"
+            price_diff = (price_first_half.min() - price_second_half.min()) / (price_first_half.min() + 1e-9)
+            cvd_diff   = abs(cvd_second_half.min() - cvd_first_half.min()) / (abs(cvd_first_half.min()) + 1e-9)
+            strength = "STRONG" if price_diff > 0.02 and cvd_diff > 0.1 else "WEAK"
+
+        # CVD slope: positive = net accumulation over lookback
+        cvd_slope = float((cvd_w.iloc[-1] - cvd_w.iloc[0]) / (lookback + 1e-9))
+
+        return {
+            "divergence": divergence,
+            "strength":   strength,
+            "cvd_slope":  round(cvd_slope, 4),
+        }
+    except Exception:
+        return {"divergence": "NONE", "strength": "NONE", "cvd_slope": 0.0}
+
+
+# ──────────────────────────────────────────────
 # GAUSSIAN CHANNEL
 # ──────────────────────────────────────────────
 def _gaussian_weights(length: int) -> np.ndarray:
@@ -1390,6 +1645,36 @@ def _enrich_df(df, tf: str = None):
         df[f'gc_{_tier}_mid']   = _gc_mid
         df[f'gc_{_tier}_upper'] = _gc_upper
         df[f'gc_{_tier}_lower'] = _gc_lower
+    # SuperTrend direction column for ml_predictor feature matrix
+    _st_vals = []
+    _st_in_up = None
+    _st_atr_s = compute_atr(df, 10)
+    _hl2 = (df['high'] + df['low']) / 2
+    _ub  = (_hl2 + 3.0 * _st_atr_s).values.copy()
+    _lb  = (_hl2 - 3.0 * _st_atr_s).values.copy()
+    _cv  = df['close'].values
+    _in_up = np.ones(len(df), dtype=bool)
+    for _i in range(1, len(df)):
+        if _cv[_i - 1] > _ub[_i - 1]:
+            _in_up[_i] = True
+        elif _cv[_i - 1] < _lb[_i - 1]:
+            _in_up[_i] = False
+        else:
+            _in_up[_i] = _in_up[_i - 1]
+            if _in_up[_i]:
+                _lb[_i] = max(_lb[_i], _lb[_i - 1])
+            else:
+                _ub[_i] = min(_ub[_i], _ub[_i - 1])
+    df['supertrend_dir'] = _in_up.astype(int)  # 1=uptrend, 0=downtrend
+    # Squeeze Momentum scalar columns (for current bar — stored as repeated value)
+    _sqz = compute_squeeze_momentum(df)
+    df['squeeze_on']  = int(_sqz['squeeze_on'])
+    df['squeeze_mom'] = _sqz['momentum']
+    # Chandelier Exit stops
+    _ce = compute_chandelier_exit(df)
+    df['chandelier_long_stop']  = _ce['long_stop']  if _ce['long_stop']  is not None else np.nan
+    df['chandelier_short_stop'] = _ce['short_stop'] if _ce['short_stop'] is not None else np.nan
+    df['chandelier_dir']        = 1 if _ce['direction'] == 'LONG' else 0
     return df
 
 # ──────────────────────────────────────────────
@@ -1446,7 +1731,29 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             regime = hmm_regime
         else:
             regime = "Ranging" if adx < ADX_RANGE_THRESHOLD else "Trending" if adx > ADX_TREND_THRESHOLD else "Neutral"
-        regime_str = f"Regime: {regime} (ADX {round(adx, 1)})"
+
+        # Hurst Exponent — refine regime using fractal market structure
+        hurst_val = compute_hurst_exponent(df['close'])
+        if hurst_val > 0.60 and regime == "Neutral":
+            regime = "Trending"   # fractal evidence confirms momentum
+        elif hurst_val < 0.40 and regime == "Neutral":
+            regime = "Ranging"    # anti-persistent → mean-reversion likely
+
+        # Squeeze Momentum — pre-computed in _enrich_df when available, else compute fresh
+        _sqz = compute_squeeze_momentum(df)
+        squeeze_on  = _sqz['squeeze_on']
+        squeeze_mom = _sqz['momentum']
+        squeeze_sig = _sqz['signal']
+
+        # CVD Divergence
+        _cvd_div = compute_cvd_divergence(df)
+
+        # Chandelier Exit direction — provides adaptive trailing stop context
+        _ce = compute_chandelier_exit(df)
+        chandelier_dir = _ce['direction']   # 'LONG' | 'SHORT'
+        chandelier_flip = _ce['flip_signal']
+
+        regime_str = f"Regime: {regime} (ADX {round(adx, 1)}, H={hurst_val:.2f})"
 
         score = 0.0
 
@@ -1679,6 +1986,49 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                 score += cvd_base + (_cvd_mom_bonus if cvd_momentum > 0 else 0)
             elif cvd_signal == 'SELL_PRESSURE':
                 score -= cvd_base + (_cvd_mom_bonus if cvd_momentum < 0 else 0)
+
+        # ── Squeeze Momentum (volatility compression breakout detector) ──────────
+        # When BB contracts inside KC, a breakout is imminent. The direction of
+        # the momentum histogram at the moment of release predicts direction.
+        # Max ±10 pts: meaningful signal when combined with trend/volume confirmation.
+        sqz_score = 0.0
+        if squeeze_on:
+            if squeeze_mom > 0 and _sqz.get('increasing', False):
+                sqz_score = 10.0   # bull squeeze with rising momentum
+            elif squeeze_mom < 0 and not _sqz.get('increasing', True):
+                sqz_score = -10.0  # bear squeeze with falling momentum
+            elif squeeze_mom > 0:
+                sqz_score = 6.0
+            elif squeeze_mom < 0:
+                sqz_score = -6.0
+        score += sqz_score * w.get('squeeze', 0.10)
+
+        # ── Chandelier Exit direction alignment ──────────────────────────────────
+        # Chandelier flip (direction change) = strong trend-change confirmation.
+        # Static alignment: Chandelier LONG + bullish signal adds confidence.
+        ce_score = 0.0
+        if chandelier_flip:
+            ce_score = 8.0 if chandelier_dir == 'LONG' else -8.0
+        elif chandelier_dir == 'LONG' and supertrend_up:
+            ce_score = 5.0    # both adaptive stops agree bullish
+        elif chandelier_dir == 'SHORT' and not supertrend_up:
+            ce_score = -5.0   # both adaptive stops agree bearish
+        score += ce_score * w.get('chandelier', 0.08)
+
+        # ── CVD Divergence — price vs cumulative volume delta ───────────────────
+        # Divergence between price and CVD reveals hidden absorption/distribution.
+        # Complements the existing OKX-taker CVD (cvd_data) with OHLCV approximation.
+        cvd_div_score = 0.0
+        if _cvd_div['divergence'] == 'BULLISH':
+            cvd_div_score = 12.0 if _cvd_div['strength'] == 'STRONG' else 7.0
+        elif _cvd_div['divergence'] == 'BEARISH':
+            cvd_div_score = -12.0 if _cvd_div['strength'] == 'STRONG' else -7.0
+        # CVD slope bias: net accumulation adds mild bullish tilt
+        if _cvd_div['cvd_slope'] > 0 and cvd_div_score == 0.0:
+            cvd_div_score += 3.0
+        elif _cvd_div['cvd_slope'] < 0 and cvd_div_score == 0.0:
+            cvd_div_score -= 3.0
+        score += cvd_div_score * w.get('cvd_div', 0.08)
 
         # FR-01: Funding rate bias — perpetual futures crowding signal (FR-01)
         # Positive funding = longs pay shorts (market overlong = contrarian bearish signal)

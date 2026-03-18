@@ -923,6 +923,53 @@ def page_dashboard():
             exit_     = _best.get("exit"),
         )
 
+    # ── Animated live price ticker strip ──────────────────────────────────────
+    try:
+        _ticker_prices = []
+        for _r in results[:6]:
+            _tick = _ws.get_price(_r["pair"])
+            if _tick:
+                _ticker_prices.append({
+                    "symbol":     _r["pair"].replace("/USDT", ""),
+                    "price":      _tick.get("price", 0),
+                    "change_pct": _r.get("timeframes", {}).get("1h", {}).get("confidence", 50) - 50,
+                })
+        if _ticker_prices:
+            st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
+    except Exception:
+        pass
+
+    # ── Market regime banner + Hurst / Squeeze context ────────────────────────
+    try:
+        _r0_tf = list(results[0].get("timeframes", {}).values())[0] if results else {}
+        _regime_str = _r0_tf.get("regime", "Neutral: Unknown")
+        _regime_key = _regime_str.split(":")[0].strip().split(" ")[-1] if ":" in _regime_str else "Neutral"
+        # Map HMM regime strings to 4-state keys
+        _regime_map = {"Trending": "BULL", "Ranging": "RANGING", "Neutral": "RANGING", "Volatile": "CRISIS"}
+        _regime_4 = _regime_map.get(_regime_key, "RANGING")
+        _hurst_val = _r0_tf.get("hurst", None)
+        _squeeze_sig = _r0_tf.get("squeeze_signal", "NO_SQUEEZE")
+        st.markdown(
+            _ui.regime_banner_html(
+                regime=_regime_4,
+                hurst=float(_hurst_val) if _hurst_val is not None else None,
+                squeeze_active=("SQUEEZE" in str(_squeeze_sig)),
+            ),
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+    # ── Top Movers bento card (3 gainers / 3 losers from CoinGecko) ──────────
+    try:
+        _movers = data_feeds.get_top_movers(top_n=3)
+        _gainers = _movers.get("gainers", [])
+        _losers  = _movers.get("losers", [])
+        if _gainers or _losers:
+            st.markdown(_ui.top_movers_card_html(_gainers, _losers), unsafe_allow_html=True)
+    except Exception:
+        pass
+
     st.markdown("---")
 
     # ── Signal Heatmap — pairs × timeframes ──
@@ -1138,10 +1185,27 @@ def page_dashboard():
     _consensus     = r.get("consensus", 0.0)
     _agents_agree  = round(_consensus * 6)   # consensus = fraction of 6 agents with abs(vote)>70
     _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#f6465d")
+
+    # Signal accuracy badge — shows historical win rate for this pair/direction
+    try:
+        import database as _db_app
+        _acc_data = _db_app.get_signal_win_rate(pair=pair, direction=direction, days=90)
+        _acc_badge = _ui.signal_accuracy_badge_html(
+            win_rate    = _acc_data.get("win_rate", 0.5),
+            sample_size = _acc_data.get("sample_size", 0),
+            signal_type = direction.replace("STRONG ", ""),
+        )
+    except Exception:
+        _acc_badge = ""
+
     st.markdown(
-        f'<div style="font-size:12px;color:rgba(168,180,200,0.6);margin:-4px 0 10px 0">'
+        f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;'
+        f'font-size:12px;color:rgba(168,180,200,0.6);margin:-4px 0 10px 0">'
+        f'<span>'
         f'<span style="color:{_agree_color};font-weight:700">{_agents_agree} of 6</span>'
         f' AI models agree on this signal'
+        f'</span>'
+        f'{_acc_badge}'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1191,6 +1255,22 @@ def page_dashboard():
                     "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
                 })
             st.dataframe(pd.DataFrame(_tf_rows).set_index("Timeframe"), use_container_width=True)
+
+    # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
+    try:
+        _casc = data_feeds.get_liquidation_cascade_risk(pair)
+        if _casc and not _casc.get("error"):
+            st.markdown(
+                _ui.cascade_risk_card_html(
+                    score      = _casc.get("score", 0),
+                    risk_level = _casc.get("risk_level", "LOW"),
+                    direction  = _casc.get("direction", "NEUTRAL"),
+                    components = _casc.get("components"),
+                ),
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        pass
 
     # ── News Sentiment ─────────────────────────────────────────────────────────
     if _news_mod is not None:
