@@ -794,7 +794,7 @@ def _auto_refresh_fragment():
 def page_dashboard():
     st.markdown(
         '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">Signal Dashboard</h1>',
+        'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
         unsafe_allow_html=True,
     )
     # Animated live price ticker strip — top of dashboard
@@ -822,7 +822,7 @@ def page_dashboard():
         # BUG-R28: use .get() for all session_state accesses — prevents KeyError if
         # init_state() is ever bypassed (e.g. session reset mid-run).
         scan_disabled = st.session_state.get("scan_running", False) or _scan_running_now
-        _btn_label = "⏳ Analyzing..." if scan_disabled else "🔍 Analyze Market Now"
+        _btn_label = "⏳ Analyzing... (this takes ~15-30s)" if scan_disabled else "🔍 Analyze All Coins Now"
         if st.button(_btn_label, disabled=scan_disabled, type="primary", use_container_width=True):
             st.session_state["scan_results"] = []
             st.session_state["scan_error"] = None
@@ -867,15 +867,28 @@ def page_dashboard():
             prog = _scan_state["progress"] if _scan_state["progress"] is not None else status.get("progress", 0)
             pair_name = _scan_state["progress_pair"] if _scan_state["progress_pair"] is not None else status.get("pair", "")
         total = len(model.PAIRS)
-        frac = min(prog / total, 1.0) if total > 0 else 0
-        if prog == 0:
-            status_text = f"Connecting to {model.TA_EXCHANGE.upper()} and loading markets..."
-        elif prog >= total:
-            status_text = "Finalizing scan results..."
-        else:
-            status_text = f"Scanning {pair_name or 'pair'}... ({prog}/{total} pairs complete)"
 
-        st.progress(frac, text=status_text)
+        # PERF-PROGRESSIVE: show engaging loading screen with fun facts + partial results
+        _fact_idx = int(time.time() / 4) % 15   # rotate fact every 4 seconds
+        st.markdown(
+            _ui.loading_screen_html(prog, total, pair_name, fact_index=_fact_idx),
+            unsafe_allow_html=True,
+        )
+
+        # Show partial results as they arrive — users see first results within ~5s
+        _partial = model.get_partial_scan_results()
+        if _partial:
+            st.markdown(
+                f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
+                f'font-weight:600;margin:4px 0 8px 0;">'
+                f'⚡ {len(_partial)} of {total} coins ready — more arriving...</div>',
+                unsafe_allow_html=True,
+            )
+            _all_ws_partial = _ws.get_all_prices()
+            st.markdown(
+                _ui.coin_cards_grid_html(_partial, ws_prices=_all_ws_partial),
+                unsafe_allow_html=True,
+            )
 
         # Check if scan just finished (status says not running, or status is empty = DB error)
         with _scan_lock:
@@ -1098,28 +1111,41 @@ def page_dashboard():
 
     st.markdown("---")
 
-    # Quick-glance summary table
-    _ui.section_header("Signal Summary", "All coins ranked by signal strength — select a coin below for full details", icon="⚡")
+    # ── Quick-View Card Grid — all coins at a glance (teen-friendly) ──────────
+    _ui.section_header(
+        "What To Do Right Now",
+        "Each card shows whether to BUY, SELL, or WAIT — score out of 10 shows how strong the signal is",
+        icon="🎯",
+    )
     # PERF: pre-fetch all WS prices once — was N individual get_price() calls per result
     _all_ws_prices = _ws.get_all_prices()
-    summary_rows = []
-    for r in results:
-        _st = _all_ws_prices.get(r["pair"])
-        _live_str = (
-            f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
-        )
-        _tp1 = r.get("tp1")
-        summary_rows.append({
-            "Coin": r["pair"],
-            "Price": _live_str,
-            "Signal": r.get("direction", "N/A"),
-            "Strength": f"{r.get('confidence_avg_pct', 0)}%",
-            "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
-            "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
-            "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
-            "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
-        })
-    st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), use_container_width=True)
+    # Sort: high-conf first, then by confidence descending for card grid
+    _grid_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
+    st.markdown(
+        _ui.coin_cards_grid_html(_grid_results, ws_prices=_all_ws_prices),
+        unsafe_allow_html=True,
+    )
+
+    # Quick-glance summary table (advanced users)
+    with st.expander("📋 Full Summary Table", expanded=False):
+        summary_rows = []
+        for r in results:
+            _st = _all_ws_prices.get(r["pair"])
+            _live_str = (
+                f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
+            )
+            _tp1 = r.get("tp1")
+            summary_rows.append({
+                "Coin": r["pair"],
+                "Price": _live_str,
+                "Signal": r.get("direction", "N/A"),
+                "Strength": f"{r.get('confidence_avg_pct', 0)}%",
+                "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
+                "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
+                "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
+                "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
+            })
+        st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), use_container_width=True)
     st.markdown("---")
 
     # Sort results: high-conf first, then by confidence descending
@@ -1130,7 +1156,7 @@ def page_dashboard():
     _exec_cfg    = _exec.get_exec_config()
 
     # ── Coin Selector Dropdown ─────────────────────────────────────────────────
-    _ui.section_header("Coin Details", "Select a coin from the dropdown to see its full signal breakdown", icon="🔍")
+    _ui.section_header("Dive Deeper — Pick a Coin", "Choose a coin below to see the full breakdown: entry price, stop loss, AI prediction, news sentiment, and more", icon="🔬")
 
     def _pair_label(r):
         _d  = r.get("direction", "N/A")
@@ -1379,6 +1405,7 @@ def page_dashboard():
             pass
 
     # ── ML Price Prediction ─────────────────────────────────────────────────────
+    # PERF: robust_fetch_ohlcv now uses 5-min OHLCV cache — no extra Kraken round-trip
     if _ml_mod is not None:
         try:
             _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
@@ -1390,12 +1417,25 @@ def page_dashboard():
                 _ml_prob = _ml.get("probability", 0.5)
                 _ml_acc  = _ml.get("model_accuracy", 0.0)
                 _ml_sig  = _ml.get("signal", "NEUTRAL")
-                _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ff4b4b" if _ml_sig == "SELL" else "#888"
+                _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ff4b4b" if _ml_sig == "SELL" else "#f59e0b"
+                _ml_emoji = "📈" if _ml_sig == "BUY" else ("📉" if _ml_sig == "SELL" else "😐")
+                _ml_plain = (
+                    "The AI thinks the price will go UP in the next few hours."
+                    if _ml_sig == "BUY" else
+                    "The AI thinks the price will go DOWN in the next few hours."
+                    if _ml_sig == "SELL" else
+                    "The AI isn't sure which way the price will go."
+                )
                 st.markdown(
-                    f'<div style="background:#1a1f2e;border-radius:8px;padding:10px 14px;'
-                    f'margin:6px 0;border-left:3px solid {_ml_col}">'
-                    f'<b>🤖 ML Prediction ({_ml_tf}):</b> {_ml_pred} '
-                    f'| P(up)={_ml_prob:.1%} | Accuracy={_ml_acc:.1%} | Signal: <b>{_ml_sig}</b>'
+                    f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
+                    f'padding:12px 16px;margin:8px 0;border-left:3px solid {_ml_col};">'
+                    f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:4px;">'
+                    f'{_ml_emoji} AI Price Prediction — Next Few Hours</div>'
+                    f'<div style="font-size:12px;color:#a8b4c8;">{_ml_plain}</div>'
+                    f'<div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:6px;">'
+                    f'Confidence: <span style="color:{_ml_col};font-weight:700;">{_ml_prob:.0%}</span>'
+                    f' &nbsp;·&nbsp; Model accuracy: {_ml_acc:.0%}'
+                    f' &nbsp;·&nbsp; <span style="color:{_ml_col};">{_ml_pred}</span></div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )

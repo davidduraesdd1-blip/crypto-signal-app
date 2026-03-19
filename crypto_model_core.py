@@ -32,7 +32,15 @@ _last_drift_result: dict = {}     # F6/F7: last concept drift check result; read
 # ──────────────────────────────────────────────
 PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT']
 TIMEFRAMES = ['1h', '4h', '1d', '1w']
-OHLCV_LIMIT = 500  # Ichimoku (10/30/60) needs 60-bar warmup; 500 gives 440 usable bars on 1h (~18.3 days)
+OHLCV_LIMIT      = 500  # Ichimoku (10/30/60) needs 60-bar warmup; 500 gives 440 usable bars on 1h (~18.3 days)
+SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need < 150 bars; ~40% faster OHLCV fetch
+
+# ─── OHLCV short-term cache ─────────────────────────────────────────────────
+# Historical candles never change; only the last bar updates. Safe to cache
+# for 5 minutes. Eliminates 24 Kraken round-trips on every repeat scan click.
+_OHLCV_CACHE: dict       = {}
+_OHLCV_CACHE_LOCK        = threading.Lock()
+_OHLCV_CACHE_TTL         = 300  # 5 minutes
 TA_EXCHANGE = 'kraken'
 PAPER_EXCHANGE = 'krakenfutures'
 
@@ -298,10 +306,19 @@ def robust_fetch_ticker(ex, pair):
 def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
     if limit is None:
         limit = OHLCV_LIMIT
+    # PERF: return cached frame — historical bars don't change; only the last bar updates
+    _key = (pair, timeframe, limit)
+    _now = time.time()
+    with _OHLCV_CACHE_LOCK:
+        _hit = _OHLCV_CACHE.get(_key)
+        if _hit and (_now - _hit['ts']) < _OHLCV_CACHE_TTL:
+            return _hit['df']
     try:
         ohlcv = ex.fetch_ohlcv(pair, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        with _OHLCV_CACHE_LOCK:
+            _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
         return df
     except Exception as e:
         logging.warning(f"OHLCV failed {pair} {timeframe}: {str(e)[:60]}")
@@ -3437,8 +3454,9 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
 
     # PERF-10: fetch all TF OHLCV frames in parallel instead of sequentially
     # Each fetch is ~300ms; 4 sequential = ~1.2s → parallel = ~300ms per pair
+    # PERF-SCAN: use SCAN_OHLCV_LIMIT (200) — all indicators need < 150 bars; halves fetch payload
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(TIMEFRAMES)) as _tf_ex:
-        _tf_futures = {tf: _tf_ex.submit(robust_fetch_ohlcv, ta_ex, pair, tf) for tf in TIMEFRAMES}
+        _tf_futures = {tf: _tf_ex.submit(robust_fetch_ohlcv, ta_ex, pair, tf, SCAN_OHLCV_LIMIT) for tf in TIMEFRAMES}
     _ohlcv_frames = {tf: fut.result() for tf, fut in _tf_futures.items()}
 
     for tf in TIMEFRAMES:
@@ -3747,12 +3765,31 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     return result
 
 
+# ─── Progressive scan results (shown in UI as each pair completes) ───────────
+# Module-level mutable list; closures inside run_scan() append to it.
+# The UI reads via get_partial_scan_results() on every 0.3s poll.
+_partial_scan_results: list = []
+_partial_scan_lock            = threading.Lock()
+
+
+def get_partial_scan_results() -> list:
+    """Return a snapshot of results completed so far in the running scan."""
+    with _partial_scan_lock:
+        return list(_partial_scan_results)
+
+
+def _clear_partial_scan_results():
+    with _partial_scan_lock:
+        _partial_scan_results.clear()
+
+
 def run_scan(progress_callback=None):
     """
     Run full multi-timeframe scan across all pairs in parallel using ThreadPoolExecutor.
     progress_callback(pair_index, total_pairs, pair_name) called after each pair completes.
     Returns list of result dicts in original PAIRS order.
     """
+    _clear_partial_scan_results()   # PERF: reset partial results before each new scan
     start_time = time.time()
     reset_kelly_cache()      # Compute Kelly once per scan — reused by all pairs (PERF-03)
     reset_agent_acc_cache()  # Prefetch agent accuracy weights once — avoids 24+ DB queries (PERF-06)
@@ -3840,6 +3877,11 @@ def run_scan(progress_callback=None):
         )
         with result_lock:
             completed[0] += 1
+            if result:
+                # PERF-PROGRESSIVE: store result immediately so UI can display it
+                # without waiting for all 6 pairs to complete
+                with _partial_scan_lock:
+                    _partial_scan_results.append(result)
             if progress_callback:
                 progress_callback(completed[0], len(PAIRS), pair)
         return result

@@ -1962,3 +1962,253 @@ def price_ticker_strip_html(prices: list[dict]) -> str:
         _PRICE_TICKER_CSS
         + f'<div class="price-ticker-wrap"><div class="price-ticker-track">{track}</div></div>'
     )
+
+
+# ─── Coin Card Grid (teen-friendly overview of all coins) ───────────────────
+
+def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
+    """
+    Render a 2- or 3-column grid of coin signal cards for quick at-a-glance view.
+    Designed to be immediately understandable by a 13-year-old:
+      - Giant colored action word (BUY / SELL / WAIT)
+      - Score bar 1-10
+      - Entry and stop-loss prices
+      - Live price if available
+
+    Parameters
+    ----------
+    results   : list of scan result dicts
+    ws_prices : optional dict from _ws.get_all_prices() for live prices
+
+    Returns HTML string.
+    """
+    if not results:
+        return ""
+
+    if ws_prices is None:
+        ws_prices = {}
+
+    def _score(conf: float) -> int:
+        """Convert 0-100% confidence to 1-10 score."""
+        return max(1, min(10, round(conf / 10)))
+
+    def _action_style(direction: str) -> tuple:
+        """Return (label, color, bg, emoji) for an action."""
+        d = (direction or "").upper()
+        if "STRONG BUY" in d:
+            return "STRONG BUY", "#00d4aa", "rgba(0,212,170,0.18)", "🚀"
+        if "BUY" in d:
+            return "BUY", "#00d4aa", "rgba(0,212,170,0.12)", "📈"
+        if "STRONG SELL" in d:
+            return "STRONG SELL", "#f6465d", "rgba(246,70,93,0.18)", "💥"
+        if "SELL" in d:
+            return "SELL", "#f6465d", "rgba(246,70,93,0.12)", "📉"
+        return "WAIT", "#f59e0b", "rgba(245,158,11,0.10)", "⏳"
+
+    def _score_bar(score: int, color: str) -> str:
+        """Render a 10-segment score bar."""
+        segs = []
+        for i in range(1, 11):
+            filled = i <= score
+            bg = color if filled else "rgba(255,255,255,0.07)"
+            segs.append(
+                f'<div style="flex:1;height:6px;border-radius:3px;'
+                f'background:{bg};margin:0 1px;"></div>'
+            )
+        return f'<div style="display:flex;gap:0;margin:6px 0 2px 0">{"".join(segs)}</div>'
+
+    def _card(r: dict) -> str:
+        pair       = r.get("pair", "?")
+        sym        = pair.replace("/USDT", "")
+        conf       = float(r.get("confidence_avg_pct") or 0)
+        direction  = r.get("direction", "WAIT")
+        entry      = r.get("entry")
+        stop       = r.get("stop_loss")
+        is_hc      = r.get("high_conf", False)
+        score      = _score(conf)
+        label, color, bg, emoji = _action_style(direction)
+
+        # Live price from WebSocket
+        ws = ws_prices.get(pair, {})
+        if ws and ws.get("price"):
+            price_str = f"${ws['price']:,.4f}" if ws["price"] < 1 else f"${ws['price']:,.2f}"
+            chg       = ws.get("change_24h_pct", 0) or 0
+            chg_color = "#00d4aa" if chg >= 0 else "#f6465d"
+            chg_str   = f'<span style="color:{chg_color};font-size:11px;">{chg:+.2f}%</span>'
+            live_html = (
+                f'<div style="font-size:15px;font-weight:700;color:#e8ecf4;'
+                f'font-family:JetBrains Mono,monospace;line-height:1.2;">'
+                f'{price_str} {chg_str}</div>'
+            )
+        else:
+            p = r.get("price_usd")
+            live_html = (
+                f'<div style="font-size:15px;font-weight:700;color:#e8ecf4;'
+                f'font-family:JetBrains Mono,monospace;">'
+                f'{"$" + f"{p:,.4f}" if p and p < 1 else "$" + f"{p:,.2f}" if p else "—"}</div>'
+            )
+
+        hc_badge = (
+            '<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            'border:1px solid rgba(0,212,170,0.3);border-radius:99px;'
+            'font-size:9px;font-weight:800;padding:1px 7px;letter-spacing:0.5px;">'
+            '⚡ TOP PICK</span>'
+        ) if is_hc else ""
+
+        entry_str = f"${entry:,.4f}" if entry and entry < 1 else (f"${entry:,.2f}" if entry else "—")
+        stop_str  = f"${stop:,.4f}"  if stop  and stop  < 1 else (f"${stop:,.2f}"  if stop  else "—")
+
+        return f"""
+<div style="
+    background:linear-gradient(135deg,rgba(17,21,32,0.95),rgba(24,29,46,0.9));
+    border:1px solid {color}33;
+    border-radius:16px;
+    padding:16px 18px;
+    position:relative;
+    overflow:hidden;
+    box-shadow:0 4px 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.04);
+    transition:transform 0.15s ease,box-shadow 0.15s ease;
+    min-height:170px;
+">
+  <!-- accent glow top-left -->
+  <div style="position:absolute;top:-20px;left:-20px;width:80px;height:80px;
+              border-radius:50%;background:{color};opacity:0.06;filter:blur(20px);"></div>
+
+  <!-- header row -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <span style="font-size:18px;font-weight:900;color:#e8ecf4;
+                 font-family:JetBrains Mono,monospace;letter-spacing:-0.5px;">{sym}</span>
+    {hc_badge}
+    <span style="font-size:22px;background:{bg};border-radius:8px;padding:2px 8px;">{emoji}</span>
+  </div>
+
+  <!-- live price -->
+  {live_html}
+
+  <!-- BIG action label -->
+  <div style="font-size:26px;font-weight:900;color:{color};letter-spacing:-0.5px;
+              line-height:1;margin:6px 0 4px 0;text-shadow:0 0 20px {color}55;">
+    {label}
+  </div>
+
+  <!-- score bar -->
+  {_score_bar(score, color)}
+  <div style="font-size:11px;color:rgba(168,180,200,0.55);margin-bottom:8px;">
+    Confidence: <span style="color:{color};font-weight:700;">{score}/10</span>
+    &nbsp;·&nbsp; {conf:.0f}%
+  </div>
+
+  <!-- entry / stop -->
+  <div style="display:flex;gap:12px;font-size:11px;">
+    <div>
+      <div style="color:rgba(168,180,200,0.45);text-transform:uppercase;
+                  letter-spacing:0.8px;font-size:9px;font-weight:600;">Entry</div>
+      <div style="color:#e8ecf4;font-family:JetBrains Mono,monospace;font-weight:600;">{entry_str}</div>
+    </div>
+    <div>
+      <div style="color:rgba(168,180,200,0.45);text-transform:uppercase;
+                  letter-spacing:0.8px;font-size:9px;font-weight:600;">Stop Loss</div>
+      <div style="color:#f6465d;font-family:JetBrains Mono,monospace;font-weight:600;">{stop_str}</div>
+    </div>
+  </div>
+</div>"""
+
+    # Build 3-column grid
+    cards_html = "".join(_card(r) for r in results)
+
+    return f"""
+<div style="
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+    gap:14px;
+    margin:8px 0 24px 0;
+">
+  {cards_html}
+</div>"""
+
+
+# ─── Fun loading screen while scan runs ────────────────────────────────────────
+
+_CRYPTO_FACTS = [
+    "💡 Bitcoin was created in 2009 by the mysterious Satoshi Nakamoto — nobody knows who they really are!",
+    "🌍 There are over 20,000 different cryptocurrencies in the world today.",
+    "⚡ The Lightning Network can process millions of Bitcoin transactions per second.",
+    "🐋 'Whale' means a person who owns a huge amount of crypto — their trades move the market!",
+    "📈 RSI (Relative Strength Index) measures how overbought or oversold a coin is on a 0-100 scale.",
+    "🔒 Blockchain is basically a tamper-proof digital notebook that thousands of computers share.",
+    "🎯 MACD compares two moving averages to spot when momentum is shifting — like a heads-up signal.",
+    "🏦 DeFi = Decentralized Finance. No banks needed — just code running on a blockchain.",
+    "🌐 Ethereum introduced 'smart contracts' — programs that run automatically when conditions are met.",
+    "📊 Volume tells you how many people are trading a coin. High volume = more people paying attention.",
+    "🔴 A 'Stop Loss' automatically sells your coin if it drops too far, protecting you from big losses.",
+    "💎 'Diamond hands' means holding onto your crypto even when prices fall. 'Paper hands' means selling quickly.",
+    "🤖 Our AI uses 6 different models that vote on the direction — like a jury deciding a verdict.",
+    "⏱️ The '1h' timeframe shows what the market looks like over 1-hour candles — great for short trades.",
+    "🌕 'To the moon' is crypto slang for when a price goes way up. Traders love this phrase!",
+]
+
+
+def loading_screen_html(progress: int, total: int, pair_name: str = "",
+                        fact_index: int = 0) -> str:
+    """
+    Engaging loading screen shown while the scan runs.
+    Shows a fact carousel + animated progress ring.
+    """
+    fact = _CRYPTO_FACTS[fact_index % len(_CRYPTO_FACTS)]
+    pct  = int(progress / max(total, 1) * 100)
+
+    status = (
+        f"Connecting to Kraken..." if progress == 0
+        else f"Analyzing {pair_name}... ({progress}/{total} pairs done)"
+    )
+
+    # SVG circle progress ring
+    r   = 28
+    circ = 2 * 3.14159 * r
+    dash = circ * pct / 100
+
+    return f"""
+<div style="
+    background:linear-gradient(135deg,rgba(12,15,26,0.97),rgba(17,21,32,0.95));
+    border:1px solid rgba(0,212,170,0.15);
+    border-radius:20px;
+    padding:28px 32px;
+    text-align:center;
+    margin:12px 0;
+    box-shadow:0 8px 40px rgba(0,0,0,0.5);
+">
+  <!-- Progress ring -->
+  <div style="position:relative;display:inline-block;margin-bottom:16px;">
+    <svg width="72" height="72" viewBox="0 0 72 72" style="transform:rotate(-90deg);">
+      <circle cx="36" cy="36" r="{r}" fill="none" stroke="rgba(0,212,170,0.1)" stroke-width="5"/>
+      <circle cx="36" cy="36" r="{r}" fill="none" stroke="#00d4aa" stroke-width="5"
+              stroke-dasharray="{dash:.1f} {circ:.1f}"
+              stroke-linecap="round" style="transition:stroke-dasharray 0.4s ease;"/>
+    </svg>
+    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+                font-size:16px;font-weight:800;color:#00d4aa;
+                font-family:JetBrains Mono,monospace;">{pct}%</div>
+  </div>
+
+  <div style="font-size:14px;font-weight:600;color:#e8ecf4;margin-bottom:6px;">
+    🔍 Scanning the market...
+  </div>
+  <div style="font-size:12px;color:rgba(168,180,200,0.6);margin-bottom:20px;">
+    {status}
+  </div>
+
+  <!-- Fun fact -->
+  <div style="
+      background:rgba(0,212,170,0.06);
+      border:1px solid rgba(0,212,170,0.15);
+      border-radius:12px;
+      padding:14px 18px;
+      text-align:left;
+  ">
+    <div style="font-size:10px;color:rgba(0,212,170,0.7);font-weight:700;
+                text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">
+      💡 Did you know?
+    </div>
+    <div style="font-size:13px;color:#a8b4c8;line-height:1.5;">{fact}</div>
+  </div>
+</div>"""
