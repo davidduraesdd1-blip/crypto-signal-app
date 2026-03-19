@@ -788,7 +788,7 @@ def check_circuit_breaker(portfolio_size_usd: float = 10_000.0) -> dict:
             _circuit_state["weekly_pnl"]   = round(weekly_pnl, 3)
             _circuit_state["monthly_pnl"]  = round(monthly_pnl, 3)
             if triggered and not _circuit_state["triggered_at"]:
-                _circuit_state["triggered_at"] = __import__("datetime").datetime.now(timezone.utc).isoformat()
+                _circuit_state["triggered_at"] = datetime.now(timezone.utc).isoformat()
             elif not triggered:
                 _circuit_state["triggered_at"] = None
 
