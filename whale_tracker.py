@@ -126,7 +126,9 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
             amount_usd = val_eth * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 n_internal = int(tx.get("methodId", "0x") != "0x")
-                direction = "distribution" if n_internal else "accumulation"
+                # Plain ETH transfer (methodId=="0x") → likely send-to-exchange = distribution
+                # Contract call (methodId!="0x") → likely DEX buy / DeFi deposit = accumulation
+                direction = "accumulation" if n_internal else "distribution"
                 moves.append({
                     "amount_usd": round(amount_usd, 0),
                     "direction":  direction,
@@ -265,7 +267,11 @@ def _fetch_bnb_whales(price_usd: float) -> list[dict]:
         for tx in txs:
             # WHALE-02: use `or "0x0"` to handle None value (key exists with JSON null)
             val_hex = tx.get("value") or "0x0"
-            val_bnb = int(val_hex, 16) / 1e18
+            try:
+                val_bnb = int(val_hex, 16) / 1e18
+            except ValueError:
+                # BSCScan occasionally returns decimal strings instead of hex
+                val_bnb = int(val_hex) / 1e18 if str(val_hex).lstrip("-").isdigit() else 0.0
             amount_usd = val_bnb * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 direction = "distribution" if len(tx.get("input", "0x")) > 10 else "accumulation"
@@ -408,6 +414,14 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
             price_usd = float(fetched) if fetched and float(fetched) > 0 else 0.0
         except Exception:
             price_usd = 0.0
+
+    if price_usd == 0.0:
+        # Cannot compute USD whale thresholds without a valid price — return neutral
+        result = {**_NEUTRAL_RESULT, "error": "price_usd unavailable — whale USD thresholds cannot be computed"}
+        result["pair"] = pair
+        with _cache_lock:
+            _cache[pair] = {**result, "_ts": now}
+        return result
 
     moves: list[dict] = []
     try:

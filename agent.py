@@ -412,9 +412,9 @@ def _get_reflection_memory(pair: str, n: int = 4) -> str:
         for _, row in pair_bt.iterrows():
             direction = str(row.get("direction", "?"))
             pnl       = row.get("pnl_pct", None)
-            pnl_str   = f"{float(pnl):+.2f}%" if pnl is not None and pnl == pnl else "pending"
+            pnl_str   = f"{float(pnl):+.2f}%" if isinstance(pnl, (int, float)) and pnl == pnl else "pending"
             conf      = row.get("confidence", None)
-            conf_str  = f"{float(conf):.0f}%" if conf is not None and conf == conf else "?"
+            conf_str  = f"{float(conf):.0f}%" if isinstance(conf, (int, float)) and conf == conf else "?"
             ts        = str(row.get("timestamp", ""))[:10]
             lines.append(f"  {ts}: {direction} @ conf={conf_str} → P&L={pnl_str}")
 
@@ -491,7 +491,7 @@ def _build_bull_bear_section(sig: dict) -> str:
         f"\n## Bull vs Bear Analysis\n"
         f"### Bull Case:\n{bull_block}\n"
         f"### Bear Case:\n{bear_block}\n"
-        f"\nWeigh both sides. The model's current lean is **{direction}** (conf={conf:.0f}%).\n"
+        f"\nWeigh both sides. The model's current lean is **{direction}** (conf={float(conf) if isinstance(conf, (int, float)) else 0.0:.0f}%).\n"
     )
 
 

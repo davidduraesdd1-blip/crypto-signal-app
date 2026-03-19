@@ -114,8 +114,8 @@ def build_chart_html(
     pair_h = html.escape(pair)
     tf_h   = html.escape(tf)
     # JS-safe versions (escape single quotes for string literals in JS)
-    pair_j = pair.replace("\\", "\\\\").replace("'", "\\'")
-    tf_j   = tf.replace("\\", "\\\\").replace("'", "\\'")
+    pair_j = pair.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+    tf_j   = tf.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
 
     if not ohlcv:
         return (

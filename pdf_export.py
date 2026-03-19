@@ -125,7 +125,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
     hc      = [r for r in results if r.get("high_conf")]
     buys    = [r for r in results if "BUY"  in r.get("direction", "")]
     sells   = [r for r in results if "SELL" in r.get("direction", "")]
-    avg_conf = round(sum(r.get("confidence_avg_pct", 0) for r in results) / len(results), 1)
+    avg_conf = round(sum((r.get("confidence_avg_pct") or 0) for r in results) / len(results), 1)
 
     summary_data = [
         ["Metric", "Value"],

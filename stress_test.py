@@ -140,7 +140,7 @@ def _compute_scenario_metrics(
     # Max drawdown during scenario
     cumulative_returns = (1 + df["close"].pct_change().fillna(0)).cumprod()
     if direction in ("SELL", "STRONG SELL"):
-        cumulative_returns = 2 - cumulative_returns   # approximate inverse for short
+        cumulative_returns = (2 - cumulative_returns).clip(lower=0)  # approximate inverse for short; clamp to 0 to prevent negative equity
     equity_curve = initial_equity + position_usd * (cumulative_returns - 1)
     rolling_max  = equity_curve.cummax()
     # STRESS-04: avoid division by zero if rolling_max hits 0 (invalid equity/position inputs)

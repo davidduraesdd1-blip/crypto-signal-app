@@ -369,7 +369,7 @@ def get_news_sentiment(pair: str) -> dict:
 
     # Source 4: LunarCrush social sentiment (front-runs price 4-12h per research)
     # Always fetch regardless of headline count — social signals are independent alpha
-    lc_headlines = _fetch_lunarcrush(currencies[0])
+    lc_headlines = _fetch_lunarcrush(currencies[0]) if currencies else []
     headlines.extend(lc_headlines)
 
     if not headlines:

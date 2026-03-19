@@ -28,6 +28,7 @@ Alert message (JSON):
 from __future__ import annotations
 
 import hmac
+import html as _html
 import logging
 import threading
 import time
@@ -50,7 +51,10 @@ import websocket_feeds as ws_feeds
 import execution as exec_engine
 
 # Start WebSocket feed when API server loads
-ws_feeds.start(model.PAIRS)
+try:
+    ws_feeds.start(model.PAIRS)
+except Exception as _ws_err:
+    logger.warning("WebSocket feed startup failed (non-fatal): %s", _ws_err)
 
 # ─── App setup ────────────────────────────────────────────────────────────────
 
@@ -173,7 +177,7 @@ def _normalize_pair(raw: str) -> str:
     if "/" not in s:
         raise ValueError(f"Cannot normalise pair: {raw!r}")
     base, quote = s.split("/", 1)
-    if not base or not quote or not base.isalpha() or not quote.isalpha():
+    if not base or not quote or not all(c.isalnum() for c in base) or not quote.isalpha():
         raise ValueError(f"Invalid pair after normalisation: {s!r} (from {raw!r})")
     return s
 
@@ -666,7 +670,7 @@ def tradingview_webhook(
     if payload.strategy:
         lines.append(f"Strategy: <code>{payload.strategy}</code>")
     if payload.message:
-        lines.append(f"Note: {payload.message}")
+        lines.append(f"Note: {_html.escape(str(payload.message))}")
 
     notification = "\n".join(lines)
 

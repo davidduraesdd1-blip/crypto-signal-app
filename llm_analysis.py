@@ -10,6 +10,8 @@ import time
 import logging
 import threading
 
+logger = logging.getLogger(__name__)
+
 _CACHE: dict = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL  = 3600   # 1 hour — re-explain if direction or confidence bucket changes

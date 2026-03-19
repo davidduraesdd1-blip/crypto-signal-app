@@ -207,10 +207,13 @@ def get_spot_prices(pair: str) -> dict[str, dict]:
     for t in threads:
         t.join(timeout=_TIMEOUT + 1)
 
+    # Snapshot results before caching — late-arriving threads could write after
+    # the cache dict is captured, producing a corrupted cached entry.
     with _cache_lock:
-        _spot_cache[pair] = {**results, "_ts": now}
+        results_snapshot = dict(results)
+        _spot_cache[pair] = {**results_snapshot, "_ts": now}
 
-    return results
+    return results_snapshot
 
 
 # ─── Spread calculator ────────────────────────────────────────────────────────
@@ -352,7 +355,7 @@ def scan_funding_arb(pairs: list) -> list:
         ann_yield = opp.get("annualized_yield", 0)
         sig = "STRONG_CARRY" if ann_yield >= 50 else "CARRY"
         _db.log_arb_opportunity(
-            pair=opp["pair"],
+            pair=opp.get("pair", ""),
             arb_type="FUNDING",
             buy_exchange=opp.get("exchange", ""),
             sell_exchange="SPOT",
