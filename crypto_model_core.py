@@ -16,6 +16,7 @@ import logging
 import itertools
 import concurrent.futures
 import threading
+import functools
 from statsmodels.tsa.stattools import coint
 import database as _db
 
@@ -449,11 +450,12 @@ def detect_hmm_regime(df) -> str:
             return None
 
         # BUG-R22: covariance_floor renamed from min_covar in hmmlearn >= 0.3.0
+        # PERF-09: n_iter reduced 80→25; 3-state crypto regime HMM converges in <20 iterations
         try:
-            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=80,
+            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=25,
                                 random_state=42, covariance_floor=1e-6)
         except TypeError:
-            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=80,
+            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=25,
                                 random_state=42)
 
         model.fit(X)
@@ -1278,11 +1280,13 @@ def compute_cvd_divergence(df: pd.DataFrame, lookback: int = 20) -> dict:
 # ──────────────────────────────────────────────
 # GAUSSIAN CHANNEL
 # ──────────────────────────────────────────────
+@functools.lru_cache(maxsize=8)
 def _gaussian_weights(length: int) -> np.ndarray:
     """One-sided causal Gaussian kernel.
     weights[0] applies to the most recent bar (highest weight),
     weights[length-1] applies to the oldest bar (lowest weight).
     Sigma = length/6 so ±3σ covers the full window.
+    Cached via lru_cache — same 3 lengths (50, 100, 200) computed once per process.
     """
     sigma = length / 6.0
     x = np.arange(length, dtype=np.float64)
@@ -1739,19 +1743,33 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         elif hurst_val < 0.40 and regime == "Neutral":
             regime = "Ranging"    # anti-persistent → mean-reversion likely
 
-        # Squeeze Momentum — pre-computed in _enrich_df when available, else compute fresh
-        _sqz = compute_squeeze_momentum(df)
-        squeeze_on  = _sqz['squeeze_on']
-        squeeze_mom = _sqz['momentum']
-        squeeze_sig = _sqz['signal']
+        # Squeeze Momentum — read columns pre-computed by _enrich_df; only recompute if missing
+        if 'squeeze_on' in df.columns and 'squeeze_mom' in df.columns:
+            squeeze_on  = bool(df['squeeze_on'].iloc[-1])
+            squeeze_mom = float(df['squeeze_mom'].iloc[-1])
+            squeeze_sig = ('BULL_SQUEEZE' if squeeze_on and squeeze_mom > 0
+                           else 'BEAR_SQUEEZE' if squeeze_on and squeeze_mom < 0
+                           else 'NO_SQUEEZE')
+        else:
+            _sqz = compute_squeeze_momentum(df)
+            squeeze_on  = _sqz['squeeze_on']
+            squeeze_mom = _sqz['momentum']
+            squeeze_sig = _sqz['signal']
 
         # CVD Divergence
         _cvd_div = compute_cvd_divergence(df)
 
-        # Chandelier Exit direction — provides adaptive trailing stop context
-        _ce = compute_chandelier_exit(df)
-        chandelier_dir = _ce['direction']   # 'LONG' | 'SHORT'
-        chandelier_flip = _ce['flip_signal']
+        # Chandelier Exit — read columns pre-computed by _enrich_df; only recompute if missing
+        if 'chandelier_dir' in df.columns and 'chandelier_long_stop' in df.columns:
+            chandelier_dir = 'LONG' if df['chandelier_dir'].iloc[-1] == 1 else 'SHORT'
+            _ls_prev = df['chandelier_long_stop'].iloc[-1]
+            _prev_close = float(df['close'].iloc[-2]) if len(df) > 1 else float(df['close'].iloc[-1])
+            dir_prev = 'LONG' if not pd.isna(_ls_prev) and _prev_close > float(_ls_prev) else 'SHORT'
+            chandelier_flip = chandelier_dir != dir_prev
+        else:
+            _ce = compute_chandelier_exit(df)
+            chandelier_dir  = _ce['direction']
+            chandelier_flip = _ce['flip_signal']
 
         regime_str = f"Regime: {regime} (ADX {round(adx, 1)}, H={hurst_val:.2f})"
 
@@ -3363,18 +3381,22 @@ def run_monte_carlo(trades_df: pd.DataFrame, n_sim: int = 1000,
 def _scan_pair(pair, ta_ex, fng_value, fng_category,
                funding_map, oi_map, iv_map, ob_map,
                master_df, circuit_breaker, start_time,
-               trending_coins=None, global_mkt=None, btc_df=None, cvd_map=None):
+               trending_coins=None, global_mkt=None, btc_df=None, cvd_map=None, tvl_map=None):
     """Process one pair across all timeframes. Called from ThreadPoolExecutor workers."""
     if trending_coins is None:
         trending_coins = []
     if global_mkt is None:
         global_mkt = {}
     onchain_data = fetch_onchain_metrics(pair)
-    # DefiLlama TVL — chain-level DeFi activity context
-    try:
-        import data_feeds as _df
-        tvl_data = _df.get_defillama_tvl(pair)
-    except Exception:
+    # DefiLlama TVL — pre-fetched by run_scan() parallel batch (PERF-09); fall back to live call
+    tvl_data = (tvl_map or {}).get(pair)
+    if not tvl_data:
+        try:
+            import data_feeds as _df
+            tvl_data = _df.get_defillama_tvl(pair)
+        except Exception:
+            tvl_data = {}
+    if not tvl_data:
         tvl_data = {'tvl_usd': 0.0, 'change_7d': 0.0, 'signal': 'N/A', 'chain': None, 'error': 'failed'}
 
     tf_data = {}
@@ -3719,6 +3741,20 @@ def run_scan(progress_callback=None):
             logging.warning(f"{label} fetch failed: {e}")
             return default
 
+    # PERF-09: DefiLlama TVL added to pre-scan parallel batch (was a serial HTTP call per pair
+    # inside each scan worker, competing with OHLCV fetching and adding 2-8s of blocking).
+    def _tvl_batch():
+        result = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(PAIRS)) as _tvl_ex:
+            _tvl_futures = {_tvl_ex.submit(_data_feeds.get_defillama_tvl, p): p for p in PAIRS}
+            for _f in concurrent.futures.as_completed(_tvl_futures):
+                p = _tvl_futures[_f]
+                try:
+                    result[p] = _f.result()
+                except Exception:
+                    result[p] = {}
+        return result
+
     _pre_scan_tasks = {
         "funding":  (lambda: _safe(_data_feeds.get_funding_rates_batch,  PAIRS, default={}, label="Funding rates")),
         "oi":       (lambda: _safe(_data_feeds.get_open_interest_batch,   PAIRS, default={}, label="Open interest")),
@@ -3727,6 +3763,7 @@ def run_scan(progress_callback=None):
         "cvd":      (lambda: _safe(_data_feeds.get_cvd_batch,             PAIRS, default={}, label="CVD")),
         "trending": (lambda: _safe(_data_feeds.get_trending_coins,               default=[], label="Trending coins")),
         "global":   (lambda: _safe(_data_feeds.get_global_market,                default={}, label="Global market")),
+        "tvl":      (lambda: _safe(_tvl_batch,                                   default={}, label="DefiLlama TVL")),
     }
 
     _pre_results = {}
@@ -3742,6 +3779,7 @@ def run_scan(progress_callback=None):
     cvd_map        = _pre_results.get("cvd",      {})
     trending_coins = _pre_results.get("trending", [])
     global_mkt     = _pre_results.get("global",   {})
+    tvl_map        = _pre_results.get("tvl",      {})
 
     # PERF-02: limit to recent 200 rows — only used for BTC correlation; full table scan is wasteful
     master_df = _db.get_signals_df(limit=200)
@@ -3764,7 +3802,7 @@ def run_scan(progress_callback=None):
             funding_map, oi_map, iv_map, ob_map,
             master_df, circuit_breaker, start_time,
             trending_coins=trending_coins, global_mkt=global_mkt,
-            btc_df=btc_df_for_scan, cvd_map=cvd_map,
+            btc_df=btc_df_for_scan, cvd_map=cvd_map, tvl_map=tvl_map,
         )
         with result_lock:
             completed[0] += 1
