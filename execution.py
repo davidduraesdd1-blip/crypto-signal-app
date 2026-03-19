@@ -751,7 +751,7 @@ def check_circuit_breaker(portfolio_size_usd: float = 10_000.0) -> dict:
         if trades_df.empty or "pnl_pct" not in trades_df.columns:
             return {**_circuit_state, "triggered": False}
 
-        now = __import__("datetime").datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
 
         # Date windows
         today_start   = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()

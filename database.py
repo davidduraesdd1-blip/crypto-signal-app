@@ -58,20 +58,56 @@ def _make_conn() -> sqlite3.Connection:
 # ──────────────────────────────────────────────
 # CONNECTION FACTORY
 # ──────────────────────────────────────────────
-def _get_conn() -> sqlite3.Connection:
+
+class _NoCloseConn:
+    """Proxy for sqlite3.Connection that converts close() into rollback().
+
+    Every database function calls conn.close() in its finally block, which was
+    silently destroying the thread-local pooled connection and forcing a full
+    PRAGMA re-initialisation on the next call (7 PRAGMAs × every DB access).
+
+    With this wrapper close() merely rolls back any uncommitted transaction,
+    leaving the underlying connection alive for reuse by the same thread.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.__dict__["_conn"] = conn
+
+    def close(self) -> None:
+        """Roll back pending transaction instead of closing — pool manages lifecycle."""
+        try:
+            self.__dict__["_conn"].rollback()
+        except Exception:
+            pass
+
+    # Dunder methods are looked up on the class, so __getattr__ misses them.
+    def __enter__(self):
+        return self.__dict__["_conn"].__enter__()
+
+    def __exit__(self, *args):
+        return self.__dict__["_conn"].__exit__(*args)
+
+    def __getattr__(self, name: str):
+        return getattr(self.__dict__["_conn"], name)
+
+    def __setattr__(self, name: str, val):
+        setattr(self.__dict__["_conn"], name, val)
+
+
+def _get_conn() -> "_NoCloseConn":
     """Return a per-thread cached connection — eliminates PRAGMA re-init overhead."""
-    conn = getattr(_thread_local, "conn", None)
-    if conn is None:
-        conn = _make_conn()
-        _thread_local.conn = conn
+    wrapped = getattr(_thread_local, "conn", None)
+    if wrapped is None:
+        wrapped = _NoCloseConn(_make_conn())
+        _thread_local.conn = wrapped
     else:
         # Verify connection is still alive (handles process restarts / DB file recreation)
         try:
-            conn.execute("SELECT 1")
+            wrapped.execute("SELECT 1")
         except (sqlite3.DatabaseError, sqlite3.ProgrammingError):
-            conn = _make_conn()
-            _thread_local.conn = conn
-    return conn
+            wrapped = _NoCloseConn(_make_conn())
+            _thread_local.conn = wrapped
+    return wrapped
 
 
 # ──────────────────────────────────────────────

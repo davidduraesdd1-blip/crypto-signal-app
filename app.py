@@ -197,12 +197,12 @@ def _cached_db_stats() -> dict:
 @st.cache_data(ttl=2, show_spinner=False, max_entries=1)
 def _cached_alerts_config() -> dict:
     """Cache alerts_config.json — 2s TTL prevents 15 redundant disk reads per page render."""
-    return _cached_alerts_config()
+    return _alerts.load_alerts_config()
 
 
 def _save_alerts_config_and_clear(cfg: dict) -> None:
     """Save alerts config and immediately invalidate the in-process cache."""
-    _save_alerts_config_and_clear(cfg)
+    _alerts.save_alerts_config(cfg)
     try:
         _cached_alerts_config.clear()
     except Exception:
