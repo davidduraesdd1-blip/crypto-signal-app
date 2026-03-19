@@ -337,7 +337,10 @@ def fetch_onchain_metrics(pair='BTC/USDT'):
     except Exception:
         return {'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0, 'whale_activity': False, 'source': 'fallback'}
 
-def get_onchain_bias(sopr, mvrv_z, net_flow, whale_activity, adx, **kwargs):
+@functools.lru_cache(maxsize=256)
+def get_onchain_bias(sopr: float, mvrv_z: float, net_flow: float,
+                     whale_activity: bool, adx: float) -> float:
+    # PERF: lru_cache — pure function, same inputs always yield same output
     bias = 0.0
     if sopr > 1.05: bias += 10
     if sopr < 0.95: bias -= 12
@@ -432,11 +435,9 @@ def detect_hmm_regime(df) -> str:
             return None
 
         # Rolling 20-bar volatility (std of log-returns)
+        # PERF: vectorized rolling().std() — was O(N²) list comprehension with per-slice .std()
         roll = 20
-        vol = np.array([
-            log_ret[max(0, i - roll): i + 1].std() if i >= roll - 1 else np.nan
-            for i in range(len(log_ret))
-        ])
+        vol = pd.Series(log_ret).rolling(roll, min_periods=roll).std().values
 
         # Rolling 20-bar EMA slope / price (normalized trend strength)
         ema = pd.Series(close[1:]).ewm(span=roll, adjust=False).mean().values
@@ -814,7 +815,13 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
         fib_closest, _ = compute_fib_levels(df)
         supertrend_up = compute_supertrend_multi(df)['consensus'] == "Uptrend"
         regime = "Ranging" if adx < ADX_RANGE_THRESHOLD else "Trending" if adx > ADX_TREND_THRESHOLD else "Neutral"
-        onchain_bias = get_onchain_bias(**onchain_data, adx=adx)
+        onchain_bias = get_onchain_bias(
+            float(onchain_data.get('sopr', 1.0)),
+            float(onchain_data.get('mvrv_z', 0.0)),
+            float(onchain_data.get('net_flow', 0.0)),
+            bool(onchain_data.get('whale_activity', False)),
+            float(adx),
+        )
 
         # F4: Get 30-day rolling accuracy weights (cached once per scan — PERF-06)
         with _weights_lock:
@@ -1683,6 +1690,8 @@ def _enrich_df(df, tf: str = None):
     df['chandelier_long_stop']  = _ce['long_stop']  if _ce['long_stop']  is not None else np.nan
     df['chandelier_short_stop'] = _ce['short_stop'] if _ce['short_stop'] is not None else np.nan
     df['chandelier_dir']        = 1 if _ce['direction'] == 'LONG' else 0
+    # PERF: cache HMM result so calculate_signal_confidence() skips recompute
+    df.attrs['hmm_regime'] = detect_hmm_regime(df)
     return df
 
 # ──────────────────────────────────────────────
@@ -1733,8 +1742,8 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         _st_agreement = _st_multi['agreement']   # 3=unanimous, 2=majority, 1=split
         support, resistance, breakout, sr_status = compute_support_resistance(df)
         sr_str = f"{sr_status} | {breakout}"
-        # T2-B: HMM regime detection with ADX fallback
-        hmm_regime = detect_hmm_regime(df)
+        # T2-B: HMM regime detection with ADX fallback (use attrs cache if pre-computed by _enrich_df)
+        hmm_regime = df.attrs.get('hmm_regime') or detect_hmm_regime(df)
         if hmm_regime:
             regime = hmm_regime
         else:
@@ -1980,7 +1989,13 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         score = score * fng_mult
 
         # On-chain
-        onchain_bias = get_onchain_bias(**onchain_data, adx=adx)
+        onchain_bias = get_onchain_bias(
+            float(onchain_data.get('sopr', 1.0)),
+            float(onchain_data.get('mvrv_z', 0.0)),
+            float(onchain_data.get('net_flow', 0.0)),
+            bool(onchain_data.get('whale_activity', False)),
+            float(adx),
+        )
         score += onchain_bias * w.get('onchain', 0.12)
 
         # Deribit Options IV bias (BTC/ETH only — regime-aware)
@@ -3128,7 +3143,8 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
 
     try:
         # Paginate backwards to collect full history
-        all_candles = []
+        # PERF: use list of pages then flatten once — avoids O(N²) from candles+all_candles prepend
+        _page_chunks = []
         since_ms = None
         pages = max(1, min(total_bars // bars_per_req + 1, _MAX_BARS // bars_per_req))
         end_ms = int(_time.time() * 1000)
@@ -3140,11 +3156,15 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 candles = ta_ex.fetch_ohlcv(pair, tf, since=fetch_since, limit=bars_per_req)
                 if not candles:
                     break
-                all_candles = candles + all_candles
+                _page_chunks.append(candles)  # O(1) append instead of O(N) prepend
                 _time.sleep(0.2)  # respect rate limits
             except Exception as e:
                 logging.warning(f"run_deep_backtest page {page} failed: {e}")
                 break
+
+        # Reverse page order (oldest first) then flatten in one pass — O(N) total
+        _page_chunks.reverse()
+        all_candles = [c for chunk in _page_chunks for c in chunk]
 
         if len(all_candles) < 100:
             return {"error": f"Insufficient data: only {len(all_candles)} bars fetched",
