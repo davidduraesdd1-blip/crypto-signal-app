@@ -196,7 +196,10 @@ def _train_model(df: pd.DataFrame):
         logger.debug("XGBoost training failed: %s — using GBM only", _xe)
         xgb_model = None
 
-    return {"gbm": gbm, "xgb": xgb_model, "X_train": X, "y_train": y}
+    # PERF: compute accuracy once at train time; stored in model dict so
+    # get_ml_prediction() skips _compute_accuracy() on every call
+    accuracy = _compute_accuracy(gbm, df)
+    return {"gbm": gbm, "xgb": xgb_model, "X_train": X, "y_train": y, "accuracy": accuracy}
 
 
 def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
@@ -310,7 +313,8 @@ def get_ml_prediction(pair: str, tf: str, df: pd.DataFrame) -> dict:
                 prob_up = (gbm_prob + xgb_prob) / 2.0   # equal-weight ensemble
             else:
                 prob_up = gbm_prob
-            accuracy = _compute_accuracy(model["gbm"], df)
+            # PERF: accuracy pre-computed at train time — avoid re-running on every prediction
+            accuracy = model.get("accuracy") or _compute_accuracy(model["gbm"], df)
         else:
             # Legacy single-model path (shouldn't happen with current code)
             prob_up = float(model.predict_proba(X_latest)[0][1])

@@ -17,6 +17,7 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Optional
 
+from concurrent.futures import ThreadPoolExecutor
 import requests
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,28 @@ logger = logging.getLogger(__name__)
 # PERF: reuse TCP connections across all news/sentiment fetches
 _SESSION = requests.Session()
 _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+
+# PERF: singleton Anthropic client — avoids repeated SSL handshake + object init
+_anthropic_client = None
+_anthropic_lock = threading.Lock()
+
+
+def _get_anthropic_client():
+    """Return or create the module-level Anthropic client (thread-safe)."""
+    global _anthropic_client
+    if _anthropic_client is not None:
+        return _anthropic_client
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+    with _anthropic_lock:
+        if _anthropic_client is None:
+            try:
+                import anthropic
+                _anthropic_client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
+            except Exception:
+                return None
+    return _anthropic_client
 
 # ─── Cache ─────────────────────────────────────────────────────────────────────
 _cache: dict = {}          # {pair: result_dict}
@@ -189,14 +212,11 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
         return {"sentiment": "NEUTRAL", "score": 0.0, "bullish": 0, "bearish": 0, "neutral": 0,
                 "articles_analyzed": 0, "source": "no_headlines"}
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
+    client = _get_anthropic_client()
+    if client is None:
         return _rule_based_classify(headlines, pair)
 
     try:
-        import anthropic
-        # NEWS-07: add timeout to prevent hung Haiku call blocking the thread
-        client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
         headlines_text = "\n".join(f"- {h}" for h in headlines[:20])
         prompt = (
             f"You are a crypto market analyst. Analyze these recent news headlines about {pair.split('/')[0]} "
@@ -370,7 +390,6 @@ def get_news_sentiment(pair: str) -> dict:
 
 def get_news_sentiment_batch(pairs: list[str]) -> dict[str, dict]:
     """Fetch sentiment for multiple pairs concurrently."""
-    from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pair: pool.submit(get_news_sentiment, pair) for pair in pairs}
         # NEWS-06: catch per-pair exceptions individually so one failure does not abort all

@@ -9,13 +9,15 @@ import json
 import logging
 import os
 import smtplib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # PERF: reuse TCP connections for Telegram webhook calls
 _SESSION = requests.Session()
 _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
-from email.mime.multipart import MIMEMultipart
 
 _ALERTS_CONFIG_FILE = "alerts_config.json"
 
@@ -572,34 +574,34 @@ def check_watchlist_alerts(scan_results: list, config: dict | None = None) -> li
             if entry:
                 msg += f"Entry: {_fmt_price(entry)}  |  Stop: {_fmt_price(stop)}"
 
-            # Fire on all enabled channels
-            try:
-                if config.get("telegram_enabled"):
-                    send_telegram(
-                        config.get("telegram_token", ""),
-                        config.get("telegram_chat_id", ""),
-                        msg,
-                    )
-            except Exception as e:
-                logging.warning(f"[watchlist] Telegram fire failed: {e}")
+            # PERF: fire all enabled channels concurrently (was sequential — up to 30s)
+            _send_tasks = []
+            if config.get("telegram_enabled"):
+                _send_tasks.append(("telegram", lambda: send_telegram(
+                    config.get("telegram_token", ""),
+                    config.get("telegram_chat_id", ""),
+                    msg,
+                )))
+            if config.get("email_enabled"):
+                _send_tasks.append(("email", lambda: send_email_alert(
+                    sender       = config.get("email_from", ""),
+                    app_password = config.get("email_pass", ""),
+                    recipient    = config.get("email_to", ""),
+                    subject      = f"Watchlist Alert: {rule.get('name', pair)}",
+                    body_text    = msg,
+                )))
+            if config.get("discord_enabled"):
+                _send_tasks.append(("discord", lambda: send_discord(
+                    config.get("discord_webhook_url", ""), msg)))
 
-            try:
-                if config.get("email_enabled"):
-                    send_email_alert(
-                        sender       = config.get("email_from", ""),
-                        app_password = config.get("email_pass", ""),
-                        recipient    = config.get("email_to", ""),
-                        subject      = f"Watchlist Alert: {rule.get('name', pair)}",
-                        body_text    = msg,
-                    )
-            except Exception as e:
-                logging.warning(f"[watchlist] Email fire failed: {e}")
-
-            try:
-                if config.get("discord_enabled"):
-                    send_discord(config.get("discord_webhook_url", ""), msg)
-            except Exception as e:
-                logging.warning(f"[watchlist] Discord fire failed: {e}")
+            if _send_tasks:
+                with ThreadPoolExecutor(max_workers=len(_send_tasks)) as _alert_ex:
+                    _futs = {name: _alert_ex.submit(fn) for name, fn in _send_tasks}
+                    for name, fut in _futs.items():
+                        try:
+                            fut.result()
+                        except Exception as e:
+                            logging.warning(f"[watchlist] {name} fire failed: {e}")
 
             triggered.append({
                 "rule_name":  rule.get("name", ""),

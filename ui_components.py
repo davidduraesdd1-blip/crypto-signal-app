@@ -608,15 +608,25 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 
 def inject_css():
-    """Inject the full premium CSS design system into the Streamlit app."""
-    st.markdown(_CSS, unsafe_allow_html=True)
+    """Inject the full premium CSS design system into the Streamlit app.
+    PERF: guarded by session_state so the 600-line CSS block is only parsed
+    and sent to the browser once per session, not on every rerun.
+    """
+    if not st.session_state.get("_css_injected"):
+        st.markdown(_CSS, unsafe_allow_html=True)
+        st.session_state["_css_injected"] = True
 
 
 def inject_beginner_mode_js(beginner_mode: bool) -> None:
     """
     Toggle 'beginner-mode' class on <body> so CSS can hide .advanced-only elements.
     Call once per page render, after inject_css().
+    PERF: only re-injects JS when beginner_mode state actually changes.
     """
+    last = st.session_state.get("_beginner_mode_last")
+    if last == beginner_mode:
+        return
+    st.session_state["_beginner_mode_last"] = beginner_mode
     action = "add" if beginner_mode else "remove"
     st.markdown(
         f'<script>document.body.classList.{action}("beginner-mode");</script>',
@@ -716,14 +726,16 @@ def market_stat_bar(stats: dict):
     Render a top-of-page stat strip — glassmorphic with gradient border.
     stats: dict of label → value strings, e.g. {"BTC": "$98,400", "F&G": "72 Greed"}
     """
-    items_html = ""
-    for i, (k, v) in enumerate(stats.items()):
-        sep = (
-            '<div style="width:1px;height:28px;'
-            'background:linear-gradient(180deg,transparent,rgba(255,255,255,0.1),transparent);'
-            'flex-shrink:0"></div>'
-        ) if i < len(stats) - 1 else ""
-        items_html += f"""
+    _SEP = (
+        '<div style="width:1px;height:28px;'
+        'background:linear-gradient(180deg,transparent,rgba(255,255,255,0.1),transparent);'
+        'flex-shrink:0"></div>'
+    )
+    _stat_items = []
+    _stats_list = list(stats.items())
+    for i, (k, v) in enumerate(_stats_list):
+        sep = _SEP if i < len(_stats_list) - 1 else ""
+        _stat_items.append(f"""
         <div style="display:flex;flex-direction:column;align-items:center;
                     padding:0 18px;flex-shrink:0;gap:3px">
             <span style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;
@@ -731,7 +743,8 @@ def market_stat_bar(stats: dict):
             <span style="font-size:14px;font-weight:700;color:#e8ecf4;
                          font-family:'JetBrains Mono',monospace;letter-spacing:-0.3px">{v}</span>
         </div>
-        {sep}"""
+        {sep}""")
+    items_html = "".join(_stat_items)
 
     st.markdown(
         f"""
@@ -875,9 +888,9 @@ def badge_row_html(badges: list[tuple]) -> str:
     Return HTML for a row of small badge chips.
     badges: list of (label, value, color_hex) tuples.
     """
-    chips = ""
+    _chips = []
     for label, value, color in badges:
-        chips += f"""
+        _chips.append(f"""
         <div style="display:flex;flex-direction:column;align-items:center;gap:1px;
                     background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.07);
                     border-radius:8px;padding:5px 12px;flex-shrink:0">
@@ -885,8 +898,8 @@ def badge_row_html(badges: list[tuple]) -> str:
                          letter-spacing:0.9px;font-weight:600">{label}</span>
             <span style="font-size:13px;font-weight:700;color:{color};
                          font-family:'JetBrains Mono',monospace">{value}</span>
-        </div>"""
-    return f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">{chips}</div>'
+        </div>""")
+    return f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">{"".join(_chips)}</div>'
 
 
 # ── Live dot HTML ─────────────────────────────────────────────────────────────
