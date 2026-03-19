@@ -320,6 +320,26 @@ def init_db():
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_fb_pair_resolved ON feedback_log(pair, resolved_at)"
             )
+            # PERF: compound indexes for resolve + win-rate queries (covers resolved_at IS NULL + timestamp <)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fb_resolve_scan ON feedback_log(resolved_at, timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fb_pair_dir_resolved ON feedback_log(pair, direction, resolved_at)"
+            )
+            # PERF: compound indexes on other hot tables
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signals_pair_dir_ts ON daily_signals(pair, direction, scan_timestamp DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_exec_pair_ts ON execution_log(pair, placed_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_arb_pair_ts ON arb_opportunities(pair, detected_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_pair_ts ON agent_log(pair, logged_at DESC)"
+            )
             conn.commit()
         finally:
             if conn is not None:
@@ -613,7 +633,10 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
     if not rows:
         return 0
 
-    resolved = 0
+    # PERF: collect all updates first, then commit in one executemany() call
+    # (was N individual UPDATE+commit per row = N+1 DB round-trips; now 1 round-trip)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    updates = []
     for row in rows:
         try:
             ts = datetime.fromisoformat(row['timestamp'])
@@ -631,32 +654,36 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
             else:
                 continue  # NEUTRAL/LOW VOL — skip
 
-            outcome = 'win' if pnl_pct > 0 else 'loss'
-            was_correct = 1 if pnl_pct > 0 else 0
-
-            with _write_lock:
-                conn2 = _get_conn()
-                try:
-                    conn2.execute(
-                        "UPDATE feedback_log "
-                        "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
-                        "    was_correct=?, resolved_at=? "
-                        # BUG-07/08: AND resolved_at IS NULL prevents double-resolution
-                        # when two threads read the same unresolved rows concurrently
-                        "WHERE id=? AND resolved_at IS NULL",
-                        (float(actual_price), round(float(pnl_pct), 4),
-                         outcome, was_correct, datetime.now(timezone.utc).isoformat(),
-                         row['id']),
-                    )
-                    conn2.commit()
-                finally:
-                    conn2.close()
-            resolved += 1
+            updates.append((
+                float(actual_price), round(float(pnl_pct), 4),
+                'win' if pnl_pct > 0 else 'loss',
+                1 if pnl_pct > 0 else 0,
+                now_iso,
+                row['id'],
+            ))
         except Exception as e:
             # BUG-28: use .get() to avoid KeyError inside exception handler
             logger.warning(f"resolve_feedback_outcomes failed for row {row.get('id', '?')}: {e}")
 
-    return resolved
+    if not updates:
+        return 0
+
+    with _write_lock:
+        conn2 = _get_conn()
+        try:
+            conn2.executemany(
+                "UPDATE feedback_log "
+                "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
+                "    was_correct=?, resolved_at=? "
+                # BUG-07/08: AND resolved_at IS NULL prevents double-resolution
+                "WHERE id=? AND resolved_at IS NULL",
+                updates,
+            )
+            conn2.commit()
+        finally:
+            conn2.close()
+
+    return len(updates)
 
 
 def quick_resolve_feedback(fetch_ohlcv_fn, hold_hours: int = 72, batch: int = 100) -> int:
@@ -694,7 +721,10 @@ def quick_resolve_feedback(fetch_ohlcv_fn, hold_hours: int = 72, batch: int = 10
     if not rows:
         return 0
 
-    resolved = 0
+    # PERF: collect all updates first, then commit in one executemany() call
+    # (was N individual UPDATE+commit per row = N+1 DB round-trips; now 1 round-trip)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    updates = []
     for row in rows:
         try:
             ts = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')
@@ -718,31 +748,35 @@ def quick_resolve_feedback(fetch_ohlcv_fn, hold_hours: int = 72, batch: int = 10
             else:
                 continue  # NEUTRAL/LOW VOL — skip
 
-            outcome = 'win' if pnl_pct > 0 else 'loss'
-            was_correct = 1 if pnl_pct > 0 else 0
-
-            with _write_lock:
-                conn2 = _get_conn()
-                try:
-                    conn2.execute(
-                        "UPDATE feedback_log "
-                        "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
-                        "    was_correct=?, resolved_at=? "
-                        # BUG-07/08: AND resolved_at IS NULL prevents double-resolution
-                        "WHERE id=? AND resolved_at IS NULL",
-                        (actual_price, round(float(pnl_pct), 4),
-                         outcome, was_correct,
-                         datetime.now(timezone.utc).isoformat(),
-                         row['id']),
-                    )
-                    conn2.commit()
-                finally:
-                    conn2.close()
-            resolved += 1
+            updates.append((
+                actual_price, round(float(pnl_pct), 4),
+                'win' if pnl_pct > 0 else 'loss',
+                1 if pnl_pct > 0 else 0,
+                now_iso,
+                row['id'],
+            ))
         except Exception as e:
             logger.warning(f"quick_resolve_feedback failed for row {row.get('id')}: {e}")
 
-    return resolved
+    if not updates:
+        return 0
+
+    with _write_lock:
+        conn2 = _get_conn()
+        try:
+            conn2.executemany(
+                "UPDATE feedback_log "
+                "SET actual_exit=?, actual_pnl_pct=?, outcome=?, "
+                "    was_correct=?, resolved_at=? "
+                # BUG-07/08: AND resolved_at IS NULL prevents double-resolution
+                "WHERE id=? AND resolved_at IS NULL",
+                updates,
+            )
+            conn2.commit()
+        finally:
+            conn2.close()
+
+    return len(updates)
 
 
 def get_agent_accuracy_weights(days: int = 30) -> dict:
@@ -1005,8 +1039,8 @@ def load_positions() -> dict:
         conn.close()
     if df.empty:
         return {}
-    cols = [c for c in df.columns if c != 'pair']
-    return {row['pair']: {k: row[k] for k in cols} for _, row in df.iterrows()}
+    # PERF: set_index + to_dict is 10-50× faster than iterrows() for O(N) loops
+    return df.set_index('pair').to_dict(orient='index')
 
 
 def save_positions(positions: dict):
