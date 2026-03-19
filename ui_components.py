@@ -2076,8 +2076,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
 
   <!-- header row -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-    <span style="font-size:18px;font-weight:900;color:#e8ecf4;
-                 font-family:JetBrains Mono,monospace;letter-spacing:-0.5px;">{sym}</span>
+    <span style="font-size:18px;font-weight:900;color:#e8ecf4;font-family:JetBrains Mono,monospace;letter-spacing:-0.5px;">{sym}</span>
     {hc_badge}
     <span style="font-size:22px;background:{bg};border-radius:8px;padding:2px 8px;">{emoji}</span>
   </div>

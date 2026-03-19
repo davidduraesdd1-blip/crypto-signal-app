@@ -193,7 +193,7 @@ def _run_scan_bg():
     try:
         db.write_scan_status(
             running=True,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             error=None,
             progress=0,
             pair="",
@@ -202,7 +202,7 @@ def _run_scan_bg():
         db.write_scan_results(results)
         db.write_scan_status(
             running=False,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             error=None,
             progress=100,
             pair="",
@@ -226,7 +226,7 @@ def _run_scan_bg():
         logger.error("[API] Background scan failed: %s", exc, exc_info=True)
         db.write_scan_status(
             running=False,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             error=str(exc),
             progress=0,
             pair="",

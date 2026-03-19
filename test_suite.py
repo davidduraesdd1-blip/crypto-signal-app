@@ -93,7 +93,6 @@ for _mod in ACTIVE_MODULES:
     try:
         _imported[_mod] = importlib.import_module(_mod)
         _ok(f"import {_mod}")
-        _pass += 1
     except Exception as _e:
         _err = str(_e)
         # Distinguish network/service errors (non-fatal) from syntax errors

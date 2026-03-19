@@ -173,7 +173,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
             f"${stop:,.4f}"    if stop     is not None else "N/A",
             (r.get("strategy_bias") or "N/A")[:10],
             (r.get("regime") or "N/A")[:10],
-            "⚡" if r.get("high_conf") else "",
+            "YES" if r.get("high_conf") else "",
         ])
 
     tbl2 = Table(rows, colWidths=col_w_cm)

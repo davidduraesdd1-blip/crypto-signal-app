@@ -61,7 +61,7 @@ def _fetch_btc_whales(price_usd: float) -> list[dict]:
         txs = resp.json().get("txs", [])[:50]
         moves = []
         for tx in txs:
-            out_btc = sum(o.get("value", 0) for o in tx.get("out", [])) / 1e8
+            out_btc = sum(o.get("value", 0) for o in (tx.get("out") or [])) / 1e8
             amount_usd = out_btc * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 # Classify: if tx has many outputs → distribution; few large → accumulation
@@ -193,7 +193,7 @@ def _fetch_sol_whales(price_usd: float) -> list[dict]:
             # SOL lamports → SOL
             fee = tx.get("fee", 0) / 1e9
             # Large transactions typically show in lamports transferred
-            sol_amount = tx.get("lamport", 0) / 1e9
+            sol_amount = (tx.get("lamport") or 0) / 1e9
             amount_usd = sol_amount * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 moves.append({
@@ -222,7 +222,7 @@ def _fetch_xrp_whales(price_usd: float) -> list[dict]:
         txs = resp.json().get("transactions", [])
         moves = []
         for item in txs[:30]:
-            tx = item.get("tx", {})
+            tx = item.get("tx") or {}
             amt = tx.get("Amount", "0")
             if isinstance(amt, str):
                 # XRP drops (1 XRP = 1,000,000 drops)
@@ -300,7 +300,7 @@ def _fetch_doge_whales(price_usd: float) -> list[dict]:
         txs = resp.json().get("transactions", [])[:20]
         moves = []
         for tx in txs:
-            outputs = tx.get("outputs", [])
+            outputs = tx.get("outputs") or []
             doge_total = sum(float(o.get("value", 0)) for o in outputs)
             amount_usd = doge_total * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:

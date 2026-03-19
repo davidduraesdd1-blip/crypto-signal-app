@@ -297,7 +297,7 @@ def send_email_alert(
         msg["Subject"] = subject
         msg["From"] = sender
         msg["To"] = recipient
-        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_text, "plain", "utf-8"))
 
         with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
             server.ehlo()

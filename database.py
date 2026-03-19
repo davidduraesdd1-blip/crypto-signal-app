@@ -1252,7 +1252,7 @@ def write_scan_results(results: list):
                 ON CONFLICT(id) DO UPDATE
                     SET saved_at=excluded.saved_at,
                         results_json=excluded.results_json
-            """, (datetime.now().isoformat(), json.dumps(results, default=_numpy_clean)))
+            """, (datetime.now(timezone.utc).isoformat(), json.dumps(results, default=_numpy_clean)))
             conn.commit()
         finally:
             conn.close()
@@ -1370,7 +1370,7 @@ def log_alert_sent(channel: str, pair: str, direction: str,
             conn.execute("""
                 INSERT INTO alerts_log (sent_at, channel, pair, direction, confidence, status, error_msg)
                 VALUES (?,?,?,?,?,?,?)
-            """, (datetime.now().isoformat(), channel, pair, direction,
+            """, (datetime.now(timezone.utc).isoformat(), channel, pair, direction,
                   float(confidence or 0), status, error_msg))
             conn.commit()
         finally:
