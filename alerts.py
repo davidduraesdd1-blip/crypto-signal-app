@@ -11,6 +11,10 @@ import os
 import smtplib
 import requests
 from email.mime.text import MIMEText
+
+# PERF: reuse TCP connections for Telegram webhook calls
+_SESSION = requests.Session()
+_SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
 from email.mime.multipart import MIMEMultipart
 
 _ALERTS_CONFIG_FILE = "alerts_config.json"
@@ -121,7 +125,7 @@ def send_telegram(token: str, chat_id: str, message: str) -> tuple[bool, str | N
             "text": message,
             "parse_mode": "HTML",
         }
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = _SESSION.post(url, json=payload, timeout=10)
         data = resp.json()
         if data.get("ok"):
             return True, None
@@ -401,7 +405,7 @@ def send_discord(webhook_url: str, message: str) -> tuple[bool, str | None]:
     if not webhook_url:
         return False, "Discord webhook URL not configured"
     try:
-        resp = requests.post(
+        resp = _SESSION.post(
             webhook_url,
             json={"content": message},
             timeout=10,

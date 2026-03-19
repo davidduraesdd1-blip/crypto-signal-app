@@ -21,6 +21,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# PERF: reuse TCP connections across all news/sentiment fetches
+_SESSION = requests.Session()
+_SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+
 # ─── Cache ─────────────────────────────────────────────────────────────────────
 _cache: dict = {}          # {pair: result_dict}
 _cache_lock = threading.Lock()
@@ -59,7 +63,7 @@ def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
         return []
     ticker = currencies[0]  # use the short ticker (e.g. BTC)
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             _CRYPTOPANIC_BASE,
             params={"public": "true", "currencies": ticker, "kind": "news"},
             timeout=_REQUEST_TIMEOUT,
@@ -98,7 +102,7 @@ def _fetch_lunarcrush(ticker: str) -> list[str]:
         return []
     try:
         url  = f"{_LUNARCRUSH_BASE}/{slug}/v1"
-        resp = requests.get(url, timeout=_REQUEST_TIMEOUT,
+        resp = _SESSION.get(url, timeout=_REQUEST_TIMEOUT,
                             headers={"User-Agent": "CryptoBot/1.0"})
         if resp.status_code != 200:
             return []
@@ -149,7 +153,7 @@ def _fetch_lunarcrush(ticker: str) -> list[str]:
 def _fetch_rss(url: str, keywords: list[str], max_items: int = 10) -> list[str]:
     """Fetch and filter RSS headlines by keyword relevance."""
     try:
-        resp = requests.get(url, timeout=_REQUEST_TIMEOUT,
+        resp = _SESSION.get(url, timeout=_REQUEST_TIMEOUT,
                             headers={"User-Agent": "CryptoBot/1.0"})
         if resp.status_code != 200:
             return []

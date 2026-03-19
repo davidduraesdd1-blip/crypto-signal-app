@@ -162,6 +162,36 @@ def _cached_scan_results() -> list:
         return []
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_execution_log_df(limit: int = 300) -> "pd.DataFrame":
+    """Cache execution_log read — frequent re-renders in Execution tab, 2-min TTL."""
+    return _db.get_execution_log_df(limit=limit)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_agent_log_df(limit: int = 200) -> "pd.DataFrame":
+    """Cache agent_log read — 2-min TTL."""
+    return _db.get_agent_log_df(limit=limit)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_arb_opportunities_df(limit: int = 100) -> "pd.DataFrame":
+    """Cache arb_opportunities read — 2-min TTL."""
+    return _db.get_arb_opportunities_df(limit=limit)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_resolved_feedback_df(days: int = 365) -> "pd.DataFrame":
+    """Cache resolved feedback — calendar heatmap, 5-min TTL."""
+    return _db.get_resolved_feedback_df(days=days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_db_stats() -> dict:
+    """Cache DB stats summary — 60s TTL."""
+    return _db.get_db_stats()
+
+
 # ──────────────────────────────────────────────
 # MODULE-LEVEL THREAD STATE (progress only — results go to file)
 # ──────────────────────────────────────────────
@@ -1595,7 +1625,7 @@ def page_dashboard():
             )
         with st.expander("Recent Agent Decisions", expanded=False):
             try:
-                _ag_log_df = _db.get_agent_log_df(limit=50)
+                _ag_log_df = _cached_agent_log_df(limit=50)
                 if _ag_log_df.empty:
                     st.caption("No decisions recorded yet.")
                 else:
@@ -2176,7 +2206,7 @@ def page_config():
     st.markdown("---")
     _ui.section_header("Database Health", "SQLite WAL-mode database — row counts and disk usage", icon="🗄️")
     try:
-        stats = _db.get_db_stats()
+        stats = _cached_db_stats()
         dc1, dc2, dc3, dc4, dc5 = st.columns(5)
         dc1.metric("Feedback Log",    f"{stats.get('feedback_log', 0):,} rows")
         dc2.metric("Signal History",  f"{stats.get('daily_signals', 0):,} rows")
@@ -2610,7 +2640,7 @@ def page_backtest():
 
     # Show existing results — from session state (fresh run) or DB (prior run)
     bt_res = st.session_state.get("backtest_results")
-    df_trades = _db.get_backtest_df()
+    df_trades = _cached_backtest_df()
 
     if bt_res is None and df_trades.empty:
         st.info("No backtest data yet. Run **▶ Run Backtest** or ensure the daily signals DB table has entries.")
@@ -2993,7 +3023,7 @@ def page_backtest():
         "How well does predicted confidence match actual win rate? Perfect calibration = diagonal line.",
         icon="🎯",
     )
-    _cal_df = _db.get_resolved_feedback_df(days=365)
+    _cal_df = _cached_resolved_feedback_df(days=365)
     _cal_has = (
         not _cal_df.empty
         and "confidence" in _cal_df.columns
@@ -3572,7 +3602,7 @@ def page_trade_log():
         st.caption("Configure execution in Config Editor → Live Execution section.")
         st.markdown("---")
 
-        df_exec_log = _db.get_execution_log_df(limit=300)
+        df_exec_log = _cached_execution_log_df(limit=300)
         if df_exec_log.empty:
             st.info(
                 "No execution records yet. "
@@ -3608,7 +3638,7 @@ def page_trade_log():
     with tab_slip:
         st.subheader("Post-Trade Slippage Analytics")
         st.caption("Tracks fill price vs. expected signal entry price. Lower slippage = better execution quality.")
-        df_slip = _db.get_execution_log_df(limit=500)
+        df_slip = _cached_execution_log_df(limit=500)
         if df_slip.empty or "slippage_pct" not in df_slip.columns:
             st.info("No slippage data yet. Slippage is tracked after each order fill.")
         else:
@@ -4342,7 +4372,7 @@ def page_market_overview():
                        "Win rate from the most recent backtest — a trade wins when pnl_pct > 0",
                        icon="🎯")
 
-    bt_df = _db.get_backtest_df()
+    bt_df = _cached_backtest_df()
     if bt_df.empty or "pair" not in bt_df.columns:
         st.info("Run a backtest on the Backtest Viewer page to see accuracy stats here.")
     else:
@@ -4437,7 +4467,7 @@ def page_arbitrage():
     if not arb_results:
         st.info("Press **Scan Now** to detect arbitrage opportunities across exchanges.")
         # Show DB history if any
-        hist_df = _db.get_arb_opportunities_df(limit=50)
+        hist_df = _cached_arb_opportunities_df(limit=50)
         if not hist_df.empty:
             st.subheader("Recent Opportunities (DB)")
             st.dataframe(hist_df, use_container_width=True, hide_index=True)
@@ -4569,7 +4599,7 @@ def page_arbitrage():
 
     # ── Historical log ──
     with st.expander("📋 Historical Arbitrage Log (DB)", expanded=False):
-        hist_df = _db.get_arb_opportunities_df(limit=100)
+        hist_df = _cached_arb_opportunities_df(limit=100)
         if not hist_df.empty:
             st.dataframe(hist_df, use_container_width=True, hide_index=True)
             csv_data = hist_df.to_csv(index=False)
@@ -4720,7 +4750,7 @@ def page_agent():
     # ── Decision log ──
     st.markdown("---")
     _ui.section_header("Recent Agent Decisions", "Last 200 cycles from agent_log table")
-    _log_df = _db.get_agent_log_df(limit=200)
+    _log_df = _cached_agent_log_df(limit=200)
     if _log_df.empty:
         st.info("No decisions recorded yet. Start the agent to begin logging.")
     else:
