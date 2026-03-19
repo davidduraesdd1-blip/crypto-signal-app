@@ -11,6 +11,10 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+# PERF: module-level Session reuses TCP connections (avoids per-call TCP handshake/TLS overhead)
+_SESSION = requests.Session()
+_SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+
 # ──────────────────────────────────────────────
 # BINANCE FUTURES FUNDING RATES
 # Public endpoint — no auth required
@@ -130,7 +134,7 @@ def get_funding_rate(pair: str) -> dict:
 
     # 1. OKX (US-accessible, good coverage)
     try:
-        resp = requests.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
+        resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
         if resp.status_code == 429:
             logging.warning(f"OKX funding rate: rate limited (429) for {pair}")
         elif resp.status_code == 200:
@@ -147,7 +151,7 @@ def get_funding_rate(pair: str) -> dict:
 
     # 2. Binance
     try:
-        resp = requests.get(_BINANCE_PREMIUM_URL, params={"symbol": symbol}, timeout=6)
+        resp = _SESSION.get(_BINANCE_PREMIUM_URL, params={"symbol": symbol}, timeout=6)
         if resp.status_code == 429:
             logging.warning(f"Binance funding rate: rate limited (429) for {pair}")
         elif resp.status_code == 200:
@@ -162,7 +166,7 @@ def get_funding_rate(pair: str) -> dict:
 
     # 3. Bybit
     try:
-        resp = requests.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
+        resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
         if resp.status_code == 429:
             logging.warning(f"Bybit funding rate: rate limited (429) for {pair}")
         elif resp.status_code == 200:
@@ -242,7 +246,7 @@ def get_onchain_metrics(pair: str) -> dict:
             'market_data': 'true', 'community_data': 'false',
             'developer_data': 'false', 'sparkline': 'false',
         }
-        resp = requests.get(url, params=params, timeout=10)
+        resp = _SESSION.get(url, params=params, timeout=10)
         if resp.status_code == 429:
             logging.warning(f"CoinGecko rate limited (429) for {pair} — using fallback")
             # BUG-M04: cache the fallback so we don't hammer CoinGecko on every call
@@ -319,7 +323,7 @@ def get_open_interest(pair: str) -> dict:
 
     inst_id = _okx_inst_id(pair)
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://www.okx.com/api/v5/public/open-interest",
             params={'instType': 'SWAP', 'instId': inst_id},
             timeout=6,
@@ -392,7 +396,7 @@ def get_options_iv(pair: str) -> dict:
         return result
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             _DERIBIT_DVOL_URL,
             params={'currency': currency, 'resolution': '3600', 'count': '720'},  # 30d hourly
             timeout=10,
@@ -461,7 +465,7 @@ def get_orderbook_depth(pair: str, levels: int = 20) -> dict:
 
     inst_id = _okx_inst_id(pair)  # BTC-USDT-SWAP
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             'https://www.okx.com/api/v5/market/books',
             params={'instId': inst_id, 'sz': str(levels)},
             timeout=6,
@@ -532,7 +536,7 @@ def _fetch_okx_fr(pair: str, now: float) -> dict:
     """Fetch OKX funding rate for a single pair."""
     try:
         inst_id = _okx_inst_id(pair)
-        resp = requests.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
+        resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
         if resp.status_code == 200:
             data  = resp.json()
             items = data.get("data", [])
@@ -549,7 +553,7 @@ def _fetch_binance_fr(pair: str, now: float) -> dict:
     """Fetch Binance funding rate for a single pair."""
     try:
         symbol = _binance_symbol(pair)
-        resp = requests.get(_BINANCE_PREMIUM_URL, params={"symbol": symbol}, timeout=6)
+        resp = _SESSION.get(_BINANCE_PREMIUM_URL, params={"symbol": symbol}, timeout=6)
         if resp.status_code == 200:
             data   = resp.json()
             parsed = _parse_binance_item(data, now) if isinstance(data, dict) else None
@@ -564,7 +568,7 @@ def _fetch_bybit_fr(pair: str, now: float) -> dict:
     """Fetch Bybit funding rate for a single pair."""
     try:
         symbol = _binance_symbol(pair)
-        resp = requests.get(
+        resp = _SESSION.get(
             _BYBIT_TICKERS_URL,
             params={"category": "linear", "symbol": symbol},
             timeout=6,
@@ -588,7 +592,7 @@ def _fetch_kucoin_fr(pair: str, now: float) -> dict:
         if not sym:
             return _empty_result("KuCoin: no symbol mapping", now)
         url  = _KUCOIN_FUNDING_URL.format(symbol=sym)
-        resp = requests.get(url, timeout=6)
+        resp = _SESSION.get(url, timeout=6)
         if resp.status_code == 429:
             logging.warning(f"KuCoin funding rate: rate limited (429) for {pair}")
             return _empty_result("KuCoin: rate limited", now)
@@ -620,15 +624,13 @@ def get_multi_exchange_funding_rates(pair: str) -> dict[str, dict]:
 
     Returns: {"okx": {...}, "binance": {...}, "bybit": {...}, "kucoin": {...}}
     """
-    import concurrent.futures
-
     now = time.time()
     with _MULTI_FR_LOCK:
         cached = _MULTI_FR_CACHE.get(pair)
         if cached and (now - cached.get("_ts", 0)) < _MULTI_FR_TTL:
             return cached["data"]
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {
             "okx":     ex.submit(_fetch_okx_fr,     pair, now),
             "binance": ex.submit(_fetch_binance_fr,  pair, now),
@@ -660,8 +662,6 @@ def get_carry_trade_opportunities(
     Returns list sorted by abs(funding_rate_pct) descending, with keys:
       pair, exchange, funding_rate_pct, direction, strategy, annualized_yield
     """
-    import concurrent.futures
-
     def _scan_one(pair: str) -> list[dict]:
         opps: list[dict] = []
         try:
@@ -691,7 +691,7 @@ def get_carry_trade_opportunities(
         return opps
 
     all_opps: list[dict] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         for opps in ex.map(_scan_one, pairs):
             all_opps.extend(opps)
 
@@ -710,25 +710,31 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
     results = {}
     now = time.time()
 
-    # 1. OKX — per-symbol (simple, US-accessible, ~100ms each)
-    try:
-        okx_success = 0
-        for pair in pairs:
+    # 1. OKX — parallel per-symbol (PERF: was sequential loop; now concurrent)
+    def _fetch_one_okx(pair: str) -> tuple[str, dict | None]:
+        try:
             inst_id = _okx_inst_id(pair)
-            resp = requests.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
+            resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
             if resp.status_code == 200:
-                data = resp.json()
+                data  = resp.json()
                 items = data.get("data", [])
                 if items and data.get("code") == "0":
-                    parsed = _parse_okx_item(items[0], now)
-                    if parsed:
-                        results[pair] = parsed
-                        with _FUNDING_CACHE_LOCK:
-                            _BINANCE_FUNDING_CACHE[pair] = parsed
-                        okx_success += 1
+                    return pair, _parse_okx_item(items[0], now)
+        except Exception:
+            pass
+        return pair, None
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(len(pairs), 8)) as ex:
+            okx_results = dict(ex.map(lambda p: _fetch_one_okx(p), pairs))
+        okx_success = sum(1 for v in okx_results.values() if v is not None)
         if okx_success > 0:
-            for pair in pairs:
-                if pair not in results:
+            for pair, parsed in okx_results.items():
+                if parsed:
+                    results[pair] = parsed
+                    with _FUNDING_CACHE_LOCK:
+                        _BINANCE_FUNDING_CACHE[pair] = parsed
+                else:
                     results[pair] = _empty_result("Not on OKX futures", now)
             return results
     except Exception:
@@ -737,7 +743,7 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
     # 2. Binance bulk
     symbols_needed = {_binance_symbol(p): p for p in pairs}
     try:
-        resp = requests.get(_BINANCE_PREMIUM_URL, timeout=10)
+        resp = _SESSION.get(_BINANCE_PREMIUM_URL, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list):
@@ -858,7 +864,7 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
         return result
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             f"https://lunarcrush.com/api4/public/coins/{coin}/v1",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
@@ -928,7 +934,7 @@ def get_coinglass_liquidations(pair: str) -> dict:
 
     symbol = pair.split("/")[0]  # BTC/USDT → BTC
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://open-api.coinglass.com/public/v2/liquidation_chart",
             params={"symbol": symbol, "interval": "24h"},
             headers={"coinglassSecret": api_key},
@@ -1005,7 +1011,7 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
 
     asset = pair.split("/")[0].lower()  # btc or eth
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             f"https://api.cryptoquant.com/v1/{asset}/exchange-flows/netflow",
             params={"window": "day", "limit": 1},
             headers={"Authorization": f"Bearer {api_key}"},
@@ -1088,8 +1094,12 @@ def get_glassnode_onchain(pair: str) -> dict:
         headers = {"X-Api-Key": api_key}
         params  = {"a": asset, "i": "24h", "f": "JSON", "timestamp_format": "humanized"}
 
-        sopr_resp = requests.get(f"{base}/indicators/sopr", params=params, headers=headers, timeout=10)
-        mvrv_resp = requests.get(f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
+        # PERF: fetch SOPR and MVRV-Z in parallel instead of sequentially
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            _sopr_fut = _ex.submit(_SESSION.get, f"{base}/indicators/sopr",   params=params, headers=headers, timeout=10)
+            _mvrv_fut = _ex.submit(_SESSION.get, f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
+            sopr_resp = _sopr_fut.result()
+            mvrv_resp = _mvrv_fut.result()
 
         sopr = mvrv_z = None
         try:
@@ -1181,7 +1191,7 @@ def get_defillama_tvl(pair: str) -> dict:
             return cached
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             f"https://api.llama.fi/v2/historicalChainTvl/{chain_name}",
             timeout=10,
         )
@@ -1269,7 +1279,7 @@ def get_token_unlock_schedule(pair: str) -> dict:
         return result
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             f"https://api.tokenomist.ai/v1/projects/{slug}/unlocks",
             timeout=10,
         )
@@ -1340,7 +1350,7 @@ def get_trending_coins() -> list[str]:
             return cached
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/search/trending",
             timeout=10,
             headers={"Accept": "application/json"},
@@ -1418,7 +1428,7 @@ def get_global_market() -> dict:
             return dict(_GLOBAL_CACHE)
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/global",
             timeout=10,
             headers={"Accept": "application/json"},
@@ -1531,7 +1541,7 @@ def get_cvd(pair: str, limit: int = 500) -> dict:
     try:
         okx_symbol = pair.replace("/", "-") + "-SWAP"  # BTC/USDT → BTC-USDT-SWAP
         url = f"https://www.okx.com/api/v5/market/trades?instId={okx_symbol}&limit={limit}"
-        resp = requests.get(url, timeout=8)
+        resp = _SESSION.get(url, timeout=8)
 
         if resp.status_code == 429:
             logging.debug(f"[CVD] OKX rate limited for {pair}")
@@ -1658,7 +1668,7 @@ def get_fear_greed_index(days: int = 7) -> dict:
             return cached
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             f"https://api.alternative.me/fng/?limit={max(days, 7)}",
             timeout=8,
             headers={"Accept": "application/json"},
@@ -1895,7 +1905,7 @@ def get_top_movers(top_n: int = 3) -> dict:
             return cached
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/coins/markets",
             params={
                 "vs_currency":    "usd",
@@ -1995,7 +2005,7 @@ def get_news_sentiment(pair: str, max_articles: int = 5) -> dict:
     coin = _CP_COIN_MAP.get(base, base)
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://cryptopanic.com/api/free/v1/posts/",
             params={
                 "auth_token": token,
@@ -2114,7 +2124,7 @@ def get_fear_greed() -> dict:
             }
 
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.alternative.me/fng/",
             params={"limit": 1},
             timeout=8,

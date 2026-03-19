@@ -39,6 +39,14 @@ def _get_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # PERF: 64 MB page cache (default is ~2 MB) — major speedup for repeated queries
+    conn.execute("PRAGMA cache_size=-65536")
+    # PERF: 256 MB memory-mapped I/O — bypasses read() syscalls for sequential scans
+    conn.execute("PRAGMA mmap_size=268435456")
+    # PERF: keep temp tables / sort buffers in RAM instead of a temp file
+    conn.execute("PRAGMA temp_store=MEMORY")
+    # PERF: checkpoint WAL less aggressively (default 1000 pages is fine; keep it)
+    conn.execute("PRAGMA wal_autocheckpoint=1000")
     conn.row_factory = sqlite3.Row
     return conn
 

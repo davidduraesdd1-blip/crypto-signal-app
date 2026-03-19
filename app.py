@@ -16,6 +16,10 @@ import time
 import requests
 from datetime import datetime, timedelta, timezone
 
+# PERF: module-level Session reuses TCP connections for all requests.get() calls in this file
+_http = requests.Session()
+_http.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+
 from apscheduler.schedulers.background import BackgroundScheduler
 import alerts as _alerts
 import pdf_export as _pdf
@@ -102,6 +106,61 @@ def _read_scan_results():
     except Exception:
         pass
     return None
+
+
+# ──────────────────────────────────────────────
+# PERF: @st.cache_data wrappers for expensive DB reads and API calls
+# Streamlit re-runs the full script on every user interaction; without caching
+# every rerun hits SQLite and external APIs, adding 1-5+ seconds of latency.
+# ──────────────────────────────────────────────
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_signals_df(limit: int = 500) -> "pd.DataFrame":
+    """Cache daily_signals DB read — 500 rows × ~30 cols, 60s TTL."""
+    return _db.get_signals_df(limit=limit)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_paper_trades_df() -> "pd.DataFrame":
+    """Cache paper_trades DB read — all closed trades, 2-min TTL."""
+    return _db.get_paper_trades_df()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_feedback_df() -> "pd.DataFrame":
+    """Cache feedback_log DB read — 12 000+ rows, 5-min TTL.
+    This is the single most expensive repeated read in the app."""
+    return _db.get_feedback_df()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_global_market() -> dict:
+    """Cache CoinGecko global market stats — HTTP call, 5-min TTL."""
+    import data_feeds as _df
+    return _df.get_global_market()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_trending_coins() -> list:
+    """Cache CoinGecko trending coins — HTTP call, 5-min TTL."""
+    import data_feeds as _df
+    return _df.get_trending_coins()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_backtest_df(run_id: str = None) -> "pd.DataFrame":
+    """Cache backtest trades read — 60s TTL."""
+    return _db.get_backtest_df(run_id=run_id)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_scan_results() -> list:
+    """Cache scan_cache JSON read — large JSON parse, 60s TTL."""
+    try:
+        return _db.read_scan_results() or []
+    except Exception:
+        return []
+
 
 # ──────────────────────────────────────────────
 # MODULE-LEVEL THREAD STATE (progress only — results go to file)
@@ -3219,7 +3278,7 @@ def page_trade_log():
 
     # ── Tab 1: Master Log ──
     with tab_master:
-        df = _db.get_signals_df()
+        df = _cached_signals_df()
         if df.empty:
             st.info("No master log data yet. Run a scan first.")
         else:
@@ -3282,7 +3341,7 @@ def page_trade_log():
 
     # ── Tab 2: Paper Trades ──
     with tab_paper:
-        df_closed = _db.get_paper_trades_df()
+        df_closed = _cached_paper_trades_df()
         try:
             positions = model.load_positions()
         except Exception as _e:
@@ -3481,7 +3540,7 @@ def page_trade_log():
 
     # ── Tab 3: Feedback Log ──
     with tab_feedback:
-        df_fb = _db.get_feedback_df()
+        df_fb = _cached_feedback_df()
         if df_fb.empty:
             st.info("No feedback log data yet.")
         else:
@@ -3610,8 +3669,8 @@ def page_market_overview():
     # ── Global Market Stats ─────────────────────────────────────────────────
     _ui.section_header("Global Market", "Live macro snapshot — BTC dominance, total cap, trending coins", icon="🌐")
 
-    gm  = _df.get_global_market()
-    trending = _df.get_trending_coins()
+    gm  = _cached_global_market()
+    trending = _cached_trending_coins()
 
     # Format helpers
     def _fmt_cap(v):
@@ -3912,7 +3971,7 @@ def page_market_overview():
                        f"Green = bullish · Red = bearish · White = neutral · Numbers = confidence % — {_ui.HELP_MTF_HEATMAP}",
                        icon="🗺️")
 
-    scan_results = _db.read_scan_results()
+    scan_results = _cached_scan_results()
     if not scan_results:
         st.info("No scan data found — run a scan on the Dashboard first.")
     else:
@@ -4045,7 +4104,7 @@ def page_market_overview():
 
     if st.button("Load F&G History", key="load_fng_history"):
         try:
-            resp = requests.get("https://api.alternative.me/fng/?limit=30", timeout=8)
+            resp = _http.get("https://api.alternative.me/fng/?limit=30", timeout=8)
             resp.raise_for_status()
             fng_raw = resp.json().get("data", [])
             # APP-02: use .get() to avoid KeyError on missing F&G fields
