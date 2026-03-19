@@ -1750,6 +1750,10 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             squeeze_sig = ('BULL_SQUEEZE' if squeeze_on and squeeze_mom > 0
                            else 'BEAR_SQUEEZE' if squeeze_on and squeeze_mom < 0
                            else 'NO_SQUEEZE')
+            # BUG-SQUEEZE-01: _sqz must be defined for the scoring block below that calls
+            # _sqz.get('increasing', ...).  Fast path has no 'increasing' column, so fall
+            # back to {} — scores use the 6-pt branch instead of the 10-pt branch.
+            _sqz = {}
         else:
             _sqz = compute_squeeze_momentum(df)
             squeeze_on  = _sqz['squeeze_on']
