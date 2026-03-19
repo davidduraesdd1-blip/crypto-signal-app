@@ -115,46 +115,46 @@ def _read_scan_results():
 # every rerun hits SQLite and external APIs, adding 1-5+ seconds of latency.
 # ──────────────────────────────────────────────
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=3)
 def _cached_signals_df(limit: int = 500) -> "pd.DataFrame":
     """Cache daily_signals DB read — 500 rows × ~30 cols, 60s TTL."""
     return _db.get_signals_df(limit=limit)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False, max_entries=1)
 def _cached_paper_trades_df() -> "pd.DataFrame":
     """Cache paper_trades DB read — all closed trades, 2-min TTL."""
     return _db.get_paper_trades_df()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_feedback_df() -> "pd.DataFrame":
     """Cache feedback_log DB read — 12 000+ rows, 5-min TTL.
     This is the single most expensive repeated read in the app."""
     return _db.get_feedback_df()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_global_market() -> dict:
     """Cache CoinGecko global market stats — HTTP call, 5-min TTL."""
     import data_feeds as _df
     return _df.get_global_market()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_trending_coins() -> list:
     """Cache CoinGecko trending coins — HTTP call, 5-min TTL."""
     import data_feeds as _df
     return _df.get_trending_coins()
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=5)
 def _cached_backtest_df(run_id: str = None) -> "pd.DataFrame":
     """Cache backtest trades read — 60s TTL."""
     return _db.get_backtest_df(run_id=run_id)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=1)
 def _cached_scan_results() -> list:
     """Cache scan_cache JSON read — large JSON parse, 60s TTL."""
     try:
@@ -163,34 +163,80 @@ def _cached_scan_results() -> list:
         return []
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False, max_entries=3)
 def _cached_execution_log_df(limit: int = 300) -> "pd.DataFrame":
     """Cache execution_log read — frequent re-renders in Execution tab, 2-min TTL."""
     return _db.get_execution_log_df(limit=limit)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False, max_entries=3)
 def _cached_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     """Cache agent_log read — 2-min TTL."""
     return _db.get_agent_log_df(limit=limit)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False, max_entries=3)
 def _cached_arb_opportunities_df(limit: int = 100) -> "pd.DataFrame":
     """Cache arb_opportunities read — 2-min TTL."""
     return _db.get_arb_opportunities_df(limit=limit)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_resolved_feedback_df(days: int = 365) -> "pd.DataFrame":
     """Cache resolved feedback — calendar heatmap, 5-min TTL."""
     return _db.get_resolved_feedback_df(days=days)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=1)
 def _cached_db_stats() -> dict:
     """Cache DB stats summary — 60s TTL."""
     return _db.get_db_stats()
+
+
+# ── PERF: Single cached read for alerts config — replaces 16+ disk reads per rerun ──
+@st.cache_data(ttl=2, show_spinner=False, max_entries=1)
+def _cached_alerts_config() -> dict:
+    """Cache alerts_config.json — 2s TTL prevents 15 redundant disk reads per page render."""
+    return _cached_alerts_config()
+
+
+def _save_alerts_config_and_clear(cfg: dict) -> None:
+    """Save alerts config and immediately invalidate the in-process cache."""
+    _save_alerts_config_and_clear(cfg)
+    try:
+        _cached_alerts_config.clear()
+    except Exception:
+        pass
+
+
+# ── PERF: @st.cache_data wrappers for slow external module calls ──────────────
+@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
+def _cached_news_sentiment(pair: str) -> dict:
+    """Streamlit-level cache for news sentiment — 15 min TTL, cross-worker dedup.
+    Module-level _cache in news_sentiment.py is per-process; this bridges workers."""
+    if _news_mod is None:
+        return {}
+    return _news_mod.get_news_sentiment(pair)
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=24)
+def _cached_whale_activity(pair: str, price: float) -> dict:
+    """Cache whale tracker HTTP calls — 5 min TTL."""
+    if _whale_mod is None:
+        return {}
+    return _whale_mod.get_whale_activity(pair, price)
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=24)
+def _cached_liquidation_cascade(pair: str) -> dict:
+    """Cache Coinglass liquidation cascade risk — 5 min TTL."""
+    return data_feeds.get_liquidation_cascade_risk(pair)
+
+
+@st.cache_data(ttl=120, show_spinner=False, max_entries=1)
+def _cached_top_movers(top_n: int = 3) -> list:
+    """Cache CoinGecko top movers — 2 min TTL."""
+    return data_feeds.get_top_movers(top_n=top_n)
 
 
 # ──────────────────────────────────────────────
@@ -318,7 +364,7 @@ _ws.start(model.PAIRS)
 
 # Auto-start autonomous agent if enabled in config (idempotent)
 if _agent is not None:
-    _agent_cfg_boot = _alerts.load_alerts_config()
+    _agent_cfg_boot = _cached_alerts_config()
     if _agent_cfg_boot.get("agent_enabled", False):
         _agent.supervisor.start()
 
@@ -329,7 +375,7 @@ _ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
 
 # ── Paper / Live mode persistent badge ───────────────────────────────────────
 try:
-    _exec_mode_cfg = _alerts.load_alerts_config()
+    _exec_mode_cfg = _cached_alerts_config()
     _is_live_mode  = _exec_mode_cfg.get("live_trading_enabled", False)
     if _is_live_mode:
         st.sidebar.markdown(
@@ -399,7 +445,7 @@ page = _PAGE_MAP.get(page, page)
 st.sidebar.markdown("---")
 # CQ-10: Load alerts config once per sidebar render; reused by all expander sections.
 # Each expander that needs to mutate gets its own .copy() or re-reads when saving.
-_sidebar_alerts_cfg = _alerts.load_alerts_config()
+_sidebar_alerts_cfg = _cached_alerts_config()
 
 with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
     _alert_cfg = _sidebar_alerts_cfg.copy()
@@ -480,7 +526,7 @@ with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
         _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
         _alert_cfg["autoscan_quiet_start"]        = quiet_start.strip()
         _alert_cfg["autoscan_quiet_end"]          = quiet_end.strip()
-        _alerts.save_alerts_config(_alert_cfg)
+        _save_alerts_config_and_clear(_alert_cfg)
 
 # ──────────────────────────────────────────────
 # SIDEBAR: TELEGRAM ALERTS
@@ -526,7 +572,7 @@ with st.sidebar.expander("🔔 Telegram Alerts", expanded=False):
                 "telegram_chat_id": tg_chat_id.strip(),
                 "min_confidence": tg_min_conf,
             })
-            _alerts.save_alerts_config(_alert_cfg2)
+            _save_alerts_config_and_clear(_alert_cfg2)
             st.success("Saved!")
     with col_test_tg:
         if st.button("Test", key="tg_test", use_container_width=True, disabled=not tg_enabled):
@@ -615,7 +661,7 @@ with st.sidebar.expander("📧 Email Alerts", expanded=False):
                 "email_pass": em_pass,
                 "email_min_confidence": em_min_conf,
             })
-            _alerts.save_alerts_config(_alert_cfg_em)
+            _save_alerts_config_and_clear(_alert_cfg_em)
             st.success("Saved!")
     with col_test_em:
         if st.button("Test", key="em_test", use_container_width=True, disabled=not em_enabled):
@@ -664,7 +710,7 @@ with st.sidebar.expander("💬 Discord Alerts", expanded=False):
                 "discord_webhook_url": dc_webhook.strip(),
                 "discord_min_confidence": dc_min_conf,
             })
-            _alerts.save_alerts_config(_alert_cfg_dc)
+            _save_alerts_config_and_clear(_alert_cfg_dc)
             st.success("Saved!")
     with col_test_dc:
         if st.button("Test", key="dc_test", use_container_width=True, disabled=not dc_enabled):
@@ -1111,7 +1157,8 @@ def page_dashboard():
         xaxis=dict(side="top", tickfont=dict(size=9)),
         yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
     )
-    st.plotly_chart(_hm_fig, use_container_width=True)
+    st.plotly_chart(_hm_fig, use_container_width=True,
+                    config={"displayModeBar": False, "staticPlot": True})
 
     st.markdown("---")
 
@@ -1378,7 +1425,7 @@ def page_dashboard():
 
     # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
     try:
-        _casc = data_feeds.get_liquidation_cascade_risk(pair)
+        _casc = _cached_liquidation_cascade(pair)
         if _casc and not _casc.get("error"):
             st.markdown(
                 _ui.cascade_risk_card_html(
@@ -1395,7 +1442,7 @@ def page_dashboard():
     # ── News Sentiment ─────────────────────────────────────────────────────────
     if _news_mod is not None:
         try:
-            _news = _news_mod.get_news_sentiment(pair)
+            _news = _cached_news_sentiment(pair)
             _nsig = _news.get("sentiment", "NEUTRAL")
             _nscore = _news.get("score", 0.0)
             _nsig_color = "🟢" if _nsig == "BULLISH" else "🔴" if _nsig == "BEARISH" else "⚪"
@@ -1415,7 +1462,7 @@ def page_dashboard():
     # ── Whale Tracker ───────────────────────────────────────────────────────────
     if _whale_mod is not None:
         try:
-            _whale = _whale_mod.get_whale_activity(pair, price)
+            _whale = _cached_whale_activity(pair, float(price or 0))
             _wsig = _whale.get("signal", "NEUTRAL")
             if _wsig != "NEUTRAL" or _whale.get("whale_count", 0) > 0:
                 _wemoji = "🐋" if "ACCUMULATION" in _wsig else "🔴" if "DISTRIBUTION" in _wsig else "⚪"
@@ -1434,9 +1481,8 @@ def page_dashboard():
     if _ml_mod is not None:
         try:
             _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
-            _ml_df = model.robust_fetch_ohlcv(model.get_exchange_instance(model.TA_EXCHANGE), pair, _ml_tf)
+            _ml_df = model.get_enriched_df(model.get_exchange_instance(model.TA_EXCHANGE), pair, _ml_tf)
             if not _ml_df.empty:
-                _ml_df = model._enrich_df(_ml_df)
                 _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
                 _ml_pred = _ml.get("prediction", "UNCERTAIN")
                 _ml_prob = _ml.get("probability", 0.5)
@@ -1467,18 +1513,22 @@ def page_dashboard():
         except Exception:
             pass
 
-    # ── AI Analysis ────────────────────────────────────────────────────────────
+    # ── AI Analysis — st.dialog renders in modal overlay, outside page diff cycle ──
     ai_key = f"ai_explanation_{pair}"
-    ai_btn_col, ai_out_col = st.columns([1, 4])
-    with ai_btn_col:
-        run_ai = st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", use_container_width=True)
-    if run_ai:
-        with st.spinner("Asking Claude..."):
-            explanation = _llm.get_signal_explanation(pair, r)
-        st.session_state[ai_key] = explanation
-    if ai_key in st.session_state:
-        with ai_out_col:
-            st.info(st.session_state[ai_key])
+
+    @st.dialog(f"AI Analysis — {pair}", width="large")
+    def _show_ai_dialog():
+        cached = st.session_state.get(ai_key)
+        if cached:
+            st.info(cached)
+        else:
+            with st.spinner("Asking Claude..."):
+                explanation = _llm.get_signal_explanation(pair, r)
+            st.session_state[ai_key] = explanation
+            st.info(explanation)
+
+    if st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", use_container_width=True):
+        _show_ai_dialog()
 
     # ── Order Execution ────────────────────────────────────────────────────────
     st.markdown("---")
@@ -1660,7 +1710,7 @@ def page_dashboard():
                 st.caption(f"PDF generation failed: {_pdf_err}")
 
     # ── Autonomous Agent Status Panel ─────────────────────────────────────────
-    _agent_cfg = _alerts.load_alerts_config()
+    _agent_cfg = _cached_alerts_config()
     if _agent_cfg.get("agent_enabled", False):
         # Auto-start supervisor if enabled in config and not already running
         try:
@@ -1736,7 +1786,7 @@ def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
     if not closed:
         return
     if cfg is None:
-        cfg = _alerts.load_alerts_config()
+        cfg = _cached_alerts_config()
     for _pos in closed:
         _pair   = _pos.get("pair", "?")
         _dir    = _pos.get("direction", "?")
@@ -1814,7 +1864,7 @@ def _run_scan_thread():
             logging.warning("[App] Position exit check error: %s", _pos_err)
             _scan_closed = []
         # BUG-H06: each alert channel in its own try/except so one failure doesn't kill the others
-        cfg = _alerts.load_alerts_config()
+        cfg = _cached_alerts_config()
         # Send exit alerts for positions closed above
         if _scan_closed:
             try:
@@ -1847,7 +1897,7 @@ def _run_scan_thread():
 
 def _scheduled_scan():
     """Entry point for APScheduler — enforces quiet hours, then delegates to _run_scan_thread."""
-    cfg = _alerts.load_alerts_config()
+    cfg = _cached_alerts_config()
     if cfg.get("autoscan_quiet_hours_enabled"):
         now_str = datetime.now(timezone.utc).strftime("%H:%M")
         qs = cfg.get("autoscan_quiet_start", "22:00")
@@ -2143,7 +2193,7 @@ def page_config():
         "Keys are stored in alerts_config.json (local only, never sent anywhere). "
         "Leave blank to use free-tier fallbacks."
     )
-    _api_cfg = _alerts.load_alerts_config()
+    _api_cfg = _cached_alerts_config()
     ak1, ak2 = st.columns(2)
     with ak1:
         lc_key = st.text_input(
@@ -2180,7 +2230,7 @@ def page_config():
             "glassnode_key":    gn_key.strip(),
             "cryptopanic_key":  cp_key.strip(),
         })
-        _alerts.save_alerts_config(_api_cfg)
+        _save_alerts_config_and_clear(_api_cfg)
         st.success("API keys saved.")
     st.caption(
         "Token unlock data (Tokenomist.ai) requires no key — automatically checked. "
@@ -2195,7 +2245,7 @@ def page_config():
         "Automatic background scanning on a configurable interval with optional UTC quiet hours",
         icon="⏰",
     )
-    _sched_cfg = _alerts.load_alerts_config()
+    _sched_cfg = _cached_alerts_config()
     with st.form("autoscan_form"):
         _sc1, _sc2 = st.columns(2)
         with _sc1:
@@ -2244,7 +2294,7 @@ def page_config():
                 "autoscan_quiet_start":        _quiet_start.strip(),
                 "autoscan_quiet_end":          _quiet_end.strip(),
             })
-            _alerts.save_alerts_config(_sched_cfg)
+            _save_alerts_config_and_clear(_sched_cfg)
             st.success("Scheduler config saved. Toggle will apply on next Streamlit rerun.")
 
     _next_t = _get_next_autoscan_time()
@@ -2294,7 +2344,7 @@ def page_config():
         "Interactive docs at **http://localhost:8000/docs**."
     )
 
-    _api_cfg = _alerts.load_alerts_config()
+    _api_cfg = _cached_alerts_config()
     with st.form("api_server_form"):
         api_key_val = st.text_input(
             "API Key",
@@ -2321,7 +2371,7 @@ def page_config():
                 "api_host": api_host_val.strip(),
                 "api_port": int(api_port_val),
             })
-            _alerts.save_alerts_config(_api_cfg)
+            _save_alerts_config_and_clear(_api_cfg)
             st.success("API config saved.")
 
     _host = _api_cfg.get("api_host", "0.0.0.0")
@@ -2364,7 +2414,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
         "Paper mode is always on by default — real orders only fire when "
         "**LIVE TRADING MODE** is explicitly enabled below."
     )
-    _exec_ui_cfg = _alerts.load_alerts_config()
+    _exec_ui_cfg = _cached_alerts_config()
     with st.form("exec_config_form"):
         _live_on = st.toggle(
             "🔴 LIVE TRADING MODE",
@@ -2417,7 +2467,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                 "okx_passphrase":              _okx_pass.strip(),
                 "default_order_type":          _ord_type,
             })
-            _alerts.save_alerts_config(_exec_ui_cfg)
+            _save_alerts_config_and_clear(_exec_ui_cfg)
             st.success("Execution config saved.")
 
     if st.button("🔌 Test OKX Connection", use_container_width=False):
@@ -2451,7 +2501,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
         "in the Dashboard for at least a few days before disabling dry-run."
     )
 
-    _ag_ui_cfg = _alerts.load_alerts_config()
+    _ag_ui_cfg = _cached_alerts_config()
     with st.form("agent_config_form"):
         _ag_enabled = st.toggle(
             "🤖 Enable Autonomous Agent",
@@ -2512,7 +2562,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                 "agent_daily_loss_limit_pct":     float(_ag_loss_limit),
                 "agent_portfolio_size_usd":       float(_ag_portfolio),
             })
-            _alerts.save_alerts_config(_ag_ui_cfg)
+            _save_alerts_config_and_clear(_ag_ui_cfg)
             if _agent is not None:
                 if _ag_enabled and not _agent.supervisor.is_running():
                     _agent.supervisor.start()
@@ -2564,7 +2614,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
         "Use 'ALL' in the coin field to watch every coin in the scan list."
     )
 
-    _wl_cfg = _alerts.load_alerts_config()
+    _wl_cfg = _cached_alerts_config()
     _watchlist = _wl_cfg.get("watchlist", [])
 
     # Add new rule form
@@ -2600,7 +2650,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                         "enabled":        _wl_enabled,
                     })
                     _wl_cfg["watchlist"] = _watchlist
-                    _alerts.save_alerts_config(_wl_cfg)
+                    _save_alerts_config_and_clear(_wl_cfg)
                     st.success(f"Rule '{_wl_name.strip()}' added.")
                     st.rerun()
 
@@ -2635,13 +2685,13 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                 if st.button(_toggle_label, key=f"wl_toggle_{_wl_idx}", use_container_width=True):
                     _watchlist[_wl_idx]["enabled"] = not _wl_rule.get("enabled", True)
                     _wl_cfg["watchlist"] = _watchlist
-                    _alerts.save_alerts_config(_wl_cfg)
+                    _save_alerts_config_and_clear(_wl_cfg)
                     st.rerun()
             with _wl_rc3:
                 if st.button("Delete", key=f"wl_del_{_wl_idx}", use_container_width=True):
                     _watchlist.pop(_wl_idx)
                     _wl_cfg["watchlist"] = _watchlist
-                    _alerts.save_alerts_config(_wl_cfg)
+                    _save_alerts_config_and_clear(_wl_cfg)
                     st.rerun()
 
 
@@ -2692,16 +2742,21 @@ def page_backtest():
             _start_backtest()
 
     if st.session_state.get("backtest_running", False) or _bt_state["running"]:
-        st.info("Running backtest — fetching historical candles for each signal... (2–5 min)")
-        # Detect thread completion and sync to session_state
-        if not _bt_state["running"] and st.session_state.get("backtest_running", False):
+        # PERF: fragment polls every 1s — only this widget re-renders, not the full page
+        @st.fragment(run_every=1)
+        def _backtest_progress():
             with _bt_lock:
-                st.session_state["backtest_results"] = _bt_state["results"]
-                st.session_state["backtest_error"] = _bt_state["error"]
-            st.session_state["backtest_running"] = False
-            st.rerun()
-        time.sleep(1)
-        st.rerun()
+                _still_running = _bt_state["running"]
+                _bt_results    = _bt_state["results"]
+                _bt_error      = _bt_state["error"]
+            if not _still_running and st.session_state.get("backtest_running", False):
+                st.session_state["backtest_results"] = _bt_results
+                st.session_state["backtest_error"]   = _bt_error
+                st.session_state["backtest_running"] = False
+                st.rerun()
+            else:
+                st.info("Running backtest — fetching historical candles for each signal... (2–5 min)")
+        _backtest_progress()
 
     if st.session_state.get("backtest_error"):
         st.error(f"Backtest failed: {st.session_state['backtest_error']}")
@@ -2881,16 +2936,14 @@ def page_backtest():
         if reason_filter and 'exit_reason' in filtered.columns:
             filtered = filtered[filtered['exit_reason'].isin(reason_filter)]
 
-        def _color_pnl(val):
-            try:
-                v = float(val)
-                return 'color: green' if v > 0 else 'color: red'
-            except Exception:
-                return ''
-
-        _pnl_cols = [c for c in ['pnl_pct', 'pnl_usd'] if c in filtered.columns]
-        styled = filtered.style.map(_color_pnl, subset=_pnl_cols if _pnl_cols else [])
-        st.dataframe(styled, use_container_width=True, height=400)
+        st.dataframe(
+            filtered,
+            use_container_width=True, height=400,
+            column_config={
+                "pnl_pct": st.column_config.NumberColumn("PNL %", format="%.2f%%"),
+                "pnl_usd": st.column_config.NumberColumn("PNL $", format="$%.2f"),
+            },
+        )
 
         dl_col1, dl_col2 = st.columns(2)
         with dl_col1:
@@ -3683,16 +3736,7 @@ def page_trade_log():
                 ex_m2.metric("Live Orders", int(live_cnt))
                 ex_m3.metric("Paper Orders", int(paper_cnt))
 
-            # Colour-code status
-            def _colour_exec_status(val):
-                if val == "ok":      return "color: green"
-                if val == "failed":  return "color: red"
-                return ""
-
-            styled_exec = df_exec_log.style.map(
-                _colour_exec_status, subset=["status"] if "status" in df_exec_log.columns else []
-            )
-            st.dataframe(styled_exec, use_container_width=True, height=400)
+            st.dataframe(df_exec_log, use_container_width=True, height=400)
             st.download_button(
                 "⬇ Download Execution Log",
                 data=df_exec_log.to_csv(index=False),
@@ -3871,7 +3915,8 @@ def page_market_overview():
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_corr, use_container_width=True)
+        st.plotly_chart(fig_corr, use_container_width=True,
+                        config={"displayModeBar": False, "staticPlot": True})
 
         # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
         st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
@@ -3918,11 +3963,15 @@ def page_market_overview():
                         pass
         if returns_data:
             ret_df = pd.DataFrame(returns_data)
-            def color_ret(val):
-                color = "color: #00d4aa" if val > 0 else "color: #ff4b4b" if val < 0 else ""
-                return color
-            styled = ret_df.style.map(color_ret, subset=["7d Return %", "30d Return %"])
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            st.dataframe(
+                ret_df,
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "7d Return %":  st.column_config.NumberColumn(format="%.2f%%"),
+                    "30d Return %": st.column_config.NumberColumn(format="%.2f%%"),
+                    "Current Price": st.column_config.NumberColumn(format="$%.4f"),
+                },
+            )
 
             fig_bar = px.bar(
                 ret_df, x="Asset", y="30d Return %",
@@ -3935,7 +3984,8 @@ def page_market_overview():
                 height=300, margin=dict(l=0, r=0, t=40, b=0),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, use_container_width=True,
+                            config={"displayModeBar": False, "staticPlot": True})
         else:
             st.warning("Could not fetch return data.")
 
@@ -4133,7 +4183,8 @@ def page_market_overview():
             yaxis=dict(tickfont=dict(size=11, color="#e0e0e0"), autorange="reversed"),
             font=dict(color="#e0e0e0"),
         )
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat, use_container_width=True,
+                        config={"displayModeBar": False, "staticPlot": True})
 
         # Composite score table
         comp_rows = []
@@ -4283,7 +4334,8 @@ def page_market_overview():
                 font=dict(color="#e0e0e0"),
                 showlegend=False,
             )
-            st.plotly_chart(fig_fng, use_container_width=True)
+            st.plotly_chart(fig_fng, use_container_width=True,
+                            config={"displayModeBar": False, "staticPlot": True})
 
         with st.expander("📋 Raw F&G Data"):
             st.dataframe(
@@ -4475,7 +4527,8 @@ def page_market_overview():
                 font=dict(color="#e0e0e0"), showlegend=False,
                 coloraxis_showscale=False,
             )
-            st.plotly_chart(fig_acc, use_container_width=True)
+            st.plotly_chart(fig_acc, use_container_width=True,
+                            config={"displayModeBar": False, "staticPlot": True})
 
         with col_tbl:
             def _color_wr(val):
@@ -4640,19 +4693,7 @@ def page_arbitrage():
             })
         f_df = pd.DataFrame(f_rows)
 
-        def _color_rate(val: str) -> str:
-            try:
-                v = float(val.replace("%", ""))
-                if v > 0.05:  return "color: #00d4aa; font-weight:bold"
-                if v < -0.05: return "color: #ff4b4b; font-weight:bold"
-                return ""
-            except Exception:
-                return ""
-
-        st.dataframe(
-            f_df.style.map(_color_rate, subset=["Funding Rate %"]),
-            use_container_width=True, hide_index=True,
-        )
+        st.dataframe(f_df, use_container_width=True, hide_index=True)
         st.caption(
             "**Strategy**: Collect funding payments by holding opposite spot + perp positions. "
             "Positive funding → Short Perp + Long Spot. "
@@ -4713,17 +4754,17 @@ def page_agent():
     with col_start:
         if st.button("▶ Start", use_container_width=True, type="primary",
                      disabled=is_running, key="agent_start_btn"):
-            _ac = _alerts.load_alerts_config()
+            _ac = _cached_alerts_config()
             _ac["agent_enabled"] = True
-            _alerts.save_alerts_config(_ac)
+            _save_alerts_config_and_clear(_ac)
             _agent.supervisor.start()
             st.rerun()
     with col_stop:
         if st.button("■ Stop", use_container_width=True,
                      disabled=not is_running, key="agent_stop_btn"):
-            _ac = _alerts.load_alerts_config()
+            _ac = _cached_alerts_config()
             _ac["agent_enabled"] = False
-            _alerts.save_alerts_config(_ac)
+            _save_alerts_config_and_clear(_ac)
             _agent.supervisor.stop()
             st.rerun()
 
@@ -4787,14 +4828,14 @@ def page_agent():
             )
         if st.form_submit_button("💾 Save Agent Config", type="secondary",
                                   use_container_width=True):
-            _saved = _alerts.load_alerts_config()
+            _saved = _cached_alerts_config()
             _saved["agent_dry_run"]                  = _dry_run
             _saved["agent_interval_seconds"]         = int(_interval)
             _saved["agent_min_confidence"]           = float(_min_conf)
             _saved["agent_max_concurrent_positions"] = int(_max_pos)
             _saved["agent_daily_loss_limit_pct"]     = float(_loss_lim)
             _saved["agent_portfolio_size_usd"]       = float(_port_sz)
-            _alerts.save_alerts_config(_saved)
+            _save_alerts_config_and_clear(_saved)
             st.success("Agent config saved.")
 
     # ── Architecture notes ──
@@ -4821,18 +4862,7 @@ def page_agent():
     if _log_df.empty:
         st.info("No decisions recorded yet. Start the agent to begin logging.")
     else:
-        def _dec_color(v):
-            if v == "approve":
-                return "background-color: #c8f7e5"
-            if v == "reject":
-                return "background-color: #ffd6d6"
-            return ""
-        # APP-07: guard column existence before Styler to avoid KeyError
-        if "claude_decision" in _log_df.columns:
-            _styled = _log_df.style.map(_dec_color, subset=["claude_decision"])
-        else:
-            _styled = _log_df.style
-        st.dataframe(_styled, use_container_width=True, hide_index=True)
+        st.dataframe(_log_df, use_container_width=True, hide_index=True)
         st.download_button(
             "⬇ Download Agent Log CSV",
             data=_log_df.to_csv(index=False),

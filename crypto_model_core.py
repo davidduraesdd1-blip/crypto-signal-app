@@ -41,6 +41,13 @@ SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need <
 _OHLCV_CACHE: dict       = {}
 _OHLCV_CACHE_LOCK        = threading.Lock()
 _OHLCV_CACHE_TTL         = 300  # 5 minutes
+
+# PERF: Enriched DataFrame cache — avoids recomputing 24 technical indicators
+# (RSI, MACD, BB, ADX, Ichimoku, SuperTrend, HMM, etc.) on every coin click.
+# TTL slightly less than OHLCV TTL so it never serves enriched data for expired raw data.
+_ENRICHED_CACHE: dict    = {}
+_ENRICHED_CACHE_LOCK     = threading.Lock()
+_ENRICHED_CACHE_TTL      = 270  # 4.5 min — always expires before OHLCV (300s)
 TA_EXCHANGE = 'kraken'
 PAPER_EXCHANGE = 'krakenfutures'
 
@@ -286,11 +293,23 @@ def check_drawdown_circuit_breaker() -> dict:
 # ──────────────────────────────────────────────
 # EXCHANGE HELPERS
 # ──────────────────────────────────────────────
+_exchange_cache: dict = {}
+_exchange_cache_lock  = threading.Lock()
+
+
 def get_exchange_instance(name='kraken'):
+    """Return a cached CCXT exchange instance — avoids repeated load_markets() calls.
+    CCXT objects are not picklable so we use a module-level dict instead of st.cache_resource."""
+    with _exchange_cache_lock:
+        ex = _exchange_cache.get(name)
+        if ex is not None:
+            return ex
     try:
         ex_class = getattr(ccxt, name)
         ex = ex_class({'enableRateLimit': True, 'timeout': 15000})
         ex.load_markets()
+        with _exchange_cache_lock:
+            _exchange_cache[name] = ex
         return ex
     except Exception as e:
         logging.warning(f"Exchange {name} failed: {str(e)[:60]}")
@@ -323,6 +342,30 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
     except Exception as e:
         logging.warning(f"OHLCV failed {pair} {timeframe}: {str(e)[:60]}")
         return pd.DataFrame()
+
+
+def get_enriched_df(ex, pair: str, timeframe: str, limit: int = None) -> "pd.DataFrame":
+    """Return an indicator-enriched OHLCV DataFrame with caching.
+
+    Avoids recomputing all 24 technical indicators (RSI, MACD, BB, ADX, Ichimoku,
+    SuperTrend, HMM regime, etc.) on every coin selector change in the dashboard.
+    Cache TTL (270s) is shorter than OHLCV TTL (300s) so enriched data never
+    outlives its underlying raw candles.
+    """
+    _key = (pair, timeframe, limit)
+    _now = time.time()
+    with _ENRICHED_CACHE_LOCK:
+        _hit = _ENRICHED_CACHE.get(_key)
+        if _hit and (_now - _hit["ts"]) < _ENRICHED_CACHE_TTL:
+            return _hit["df"]
+    raw = robust_fetch_ohlcv(ex, pair, timeframe, limit=limit)
+    if raw.empty:
+        return raw
+    enriched = _enrich_df(raw)
+    with _ENRICHED_CACHE_LOCK:
+        _ENRICHED_CACHE[_key] = {"df": enriched, "ts": _now}
+    return enriched
+
 
 # ──────────────────────────────────────────────
 # PHASE 1: FEAR & GREED

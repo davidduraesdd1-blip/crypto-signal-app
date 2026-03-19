@@ -30,11 +30,13 @@ DB_FILE = "crypto_model.db"
 # Single write lock — mirrors _log_lock used in crypto_model_core.py
 _write_lock = threading.Lock()
 
-# ──────────────────────────────────────────────
-# CONNECTION FACTORY
-# ──────────────────────────────────────────────
-def _get_conn() -> sqlite3.Connection:
-    """Open a connection with WAL mode (concurrent reads, one writer)."""
+# PERF: Thread-local connection pool — reuses the same connection per thread
+# instead of re-opening and re-running all PRAGMAs on every _get_conn() call.
+_thread_local = threading.local()
+
+
+def _make_conn() -> sqlite3.Connection:
+    """Create a fresh SQLite connection with all performance PRAGMAs applied."""
     conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -47,7 +49,28 @@ def _get_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA temp_store=MEMORY")
     # PERF: checkpoint WAL less aggressively (default 1000 pages is fine; keep it)
     conn.execute("PRAGMA wal_autocheckpoint=1000")
+    # PERF: update query planner statistics once per connection
+    conn.execute("PRAGMA optimize")
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+# ──────────────────────────────────────────────
+# CONNECTION FACTORY
+# ──────────────────────────────────────────────
+def _get_conn() -> sqlite3.Connection:
+    """Return a per-thread cached connection — eliminates PRAGMA re-init overhead."""
+    conn = getattr(_thread_local, "conn", None)
+    if conn is None:
+        conn = _make_conn()
+        _thread_local.conn = conn
+    else:
+        # Verify connection is still alive (handles process restarts / DB file recreation)
+        try:
+            conn.execute("SELECT 1")
+        except (sqlite3.DatabaseError, sqlite3.ProgrammingError):
+            conn = _make_conn()
+            _thread_local.conn = conn
     return conn
 
 
