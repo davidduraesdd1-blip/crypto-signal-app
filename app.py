@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import json
 import logging
 import os
@@ -888,9 +889,9 @@ def page_dashboard():
             st.session_state["scan_running"] = False
             st.rerun()
 
-        # BUG-R08: reduced from 0.5s to 0.1s — 500ms blocking on the Streamlit
-        # server thread freezes UI interactions during the entire scan.
-        time.sleep(0.1)
+        # PERF: 0.3s poll — 3× less frequent than 0.1s (was 10 reruns/s; now 3/s)
+        # Still responsive enough to show progress updates promptly.
+        time.sleep(0.3)
         st.rerun()
 
     # On page load, always try to restore results from cache file if session is empty
@@ -1099,9 +1100,11 @@ def page_dashboard():
 
     # Quick-glance summary table
     _ui.section_header("Signal Summary", "All coins ranked by signal strength — select a coin below for full details", icon="⚡")
+    # PERF: pre-fetch all WS prices once — was N individual get_price() calls per result
+    _all_ws_prices = _ws.get_all_prices()
     summary_rows = []
     for r in results:
-        _st = _ws.get_price(r["pair"])
+        _st = _all_ws_prices.get(r["pair"])
         _live_str = (
             f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
         )
@@ -2733,7 +2736,6 @@ def page_backtest():
                     elif _pnl_val < 0:
                         _loss_x.append(_ti); _loss_y.append(_eq[_ti])
 
-        from plotly.subplots import make_subplots
         _efig = make_subplots(
             rows=2, cols=1,
             row_heights=[0.65, 0.35],
@@ -3062,9 +3064,8 @@ def page_backtest():
         _cm4.metric("Calibration Error (ECE)", f"{_ece * 100:.1f}%", help="Mean absolute deviation between predicted and actual win rate")
 
         # Calibration bar chart
-        import plotly.graph_objects as _go_cal
-        _fig_cal = _go_cal.Figure()
-        _fig_cal.add_trace(_go_cal.Bar(
+        _fig_cal = go.Figure()
+        _fig_cal.add_trace(go.Bar(
             x=_cal_summary["label"],
             y=_cal_summary["win_rate_pct"],
             name="Actual Win Rate",
@@ -3078,7 +3079,7 @@ def page_backtest():
         # Perfect calibration diagonal
         _diag_x = _cal_summary["label"].tolist()
         _diag_y = [(_r["conf_bucket"] + 5) for _, _r in _cal_summary.iterrows()]
-        _fig_cal.add_trace(_go_cal.Scatter(
+        _fig_cal.add_trace(go.Scatter(
             x=_diag_x, y=_diag_y,
             mode="lines", name="Perfect Calibration",
             line=dict(color="#ffffff", width=1, dash="dot"),
@@ -3780,14 +3781,14 @@ def page_market_overview():
             st.session_state["corr_matrix_data"] = None
             st.session_state["corr_error"] = err
         else:
-            st.session_state["corr_matrix_data"] = corr_matrix.to_dict()
-            st.session_state["corr_matrix_pairs"] = list(corr_matrix.columns)
+            # PERF: store DataFrame directly — was .to_dict() + pd.DataFrame() round-trip on every render
+            st.session_state["corr_matrix_data"] = corr_matrix
             st.session_state["corr_error"] = None
 
     cached = st.session_state.get("corr_matrix_data")
-    if cached:
-        pairs_list = st.session_state.get("corr_matrix_pairs", [])
-        corr_df = pd.DataFrame(cached, index=pairs_list, columns=pairs_list)
+    if cached is not None:
+        corr_df = cached
+        pairs_list = list(corr_df.columns)
 
         fig_corr = go.Figure(data=go.Heatmap(
             z=corr_df.values,
@@ -3807,15 +3808,16 @@ def page_market_overview():
         )
         st.plotly_chart(fig_corr, use_container_width=True)
 
-        # Highlight high-correlation pairs
+        # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
         st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
-        high_corr_rows = []
-        for i, a in enumerate(pairs_list):
-            for j, b in enumerate(pairs_list):
-                if i < j:
-                    val = corr_df.iloc[i, j]
-                    if abs(val) > 0.75:
-                        high_corr_rows.append({"Pair A": a, "Pair B": b, "Correlation": round(val, 3)})
+        _corr_arr = corr_df.values
+        _rows_idx, _cols_idx = np.where(
+            (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
+        )
+        high_corr_rows = [
+            {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
+            for i, j in zip(_rows_idx, _cols_idx)
+        ]
         if high_corr_rows:
             st.dataframe(pd.DataFrame(high_corr_rows), use_container_width=True, hide_index=True)
         else:
