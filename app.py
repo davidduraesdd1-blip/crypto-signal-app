@@ -862,50 +862,54 @@ def page_dashboard():
     is_scanning = st.session_state.get("scan_running", False) or _scan_running_now2 or status.get("running", False)
 
     if is_scanning:
-        # Read progress from module-level dict first, fall back to file
-        with _scan_lock:
-            prog = _scan_state["progress"] if _scan_state["progress"] is not None else status.get("progress", 0)
-            pair_name = _scan_state["progress_pair"] if _scan_state["progress_pair"] is not None else status.get("pair", "")
-        total = len(model.PAIRS)
+        # PERF-FRAGMENT: st.fragment(run_every=0.5) means only this section re-renders
+        # every 0.5 seconds — NOT the entire page. Eliminates time.sleep(0.3) + full
+        # st.rerun() which previously re-rendered sidebars, CSS, headers on every poll.
+        @st.fragment(run_every=0.5)
+        def _scan_progress():
+            _st = _read_scan_status()
+            with _scan_lock:
+                _prog      = _scan_state.get("progress") or _st.get("progress", 0)
+                _pair      = _scan_state.get("progress_pair") or _st.get("pair", "")
+                _running   = _scan_state["running"]
+            _total = len(model.PAIRS)
 
-        # PERF-PROGRESSIVE: show engaging loading screen with fun facts + partial results
-        _fact_idx = int(time.time() / 4) % 15   # rotate fact every 4 seconds
-        st.markdown(
-            _ui.loading_screen_html(prog, total, pair_name, fact_index=_fact_idx),
-            unsafe_allow_html=True,
-        )
-
-        # Show partial results as they arrive — users see first results within ~5s
-        _partial = model.get_partial_scan_results()
-        if _partial:
+            # Engaging loading screen: SVG progress ring + rotating crypto fun facts
+            _fact_idx = int(time.time() / 4) % 15
             st.markdown(
-                f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
-                f'font-weight:600;margin:4px 0 8px 0;">'
-                f'⚡ {len(_partial)} of {total} coins ready — more arriving...</div>',
-                unsafe_allow_html=True,
-            )
-            _all_ws_partial = _ws.get_all_prices()
-            st.markdown(
-                _ui.coin_cards_grid_html(_partial, ws_prices=_all_ws_partial),
+                _ui.loading_screen_html(_prog, _total, _pair, fact_index=_fact_idx),
                 unsafe_allow_html=True,
             )
 
-        # Check if scan just finished (status says not running, or status is empty = DB error)
-        with _scan_lock:
-            _still_running = _scan_state["running"]
-        if not status.get("running", False) and not _still_running:
-            cached = _read_scan_results()
-            if cached is not None:
-                st.session_state["scan_results"] = cached
-                st.session_state["scan_error"] = status.get("error")
-                st.session_state["scan_timestamp"] = status.get("timestamp")
-            st.session_state["scan_running"] = False
-            st.rerun()
+            # Progressive card grid — real cards for completed pairs + skeletons for pending
+            _partial = model.get_partial_scan_results()
+            _n_done  = len(_partial)
+            _n_wait  = _total - _n_done
+            if _n_done > 0:
+                st.markdown(
+                    f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
+                    f'font-weight:600;margin:4px 0 8px 0;">'
+                    f'⚡ {_n_done} of {_total} coins ready — more arriving...</div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown(
+                _ui.coin_cards_grid_html(_partial, ws_prices=_ws.get_all_prices())
+                + (_ui.skeleton_cards_html(_n_wait) if _n_wait > 0 else ""),
+                unsafe_allow_html=True,
+            )
 
-        # PERF: 0.3s poll — 3× less frequent than 0.1s (was 10 reruns/s; now 3/s)
-        # Still responsive enough to show progress updates promptly.
-        time.sleep(0.3)
-        st.rerun()
+            # Detect completion → trigger full-page rerun to show final results
+            if not _st.get("running", False) and not _running:
+                cached = _read_scan_results()
+                if cached is not None:
+                    st.session_state["scan_results"] = cached
+                    st.session_state["scan_error"]     = _st.get("error")
+                    st.session_state["scan_timestamp"] = _st.get("timestamp")
+                st.session_state["scan_running"] = False
+                st.rerun()  # Full page rerun — shows complete results
+
+        _scan_progress()
+        return  # Don't render the results section while scan is in progress
 
     # On page load, always try to restore results from cache file if session is empty
     if not st.session_state.get("scan_results"):
@@ -1254,17 +1258,20 @@ def page_dashboard():
     # ── Row 2: Take Profit · Signal Strength · Trade Size ─────────────────────
     bot_cols = st.columns(3)
     _tp1_val = r.get("tp1") or exit_
-    bot_cols[0].metric("Take Profit Target", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
-                       help="Where to take your profits. Consider selling here.")
-    bot_cols[1].metric("Signal Strength", f"{conf}%",
-                       help="How confident the model is. 70%+ = strong signal, below 50% = weak.")
+    bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
+                       help="This is your TARGET — the price to sell at and take your profit. Think of it as the finish line.")
+    # Score out of 10 alongside % — research shows teens prefer a 1-10 scale
+    _score_10 = max(1, min(10, round(conf / 10)))
+    bot_cols[1].metric("Confidence Score", f"{_score_10}/10  ({conf:.0f}%)",
+                       help="How confident the model is. 7+/10 = strong signal. 5 or below = uncertain — don't trade this. Like a teacher grading the signal.")
     bot_cols[2].metric("Suggested Trade Size", f"{pos_pct}% of funds" if pos_pct else "N/A",
-                       help="How much of your total funds to use for this trade. Keep it small.")
+                       help="How much of your total money to use. If you have $1,000, and it says 10%, use only $100. This protects you if things go wrong.")
 
     # Confidence progress bar — visual bar is more intuitive than a raw % for beginners
+    _bar_color = "🟢" if conf >= 70 else ("🟡" if conf >= 50 else "🔴")
     st.progress(
         min(conf / 100.0, 1.0),
-        text=f"Signal strength: {conf:.0f}% confident",
+        text=f"{_bar_color} Confidence: {_score_10}/10  ({conf:.0f}%) — {'Strong signal' if conf >= 70 else 'Moderate signal' if conf >= 50 else 'Weak signal — use caution'}",
     )
 
     # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
@@ -1334,22 +1341,40 @@ def page_dashboard():
             with _tf_info_col:
                 _ui.tf_column_guide_popover()
             _tf_rows = []
+            # Plain-English timeframe labels (research: teens respond to time they understand)
+            _TF_PLAIN = {"1h": "1 Hour", "4h": "4 Hours", "1d": "Daily", "1w": "Weekly"}
             for tf, td in tf_data.items():
                 _td_dir = td.get("direction", "N/A")
                 _no_data = _td_dir in ("NO DATA", "N/A")
                 _td_conf = td.get("confidence", 0)
+                _rsi_raw = td.get("rsi", "N/A")
+                # Plain English RSI — "Heat Level: Overheated (72)", "Heat Level: Cool (28)"
+                try:
+                    _rsi_v = float(_rsi_raw)
+                    if _rsi_v >= 70:
+                        _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
+                    elif _rsi_v <= 30:
+                        _rsi_str = f"🧊 Very Cool ({_rsi_v:.0f})"
+                    elif _rsi_v >= 55:
+                        _rsi_str = f"Warm ({_rsi_v:.0f})"
+                    elif _rsi_v <= 45:
+                        _rsi_str = f"Cool ({_rsi_v:.0f})"
+                    else:
+                        _rsi_str = f"Neutral ({_rsi_v:.0f})"
+                except (ValueError, TypeError):
+                    _rsi_str = str(_rsi_raw)
                 _tf_rows.append({
-                    "Timeframe": tf,
+                    "Time Period": _TF_PLAIN.get(tf, tf),
                     "Signal": _td_dir,
                     # Show "—" instead of "0%" when a timeframe returned no data
                     "Strength": "—" if _no_data else f"{_td_conf}%",
-                    "Momentum (RSI)": td.get("rsi", "N/A"),
-                    "Trend Strength (ADX)": td.get("adx", "N/A"),
+                    "Heat Level (RSI)": _rsi_str,
+                    "Trend Power (ADX)": td.get("adx", "N/A"),
                     "Trend Direction": td.get("supertrend", "N/A"),
                     "Market Mode": _ui.regime_label(td.get("regime", "")),
                     "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
                 })
-            st.dataframe(pd.DataFrame(_tf_rows).set_index("Timeframe"), use_container_width=True)
+            st.dataframe(pd.DataFrame(_tf_rows).set_index("Time Period"), use_container_width=True)
 
     # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
     try:

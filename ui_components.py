@@ -2127,6 +2127,81 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
 </div>"""
 
 
+# ─── Skeleton shimmer cards (shown for pending pairs while others load) ────────
+
+_SKELETON_CSS = """
+<style>
+@keyframes skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton-card {
+    background: linear-gradient(
+        90deg,
+        rgba(30,35,55,0.8) 25%,
+        rgba(50,57,85,0.6) 50%,
+        rgba(30,35,55,0.8) 75%
+    );
+    background-size: 400px 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    min-height: 170px;
+}
+.skeleton-line {
+    background: linear-gradient(
+        90deg,
+        rgba(255,255,255,0.04) 25%,
+        rgba(255,255,255,0.08) 50%,
+        rgba(255,255,255,0.04) 75%
+    );
+    background-size: 400px 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+    border-radius: 6px;
+    height: 12px;
+    margin: 8px 0;
+}
+</style>
+"""
+
+
+def skeleton_cards_html(n: int) -> str:
+    """
+    Render n shimmer skeleton cards to fill remaining grid slots while coins
+    are still being analyzed. Each card shows animated grey-glow placeholders
+    instead of a boring spinner — makes the loading feel premium and fast.
+    """
+    if n <= 0:
+        return ""
+
+    def _skeleton_card() -> str:
+        return """
+<div class="skeleton-card" style="padding:18px 20px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <div class="skeleton-line" style="width:80px;height:18px;"></div>
+    <div class="skeleton-line" style="width:50px;height:18px;border-radius:99px;"></div>
+  </div>
+  <div class="skeleton-line" style="width:120px;height:26px;margin:10px 0 14px 0;"></div>
+  <div class="skeleton-line" style="width:100%;height:6px;border-radius:3px;"></div>
+  <div style="display:flex;gap:12px;margin-top:16px;">
+    <div>
+      <div class="skeleton-line" style="width:35px;height:9px;"></div>
+      <div class="skeleton-line" style="width:70px;height:14px;"></div>
+    </div>
+    <div>
+      <div class="skeleton-line" style="width:55px;height:9px;"></div>
+      <div class="skeleton-line" style="width:70px;height:14px;"></div>
+    </div>
+  </div>
+  <div style="margin-top:12px;font-size:11px;color:rgba(168,180,200,0.3);text-align:center;">
+    ⏳ Analyzing...
+  </div>
+</div>"""
+
+    cards = "".join(_skeleton_card() for _ in range(n))
+    return f"{_SKELETON_CSS}<div style='display:contents'>{cards}</div>"
+
+
 # ─── Fun loading screen while scan runs ────────────────────────────────────────
 
 _CRYPTO_FACTS = [
