@@ -99,7 +99,7 @@ def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
         for item in results[:15]:
             title = item.get("title", "")
             # CryptoPanic includes its own sentiment; use as hint
-            votes = item.get("votes", {})
+            votes = item.get("votes") or {}
             sentiment_hint = ""
             if votes.get("positive", 0) > votes.get("negative", 0):
                 sentiment_hint = " [positive votes]"
