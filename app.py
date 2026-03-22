@@ -1880,7 +1880,7 @@ def _run_scan_thread():
             model.run_feedback_loop()
         except Exception as _fb_err:
             logging.warning(f"Feedback loop error: {_fb_err}")
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
         _write_scan_status(running=False, timestamp=ts, error=None)
         # Check paper position exits using fresh scan prices

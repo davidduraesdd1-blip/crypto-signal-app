@@ -128,7 +128,7 @@ def run_scan_job() -> None:
         except Exception as _fb:
             logger.warning("[Scheduler] Feedback loop error (non-critical): %s", _fb)
 
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         _db.write_scan_results(results)
         _db.write_scan_status(False, timestamp=ts, error=None, progress=100)
 
