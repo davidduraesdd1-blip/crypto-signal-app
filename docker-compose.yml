@@ -6,6 +6,22 @@ volumes:
 
 services:
 
+  # ── Background scheduler — runs scans + AI feedback loop 24/7 ─────────────
+  scheduler:
+    build: .
+    container_name: crypto_scheduler
+    command: python scheduler.py
+    restart: unless-stopped
+    volumes:
+      - crypto_data:/app
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── Streamlit UI ─────────────────────────────────────────────────────────
   streamlit:
     build: .
