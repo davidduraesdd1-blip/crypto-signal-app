@@ -263,12 +263,43 @@ _scheduler: BackgroundScheduler | None = None
 _AUTOSCAN_JOB_ID = "autoscan_job"
 
 
+_CALIBRATION_JOB_ID = "calibration_job"
+
+
 def _get_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is None:
         _scheduler = BackgroundScheduler(daemon=True)
         _scheduler.start()
+        # Start alert threshold calibration job (runs every 6 hours)
+        _setup_calibration_job()
     return _scheduler
+
+
+def _setup_calibration_job():
+    """Schedule AI feedback loop calibration to run every 6 hours."""
+    def _run_calibration():
+        try:
+            from ai_feedback import calibrate_alert_thresholds
+            result = calibrate_alert_thresholds()
+            if result.get("calibrated"):
+                logging.info(
+                    "[Calibration] Threshold %s → %.1f%% (n=%d)",
+                    result.get("direction"), result.get("new_threshold", 0), result.get("samples", 0),
+                )
+        except Exception as e:
+            logging.warning("[Calibration] Failed: %s", e)
+
+    sched = _scheduler
+    if sched and not sched.get_job(_CALIBRATION_JOB_ID):
+        sched.add_job(
+            _run_calibration,
+            trigger="interval",
+            hours=6,
+            id=_CALIBRATION_JOB_ID,
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(hours=1),
+        )
 
 
 def _setup_autoscan(interval_minutes: int):

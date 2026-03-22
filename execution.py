@@ -19,7 +19,7 @@ import logging
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import database as db
@@ -211,7 +211,7 @@ def place_order(
             "size_usd": size_usd, "order_type": order_type,
             "price": current_price, "order_id": None,
             "error": f"Invalid direction: {direction!r}. Must contain BUY or SELL.",
-            "placed_at": datetime.now().isoformat(),
+            "placed_at": datetime.now(timezone.utc).isoformat(),
         }
     if size_usd <= 0:
         return {
@@ -220,7 +220,7 @@ def place_order(
             "size_usd": size_usd, "order_type": order_type,
             "price": current_price, "order_id": None,
             "error": f"Invalid size_usd={size_usd}: must be > 0.",
-            "placed_at": datetime.now().isoformat(),
+            "placed_at": datetime.now(timezone.utc).isoformat(),
         }
     side   = "buy" if "BUY" in _dir_upper else "sell"
     symbol = _to_swap_symbol(pair)
@@ -236,7 +236,7 @@ def place_order(
         "price":        current_price,
         "order_id":     None,
         "error":        None,
-        "placed_at":    datetime.now().isoformat(),
+        "placed_at":    datetime.now(timezone.utc).isoformat(),
         "slippage_pct": None,
     }
 
@@ -411,7 +411,7 @@ def _log_to_db(result: dict) -> None:
     """Persist execution result to database.execution_log (best-effort)."""
     try:
         db.log_execution(
-            placed_at    = result.get("placed_at", datetime.now().isoformat()),
+            placed_at    = result.get("placed_at", datetime.now(timezone.utc).isoformat()),
             pair         = result.get("pair", ""),
             direction    = result.get("direction", ""),
             side         = result.get("side", ""),
@@ -551,7 +551,7 @@ def place_iceberg_order(
         "price":       current_price,
         "order_id":    None,
         "error":       None,
-        "placed_at":   datetime.now().isoformat(),
+        "placed_at":   datetime.now(timezone.utc).isoformat(),
         "slippage_pct": None,
     }
 

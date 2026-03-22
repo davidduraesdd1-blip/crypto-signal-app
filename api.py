@@ -98,15 +98,14 @@ _api_key_lock = threading.Lock()
 
 
 def _get_configured_api_key() -> str:
-    now = time.time()
     with _api_key_lock:
-        if now - _api_key_cache["ts"] < _API_KEY_CACHE_TTL:
+        if time.time() - _api_key_cache["ts"] < _API_KEY_CACHE_TTL:
             return _api_key_cache["key"] or ""
     cfg = alerts.load_alerts_config()
     key = cfg.get("api_key", "")
     with _api_key_lock:
         _api_key_cache["key"] = key
-        _api_key_cache["ts"] = now
+        _api_key_cache["ts"] = time.time()   # timestamp after I/O for accurate TTL
     return key
 
 

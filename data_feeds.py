@@ -358,7 +358,7 @@ def get_open_interest_batch(pairs: list) -> dict:
         return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_open_interest, pair) for pair in pairs}
-    return {pair: f.result() for pair, f in futures.items()}
+        return {pair: f.result() for pair, f in futures.items()}
 
 
 # ──────────────────────────────────────────────
@@ -437,7 +437,7 @@ def get_options_iv_batch(pairs: list) -> dict:
         return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_options_iv, pair) for pair in pairs}
-    return {pair: f.result() for pair, f in futures.items()}
+        return {pair: f.result() for pair, f in futures.items()}
 
 
 # ──────────────────────────────────────────────
@@ -507,7 +507,7 @@ def get_orderbook_batch(pairs: list) -> dict:
         return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_orderbook_depth, pair) for pair in pairs}
-    return {pair: f.result() for pair, f in futures.items()}
+        return {pair: f.result() for pair, f in futures.items()}
 
 
 # ──────────────────────────────────────────────

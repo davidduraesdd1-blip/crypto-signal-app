@@ -2199,6 +2199,23 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         if rl_mult != 1.0:
             score = score * rl_mult
 
+        # ── News Sentiment bias (max ±10 pts) ───────────────────────────────────
+        # Claude Haiku-classified headline sentiment; 0 if API unavailable
+        try:
+            from news_sentiment import get_sentiment_score_bias as _news_bias_fn
+            score += _news_bias_fn(pair)
+        except Exception:
+            pass
+
+        # ── Allora Network decentralized price prediction bias (max ±10 pts) ────
+        # If Allora predicts significantly above/below current price, adjust score
+        try:
+            from allora import get_allora_price_bias as _allora_bias_fn
+            _current_price = float(df['close'].iloc[-1])
+            score += _allora_bias_fn(pair, _current_price)
+        except Exception:
+            pass
+
         score = max(0, min(100, score))
         # T2-A: Sigmoid calibration — converts raw score to a more decisive probability-like value.
         # Maps: 50→50, 65→72, 75→80, 45→28, 35→20. Scale=20 keeps changes moderate.

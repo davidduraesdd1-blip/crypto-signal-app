@@ -157,7 +157,7 @@ def _estimate_eth_whale_activity(price_usd: float) -> list[dict]:
         mkt = data.get("market_data", {})
         vol_24h = mkt.get("total_volume", {}).get("usd", 0)
         # Very rough: if vol/mcap ratio is high → increased whale activity
-        mcap = mkt.get("market_cap", {}).get("usd", 1)
+        mcap = (mkt.get("market_cap") or {}).get("usd", 1) if isinstance(mkt.get("market_cap"), dict) else 1
         ratio = vol_24h / mcap if mcap else 0
         if ratio > 0.10:
             return [{"amount_usd": vol_24h * 0.01, "direction": "mixed", "txid": "estimated"}]
