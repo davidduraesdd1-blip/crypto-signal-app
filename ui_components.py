@@ -2070,46 +2070,14 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
     transition:transform 0.15s ease,box-shadow 0.15s ease;
     min-height:170px;
 ">
-  <!-- accent glow top-left -->
-  <div style="position:absolute;top:-20px;left:-20px;width:80px;height:80px;
-              border-radius:50%;background:{color};opacity:0.06;filter:blur(20px);"></div>
+  <div style="position:absolute;top:-20px;left:-20px;width:80px;height:80px;border-radius:50%;background:{color};opacity:0.06;filter:blur(20px);"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:18px;font-weight:900;color:#e8ecf4;font-family:JetBrains Mono,monospace;letter-spacing:-0.5px;">{sym}</span>{hc_badge}<span style="font-size:22px;background:{bg};border-radius:8px;padding:2px 8px;">{emoji}</span></div>
 
-  <!-- header row -->
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-    <span style="font-size:18px;font-weight:900;color:#e8ecf4;font-family:JetBrains Mono,monospace;letter-spacing:-0.5px;">{sym}</span>
-    {hc_badge}
-    <span style="font-size:22px;background:{bg};border-radius:8px;padding:2px 8px;">{emoji}</span>
-  </div>
-
-  <!-- live price -->
   {live_html}
-
-  <!-- BIG action label -->
-  <div style="font-size:26px;font-weight:900;color:{color};letter-spacing:-0.5px;
-              line-height:1;margin:6px 0 4px 0;text-shadow:0 0 20px {color}55;">
-    {label}
-  </div>
-
-  <!-- score bar -->
+  <div style="font-size:26px;font-weight:900;color:{color};letter-spacing:-0.5px;line-height:1;margin:6px 0 4px 0;text-shadow:0 0 20px {color}55;">{label}</div>
   {_score_bar(score, color)}
-  <div style="font-size:11px;color:rgba(168,180,200,0.55);margin-bottom:8px;">
-    Confidence: <span style="color:{color};font-weight:700;">{score}/10</span>
-    &nbsp;·&nbsp; {conf:.0f}%
-  </div>
-
-  <!-- entry / stop -->
-  <div style="display:flex;gap:12px;font-size:11px;">
-    <div>
-      <div style="color:rgba(168,180,200,0.45);text-transform:uppercase;
-                  letter-spacing:0.8px;font-size:9px;font-weight:600;">Entry</div>
-      <div style="color:#e8ecf4;font-family:JetBrains Mono,monospace;font-weight:600;">{entry_str}</div>
-    </div>
-    <div>
-      <div style="color:rgba(168,180,200,0.45);text-transform:uppercase;
-                  letter-spacing:0.8px;font-size:9px;font-weight:600;">Stop Loss</div>
-      <div style="color:#f6465d;font-family:JetBrains Mono,monospace;font-weight:600;">{stop_str}</div>
-    </div>
-  </div>
+  <div style="font-size:11px;color:rgba(168,180,200,0.55);margin-bottom:8px;">Confidence: <span style="color:{color};font-weight:700;">{score}/10</span> &nbsp;·&nbsp; {conf:.0f}%</div>
+  <div style="display:flex;gap:12px;font-size:11px;"><div><div style="color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:0.8px;font-size:9px;font-weight:600;">Entry</div><div style="color:#e8ecf4;font-family:JetBrains Mono,monospace;font-weight:600;">{entry_str}</div></div><div><div style="color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:0.8px;font-size:9px;font-weight:600;">Stop Loss</div><div style="color:#f6465d;font-family:JetBrains Mono,monospace;font-weight:600;">{stop_str}</div></div></div>
 </div>"""
 
     # Build 3-column grid
