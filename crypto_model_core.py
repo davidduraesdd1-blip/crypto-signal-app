@@ -3856,7 +3856,10 @@ def run_scan(progress_callback=None):
     fng_value, fng_category = fetch_fear_greed()
     ta_ex = get_exchange_instance(TA_EXCHANGE)
     if not ta_ex:
-        return []
+        raise RuntimeError(
+            f"Cannot connect to {TA_EXCHANGE} exchange — check network connectivity "
+            "and API configuration on the server."
+        )
 
     # Drawdown circuit breaker — checked once per scan run
     circuit_breaker = check_drawdown_circuit_breaker()
