@@ -367,6 +367,12 @@ def init_db():
             # T3-11: slippage tracking column in execution_log
             _add_col('execution_log', 'slippage_pct', 'REAL')
 
+            # Backtest schema migration — add columns added after initial release
+            _add_col('backtest_trades', 'gross_pnl_pct',  'REAL')
+            _add_col('backtest_trades', 'fee_usd',        'REAL')
+            _add_col('backtest_trades', 'slippage_usd',   'REAL')
+            _add_col('backtest_trades', 'pos_pct',        'REAL')
+
             # BUG-02: commit ALTER TABLE additions before index creation so a
             # crash between the two steps does not leave both uncommitted
             conn.commit()
