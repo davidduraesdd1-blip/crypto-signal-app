@@ -108,7 +108,6 @@ for _mod in ACTIVE_MODULES:
 try:
     import app as _app_mod
     _ok("import app")
-    _pass += 1
     _imported["app"] = _app_mod
 except Exception as _e:
     _err = str(_e)

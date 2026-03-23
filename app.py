@@ -3019,7 +3019,7 @@ def page_backtest():
                                        key="n_mc_sims")
                 if st.button("Run Monte Carlo", type="secondary", use_container_width=True,
                              key="btn_monte_carlo"):
-                    with st.spinner(f"Running {int(n_mc, show_time=True)} Monte Carlo simulations..."):
+                    with st.spinner(f"Running {int(n_mc)} Monte Carlo simulations...", show_time=True):
                         mc_res = model.run_monte_carlo(df_trades, n_sim=int(n_mc))
                     st.session_state["mc_result"] = mc_res
 
@@ -3074,7 +3074,7 @@ def page_backtest():
 
     if st.button("Run Walk-Forward Validation", type="secondary", use_container_width=True,
                  key="btn_wf"):
-        with st.spinner(f"Running {int(wf_splits, show_time=True)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)"):
+        with st.spinner(f"Running {int(wf_splits)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)", show_time=True):
             wf_res = model.run_walk_forward(n_splits=int(wf_splits), pair=wf_pair, tf=wf_tf)
         st.session_state["wf_result"] = wf_res
 
@@ -3116,7 +3116,7 @@ def page_backtest():
         db_pos = st.number_input("Position Size %", 2.0, 25.0, 10.0, step=1.0, key="db_pos")
 
     if st.button("Run Deep Backtest", type="primary", use_container_width=True, key="btn_deep_bt"):
-        with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min, show_time=True)"):
+        with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min)", show_time=True):
             deep_r = model.run_deep_backtest(
                 pair=db_pair, tf=db_tf, years=float(db_years), pos_pct=float(db_pos)
             )
@@ -4043,7 +4043,7 @@ def page_market_overview():
         _run_coint = st.button("Scan for Pair Trades", type="primary", use_container_width=True, key="run_coint")
 
     if _run_coint:
-        with st.spinner(f"Testing {len(model.PAIRS, show_time=True) * (len(model.PAIRS) - 1) // 2} pair combinations..."):
+        with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
             _coint_results, _coint_err = model.run_cointegration_scan(
                 pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
             )
