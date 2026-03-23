@@ -2178,6 +2178,179 @@ def get_fear_greed_bias() -> float:
 # EXPONENTIAL BACKOFF RETRY WRAPPER
 # ──────────────────────────────────────────────
 
+# ──────────────────────────────────────────────
+# GECKOTERMINAL — FREE DEX POOL DATA (no API key)
+# ──────────────────────────────────────────────
+
+_GECKO_CACHE: dict = {}
+_GECKO_LOCK = threading.Lock()
+_GECKO_TTL = 120  # 2-minute cache
+
+
+def fetch_geckoterminal_trending(network: str = "eth") -> list[dict]:
+    """
+    Fetch trending DEX pools from GeckoTerminal — FREE, no API key required.
+    Returns list of top pools with volume, price change, and liquidity.
+    Supported networks: eth, bsc, polygon, arbitrum, base, solana, flare
+    """
+    now = time.time()
+    cache_key = f"gecko_trending_{network}"
+    with _GECKO_LOCK:
+        cached = _GECKO_CACHE.get(cache_key, {})
+        if cached and now - cached.get("_ts", 0) < _GECKO_TTL:
+            return cached.get("data", [])
+    try:
+        url = f"https://api.geckoterminal.com/api/v2/networks/{network}/trending_pools"
+        headers = {"Accept": "application/json;version=20230302"}
+        resp = _SESSION.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            pools = resp.json().get("data", [])
+            results = []
+            for pool in pools[:10]:
+                attr = pool.get("attributes", {})
+                results.append({
+                    "name":             attr.get("name", ""),
+                    "address":          attr.get("address", ""),
+                    "price_usd":        float(attr.get("base_token_price_usd", 0) or 0),
+                    "volume_24h":       float((attr.get("volume_usd") or {}).get("h24", 0) or 0),
+                    "price_change_24h": float((attr.get("price_change_percentage") or {}).get("h24", 0) or 0),
+                    "liquidity_usd":    float(attr.get("reserve_in_usd", 0) or 0),
+                    "data_source":      "geckoterminal_live",
+                    "network":          network,
+                })
+            with _GECKO_LOCK:
+                _GECKO_CACHE[cache_key] = {"data": results, "_ts": now}
+            return results
+    except Exception as e:
+        logging.debug("GeckoTerminal trending fetch failed (%s): %s", network, e)
+    return []
+
+
+def fetch_geckoterminal_ohlcv(network: str, pool_address: str, timeframe: str = "hour", limit: int = 24) -> list[dict]:
+    """
+    Fetch OHLCV candles for a specific pool from GeckoTerminal — FREE.
+    timeframe options: minute, hour, day
+    """
+    try:
+        url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/ohlcv/{timeframe}"
+        headers = {"Accept": "application/json;version=20230302"}
+        params = {"limit": min(limit, 1000), "currency": "usd"}
+        resp = _SESSION.get(url, headers=headers, params=params, timeout=10)
+        if resp.status_code == 200:
+            ohlcv_list = resp.json().get("data", {}).get("attributes", {}).get("ohlcv_list", [])
+            return [
+                {"timestamp": int(c[0]), "open": float(c[1]), "high": float(c[2]),
+                 "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
+                for c in ohlcv_list
+            ]
+    except Exception as e:
+        logging.debug("GeckoTerminal OHLCV failed: %s", e)
+    return []
+
+
+# ──────────────────────────────────────────────
+# DEFILLAMA — FREE YIELD DATA (no API key)
+# ──────────────────────────────────────────────
+
+_LLAMA_CACHE: dict = {}
+_LLAMA_LOCK = threading.Lock()
+_LLAMA_TTL = 300  # 5-minute cache
+
+
+def fetch_defillama_top_yields(min_apy: float = 5.0, max_apy: float = 50.0, top_n: int = 20) -> list[dict]:
+    """
+    Fetch top yield pools from DeFiLlama — FREE, no API key.
+    Filters for realistic, credible yields (>$1M TVL, 5–50% APY range).
+    """
+    now = time.time()
+    with _LLAMA_LOCK:
+        cached = _LLAMA_CACHE.get("top_yields", {})
+        if cached and now - cached.get("_ts", 0) < _LLAMA_TTL:
+            return cached.get("data", [])
+    try:
+        resp = _SESSION.get("https://yields.llama.fi/pools", timeout=15)
+        if resp.status_code == 200:
+            pools = resp.json().get("data", [])
+            filtered = [
+                p for p in pools
+                if p.get("apy") and min_apy <= p["apy"] <= max_apy
+                and p.get("tvlUsd", 0) > 1_000_000
+                and not p.get("ilRisk")  # skip high-IL pools for signal purity
+            ]
+            filtered.sort(key=lambda x: x.get("tvlUsd", 0), reverse=True)
+            result = filtered[:top_n]
+            with _LLAMA_LOCK:
+                _LLAMA_CACHE["top_yields"] = {"data": result, "_ts": now}
+            return result
+    except Exception as e:
+        logging.debug("DeFiLlama yields fetch failed: %s", e)
+    return []
+
+
+def fetch_defillama_protocol_tvl(protocol_slug: str) -> dict:
+    """
+    Fetch TVL history for a specific protocol — FREE.
+    Example slugs: 'aave', 'uniswap', 'hyperliquid'
+    """
+    try:
+        resp = _SESSION.get(f"https://api.llama.fi/protocol/{protocol_slug}", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            tvl_list = data.get("tvl", [])
+            current_tvl = tvl_list[-1]["totalLiquidityUSD"] if tvl_list else 0
+            return {
+                "protocol":    protocol_slug,
+                "current_tvl": current_tvl,
+                "name":        data.get("name", protocol_slug),
+                "category":    data.get("category", ""),
+                "chains":      data.get("chains", []),
+            }
+    except Exception as e:
+        logging.debug("DeFiLlama protocol TVL failed (%s): %s", protocol_slug, e)
+    return {}
+
+
+# ──────────────────────────────────────────────
+# COIN METRICS — FREE COMMUNITY ON-CHAIN DATA
+# ──────────────────────────────────────────────
+
+_CM_CACHE: dict = {}
+_CM_LOCK = threading.Lock()
+_CM_TTL = 3600  # 1-hour cache (daily metrics don't change faster)
+
+
+def fetch_coin_metrics_onchain(assets: str = "btc,eth", metrics: str = "AdrActCnt,TxCnt") -> list[dict]:
+    """
+    Fetch on-chain metrics from Coin Metrics Community API — FREE, no API key.
+    AdrActCnt = daily active addresses
+    TxCnt     = daily transaction count
+    Returns last 7 days of data per asset.
+    """
+    now = time.time()
+    cache_key = f"cm_{assets}_{metrics}"
+    with _CM_LOCK:
+        cached = _CM_CACHE.get(cache_key, {})
+        if cached and now - cached.get("_ts", 0) < _CM_TTL:
+            return cached.get("data", [])
+    try:
+        url = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+        params = {
+            "assets":          assets,
+            "metrics":         metrics,
+            "frequency":       "1d",
+            "limit_per_asset": 7,
+        }
+        resp = _SESSION.get(url, params=params, timeout=10)
+        if resp.status_code == 200:
+            result = resp.json().get("data", [])
+            with _CM_LOCK:
+                _CM_CACHE[cache_key] = {"data": result, "_ts": now}
+            return result
+    except Exception as e:
+        logging.debug("Coin Metrics community API failed: %s", e)
+    return []
+
+
 def _with_retry(fn, *args, max_attempts: int = 3, base_delay: float = 1.0, **kwargs):
     """
     Call fn(*args, **kwargs) with exponential backoff on exception.

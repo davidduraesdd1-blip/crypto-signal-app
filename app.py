@@ -1553,7 +1553,7 @@ def page_dashboard():
         if cached:
             st.info(cached)
         else:
-            with st.spinner("Asking Claude..."):
+            with st.spinner("Asking Claude...", show_time=True):
                 explanation = _llm.get_signal_explanation(pair, r)
             st.session_state[ai_key] = explanation
             st.info(explanation)
@@ -1673,7 +1673,7 @@ def page_dashboard():
         try:
             exchange = model.get_exchange_instance(model.TA_EXCHANGE)
             if exchange:
-                with st.spinner(f"Fetching {chart_pair} {chart_tf}..."):
+                with st.spinner(f"Fetching {chart_pair} {chart_tf}...", show_time=True):
                     ohlcv = exchange.fetch_ohlcv(chart_pair, chart_tf, limit=250)
                 r_sel = next((r for r in results if r["pair"] == chart_pair), {})
                 st.session_state["chart_html"] = _chart.build_chart_html(
@@ -2179,7 +2179,7 @@ def page_config():
                               index=0, key="opt_tf")
 
     if st.button("Run Optuna Optimization", type="primary", use_container_width=True):
-        with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}..."):
+        with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}...", show_time=True):
             result = model.run_optuna_weight_optimization(
                 n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
             )
@@ -2209,7 +2209,7 @@ def page_config():
         st.info(f"Current model: trained {lgbm_info['trained_at']} on {lgbm_info['n_samples']} samples")
 
     if st.button("Retrain LightGBM from Feedback", type="secondary", use_container_width=True, key="btn_lgbm_retrain"):
-        with st.spinner("Retraining LightGBM on resolved trade outcomes..."):
+        with st.spinner("Retraining LightGBM on resolved trade outcomes...", show_time=True):
             lgbm_r = model.retrain_lgbm_from_feedback()
         if lgbm_r.get("success"):
             st.success(lgbm_r["message"])
@@ -2506,7 +2506,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
         if not _es.get("keys_configured", False):
             st.warning("No API keys saved — enter and save keys first.")
         else:
-            with st.spinner("Connecting to OKX..."):
+            with st.spinner("Connecting to OKX...", show_time=True):
                 _conn = _exec.test_connection()
             if _conn["ok"]:
                 st.success(f"Connected! USDT Balance: ${_conn['balance_usdt']:,.2f}")
@@ -3019,7 +3019,7 @@ def page_backtest():
                                        key="n_mc_sims")
                 if st.button("Run Monte Carlo", type="secondary", use_container_width=True,
                              key="btn_monte_carlo"):
-                    with st.spinner(f"Running {int(n_mc)} Monte Carlo simulations..."):
+                    with st.spinner(f"Running {int(n_mc, show_time=True)} Monte Carlo simulations..."):
                         mc_res = model.run_monte_carlo(df_trades, n_sim=int(n_mc))
                     st.session_state["mc_result"] = mc_res
 
@@ -3074,7 +3074,7 @@ def page_backtest():
 
     if st.button("Run Walk-Forward Validation", type="secondary", use_container_width=True,
                  key="btn_wf"):
-        with st.spinner(f"Running {int(wf_splits)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)"):
+        with st.spinner(f"Running {int(wf_splits, show_time=True)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)"):
             wf_res = model.run_walk_forward(n_splits=int(wf_splits), pair=wf_pair, tf=wf_tf)
         st.session_state["wf_result"] = wf_res
 
@@ -3116,7 +3116,7 @@ def page_backtest():
         db_pos = st.number_input("Position Size %", 2.0, 25.0, 10.0, step=1.0, key="db_pos")
 
     if st.button("Run Deep Backtest", type="primary", use_container_width=True, key="btn_deep_bt"):
-        with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min)"):
+        with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min, show_time=True)"):
             deep_r = model.run_deep_backtest(
                 pair=db_pair, tf=db_tf, years=float(db_years), pos_pct=float(db_pos)
             )
@@ -3372,7 +3372,7 @@ def _render_stress_test():
     )
 
     if st.button("▶ Run Stress Test", key="run_stress_btn", type="primary"):
-        with st.spinner("Fetching historical OHLCV and simulating..."):
+        with st.spinner("Fetching historical OHLCV and simulating...", show_time=True):
             try:
                 import crypto_model_core as _cm
                 _stress_res = _stress_mod.run_stress_test(
@@ -3912,7 +3912,7 @@ def page_market_overview():
         run_corr = st.button("Compute Correlation", type="primary", use_container_width=True, key="run_corr")
 
     if run_corr:
-        with st.spinner("Fetching OHLCV data..."):
+        with st.spinner("Fetching OHLCV data...", show_time=True):
             corr_matrix, err = model.compute_correlation_matrix(
                 pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
             )
@@ -3973,7 +3973,7 @@ def page_market_overview():
                        "Estimated price return per pair — 7-day and 30-day based on exchange daily close",
                        icon="📊")
     if st.button("Load Returns", key="load_returns"):
-        with st.spinner("Fetching prices..."):
+        with st.spinner("Fetching prices...", show_time=True):
             returns_data = []
             exchange = model.get_exchange_instance(model.TA_EXCHANGE)
             if exchange:
@@ -4043,7 +4043,7 @@ def page_market_overview():
         _run_coint = st.button("Scan for Pair Trades", type="primary", use_container_width=True, key="run_coint")
 
     if _run_coint:
-        with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations..."):
+        with st.spinner(f"Testing {len(model.PAIRS, show_time=True) * (len(model.PAIRS) - 1) // 2} pair combinations..."):
             _coint_results, _coint_err = model.run_cointegration_scan(
                 pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
             )
@@ -4404,7 +4404,7 @@ def page_market_overview():
         )
 
     if run_fr and fr_pairs_sel:
-        with st.spinner("Fetching rates from 4 exchanges…"):
+        with st.spinner("Fetching rates from 4 exchanges…", show_time=True):
             fr_rows: list[dict] = []
             for pair in fr_pairs_sel:
                 multi = _df.get_multi_exchange_funding_rates(pair)
@@ -4607,7 +4607,7 @@ def page_arbitrage():
 
     # ── Run scan ──
     if run_scan:
-        with st.spinner("Fetching prices from OKX, KuCoin, Kraken, Gate.io …"):
+        with st.spinner("Fetching prices from OKX, KuCoin, Kraken, Gate.io …", show_time=True):
             arb_results = _arb.scan_all_arb(model.PAIRS)
         st.session_state["arb_results"] = arb_results
         ts = datetime.now().strftime("%H:%M:%S")
