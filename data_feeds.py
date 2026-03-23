@@ -2375,3 +2375,347 @@ def _with_retry(fn, *args, max_attempts: int = 3, base_delay: float = 1.0, **kwa
                               attempt + 1, max_attempts, e, delay)
                 time.sleep(delay)
     raise last_exc
+
+
+# ──────────────────────────────────────────────────────────────
+# LONG-SHORT RATIO  (Binance → OKX → Bybit fallback)
+# Free public endpoints — no auth required
+# ──────────────────────────────────────────────────────────────
+
+_LS_RATIO_CACHE: dict = {}
+_LS_RATIO_LOCK = threading.Lock()
+
+
+def get_long_short_ratio(pair: str) -> dict:
+    """
+    Fetch the global long/short account ratio for a perpetual pair.
+    Falls back: Binance → OKX → Bybit.
+
+    Returns a dict with keys: long_pct, short_pct, ratio, signal, source, cached_at
+    Signal: CROWDED_LONG | CROWDED_SHORT | BALANCED
+    """
+    symbol = pair.replace("/", "")
+    now = time.time()
+    with _LS_RATIO_LOCK:
+        cached = _LS_RATIO_CACHE.get(symbol)
+        if cached and now - cached.get("cached_at", 0) < _CACHE_TTL_SECONDS:
+            return cached
+
+    result = None
+
+    # --- Binance ---
+    try:
+        resp = _SESSION.get(
+            "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+            params={"symbol": symbol, "period": "5m", "limit": 1},
+            timeout=6,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            row = data[0]
+            long_pct  = float(row["longAccount"])
+            short_pct = float(row["shortAccount"])
+            ratio     = long_pct / short_pct if short_pct else 0.0
+            signal    = "CROWDED_LONG" if long_pct > 0.65 else ("CROWDED_SHORT" if long_pct < 0.35 else "BALANCED")
+            result = {
+                "long_pct": round(long_pct, 4),
+                "short_pct": round(short_pct, 4),
+                "ratio": round(ratio, 3),
+                "signal": signal,
+                "source": "binance",
+                "cached_at": now,
+            }
+    except Exception as e:
+        logging.debug("Binance LS ratio failed for %s: %s", symbol, e)
+
+    # --- OKX fallback ---
+    if result is None:
+        try:
+            inst_id = _okx_inst_id(pair)
+            resp = _SESSION.get(
+                "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio",
+                params={"instId": inst_id, "period": "5m"},
+                timeout=6,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+            if data:
+                row = data[0]
+                long_pct  = float(row[1])  # OKX: [ts, longRatio, shortRatio]
+                short_pct = float(row[2])
+                ratio     = long_pct / short_pct if short_pct else 0.0
+                signal    = "CROWDED_LONG" if long_pct > 0.65 else ("CROWDED_SHORT" if long_pct < 0.35 else "BALANCED")
+                result = {
+                    "long_pct": round(long_pct, 4),
+                    "short_pct": round(short_pct, 4),
+                    "ratio": round(ratio, 3),
+                    "signal": signal,
+                    "source": "okx",
+                    "cached_at": now,
+                }
+        except Exception as e:
+            logging.debug("OKX LS ratio failed for %s: %s", pair, e)
+
+    # --- Bybit fallback ---
+    if result is None:
+        try:
+            resp = _SESSION.get(
+                "https://api.bybit.com/v5/market/account-ratio",
+                params={"category": "linear", "symbol": symbol, "period": "5min", "limit": 1},
+                timeout=6,
+            )
+            resp.raise_for_status()
+            rows = resp.json().get("result", {}).get("list", [])
+            if rows:
+                row = rows[0]
+                buy_ratio  = float(row.get("buyRatio", 0.5))
+                sell_ratio = float(row.get("sellRatio", 0.5))
+                ratio      = buy_ratio / sell_ratio if sell_ratio else 0.0
+                signal     = "CROWDED_LONG" if buy_ratio > 0.65 else ("CROWDED_SHORT" if buy_ratio < 0.35 else "BALANCED")
+                result = {
+                    "long_pct": round(buy_ratio, 4),
+                    "short_pct": round(sell_ratio, 4),
+                    "ratio": round(ratio, 3),
+                    "signal": signal,
+                    "source": "bybit",
+                    "cached_at": now,
+                }
+        except Exception as e:
+            logging.debug("Bybit LS ratio failed for %s: %s", symbol, e)
+
+    if result is None:
+        result = {"error": "all sources failed", "signal": "UNKNOWN", "cached_at": now}
+
+    with _LS_RATIO_LOCK:
+        _LS_RATIO_CACHE[symbol] = result
+    return result
+
+
+def get_long_short_ratio_batch(pairs: list) -> dict:
+    """Fetch long/short ratio for multiple pairs in parallel. Returns {pair: result}."""
+    with ThreadPoolExecutor(max_workers=min(len(pairs), 6)) as ex:
+        futures = {ex.submit(get_long_short_ratio, p): p for p in pairs}
+        return {futures[f]: f.result() for f in futures}
+
+
+# ──────────────────────────────────────────────────────────────
+# TAKER BUY/SELL RATIO  (Binance futures — no auth required)
+# ──────────────────────────────────────────────────────────────
+
+_TAKER_RATIO_CACHE: dict = {}
+_TAKER_RATIO_LOCK = threading.Lock()
+
+
+def get_taker_buy_sell_ratio(pair: str) -> dict:
+    """
+    Fetch Binance futures taker buy/sell volume ratio.
+    Reflects aggressive order flow: >0.55 buy_pct = buy-side pressure.
+
+    Returns: buy_pct, sell_pct, signal, source, cached_at
+    Signal: BUY_DOMINANT | SELL_DOMINANT | BALANCED
+    """
+    symbol = pair.replace("/", "")
+    now = time.time()
+    with _TAKER_RATIO_LOCK:
+        cached = _TAKER_RATIO_CACHE.get(symbol)
+        if cached and now - cached.get("cached_at", 0) < _CACHE_TTL_SECONDS:
+            return cached
+
+    try:
+        resp = _SESSION.get(
+            "https://fapi.binance.com/futures/data/takerlongshortRatio",
+            params={"symbol": symbol, "period": "5m", "limit": 1},
+            timeout=6,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            row = data[0]
+            buy_ratio  = float(row.get("buySellRatio", 1.0))
+            buy_pct    = buy_ratio / (1.0 + buy_ratio)
+            sell_pct   = 1.0 - buy_pct
+            signal     = "BUY_DOMINANT" if buy_pct > 0.55 else ("SELL_DOMINANT" if buy_pct < 0.45 else "BALANCED")
+            result = {
+                "buy_pct": round(buy_pct, 4),
+                "sell_pct": round(sell_pct, 4),
+                "signal": signal,
+                "source": "binance",
+                "cached_at": now,
+            }
+        else:
+            result = {"error": "no data", "signal": "UNKNOWN", "cached_at": now}
+    except Exception as e:
+        logging.debug("Taker buy/sell ratio failed for %s: %s", symbol, e)
+        result = {"error": str(e), "signal": "UNKNOWN", "cached_at": now}
+
+    with _TAKER_RATIO_LOCK:
+        _TAKER_RATIO_CACHE[symbol] = result
+    return result
+
+
+# ──────────────────────────────────────────────────────────────
+# KIMCHI PREMIUM  (Upbit KRW + open.er-api.com + Binance)
+# Free public endpoints — no auth required
+# ──────────────────────────────────────────────────────────────
+
+_KIMCHI_CACHE: dict = {}
+_KIMCHI_LOCK = threading.Lock()
+
+
+def get_kimchi_premium() -> dict:
+    """
+    Calculate the Kimchi Premium: Upbit BTC/KRW vs (Binance BTC/USDT × USD/KRW rate).
+    Premium > 3% historically correlates with Korean retail FOMO; discount = fear.
+
+    Returns: premium_pct, signal, upbit_btc_krw, binance_btc_usd, usd_krw, cached_at
+    Signal: EXTREME_PREMIUM (>5%) | PREMIUM (>2%) | NEUTRAL | DISCOUNT (<-2%)
+    """
+    now = time.time()
+    with _KIMCHI_LOCK:
+        cached = _KIMCHI_CACHE.get("btc")
+        if cached and now - cached.get("cached_at", 0) < _CACHE_TTL_SECONDS:
+            return cached
+
+    upbit_btc_krw = None
+    binance_btc_usd = None
+    usd_krw = None
+
+    # Upbit BTC/KRW
+    try:
+        resp = _SESSION.get(
+            "https://api.upbit.com/v1/ticker",
+            params={"markets": "KRW-BTC"},
+            timeout=6,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            upbit_btc_krw = float(data[0]["trade_price"])
+    except Exception as e:
+        logging.debug("Upbit BTC/KRW failed: %s", e)
+
+    # Binance BTC/USDT spot
+    try:
+        resp = _SESSION.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"},
+            timeout=6,
+        )
+        resp.raise_for_status()
+        binance_btc_usd = float(resp.json()["price"])
+    except Exception as e:
+        logging.debug("Binance BTC/USDT failed: %s", e)
+
+    # USD/KRW exchange rate
+    try:
+        resp = _SESSION.get("https://open.er-api.com/v6/latest/USD", timeout=6)
+        resp.raise_for_status()
+        usd_krw = float(resp.json()["rates"]["KRW"])
+    except Exception as e:
+        logging.debug("USD/KRW exchange rate failed: %s", e)
+
+    if upbit_btc_krw and binance_btc_usd and usd_krw:
+        btc_usd_via_krw = upbit_btc_krw / usd_krw
+        premium_pct = (btc_usd_via_krw - binance_btc_usd) / binance_btc_usd * 100
+        if premium_pct > 5:
+            signal = "EXTREME_PREMIUM"
+        elif premium_pct > 2:
+            signal = "PREMIUM"
+        elif premium_pct < -2:
+            signal = "DISCOUNT"
+        else:
+            signal = "NEUTRAL"
+        result = {
+            "premium_pct":     round(premium_pct, 3),
+            "signal":          signal,
+            "upbit_btc_krw":   upbit_btc_krw,
+            "binance_btc_usd": binance_btc_usd,
+            "usd_krw":         usd_krw,
+            "cached_at":       now,
+        }
+    else:
+        result = {"error": "incomplete data", "signal": "UNKNOWN", "cached_at": now}
+
+    with _KIMCHI_LOCK:
+        _KIMCHI_CACHE["btc"] = result
+    return result
+
+
+# ──────────────────────────────────────────────────────────────
+# HYPERLIQUID ON-CHAIN PERP STATS
+# Public API — no auth required
+# ──────────────────────────────────────────────────────────────
+
+_HL_CACHE: dict = {}
+_HL_LOCK = threading.Lock()
+_HL_CACHE_TTL = 120  # 2-minute cache (on-chain data updates frequently)
+
+
+def get_hyperliquid_stats(pair: str) -> dict:
+    """
+    Fetch open interest and funding rate for a pair on Hyperliquid.
+    Uses the /info endpoint with metaAndAssetCtxs action.
+
+    Returns: open_interest_usd, funding_rate_8h, funding_annualised_pct, mark_price, signal, cached_at
+    Signal: HIGH_OI_POSITIVE_FUNDING | HIGH_OI_NEGATIVE_FUNDING | NORMAL
+    """
+    coin = pair.replace("/USDT", "").replace("/USDC", "").replace("USDT", "").replace("USDC", "")
+    now = time.time()
+    with _HL_LOCK:
+        cached = _HL_CACHE.get(coin)
+        if cached and now - cached.get("cached_at", 0) < _HL_CACHE_TTL:
+            return cached
+
+    try:
+        resp = _SESSION.post(
+            "https://api.hyperliquid.xyz/info",
+            json={"type": "metaAndAssetCtxs"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        # payload = [meta_dict, [assetCtx, ...]]
+        assets = payload[0].get("universe", [])
+        ctxs   = payload[1]
+        result = None
+        for i, asset in enumerate(assets):
+            if asset.get("name", "").upper() == coin.upper() and i < len(ctxs):
+                ctx      = ctxs[i]
+                mark_px  = float(ctx.get("markPx") or 0)
+                oi       = float(ctx.get("openInterest") or 0) * mark_px
+                fund     = float(ctx.get("funding") or 0)
+                fund_ann = fund * 3 * 365 * 100  # 8h rate → annualised %
+                signal   = "NORMAL"
+                if oi > 50_000_000:
+                    signal = "HIGH_OI_POSITIVE_FUNDING" if fund > 0 else "HIGH_OI_NEGATIVE_FUNDING"
+                result = {
+                    "coin":                   coin,
+                    "open_interest_usd":      round(oi),
+                    "funding_rate_8h":        round(fund, 6),
+                    "funding_annualised_pct": round(fund_ann, 2),
+                    "mark_price":             mark_px,
+                    "signal":                 signal,
+                    "source":                 "hyperliquid",
+                    "cached_at":              now,
+                }
+                break
+        if result is None:
+            result = {"error": f"{coin} not found on Hyperliquid", "signal": "UNKNOWN", "cached_at": now}
+    except Exception as e:
+        logging.debug("Hyperliquid stats failed for %s: %s", coin, e)
+        result = {"error": str(e), "signal": "UNKNOWN", "cached_at": now}
+
+    with _HL_LOCK:
+        _HL_CACHE[coin] = result
+    return result
+
+
+def get_hyperliquid_batch(pairs: list) -> dict:
+    """
+    Fetch Hyperliquid stats for multiple coins efficiently.
+    The first call fetches all assets in one API request; subsequent calls are cache hits.
+    """
+    if pairs:
+        get_hyperliquid_stats(pairs[0])  # warms the full cache in one call
+    return {p: get_hyperliquid_stats(p) for p in pairs}
