@@ -51,9 +51,10 @@ def compute_historical_var(
         n_samples: number of historical trades used
         method:    'historical' or 'parametric_fallback'
     """
-    conn = db._get_conn()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).isoformat()
+    conn = None
     try:
+        conn = db._get_conn()
         if pair:
             rows = conn.execute(
                 "SELECT actual_pnl_pct FROM feedback_log WHERE pair=? AND timestamp>=? AND actual_pnl_pct IS NOT NULL",
@@ -68,7 +69,8 @@ def compute_historical_var(
         logger.error(f"Historical VaR DB read failed: {e}")
         rows = []
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     pnl_returns = np.array([float(r[0]) for r in rows])
     position_usd = portfolio_size_usd * position_pct / 100
@@ -157,9 +159,10 @@ def compute_var_summary(
     var_99 = compute_historical_var(pair, 0.99, portfolio_size_usd, position_pct)
 
     # Additional metrics from PnL distribution
-    conn = db._get_conn()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).isoformat()
+    conn = None
     try:
+        conn = db._get_conn()
         q    = "SELECT actual_pnl_pct FROM feedback_log WHERE timestamp>=? AND actual_pnl_pct IS NOT NULL"
         args = [cutoff]
         if pair:
@@ -169,7 +172,8 @@ def compute_var_summary(
     except Exception:
         rows = []
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     pnl = np.array([float(r[0]) for r in rows]) if rows else np.array([])
 
@@ -184,8 +188,10 @@ def compute_var_summary(
         # Max drawdown: max cumulative loss in equity curve
         equity = np.cumprod(1 + pnl / 100)
         roll_max = np.maximum.accumulate(equity)
-        drawdowns = (roll_max - equity) / roll_max * 100
-        max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+        # Guard against division by zero when roll_max reaches 0 (catastrophic loss)
+        safe_roll_max = np.where(roll_max == 0, np.nan, roll_max)
+        drawdowns = (roll_max - equity) / safe_roll_max * 100
+        max_dd = float(np.nanmax(drawdowns)) if len(drawdowns) > 0 else 0.0
     else:
         sharpe = sortino = max_dd = 0.0
 

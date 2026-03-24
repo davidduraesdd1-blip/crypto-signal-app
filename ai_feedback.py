@@ -138,12 +138,15 @@ def compute_accuracy(pair: str = None) -> dict:
     else:
         grade = "F"
 
-    # Health score: 50% accuracy weighting, 30% avg PnL, 20% consistency
+    # Health score: 50% accuracy weighting, 30% avg PnL, 20% grade consistency
+    # consistency_score: A=100, B=80, C=60, D=40, F=20
+    _grade_consistency = {"A": 100, "B": 80, "C": 60, "D": 40, "F": 20}
+    consistency_score = _grade_consistency.get(grade, 50)
     pnl_score = min(100, max(0, 50 + avg_pnl * 10))   # 0% PnL → 50, +5% PnL → 100
     health_score = min(100, max(0, int(
-        accuracy_pct * 0.50
-        + pnl_score  * 0.30
-        + accuracy_pct * 0.20
+        accuracy_pct   * 0.50
+        + pnl_score    * 0.30
+        + consistency_score * 0.20
     )))
 
     return {

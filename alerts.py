@@ -575,24 +575,27 @@ def check_watchlist_alerts(scan_results: list, config: dict | None = None) -> li
                 msg += f"Entry: {_fmt_price(entry)}  |  Stop: {_fmt_price(stop)}"
 
             # PERF: fire all enabled channels concurrently (was sequential — up to 30s)
+            # Use default-argument capture to bind loop variables into each lambda,
+            # preventing the classic Python closure-over-loop-variable bug.
             _send_tasks = []
             if config.get("telegram_enabled"):
-                _send_tasks.append(("telegram", lambda: send_telegram(
+                _send_tasks.append(("telegram", lambda _msg=msg: send_telegram(
                     config.get("telegram_token", ""),
                     config.get("telegram_chat_id", ""),
-                    msg,
+                    _msg,
                 )))
             if config.get("email_enabled"):
-                _send_tasks.append(("email", lambda: send_email_alert(
+                _rule_name = rule.get("name", pair)
+                _send_tasks.append(("email", lambda _msg=msg, _rn=_rule_name: send_email_alert(
                     sender       = config.get("email_from", ""),
                     app_password = config.get("email_pass", ""),
                     recipient    = config.get("email_to", ""),
-                    subject      = f"Watchlist Alert: {rule.get('name', pair)}",
-                    body_text    = msg,
+                    subject      = f"Watchlist Alert: {_rn}",
+                    body_text    = _msg,
                 )))
             if config.get("discord_enabled"):
-                _send_tasks.append(("discord", lambda: send_discord(
-                    config.get("discord_webhook_url", ""), msg)))
+                _send_tasks.append(("discord", lambda _msg=msg: send_discord(
+                    config.get("discord_webhook_url", ""), _msg)))
 
             if _send_tasks:
                 with ThreadPoolExecutor(max_workers=len(_send_tasks)) as _alert_ex:

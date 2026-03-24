@@ -225,7 +225,9 @@ def update_positions(current_prices):
         direction = pos['direction']
         target = pos['target']
         stop = pos['stop']
-        entry_time = datetime.fromisoformat(pos['entry_time'])
+        _et_raw = datetime.fromisoformat(pos['entry_time'].replace("Z", "+00:00"))
+        # Normalise to UTC-aware so subtraction never raises TypeError
+        entry_time = _et_raw if _et_raw.tzinfo is not None else _et_raw.replace(tzinfo=timezone.utc)
         size_pct = pos['size_pct']
         pnl_pct = 0
         reason = "Open"
@@ -241,13 +243,13 @@ def update_positions(current_prices):
             if real_price <= target: reason = "Target Hit"
             elif real_price >= stop: reason = "Stop Hit"
 
-        if (datetime.now() - entry_time).days >= BACKTEST_HOLD_DAYS:
+        if (datetime.now(timezone.utc) - entry_time).days >= BACKTEST_HOLD_DAYS:
             reason = "Timeout"
 
         if reason != "Open":
             record = {
                 'pair': pair, 'entry_time': pos['entry_time'],
-                'close_time': datetime.now().isoformat(), 'direction': direction,
+                'close_time': datetime.now(timezone.utc).isoformat(), 'direction': direction,
                 'entry': entry, 'exit': real_price, 'pnl_pct': pnl_pct,
                 'size_pct': size_pct, 'reason': reason
             }
@@ -271,7 +273,7 @@ def simulate_entry(pair, direction, entry, exit_, size_pct):
     positions[pair] = {
         'pair': pair, 'direction': direction, 'entry': entry, 'target': exit_,
         'stop': entry * (1 - 0.025) if direction == "BUY" else entry * (1 + 0.025),
-        'entry_time': datetime.now().isoformat(), 'size_pct': size_pct, 'current_pnl_pct': 0.0
+        'entry_time': datetime.now(timezone.utc).isoformat(), 'size_pct': size_pct, 'current_pnl_pct': 0.0
     }
     save_positions(positions)
 
@@ -1529,7 +1531,10 @@ def compute_cointegration_zscore(df1, df2, lookback=STAT_ARB_LOOKBACK):
         _, pvalue, _ = coint(p1, p2)
         if pvalue > 0.05:
             return 0.0, "NEUTRAL"
-        ratio = p1.values / p2.values
+        _p2_safe = np.where(p2.values != 0, p2.values, np.nan)
+        ratio = p1.values / _p2_safe
+        if np.any(np.isnan(ratio)) or np.any(np.isinf(ratio)):
+            return 0.0, "NEUTRAL"
         mean_r = ratio.mean()
         std_r = ratio.std()
         z = (ratio[-1] - mean_r) / std_r if std_r != 0 else 0.0
@@ -1708,8 +1713,9 @@ def _enrich_df(df, tf: str = None):
     _down = df['low'].shift() - df['low']
     _pdm  = pd.Series(np.where((_up > _down) & (_up > 0), _up, 0), index=df.index)
     _mdm  = pd.Series(np.where((_down > _up) & (_down > 0), _down, 0), index=df.index)
-    _pdi  = 100 * _pdm.rolling(14).mean() / _atr
-    _mdi  = 100 * _mdm.rolling(14).mean() / _atr
+    _atr_safe = _atr.replace(0, np.nan)  # guard: avoid inf when price has zero range
+    _pdi  = 100 * _pdm.rolling(14).mean() / _atr_safe
+    _mdi  = 100 * _mdm.rolling(14).mean() / _atr_safe
     _dx   = 100 * (_pdi - _mdi).abs() / (_pdi + _mdi + 1e-6)
     df['adx'] = _dx.rolling(14).mean().fillna(20.0)
     # Gaussian Channels — fast(50), base(100), slow(200) bars
@@ -3114,7 +3120,7 @@ def run_backtest():
         return None
 
     df_trades = pd.DataFrame(trades)
-    _bt_run_id = datetime.now().strftime('bt_%Y%m%d_%H%M%S')
+    _bt_run_id = datetime.now(timezone.utc).strftime('bt_%Y%m%d_%H%M%S')
     _db.save_backtest_trades(trades, run_id=_bt_run_id)
 
     wins = df_trades[df_trades['pnl_pct'] > 0]

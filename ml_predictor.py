@@ -314,7 +314,7 @@ def get_ml_prediction(pair: str, tf: str, df: pd.DataFrame) -> dict:
             else:
                 prob_up = gbm_prob
             # PERF: accuracy pre-computed at train time — avoid re-running on every prediction
-            accuracy = model.get("accuracy") or _compute_accuracy(model["gbm"], df)
+            accuracy = model["accuracy"] if model.get("accuracy") is not None else _compute_accuracy(model["gbm"], df)
         else:
             # Legacy single-model path (shouldn't happen with current code)
             prob_up = float(model.predict_proba(X_latest)[0][1])

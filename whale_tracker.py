@@ -97,7 +97,11 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
             return []
         # WHALE-01: use `or "0x0"` to handle JSON null (None) from Etherscan
         hex_block = resp.json().get("result") or "0x0"
-        block_num = int(hex_block, 16)
+        try:
+            block_num = int(hex_block, 16)
+        except (ValueError, TypeError):
+            logger.debug("ETH whale: invalid block number hex %r", hex_block)
+            return _estimate_eth_whale_activity(price_usd)
 
         # Fetch recent large internal txs — use Etherscan's free account transfer endpoint
         # alternative: fetch latest block and scan for large ETH transfers
@@ -122,7 +126,12 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
 
         moves = []
         for tx in data.get("result", [])[:20]:
-            val_eth = int(tx.get("value", "0")) / 1e18
+            try:
+                raw_val = tx.get("value", "0") or "0"
+                # Etherscan returns decimal wei strings; guard against hex or empty values
+                val_eth = int(raw_val, 0) / 1e18 if str(raw_val).startswith("0x") else int(raw_val) / 1e18
+            except (ValueError, TypeError):
+                continue
             amount_usd = val_eth * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 n_internal = int(tx.get("methodId", "0x") != "0x")
@@ -301,7 +310,12 @@ def _fetch_doge_whales(price_usd: float) -> list[dict]:
         moves = []
         for tx in txs:
             outputs = tx.get("outputs") or []
-            doge_total = sum(float(o.get("value", 0)) for o in outputs)
+            doge_total = 0.0
+            for o in outputs:
+                try:
+                    doge_total += float(o.get("value", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
             amount_usd = doge_total * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 moves.append({
@@ -394,7 +408,9 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
 
     chain = _PAIR_CHAIN.get(pair, "")
     if not chain:
-        result = {**_NEUTRAL_RESULT, "error": f"Unsupported chain for {pair}"}
+        result = {**_NEUTRAL_RESULT, "error": f"Unsupported chain for {pair}", "pair": pair}
+        with _cache_lock:
+            _cache[pair] = {**result, "_ts": now}
         return result
 
     if price_usd <= 0:

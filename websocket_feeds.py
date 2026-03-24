@@ -166,7 +166,8 @@ def _run_loop(pairs: list[str], session: int) -> None:
             )
             with _lock:
                 _ws_app = new_app
-            _ws_app.run_forever(ping_interval=_PING_INTERVAL, ping_timeout=10)
+            # Use local ref so a concurrent start() replacing _ws_app doesn't affect this run
+            new_app.run_forever(ping_interval=_PING_INTERVAL, ping_timeout=10)
         except Exception as exc:
             logger.warning(f"[WS] loop exception: {exc}")
         if _running and _session_id == session:

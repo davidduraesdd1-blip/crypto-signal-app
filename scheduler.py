@@ -228,9 +228,10 @@ def start_scheduler() -> None:
     logger.info("[Scheduler] Running initial scan immediately...")
 
     # Initial scan before the scheduler loop starts
+    # Join with timeout so a hung initial scan cannot block scheduler startup forever
     _t = threading.Thread(target=run_scan_job, daemon=True)
     _t.start()
-    _t.join()
+    _t.join(timeout=1800)  # 30-minute hard cap; scheduler proceeds regardless
 
     try:
         scheduler.start()

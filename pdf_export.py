@@ -142,7 +142,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
 
     # ── High-confidence alerts ──
     if hc:
-        pairs_str = ", ".join(r["pair"] for r in hc)
+        pairs_str = ", ".join(r.get("pair", "?") for r in hc)
         story.append(Paragraph(f"HIGH-CONFIDENCE SIGNALS: {pairs_str}", styles["body"]))
         story.append(Spacer(1, 6))
 
