@@ -7,6 +7,8 @@ kraken_testnet_keys.json
 
 # ── Database & runtime data ───────────────────────────────────────────────────
 crypto_model.db
+crypto_model.db-shm
+crypto_model.db-wal
 dynamic_weights.json
 positions.json
 scan_status.json
