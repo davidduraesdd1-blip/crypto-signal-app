@@ -20,7 +20,7 @@ _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep
 # Public endpoint — no auth required
 # ──────────────────────────────────────────────
 
-_BINANCE_PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
+_BINANCE_PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"  # geo-blocked for US; kept for reference only — not called
 _BYBIT_TICKERS_URL  = "https://api.bybit.com/v5/market/tickers"
 _OKX_FUNDING_URL    = "https://www.okx.com/api/v5/public/funding-rate"
 _OKX_TICKERS_URL    = "https://www.okx.com/api/v5/public/instruments"
@@ -149,22 +149,7 @@ def get_funding_rate(pair: str) -> dict:
     except Exception as _e:
         logging.debug(f"OKX funding rate fetch error for {pair}: {_e}")
 
-    # 2. Binance
-    try:
-        resp = _SESSION.get(_BINANCE_PREMIUM_URL, params={"symbol": symbol}, timeout=6)
-        if resp.status_code == 429:
-            logging.warning(f"Binance funding rate: rate limited (429) for {pair}")
-        elif resp.status_code == 200:
-            data = resp.json()
-            parsed = _parse_binance_item(data, now) if isinstance(data, dict) else None
-            if parsed:
-                with _FUNDING_CACHE_LOCK:
-                    _BINANCE_FUNDING_CACHE[pair] = parsed
-                return parsed
-    except Exception as _e:
-        logging.debug(f"Binance funding rate fetch error for {pair}: {_e}")
-
-    # 3. Bybit
+    # 2. Bybit (no US geo-block — replaces fapi.binance.com)
     try:
         resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
         if resp.status_code == 429:
@@ -550,18 +535,19 @@ def _fetch_okx_fr(pair: str, now: float) -> dict:
 
 
 def _fetch_binance_fr(pair: str, now: float) -> dict:
-    """Fetch Binance funding rate for a single pair."""
+    """Fetch funding rate via Bybit v5 (no US geo-block — replaces fapi.binance.com)."""
     try:
         symbol = _binance_symbol(pair)
-        resp = _SESSION.get(_BINANCE_PREMIUM_URL, params={"symbol": symbol}, timeout=6)
+        resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
         if resp.status_code == 200:
-            data   = resp.json()
-            parsed = _parse_binance_item(data, now) if isinstance(data, dict) else None
-            if parsed:
-                return parsed
+            items = resp.json().get("result", {}).get("list", [])
+            if items:
+                parsed = _parse_bybit_item(items[0], now)
+                if parsed:
+                    return parsed
     except Exception as _e:
-        logging.debug("_fetch_binance_fr %s: %s", pair, _e)  # BUG-R24: was silent pass
-    return _empty_result("Binance N/A", now)
+        logging.debug("_fetch_binance_fr (bybit) %s: %s", pair, _e)
+    return _empty_result("Bybit N/A", now)
 
 
 def _fetch_bybit_fr(pair: str, now: float) -> dict:
@@ -740,25 +726,7 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
     except Exception:
         pass
 
-    # 2. Binance bulk
-    symbols_needed = {_binance_symbol(p): p for p in pairs}
-    try:
-        resp = _SESSION.get(_BINANCE_PREMIUM_URL, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list):
-                bulk_map = {item["symbol"]: item for item in data}
-                for symbol, pair in symbols_needed.items():
-                    item = bulk_map.get(symbol)
-                    parsed = _parse_binance_item(item, now) if item else None
-                    results[pair] = parsed if parsed else _empty_result("Not on Binance futures", now)
-                    with _FUNDING_CACHE_LOCK:
-                        _BINANCE_FUNDING_CACHE[pair] = results[pair]
-                return results
-    except Exception:
-        pass
-
-    # 3. Per-symbol fallback
+    # 2. Per-symbol fallback (fapi.binance.com bulk removed — geo-blocked for US users)
     for pair in pairs:
         if pair not in results:
             results[pair] = get_funding_rate(pair)
@@ -2403,33 +2371,7 @@ def get_long_short_ratio(pair: str) -> dict:
 
     result = None
 
-    # --- Binance ---
-    try:
-        resp = _SESSION.get(
-            "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-            params={"symbol": symbol, "period": "5m", "limit": 1},
-            timeout=6,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data:
-            row = data[0]
-            long_pct  = float(row["longAccount"])
-            short_pct = float(row["shortAccount"])
-            ratio     = long_pct / short_pct if short_pct else 0.0
-            signal    = "CROWDED_LONG" if long_pct > 0.65 else ("CROWDED_SHORT" if long_pct < 0.35 else "BALANCED")
-            result = {
-                "long_pct": round(long_pct, 4),
-                "short_pct": round(short_pct, 4),
-                "ratio": round(ratio, 3),
-                "signal": signal,
-                "source": "binance",
-                "cached_at": now,
-            }
-    except Exception as e:
-        logging.debug("Binance LS ratio failed for %s: %s", symbol, e)
-
-    # --- OKX fallback ---
+    # --- OKX (US-accessible, no geo-block — Binance fapi removed) ---
     if result is None:
         try:
             inst_id = _okx_inst_id(pair)
@@ -2509,7 +2451,8 @@ _TAKER_RATIO_LOCK = threading.Lock()
 
 def get_taker_buy_sell_ratio(pair: str) -> dict:
     """
-    Fetch Binance futures taker buy/sell volume ratio.
+    Fetch taker buy/sell volume ratio.
+    Primary: Bybit v5 (no US geo-block). fapi.binance.com removed — geo-blocked.
     Reflects aggressive order flow: >0.55 buy_pct = buy-side pressure.
 
     Returns: buy_pct, sell_pct, signal, source, cached_at
@@ -2522,32 +2465,37 @@ def get_taker_buy_sell_ratio(pair: str) -> dict:
         if cached and now - cached.get("cached_at", 0) < _CACHE_TTL_SECONDS:
             return cached
 
+    result = None
+
+    # --- Bybit v5 (primary — no US geo-block) ---
     try:
         resp = _SESSION.get(
-            "https://fapi.binance.com/futures/data/takerlongshortRatio",
-            params={"symbol": symbol, "period": "5m", "limit": 1},
+            "https://api.bybit.com/v5/market/taker-volume",
+            params={"category": "linear", "symbol": symbol, "period": "5min", "limit": 1},
             timeout=6,
         )
         resp.raise_for_status()
-        data = resp.json()
-        if data:
-            row = data[0]
-            buy_ratio  = float(row.get("buySellRatio", 1.0))
-            buy_pct    = buy_ratio / (1.0 + buy_ratio)
+        rows = resp.json().get("result", {}).get("list", [])
+        if rows:
+            row = rows[0]
+            buy_ratio  = float(row.get("buyRatio", 0.5))
+            sell_ratio = float(row.get("sellRatio", 0.5))
+            total      = buy_ratio + sell_ratio
+            buy_pct    = buy_ratio / total if total > 0 else 0.5
             sell_pct   = 1.0 - buy_pct
             signal     = "BUY_DOMINANT" if buy_pct > 0.55 else ("SELL_DOMINANT" if buy_pct < 0.45 else "BALANCED")
             result = {
                 "buy_pct": round(buy_pct, 4),
                 "sell_pct": round(sell_pct, 4),
                 "signal": signal,
-                "source": "binance",
+                "source": "bybit",
                 "cached_at": now,
             }
-        else:
-            result = {"error": "no data", "signal": "UNKNOWN", "cached_at": now}
     except Exception as e:
-        logging.debug("Taker buy/sell ratio failed for %s: %s", symbol, e)
-        result = {"error": str(e), "signal": "UNKNOWN", "cached_at": now}
+        logging.debug("Bybit taker buy/sell ratio failed for %s: %s", symbol, e)
+
+    if result is None:
+        result = {"error": "all sources failed", "signal": "UNKNOWN", "cached_at": now}
 
     with _TAKER_RATIO_LOCK:
         _TAKER_RATIO_CACHE[symbol] = result

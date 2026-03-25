@@ -3680,7 +3680,8 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     elif n == 3:
         mtf_weights = [0.20, 0.35, 0.45]
     else:  # 4+
-        base = [0.10, 0.15, 0.30, 0.45]
+        # Weights: 1H noise-filter only, 4H entry-timing, 1D primary signal, 1W macro-trend
+        base = [0.05, 0.15, 0.40, 0.40]
         if n > 4:
             # Equal weights normalised for more than 4 TFs
             mtf_weights = [1.0 / n] * n
@@ -3690,6 +3691,13 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     for j, c in enumerate(confidence_list[:len(mtf_weights)]):
         mtf_alignment += c * mtf_weights[j]
     mtf_alignment = round(mtf_alignment, 1)
+
+    # Confluence: count timeframes agreeing with the overall signal direction
+    _mid = 50.0
+    _bullish_tfs = sum(1 for c in confidence_list if c > _mid)
+    _bearish_tfs = sum(1 for c in confidence_list if c < _mid)
+    _confluence_count = max(_bullish_tfs, _bearish_tfs)
+    _confluence_pct   = round(_confluence_count / len(confidence_list), 2) if confidence_list else 0.0
 
     conf_avg = round(sum(confidence_list) / len(confidence_list), 1) if confidence_list else 0
 
@@ -3809,6 +3817,9 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         # Fallback keys always present so downstream consumers never get KeyError
         'regime':             f"Regime: {regime_1h}",
         'sr_status':          tf_data.get('1h', {}).get('sr_status', 'N/A'),
+        # Confluence (Group 1 — A3)
+        'confluence_count':   _confluence_count,   # 0–4: TFs agreeing with overall direction
+        'confluence_pct':     _confluence_pct,      # 0.0–1.0
     }
     if risk_info:
         _sup = None if _cb_triggered else risk_info['stop_loss']
