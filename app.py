@@ -1124,6 +1124,73 @@ def page_dashboard():
 
     st.markdown("---")
 
+    # ── Blood in the Streets · DCA Multiplier · Macro Overlay (Group 3) ──────
+    try:
+        _fg_val3   = results[0].get("fng_value", 50) if results else 50
+        _btc_res   = next((r for r in results if r.get("pair") == "BTC/USDT"), {})
+        _btc_rsi3  = (_btc_res.get("timeframes", {}).get("1d", {}) or {}).get("rsi", None)
+        _bits3     = data_feeds.compute_blood_in_streets(_fg_val3, _btc_rsi3)
+        _dca_m3    = _bits3["dca_multiplier"]
+        _macro3    = data_feeds.get_macro_signal_adjustment()
+        # Only render if signal is notable (not all-normal)
+        if _bits3["signal"] != "NORMAL" or _macro3["adjustment"] != 0.0:
+            _bc3    = {"BLOOD_IN_STREETS": "#ef4444", "EXTREME_FEAR": "#f59e0b", "NORMAL": "#6b7280"}.get(_bits3["signal"], "#6b7280")
+            _bg3    = {"BLOOD_IN_STREETS": "#1f0000",  "EXTREME_FEAR": "#1c1200", "NORMAL": "#111827"}.get(_bits3["signal"], "#111827")
+            _dc3    = {0.0: "#ef4444", 0.5: "#f97316", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
+            _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
+            _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f97316", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
+            _sk3    = data_feeds.get_deribit_options_skew("BTC")
+            _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "N/A"), "#6b7280")
+            _b1, _b2, _b3, _b4 = st.columns(4)
+            with _b1:
+                st.markdown(f"""
+<div style="background:{_bg3};border:1px solid {_bc3};border-top:3px solid {_bc3};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Blood in Streets</div>
+  <div style="font-size:18px;font-weight:700;color:{_bc3}">{_bits3["signal"].replace("_", " ")}</div>
+  <div style="font-size:12px;color:#9ca3af;margin-top:4px">{_bits3["strength"]} · {_bits3["criteria_met"]}/3 criteria</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:8px">{_bits3["description"]}</div>
+  <div style="margin-top:10px;font-size:11px;color:#6b7280">
+    {"✅" if _bits3["criteria"]["extreme_fear"] else "❌"} F&amp;G≤25 &nbsp;
+    {"✅" if _bits3["criteria"]["rsi_oversold"] else "❌"} RSI≤30 &nbsp;
+    {"✅" if _bits3["criteria"]["exchange_outflow"] else "❌"} Outflow
+  </div>
+</div>
+""", unsafe_allow_html=True)
+            with _b2:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dc3};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">DCA Multiplier</div>
+  <div style="font-size:36px;font-weight:700;color:{_dc3}">{_dca_m3}×</div>
+  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_dl3}</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:8px">F&amp;G: {_fg_val3}/100 · BTC RSI-1D: {f"{_btc_rsi3:.1f}" if _btc_rsi3 else "—"}</div>
+</div>
+""", unsafe_allow_html=True)
+            with _b3:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_rc3};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Macro Overlay</div>
+  <div style="font-size:18px;font-weight:700;color:{_rc3}">{_macro3["regime"].replace("_", " ")}</div>
+  <div style="font-size:12px;color:#9ca3af;margin-top:4px">Confidence adj: {_macro3["adjustment"]:+.0f} pts</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:8px">DXY {_macro3["dxy"]:.1f} ({_macro3["dxy_signal"]}) · 10Y {_macro3["ten_yr"]:.2f}% ({_macro3["yr_signal"]})</div>
+</div>
+""", unsafe_allow_html=True)
+            with _b4:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_skc3};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Options Skew (Deribit)</div>
+  <div style="font-size:18px;font-weight:700;color:{_skc3}">{_sk3.get("signal", "N/A")}</div>
+  <div style="font-size:12px;color:#9ca3af;margin-top:4px">Skew: {f"{_sk3['skew']:+.1f}%" if "skew" in _sk3 else "—"}</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:8px">
+    Put IV {f"{_sk3['put_iv']:.1f}%" if "put_iv" in _sk3 else "—"} · Call IV {f"{_sk3['call_iv']:.1f}%" if "call_iv" in _sk3 else "—"}
+  </div>
+  {f'<div style="font-size:10px;color:#4b5563;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
+</div>
+""", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+    st.markdown("---")
+
     # ── Signal Heatmap — pairs × timeframes ──
     _ui.section_header("Signal Heatmap",
                        "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",

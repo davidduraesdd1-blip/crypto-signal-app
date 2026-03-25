@@ -3719,6 +3719,18 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
             _nudge = 5.0 if conf_avg > 50 else -5.0       # push away from neutral
             conf_avg = round(max(min(conf_avg + _nudge, 99.9), 0.1), 1)
 
+    # ── Macro signal overlay (Group 3) ────────────────────────────────────────
+    # DXY / 10Y yield trend adjusts confidence ±4–8 pts.
+    try:
+        import data_feeds as _df_macro
+        _macro_adj = _df_macro.get_macro_signal_adjustment()
+        _madj_pts  = _macro_adj.get("adjustment", 0.0)
+        if _madj_pts != 0.0 and conf_avg != 50:
+            _sign = 1 if conf_avg > 50 else -1
+            conf_avg = round(max(min(conf_avg + _sign * abs(_madj_pts), 99.9), 0.1), 1)
+    except Exception:
+        _macro_adj = {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
+
     direction_avg = get_signal_direction(conf_avg)
 
     # ── MTF confirmation gate ──────────────────────────────────────────────────
@@ -3820,6 +3832,11 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         # Confluence (Group 1 — A3)
         'confluence_count':   _confluence_count,   # 0–4: TFs agreeing with overall direction
         'confluence_pct':     _confluence_pct,      # 0.0–1.0
+        # Group 3 — DCA multiplier + Blood in Streets
+        'dca_multiplier':     (3.0 if fng_value <= 15 else 2.0 if fng_value <= 30 else 1.0 if fng_value <= 55 else 0.5 if fng_value <= 74 else 0.0),
+        'blood_in_streets':   ("BLOOD_IN_STREETS" if fng_value <= 25 else "EXTREME_FEAR" if fng_value <= 30 else "NORMAL"),
+        'macro_regime':       _macro_adj.get("regime", "MACRO_NEUTRAL"),
+        'macro_adj_pts':      _macro_adj.get("adjustment", 0.0),
     }
     if risk_info:
         _sup = None if _cb_triggered else risk_info['stop_loss']
