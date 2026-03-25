@@ -2598,7 +2598,7 @@ def get_kimchi_premium() -> dict:
     # Binance BTC/USDT spot
     try:
         resp = _SESSION.get(
-            "https://api.binance.com/api/v3/ticker/price",
+            "https://api.binance.us/api/v3/ticker/price",
             params={"symbol": "BTCUSDT"},
             timeout=6,
         )
