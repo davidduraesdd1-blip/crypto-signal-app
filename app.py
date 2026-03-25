@@ -4022,10 +4022,14 @@ def page_market_overview():
         _rows_idx, _cols_idx = np.where(
             (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
         )
-        high_corr_rows = [
-            {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
-            for i, j in zip(_rows_idx, _cols_idx)
-        ]
+        high_corr_rows = []
+        try:
+            high_corr_rows = [
+                {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
+                for i, j in zip(_rows_idx, _cols_idx)
+            ]
+        except Exception:
+            pass
         if high_corr_rows:
             st.dataframe(pd.DataFrame(high_corr_rows), use_container_width=True, hide_index=True)
         else:
