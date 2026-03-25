@@ -3680,8 +3680,9 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     elif n == 3:
         mtf_weights = [0.20, 0.35, 0.45]
     else:  # 4+
-        # Weights: 1H noise-filter only, 4H entry-timing, 1D primary signal, 1W macro-trend
-        base = [0.05, 0.15, 0.40, 0.40]
+        # Weights per QuantPedia D1H1 research (Sharpe 0.33→0.80):
+        # 1H noise-filter 10%, 4H entry-timing 20%, 1D primary 35%, 1W macro-trend 35%
+        base = [0.10, 0.20, 0.35, 0.35]
         if n > 4:
             # Equal weights normalised for more than 4 TFs
             mtf_weights = [1.0 / n] * n
@@ -3699,7 +3700,8 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     _confluence_count = max(_bullish_tfs, _bearish_tfs)
     _confluence_pct   = round(_confluence_count / len(confidence_list), 2) if confidence_list else 0.0
 
-    conf_avg = round(sum(confidence_list) / len(confidence_list), 1) if confidence_list else 0
+    # Use MTF weighted average (validated weights above) instead of simple mean
+    conf_avg = mtf_alignment if confidence_list else 0
 
     # ── Trending bonus: CoinGecko top-7 trending → +8 pts when already bullish/bearish ──
     _base_currency = pair.split("/")[0].upper() if "/" in pair else pair.upper()
