@@ -712,7 +712,7 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
 
     try:
         with ThreadPoolExecutor(max_workers=min(len(pairs), 8)) as ex:
-            okx_results = dict(ex.map(lambda p: _fetch_one_okx(p), pairs))
+            okx_results = dict(ex.map(_fetch_one_okx, pairs))
         okx_success = sum(1 for v in okx_results.values() if v is not None)
         if okx_success > 0:
             for pair, parsed in okx_results.items():

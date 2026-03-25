@@ -500,7 +500,7 @@ def migrate_csv_to_db():
                 try:
                     df = pd.read_csv("backtest_summary.csv", encoding="utf-8")
                     if not df.empty:
-                        df['run_id'] = 'migrated_' + datetime.now().strftime('%Y%m%d_%H%M%S')
+                        df['run_id'] = 'migrated_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
                         # BUG-21: filter to known schema columns
                         known_cols = [r[1] for r in conn.execute("PRAGMA table_info(backtest_trades)").fetchall()]
                         df = df[[c for c in df.columns if c in known_cols]]
@@ -550,7 +550,7 @@ def migrate_csv_to_db():
                         w = json.load(f)
                     conn.execute(
                         "INSERT INTO dynamic_weights (saved_at, source, weights_json) VALUES (?,?,?)",
-                        (datetime.now().isoformat(), 'migrated', json.dumps(w))
+                        (datetime.now(timezone.utc).isoformat(), 'migrated', json.dumps(w))
                     )
                     conn.commit()
                     logger.info("DB migration: imported dynamic_weights.json → dynamic_weights")
@@ -576,7 +576,7 @@ def migrate_csv_to_db():
                     if results:
                         conn.execute(
                             "INSERT INTO scan_cache (id, saved_at, results_json) VALUES (1,?,?)",
-                            (datetime.now().isoformat(), json.dumps(results, default=str))
+                            (datetime.now(timezone.utc).isoformat(), json.dumps(results, default=str))
                         )
                         conn.commit()
                     logger.info("DB migration: imported scan_results_cache.json → scan_cache")

@@ -162,6 +162,9 @@ DEFAULT_WEIGHTS = {
     'gaussian_ch': 0.15,  # GC-01: Gaussian Channel — 3-period multi-TF bands
     'rsi_div':    0.08,   # RSI-DIV: standalone RSI divergence with 200 EMA trend filter
     'funding_rate': 0.10, # FR-01: perpetual funding rate crowding signal
+    'squeeze':    0.08,   # squeeze momentum indicator weight
+    'chandelier': 0.08,   # chandelier exit indicator weight
+    'cvd_div':    0.07,   # cumulative volume delta divergence weight
 }
 
 # Gaussian Channel multipliers per timeframe (wider bands on higher timeframes)
@@ -2656,7 +2659,7 @@ def update_dynamic_weights():
         resolved_df = resolved_df.copy()
         # CM-16: parse with utc=True so mixed tz-aware/naive strings don't raise TypeError
         resolved_df['timestamp'] = pd.to_datetime(resolved_df['timestamp'], errors='coerce', utc=True)
-        now = pd.Timestamp.utcnow()
+        now = pd.Timestamp.now(tz='UTC')
         resolved_df['days_ago'] = (now - resolved_df['timestamp']).dt.days.clip(lower=0)
         resolved_df['recency_w'] = np.power(0.98, resolved_df['days_ago'].fillna(30))
         resolved_df['was_correct'] = pd.to_numeric(resolved_df['was_correct'], errors='coerce').fillna(0)
@@ -4546,7 +4549,7 @@ def run_cointegration_scan(pairs=None, tf='1d', lookback=100):
 
 def main():
     print(f"\nCrypto Model {VERSION}")
-    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    print(f"Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}\n")
     results = run_scan()
     run_feedback_loop()
     append_to_master(results)
