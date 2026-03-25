@@ -865,7 +865,7 @@ def _auto_refresh_fragment():
     st.caption(f"Auto-refresh in {_remaining}s  |  toggle off in sidebar to pause")
     if _elapsed >= interval:
         st.session_state[_ar_key] = _now
-        st.rerun(scope="app")   # full page rerun only when the interval actually expires
+        st.rerun()   # full page rerun only when the interval actually expires
 
 
 def page_dashboard():

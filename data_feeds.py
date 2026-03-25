@@ -2265,7 +2265,7 @@ def fetch_defillama_protocol_tvl(protocol_slug: str) -> dict:
         if resp.status_code == 200:
             data = resp.json()
             tvl_list = data.get("tvl", [])
-            current_tvl = tvl_list[-1]["totalLiquidityUSD"] if tvl_list else 0
+            current_tvl = tvl_list[-1].get("totalLiquidityUSD", 0) if tvl_list else 0
             return {
                 "protocol":    protocol_slug,
                 "current_tvl": current_tvl,

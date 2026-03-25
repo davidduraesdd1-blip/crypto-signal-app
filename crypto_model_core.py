@@ -232,6 +232,8 @@ def update_positions(current_prices):
         pnl_pct = 0
         reason = "Open"
 
+        if not entry:
+            continue
         if direction == "BUY":
             gross = (real_price - entry) / entry * 100
             pnl_pct = gross - (TAKER_FEE_PCT + SLIPPAGE_PCT + TAKER_FEE_PCT) * 100
@@ -3033,6 +3035,8 @@ def run_backtest():
             pair = row['pair']
             direction = row['direction']
             entry = float(row['entry'])
+            if not entry:
+                continue
             target = float(row['exit'])
             stop = float(row['stop_loss'])
             pos_pct = min(float(row.get('position_size_pct', 10)), MAX_POSITION_PCT_CAP) / 100
