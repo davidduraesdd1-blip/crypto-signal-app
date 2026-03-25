@@ -4582,6 +4582,88 @@ def page_market_overview():
             )
 
 
+
+    # ── Macro Intelligence Section ───────────────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header("Macro Intelligence",
+                       "FRED + yfinance macro snapshot · BTC rolling correlations",
+                       icon="🌍")
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _cached_macro_snapshot():
+        fred_d = data_feeds.fetch_fred_macro()
+        yf_d   = data_feeds.fetch_yfinance_macro()
+        return fred_d, yf_d
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _cached_macro_ts(days: int):
+        return data_feeds.fetch_macro_timeseries(days)
+
+    _fred, _yf = _cached_macro_snapshot()
+
+    # Snapshot metrics row
+    _ma1, _ma2, _ma3, _ma4, _ma5, _ma6, _ma7 = st.columns(7)
+    _ma1.metric("10Y Yield", f"{_fred.get('ten_yr_yield', 4.35):.2f}%")
+    _ma2.metric("M2 ($B)",   f"${_fred.get('m2_supply_bn', 21500):,.0f}B")
+    _ma3.metric("ISM Mfg",   f"{_fred.get('ism_manufacturing', 52.0):.1f}")
+    _ma4.metric("DXY",       f"{_yf.get('dxy', 104.0):.1f}")
+    _ma5.metric("VIX",       f"{_yf.get('vix', 18.0):.1f}")
+    _ma6.metric("Gold",      f"${_yf.get('gold_spot', 2900.0):,.0f}")
+    _ma7.metric("SPX",       f"{_yf.get('spx', 5800.0):,.0f}")
+
+    st.caption(f"FRED: {_fred.get('source','?')} · yfinance: {_yf.get('source','?')} · Cached 30 min")
+
+    # Rolling correlation chart
+    _corr_window = st.select_slider(
+        "Correlation window (days)", options=[14, 30, 60, 90],
+        value=30, key="sg_macro_corr_days",
+    )
+    _ts = _cached_macro_ts(_corr_window + 20)
+
+    if _ts and "BTC" in _ts:
+        _frames = {}
+        for _key in ["BTC", "VIX", "Gold", "SPX", "DXY", "Oil"]:
+            _s = _ts.get(_key)
+            if _s and isinstance(_s, dict):
+                _frames[_key] = pd.Series(_s).rename(_key)
+        if len(_frames) >= 2:
+            _df_ts  = pd.DataFrame(_frames).sort_index()
+            _df_ts.index = pd.to_datetime(_df_ts.index)
+            _df_ret = _df_ts.pct_change().dropna()
+            _factors = [c for c in _df_ret.columns if c != "BTC"]
+            _corr_res = {}
+            for _fac in _factors:
+                if _fac in _df_ret.columns and "BTC" in _df_ret.columns:
+                    _rc = _df_ret["BTC"].rolling(_corr_window).corr(_df_ret[_fac]).dropna()
+                    if not _rc.empty:
+                        _corr_res[_fac] = _rc
+            if _corr_res:
+                _fig_c = go.Figure()
+                _clrs = {"VIX": "#ef4444", "Gold": "#f59e0b", "SPX": "#10b981",
+                         "DXY": "#6366f1", "Oil": "#f97316"}
+                for _fac, _ser in _corr_res.items():
+                    _fig_c.add_trace(go.Scatter(
+                        x=_ser.index, y=_ser.values, mode="lines", name=_fac,
+                        line=dict(color=_clrs.get(_fac, "#888"), width=2),
+                    ))
+                _fig_c.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)")
+                _fig_c.update_layout(
+                    height=280, title=f"BTC {_corr_window}-day Rolling Correlation",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#e2e8f0", size=12),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    yaxis=dict(range=[-1, 1], gridcolor="rgba(255,255,255,0.07)"),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
+                )
+                st.plotly_chart(_fig_c, use_container_width=True)
+            else:
+                st.info("Not enough data for rolling correlations — try a smaller window.")
+        else:
+            st.info("Macro timeseries loading... (yfinance required)")
+    else:
+        st.info("Install yfinance for macro correlations: `pip install yfinance`")
+
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
 # ──────────────────────────────────────────────

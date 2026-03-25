@@ -2667,3 +2667,222 @@ def get_hyperliquid_batch(pairs: list) -> dict:
     if pairs:
         get_hyperliquid_stats(pairs[0])  # warms the full cache in one call
     return {p: get_hyperliquid_stats(p) for p in pairs}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP 2: MACRO DATA LAYER
+# FRED: DGS10 (10Y yield), M2SL (M2 money supply), NAPM (ISM proxy)
+# yfinance: DXY, VIX, Gold, SPX, Oil — free, no API key required
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FRED_MACRO_SERIES_SG = {
+    "m2_supply_bn":      "M2SL",
+    "ten_yr_yield":      "DGS10",
+    "ism_manufacturing": "NAPM",
+}
+
+_FRED_MACRO_FALLBACKS_SG = {
+    "m2_supply_bn":      21_500.0,
+    "ten_yr_yield":          4.35,
+    "ism_manufacturing":    52.0,
+}
+
+_MACRO_CACHE_SG: dict = {}
+_MACRO_CACHE_LOCK_SG = threading.Lock()
+_MACRO_TTL = 3600  # 1 hour
+
+
+def _macro_cached_get(key: str, ttl: int, fetch_fn):
+    """TTL cache wrapper for macro data."""
+    import time
+    with _MACRO_CACHE_LOCK_SG:
+        cached = _MACRO_CACHE_SG.get(key)
+        if cached and (time.time() - cached["_ts"]) < ttl:
+            return cached["data"]
+    try:
+        data = fetch_fn()
+        if data:
+            with _MACRO_CACHE_LOCK_SG:
+                _MACRO_CACHE_SG[key] = {"data": data, "_ts": time.time()}
+        return data
+    except Exception as e:
+        logging.debug("[MacroCache] %s fetch failed: %s", key, e)
+        with _MACRO_CACHE_LOCK_SG:
+            cached = _MACRO_CACHE_SG.get(key)
+            if cached:
+                return cached["data"]
+        return None
+
+
+def fetch_fred_macro() -> dict:
+    """
+    Fetch macro series from FRED public CSV: M2SL, DGS10, NAPM.
+    No API key required (uses public CSV endpoint).
+    Returns fallback values on error.
+    """
+    def _fetch():
+        result = {}
+        for key, series_id in _FRED_MACRO_SERIES_SG.items():
+            try:
+                url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+                resp = _SESSION.get(url, timeout=10)
+                if resp.status_code == 200:
+                    lines = resp.text.strip().split("\n")
+                    for line in reversed(lines[1:]):
+                        parts = line.split(",")
+                        if len(parts) == 2 and parts[1].strip() not in (".", ""):
+                            result[key] = round(float(parts[1].strip()), 4)
+                            break
+            except Exception as e:
+                logging.debug("[FRED] %s failed: %s", series_id, e)
+        if len(result) < 1:
+            return None
+        for k, v in _FRED_MACRO_FALLBACKS_SG.items():
+            result.setdefault(k, v)
+        result["source"] = "FRED"
+        import datetime as _dt
+        result["timestamp"] = _dt.datetime.utcnow().isoformat()
+        return result
+
+    cached = _macro_cached_get("fred_macro", _MACRO_TTL, _fetch)
+    if cached is None:
+        fb = dict(_FRED_MACRO_FALLBACKS_SG)
+        fb["source"] = "fallback"
+        import datetime as _dt
+        fb["timestamp"] = _dt.datetime.utcnow().isoformat()
+        return fb
+    return cached
+
+
+def fetch_yfinance_macro() -> dict:
+    """
+    Fetch macro market data via yfinance: DXY, VIX, Gold, SPX, Oil.
+    Free, no API key required.  Returns fallback dict if yfinance not installed.
+    """
+    _YF_FALLBACKS = {
+        "dxy": 104.0, "vix": 18.0, "gold_spot": 2900.0,
+        "spx": 5800.0, "oil": 67.5,
+    }
+
+    def _fetch():
+        try:
+            import yfinance as yf
+        except ImportError:
+            return None
+        _MAP = {
+            "dxy":       "DX-Y.NYB",
+            "vix":       "^VIX",
+            "gold_spot": "GC=F",
+            "spx":       "^GSPC",
+            "oil":       "CL=F",
+        }
+        result = {}
+        for key, symbol in _MAP.items():
+            try:
+                hist = yf.Ticker(symbol).history(period="5d")
+                if not hist.empty:
+                    result[key] = round(float(hist["Close"].iloc[-1]), 2)
+            except Exception as e:
+                logging.debug("[yfinance] %s failed: %s", symbol, e)
+        if not result:
+            return None
+        result["source"] = "yfinance"
+        import datetime as _dt
+        result["timestamp"] = _dt.datetime.utcnow().isoformat()
+        return result
+
+    cached = _macro_cached_get("yfinance_macro", _MACRO_TTL, _fetch)
+    if cached is None:
+        fb = dict(_YF_FALLBACKS)
+        fb["source"] = "fallback"
+        import datetime as _dt
+        fb["timestamp"] = _dt.datetime.utcnow().isoformat()
+        return fb
+    return cached
+
+
+def fetch_macro_timeseries(days: int = 90) -> dict:
+    """
+    Fetch historical daily close prices for macro correlation analysis.
+    Returns {symbol_key: {date_str: price}} for BTC, VIX, Gold, SPX, DXY, Oil.
+    Cached 30 minutes. Returns {} if yfinance not installed.
+    """
+    def _fetch():
+        try:
+            import yfinance as yf
+        except ImportError:
+            return {}
+        _SYMBOLS = {
+            "BTC":  "BTC-USD",
+            "VIX":  "^VIX",
+            "Gold": "GC=F",
+            "SPX":  "^GSPC",
+            "DXY":  "DX-Y.NYB",
+            "Oil":  "CL=F",
+        }
+        result = {}
+        for key, symbol in _SYMBOLS.items():
+            try:
+                hist = yf.Ticker(symbol).history(period=f"{days}d")
+                if not hist.empty:
+                    result[key] = {
+                        str(dt)[:10]: round(float(v), 4)
+                        for dt, v in hist["Close"].items()
+                    }
+            except Exception as e:
+                logging.debug("[MacroTS] %s failed: %s", symbol, e)
+        import datetime as _dt
+        result["_days"]      = days
+        result["_timestamp"] = _dt.datetime.utcnow().isoformat()
+        return result
+
+    cached = _macro_cached_get(f"macro_ts_{days}", 1800, _fetch)
+    return cached if cached else {}
+
+
+def fetch_coinalyze_funding(symbols: list | None = None) -> dict:
+    """
+    Fetch aggregated perpetual funding rates from Coinalyze (Binance+Bybit+OKX).
+    Returns {symbol: {funding_rate, funding_rate_pct, open_interest_usd, signal}}.
+    Falls back to {} if unavailable or API key not set.
+    """
+    if symbols is None:
+        symbols = ["BTCUSDT_PERP.A", "ETHUSDT_PERP.A", "SOLUSDT_PERP.A"]
+    import os
+    api_key = os.environ.get("SUPERGROK_COINALYZE_API_KEY") or os.environ.get("COINALYZE_API_KEY")
+
+    def _fetch():
+        headers = {}
+        if api_key:
+            headers["api_key"] = api_key
+        url = "https://api.coinalyze.net/v1/funding-rate"
+        try:
+            resp = _SESSION.get(
+                url,
+                params={"symbols": ",".join(symbols)},
+                headers=headers,
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result = {}
+                for item in (data if isinstance(data, list) else []):
+                    sym  = item.get("symbol", "")
+                    rate = float(item.get("last_funding_rate", 0))
+                    result[sym] = {
+                        "funding_rate":      rate,
+                        "funding_rate_pct":  round(rate * 100, 4),
+                        "open_interest_usd": item.get("open_interest_usd"),
+                        "signal": (
+                            "BEARISH" if rate > 0.0003
+                            else ("BULLISH" if rate < -0.0003 else "NEUTRAL")
+                        ),
+                        "source": "coinalyze",
+                    }
+                return result if result else None
+        except Exception as e:
+            logging.debug("[Coinalyze] funding fetch failed: %s", e)
+        return None
+
+    cached = _macro_cached_get("coinalyze_funding", 300, _fetch)
+    return cached if cached else {}
