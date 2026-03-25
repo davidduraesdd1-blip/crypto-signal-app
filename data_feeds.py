@@ -2741,7 +2741,7 @@ def fetch_fred_macro() -> dict:
             result.setdefault(k, v)
         result["source"] = "FRED"
         import datetime as _dt
-        result["timestamp"] = _dt.datetime.utcnow().isoformat()
+        result["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
         return result
 
     cached = _macro_cached_get("fred_macro", _MACRO_TTL, _fetch)
@@ -2749,7 +2749,7 @@ def fetch_fred_macro() -> dict:
         fb = dict(_FRED_MACRO_FALLBACKS_SG)
         fb["source"] = "fallback"
         import datetime as _dt
-        fb["timestamp"] = _dt.datetime.utcnow().isoformat()
+        fb["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
         return fb
     return cached
 
@@ -2788,7 +2788,7 @@ def fetch_yfinance_macro() -> dict:
             return None
         result["source"] = "yfinance"
         import datetime as _dt
-        result["timestamp"] = _dt.datetime.utcnow().isoformat()
+        result["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
         return result
 
     cached = _macro_cached_get("yfinance_macro", _MACRO_TTL, _fetch)
@@ -2796,7 +2796,7 @@ def fetch_yfinance_macro() -> dict:
         fb = dict(_YF_FALLBACKS)
         fb["source"] = "fallback"
         import datetime as _dt
-        fb["timestamp"] = _dt.datetime.utcnow().isoformat()
+        fb["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
         return fb
     return cached
 
@@ -2833,7 +2833,7 @@ def fetch_macro_timeseries(days: int = 90) -> dict:
                 logging.debug("[MacroTS] %s failed: %s", symbol, e)
         import datetime as _dt
         result["_days"]      = days
-        result["_timestamp"] = _dt.datetime.utcnow().isoformat()
+        result["_timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
         return result
 
     cached = _macro_cached_get(f"macro_ts_{days}", 1800, _fetch)
@@ -3024,7 +3024,7 @@ def get_deribit_options_skew(currency: str = "BTC") -> dict:
             data = resp.json().get("result", [])
 
             import datetime as _dt
-            now = _dt.datetime.utcnow()
+            now = _dt.datetime.now(_dt.timezone.utc)
             puts, calls = [], []
             for item in data:
                 name = item.get("instrument_name", "")
@@ -3032,10 +3032,10 @@ def get_deribit_options_skew(currency: str = "BTC") -> dict:
                 if len(parts) < 4:
                     continue
                 try:
-                    exp = _dt.datetime.strptime(parts[1], "%d%b%y")
+                    exp = _dt.datetime.strptime(parts[1], "%d%b%y").replace(tzinfo=_dt.timezone.utc)
                 except ValueError:
                     try:
-                        exp = _dt.datetime.strptime(parts[1], "%d%b%Y")
+                        exp = _dt.datetime.strptime(parts[1], "%d%b%Y").replace(tzinfo=_dt.timezone.utc)
                     except ValueError:
                         continue
                 days_to_exp = (exp - now).days
@@ -3103,7 +3103,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
     """
     import datetime as _dt
     import statistics as _stats
-    start     = (_dt.datetime.utcnow() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    start     = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
     cache_key = f"cm_onchain_{days}"
 
     def _fetch():
@@ -3185,7 +3185,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "mvrv_history":     {mvrv_dates[i]: round(mvrv_vals[i], 3) for i in range(len(mvrv_dates))},
                 "sopr_history":     {sopr_dates[i]: round(sopr_vals[i], 4) for i in range(len(sopr_dates))},
                 "source":           "coinmetrics_community",
-                "timestamp":        _dt.datetime.utcnow().isoformat(),
+                "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 "error":            None,
             }
         except Exception as e:
@@ -3234,7 +3234,7 @@ def fetch_deribit_options_chain(currency: str = "BTC") -> dict:
             if not data:
                 return {"error": "empty response", "source": "deribit"}
 
-            now  = _dt5.datetime.utcnow()
+            now  = _dt5.datetime.now(_dt5.timezone.utc)
             spot = None
             oi_by_strike: dict = {}
             expiry_data:  dict = {}
@@ -3245,10 +3245,10 @@ def fetch_deribit_options_chain(currency: str = "BTC") -> dict:
                 if len(parts) < 4:
                     continue
                 try:
-                    exp = _dt5.datetime.strptime(parts[1], "%d%b%y")
+                    exp = _dt5.datetime.strptime(parts[1], "%d%b%y").replace(tzinfo=_dt5.timezone.utc)
                 except ValueError:
                     try:
-                        exp = _dt5.datetime.strptime(parts[1], "%d%b%Y")
+                        exp = _dt5.datetime.strptime(parts[1], "%d%b%Y").replace(tzinfo=_dt5.timezone.utc)
                     except ValueError:
                         continue
                 dte = (exp - now).days
@@ -3345,7 +3345,7 @@ def fetch_deribit_options_chain(currency: str = "BTC") -> dict:
                 "signal":          signal,
                 "spot_price":      spot,
                 "source":          "deribit",
-                "timestamp":       _dt5.datetime.utcnow().isoformat(),
+                "timestamp":       _dt5.datetime.now(_dt5.timezone.utc).isoformat(),
                 "error":           None,
             }
         except Exception as e:

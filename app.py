@@ -298,7 +298,7 @@ def _setup_calibration_job():
             hours=6,
             id=_CALIBRATION_JOB_ID,
             replace_existing=True,
-            next_run_time=datetime.now() + timedelta(hours=1),
+            next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
         )
 
 
@@ -312,7 +312,7 @@ def _setup_autoscan(interval_minutes: int):
         minutes=interval_minutes,
         id=_AUTOSCAN_JOB_ID,
         replace_existing=True,
-        next_run_time=datetime.now() + timedelta(minutes=interval_minutes),
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=interval_minutes),
     )
 
 
@@ -3056,12 +3056,12 @@ def page_backtest():
             bt_pdf_bytes = _pdf.generate_backtest_pdf(
                 metrics=metrics,
                 trades_df=filtered,
-                scan_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                scan_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             )
             st.download_button(
                 "⬇ Download Report (PDF)",
                 data=bt_pdf_bytes,
-                file_name=f"backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -3838,7 +3838,7 @@ def page_trade_log():
             st.download_button(
                 "⬇ Download Execution Log",
                 data=df_exec_log.to_csv(index=False),
-                file_name=f"execution_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                file_name=f"execution_log_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
 
@@ -3888,7 +3888,7 @@ def page_trade_log():
                 st.download_button(
                     "⬇ Download Slippage Data",
                     data=df_slip_valid.to_csv(index=False),
-                    file_name=f"slippage_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"slippage_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                 )
 
@@ -4972,7 +4972,7 @@ def page_arbitrage():
         with st.spinner("Fetching prices from OKX, KuCoin, Kraken, Gate.io …", show_time=True):
             arb_results = _arb.scan_all_arb(model.PAIRS)
         st.session_state["arb_results"] = arb_results
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
         st.session_state["arb_ts"] = ts
         st.success(f"Scan complete — {ts}")
 

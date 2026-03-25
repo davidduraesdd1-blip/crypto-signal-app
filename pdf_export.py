@@ -4,7 +4,7 @@ Uses reportlab to build scan and backtest PDF reports.
 """
 
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -110,7 +110,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
     story = []
 
     # ── Title ──
-    ts = scan_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = scan_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     story.append(Paragraph("Crypto Signal Model v5.9.13 — Scan Report", styles["title"]))
     story.append(Paragraph(f"Generated: {ts}  |  Pairs scanned: {len(results)}", styles["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=10))
@@ -232,7 +232,7 @@ def generate_backtest_pdf(metrics: dict, trades_df, scan_timestamp: str = None) 
     styles = _styles()
     story = []
 
-    ts = scan_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = scan_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     story.append(Paragraph("Crypto Signal Model v5.9.13 — Backtest Report", styles["title"]))
     story.append(Paragraph(f"Generated: {ts}", styles["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=10))
