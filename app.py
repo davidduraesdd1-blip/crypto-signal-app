@@ -5334,6 +5334,13 @@ def page_market_overview():
         _skew_val = _sk.get("skew")
         _put_iv   = _sk.get("put_iv")
         _call_iv  = _sk.get("call_iv")
+        # Coerce to float to prevent format string crash on non-numeric API responses
+        try:
+            _skew_val = float(_skew_val) if _skew_val is not None else None
+            _put_iv   = float(_put_iv)   if _put_iv   is not None else None
+            _call_iv  = float(_call_iv)  if _call_iv  is not None else None
+        except (TypeError, ValueError):
+            _skew_val = _put_iv = _call_iv = None
         _expiry   = _sk.get("expiry", "—")
         _sk_src   = _sk.get("source", "deribit")
         _sk_err   = _sk.get("error")
@@ -5387,7 +5394,11 @@ def page_market_overview():
     def _cached_macro_conditions():
         return data_feeds.get_macro_signal_adjustment()
 
-    _mac = _cached_macro_conditions()
+    try:
+        _mac = _cached_macro_conditions()
+    except Exception:
+        _mac = {"regime": "N/A", "adjustment": 0.0, "dxy": 0.0, "ten_yr": 0.0,
+                "dxy_signal": "neutral", "yr_signal": "neutral"}
     _mac_regime  = _mac.get("regime", "N/A")
     _mac_adj     = _mac.get("adjustment", 0.0)
     _mac_dxy     = _mac.get("dxy", 0.0)
