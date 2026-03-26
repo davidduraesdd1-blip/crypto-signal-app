@@ -5699,7 +5699,7 @@ def page_market_overview():
             _results_now = st.session_state.get("scan_results") or []
             for _r in _results_now:
                 if _r.get("pair") == _cex_sym:
-                    _cex_price = _r.get("current_price")
+                    _cex_price = _r.get("price_usd")
                     break
             if _dex_price > 0:
                 _spread_pct = round((_dex_price - _cex_price) / _cex_price * 100, 3) if _cex_price and _cex_price > 0 else None
@@ -5710,8 +5710,7 @@ def page_market_overview():
                     "CEX Spread": f"{_spread_pct:+.3f}%" if _spread_pct is not None else "—",
                 })
         if _dex_rows:
-            import pandas as _pd2
-            st.dataframe(_pd2.DataFrame(_dex_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_dex_rows), use_container_width=True, hide_index=True)
             st.caption(
                 "DEX prices: Jupiter Aggregator (Solana) · dYdX v4 oracle (Cosmos) · Raydium AMM · 1-min cache. "
                 "CEX Spread vs last scan price (run a scan to populate)."
