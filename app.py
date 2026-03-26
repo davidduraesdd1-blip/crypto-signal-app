@@ -5227,6 +5227,209 @@ def page_market_overview():
     else:
         st.info("Sector rotation data loading… Run a market overview scan or wait for CoinGecko data.")
 
+    # ── Funding Rate Monitor (Phase 9) ────────────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Funding Rate Monitor",
+        "Live perpetual funding rates across all 29 pairs — extreme rates signal overheated longs/shorts",
+        icon="💸",
+    )
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_funding_batch():
+        return data_feeds.get_funding_rates_batch(model.PAIRS)
+
+    _fr_col1, _fr_col2 = st.columns([3, 1])
+    with _fr_col2:
+        _fr_load = st.button("Refresh Funding Rates", key="load_fr_monitor", use_container_width=True)
+
+    if _fr_load:
+        st.cache_data.clear()
+
+    _fr_data = _cached_funding_batch()
+
+    if _fr_data:
+        _fr_rows = []
+        for _pair in model.PAIRS:
+            _fd = _fr_data.get(_pair, {})
+            _rate_pct = _fd.get("funding_rate_pct", 0.0) or 0.0
+            _signal   = _fd.get("signal", "N/A")
+            _src      = _fd.get("source", "—") or "—"
+            _fr_rows.append({
+                "Pair":        _pair.replace("/USDT", ""),
+                "Rate %":      round(_rate_pct, 4),
+                "8h Annualised": round(_rate_pct * 3 * 365, 1),
+                "Signal":      _signal,
+                "Exchange":    _src.title(),
+            })
+
+        _fr_df = pd.DataFrame(_fr_rows).sort_values("Rate %", ascending=False)
+
+        # Highlight extremes
+        _extreme_pos = _fr_df[_fr_df["Rate %"] > 0.03]
+        _extreme_neg = _fr_df[_fr_df["Rate %"] < -0.03]
+        if not _extreme_pos.empty:
+            st.warning(
+                f"⚠️ **Extreme positive funding** (longs overheating): "
+                + ", ".join(f"**{r}** ({v:+.4f}%)" for r, v in zip(_extreme_pos["Pair"], _extreme_pos["Rate %"]))
+            )
+        if not _extreme_neg.empty:
+            st.info(
+                f"📉 **Extreme negative funding** (shorts dominant): "
+                + ", ".join(f"**{r}** ({v:+.4f}%)" for r, v in zip(_extreme_neg["Pair"], _extreme_neg["Rate %"]))
+            )
+
+        _SIGNAL_COLORS = {"BEARISH": "#f6465d", "BULLISH": "#00d4aa", "NEUTRAL": "#64748b", "N/A": "#64748b"}
+
+        # Render heatmap chips
+        _chips_fr = ""
+        for _, _row in _fr_df.iterrows():
+            _col = _SIGNAL_COLORS.get(_row["Signal"], "#64748b")
+            _opacity = min(0.9, 0.3 + abs(_row["Rate %"]) / 0.05)
+            _chips_fr += (
+                f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
+                f'padding:6px 10px;border-radius:8px;background:rgba({int(_col[1:3],16)},'
+                f'{int(_col[3:5],16)},{int(_col[5:7],16)},{_opacity:.2f});'
+                f'border:1px solid {_col}40;margin:3px;min-width:60px">'
+                f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_row["Pair"]}</span>'
+                f'<span style="font-size:10px;color:{_col};font-weight:600">{_row["Rate %"]:+.4f}%</span>'
+                f'</span>'
+            )
+        st.markdown(
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_fr}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Table
+        with st.expander("Full funding rate table"):
+            st.dataframe(
+                _fr_df,
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Rate %":          st.column_config.NumberColumn(format="%.4f%%"),
+                    "8h Annualised":   st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+        st.caption("Positive = longs pay shorts (bearish signal) · Negative = shorts pay longs (bullish signal) · Refreshed every 5 min")
+    else:
+        st.info("Funding rate data unavailable — OKX/Binance may be geo-blocked. Try a VPN.")
+
+    # ── Options Market Intelligence (Phase 9) ────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Options Market Intelligence",
+        "BTC & ETH Deribit put/call IV skew — market's implied directional bias (30-min cache)",
+        icon="📐",
+    )
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _cached_skew(currency: str):
+        return data_feeds.get_deribit_options_skew(currency)
+
+    _opt_c1, _opt_c2 = st.columns(2)
+
+    for _cur, _col in [("BTC", _opt_c1), ("ETH", _opt_c2)]:
+        _sk = _cached_skew(_cur)
+        _sig = _sk.get("signal", "N/A")
+        _skew_val = _sk.get("skew")
+        _put_iv   = _sk.get("put_iv")
+        _call_iv  = _sk.get("call_iv")
+        _expiry   = _sk.get("expiry", "—")
+        _sk_src   = _sk.get("source", "deribit")
+        _sk_err   = _sk.get("error")
+
+        _SIG_COL = {
+            "BEARISH": "#f6465d", "MILD_BEARISH": "#f59e0b",
+            "NEUTRAL": "#64748b",
+            "MILD_BULLISH": "#00d4aa", "BULLISH": "#00c076", "N/A": "#64748b",
+        }
+        _sk_color = _SIG_COL.get(_sig, "#64748b")
+
+        with _col:
+            st.markdown(
+                f'<div style="background:rgba(255,255,255,0.04);border:1px solid {_sk_color}40;'
+                f'border-radius:12px;padding:16px;margin-bottom:8px">'
+                f'<div style="font-size:16px;font-weight:800;color:#e2e8f0;margin-bottom:8px">{_cur} Options Skew</div>'
+                + (
+                    f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center">'
+                    f'<div><div style="font-size:11px;color:#9ca3af">Put IV</div>'
+                    f'<div style="font-size:18px;font-weight:700;color:#f6465d">{_put_iv:.1f}%</div></div>'
+                    f'<div><div style="font-size:11px;color:#9ca3af">Skew</div>'
+                    f'<div style="font-size:18px;font-weight:700;color:{_sk_color}">{_skew_val:+.1f}</div></div>'
+                    f'<div><div style="font-size:11px;color:#9ca3af">Call IV</div>'
+                    f'<div style="font-size:18px;font-weight:700;color:#00d4aa">{_call_iv:.1f}%</div></div>'
+                    f'</div>'
+                    f'<div style="margin-top:10px;padding:6px 12px;border-radius:6px;'
+                    f'background:{_sk_color}20;text-align:center">'
+                    f'<span style="font-size:13px;font-weight:700;color:{_sk_color}">{_sig.replace("_"," ")}</span>'
+                    f'<span style="font-size:11px;color:#9ca3af;margin-left:8px">Expiry: {_expiry}</span>'
+                    f'</div>'
+                    if _skew_val is not None and _put_iv is not None and _call_iv is not None
+                    else f'<div style="color:#9ca3af;font-size:12px">{_sk_err or "Data unavailable"}</div>'
+                )
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+    st.caption(
+        "Skew = Put IV − Call IV · Positive skew = market paying premium for downside protection (bearish) · "
+        "Negative skew = calls bid up (bullish) · Source: Deribit public API · 30-min cache"
+    )
+
+    # ── Macro Conditions (Phase 9) ────────────────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Macro Conditions",
+        "DXY + 10Y Treasury yield — macro tailwind/headwind signal for crypto",
+        icon="🏛️",
+    )
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _cached_macro_conditions():
+        return data_feeds.get_macro_signal_adjustment()
+
+    _mac = _cached_macro_conditions()
+    _mac_regime  = _mac.get("regime", "N/A")
+    _mac_adj     = _mac.get("adjustment", 0.0)
+    _mac_dxy     = _mac.get("dxy", 0.0)
+    _mac_10yr    = _mac.get("ten_yr", 0.0)
+    _mac_dxy_sig = _mac.get("dxy_signal", "neutral")
+    _mac_yr_sig  = _mac.get("yr_signal",  "neutral")
+
+    _MAC_COLORS = {
+        "MACRO_TAILWIND": "#00d4aa", "MILD_TAILWIND": "#00c076",
+        "MACRO_NEUTRAL":  "#64748b",
+        "MILD_HEADWIND":  "#f59e0b", "MACRO_HEADWIND": "#f6465d",
+    }
+    _mac_color = _MAC_COLORS.get(_mac_regime, "#64748b")
+    _SIG_ICONS = {"tailwind": "✅", "neutral": "➖", "headwind": "⛔"}
+
+    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+    _mc1.metric("DXY (Dollar Index)",   f"{_mac_dxy:.2f}",  help="< 100 = crypto tailwind · > 105 = headwind")
+    _mc2.metric("10Y Treasury Yield",   f"{_mac_10yr:.2f}%", help="< 4.0% = tailwind · > 4.5% = headwind")
+    _mc3.metric(
+        "DXY Signal",
+        f"{_SIG_ICONS.get(_mac_dxy_sig,'➖')} {_mac_dxy_sig.title()}",
+    )
+    _mc4.metric(
+        "Yield Signal",
+        f"{_SIG_ICONS.get(_mac_yr_sig,'➖')} {_mac_yr_sig.title()}",
+    )
+
+    st.markdown(
+        f'<div style="background:rgba(255,255,255,0.04);border:1px solid {_mac_color}60;'
+        f'border-radius:10px;padding:12px 16px;margin-top:8px;display:flex;'
+        f'align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'
+        f'<div>'
+        f'<span style="font-size:15px;font-weight:800;color:{_mac_color}">'
+        f'{_mac_regime.replace("_"," ")}</span>'
+        f'<span style="font-size:12px;color:#9ca3af;margin-left:12px">'
+        f'Signal adjustment: {_mac_adj:+.1f} pts to confidence scores</span>'
+        f'</div>'
+        f'<span style="font-size:11px;color:#9ca3af">Source: FRED + yfinance · 1h cache</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
 
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
