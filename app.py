@@ -4245,6 +4245,83 @@ def page_market_overview():
 
     st.markdown("---")
 
+    # ── Realized Volatility Rankings (Phase 11) ───────────────────────────────
+    _ui.section_header(
+        "Realized Volatility Rankings",
+        "7-day annualized realized volatility across all pairs — rank from calmest to most explosive",
+        icon="📉",
+    )
+    st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
+
+    if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
+        with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
+            _vol_rows = []
+            _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
+            if _exchange:
+                for _vp in model.PAIRS:
+                    try:
+                        _ohlcv = _exchange.fetch_ohlcv(_vp, "1d", limit=9)  # 9 bars → 8 returns
+                        if len(_ohlcv) >= 3:
+                            _cls   = [o[4] for o in _ohlcv if o[4] and o[4] > 0]
+                            _rets  = [
+                                (_cls[i] - _cls[i - 1]) / _cls[i - 1]
+                                for i in range(1, len(_cls))
+                                if _cls[i - 1] > 0
+                            ]
+                            if len(_rets) >= 2:
+                                import statistics as _stat
+                                _daily_vol = _stat.stdev(_rets)
+                                _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
+                                _sector    = SECTOR_MAP.get(_vp, "other")
+                                _vol_rows.append({
+                                    "Asset":    _vp.replace("/USDT", ""),
+                                    "Sector":   _sector.replace("_", " ").title(),
+                                    "Ann. Vol%": _ann_vol,
+                                    "7d Close": round(_cls[-1], 4),
+                                })
+                    except Exception:
+                        pass
+            st.session_state["vol_rank_data"] = _vol_rows
+
+    _vol_data = st.session_state.get("vol_rank_data")
+    if _vol_data:
+        _vol_df = pd.DataFrame(_vol_data).sort_values("Ann. Vol%", ascending=False).reset_index(drop=True)
+
+        # Rank chips — color by volatility tier
+        _chips_vol = ""
+        _vmax = _vol_df["Ann. Vol%"].max() if not _vol_df.empty else 1
+        for _, _vr in _vol_df.iterrows():
+            _v = _vr["Ann. Vol%"]
+            _pct = _v / max(_vmax, 1)
+            _vc = "#f6465d" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
+            _chips_vol += (
+                f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
+                f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
+                f'border:1px solid {_vc}50;margin:2px;min-width:52px">'
+                f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_vr["Asset"]}</span>'
+                f'<span style="font-size:10px;color:{_vc};font-weight:600">{_v:.0f}%</span>'
+                f'</span>'
+            )
+        st.markdown(
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_vol}</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("🔴 High vol (>70th pct) · 🟡 Medium · 🟢 Low — annualized, based on 7-day daily returns")
+
+        with st.expander("Full volatility table"):
+            st.dataframe(
+                _vol_df,
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
+                    "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
+                },
+            )
+    elif _vol_data is not None and len(_vol_data) == 0:
+        st.warning("No volatility data returned — check exchange connectivity.")
+
+    st.markdown("---")
+
     # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
     _ui.section_header(
         "Pair Trade Scanner",
