@@ -51,6 +51,9 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "api.binance.us", "api.stlouisfed.org", "api.coinalyze.net",
     "lunarcrush.com", "cryptopanic.com", "dogechain.info",
     "fapi.binance.com",  # kept for reference, geo-blocked but safe
+    # Phase 9 additions
+    "api.mexc.com", "bitso.com", "api.coindcx.com",  # regional exchanges (#89)
+    "price.jup.ag", "indexer.dydx.trade", "api.raydium.io",  # DEX feeds (#91)
 })
 
 
@@ -3756,3 +3759,237 @@ def fetch_sparkline_closes(pair: str, n: int = 24) -> list[float]:
     except Exception as e:
         logging.debug("[Sparkline] %s fetch failed: %s", pair, e)
         return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGIONAL EXCHANGE PRICE FEEDS  (#89)
+# MEXC (Asia), Bitso (LatAm/MXN), CoinDCX (India/INR)
+# Shows regional price premium/discount vs Binance global benchmark
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REGIONAL_CACHE: dict = {}
+_REGIONAL_LOCK = threading.Lock()
+_REGIONAL_TTL  = 120  # 2 min
+
+
+def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
+    """
+    Fetch prices from MEXC, Bitso (MXN), and CoinDCX (INR) for regional premium signals.
+
+    Returns dict with:
+        pair, binance_price, mexc_price, mexc_premium_pct,
+        bitso_mxn, bitso_usd_equiv, coindcx_inr, coindcx_usd_equiv, errors
+    """
+    cache_key = pair
+    with _REGIONAL_LOCK:
+        entry = _REGIONAL_CACHE.get(cache_key)
+        if entry and (time.time() - entry["_ts"]) < _REGIONAL_TTL:
+            return entry["data"]
+
+    symbol = pair.replace("/", "")   # "BTCUSDT"
+    base   = pair.split("/")[0]      # "BTC"
+
+    result: dict = {
+        "pair": pair, "binance_price": None, "mexc_price": None,
+        "mexc_premium_pct": None, "bitso_mxn": None, "bitso_usd_equiv": None,
+        "coindcx_inr": None, "coindcx_usd_equiv": None, "errors": [],
+    }
+
+    # 1. Binance baseline
+    try:
+        r = _SESSION.get(
+            f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}",
+            timeout=5,
+        )
+        if r.status_code == 200:
+            result["binance_price"] = float(r.json().get("price", 0) or 0)
+    except Exception as e:
+        result["errors"].append(f"binance:{e}")
+
+    # 2. MEXC — same symbol format, no auth required
+    try:
+        r = _SESSION.get(
+            f"https://api.mexc.com/api/v3/ticker/price?symbol={symbol}",
+            timeout=5,
+        )
+        if r.status_code == 200:
+            mexc_price = float(r.json().get("price", 0) or 0)
+            result["mexc_price"] = mexc_price
+            bp = result["binance_price"]
+            if bp and bp > 0:
+                result["mexc_premium_pct"] = round((mexc_price - bp) / bp * 100, 4)
+    except Exception as e:
+        result["errors"].append(f"mexc:{e}")
+
+    # 3. Bitso — BTC/MXN or ETH/MXN book
+    try:
+        book = f"{base.lower()}_mxn"
+        r = _SESSION.get(f"https://bitso.com/api/v3/ticker/?book={book}", timeout=5)
+        if r.status_code == 200:
+            last_mxn = float((r.json().get("payload") or {}).get("last", 0) or 0)
+            result["bitso_mxn"] = last_mxn
+            # MXN→USD conversion via USDCMXN on Binance
+            try:
+                r2 = _SESSION.get(
+                    "https://api.binance.com/api/v3/ticker/price?symbol=USDCMXN",
+                    timeout=4,
+                )
+                mxn_rate = float(r2.json().get("price", 17.5) or 17.5) if r2.status_code == 200 else 17.5
+            except Exception:
+                mxn_rate = 17.5
+            result["bitso_usd_equiv"] = round(last_mxn / mxn_rate, 2) if mxn_rate > 0 else None
+    except Exception as e:
+        result["errors"].append(f"bitso:{e}")
+
+    # 4. CoinDCX — INR markets
+    try:
+        r = _SESSION.get("https://api.coindcx.com/exchange/ticker", timeout=6)
+        if r.status_code == 200:
+            tickers = r.json()
+            target_market = f"B-{base}_INR"
+            for t in tickers:
+                if t.get("market") == target_market:
+                    last_inr = float(t.get("last_price", 0) or 0)
+                    result["coindcx_inr"] = last_inr
+                    try:
+                        r2 = _SESSION.get(
+                            "https://api.binance.com/api/v3/ticker/price?symbol=USDTINR",
+                            timeout=4,
+                        )
+                        inr_rate = float(r2.json().get("price", 83.5) or 83.5) if r2.status_code == 200 else 83.5
+                    except Exception:
+                        inr_rate = 83.5
+                    result["coindcx_usd_equiv"] = round(last_inr / inr_rate, 2) if inr_rate > 0 else None
+                    break
+    except Exception as e:
+        result["errors"].append(f"coindcx:{e}")
+
+    with _REGIONAL_LOCK:
+        _REGIONAL_CACHE[cache_key] = {"data": result, "_ts": time.time()}
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEX PRICE FEEDS  (#91)
+# Jupiter (Solana aggregator), dYdX v4 (Cosmos chain), Raydium (Solana AMM)
+# Provides on-chain prices for Solana-native and perp pairs
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DEX_PRICE_CACHE: dict = {}
+_DEX_PRICE_LOCK = threading.Lock()
+_DEX_PRICE_TTL  = 60  # 1 min
+
+# Solana token mint addresses for Jupiter price API
+_JUPITER_MINTS: dict = {
+    "SOL":  "So11111111111111111111111111111111111111112",
+    "JUP":  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+    "WIF":  "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+    "PYTH": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+    "RAY":  "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+    "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+}
+
+# dYdX v4 market IDs for perp oracle prices
+_DYDX_MARKETS: dict = {
+    "BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD",
+    "JUP": "JUP-USD", "WIF": "WIF-USD", "AVAX": "AVAX-USD",
+    "LINK": "LINK-USD", "XRP": "XRP-USD",
+}
+
+# Raydium token mints (subset — primary Solana tokens)
+_RAYDIUM_MINTS: dict = {
+    "SOL": "So11111111111111111111111111111111111111112",
+    "RAY": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+    "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+}
+
+
+def fetch_dex_prices(tokens: list = None) -> dict:
+    """
+    Fetch token prices from DEX aggregators.
+
+    Priority order per token:
+      1. Jupiter (best for Solana-native tokens)
+      2. dYdX v4 oracle (good for BTC/ETH/SOL/major pairs)
+      3. Raydium (fallback for Solana tokens)
+
+    Args:
+        tokens: list of token symbols (e.g. ["JUP", "WIF", "SOL"])
+
+    Returns:
+        dict keyed by symbol: {"price": float, "source": str, "dex": str}
+    """
+    _defaults = ["JUP", "WIF", "PYTH", "SOL", "RAY"]
+    targets = {t.upper() for t in (tokens or _defaults)}
+
+    cache_key = ",".join(sorted(targets))
+    with _DEX_PRICE_LOCK:
+        entry = _DEX_PRICE_CACHE.get(cache_key)
+        if entry and (time.time() - entry["_ts"]) < _DEX_PRICE_TTL:
+            return entry["data"]
+
+    prices: dict = {}
+
+    # 1. Jupiter Price API (Solana-native tokens)
+    jup_targets = {sym: mint for sym, mint in _JUPITER_MINTS.items() if sym in targets}
+    if jup_targets:
+        try:
+            ids_str = ",".join(jup_targets.values())
+            r = _SESSION.get(f"https://price.jup.ag/v6/price?ids={ids_str}", timeout=6)
+            if r.status_code == 200:
+                jup_data = r.json().get("data", {})
+                for sym, mint in jup_targets.items():
+                    if mint in jup_data:
+                        prices[sym] = {
+                            "price": float(jup_data[mint].get("price", 0) or 0),
+                            "source": "jupiter",
+                            "dex": "Jupiter Aggregator",
+                        }
+        except Exception as e:
+            logging.debug("[DEX] Jupiter fetch failed: %s", e)
+
+    # 2. dYdX v4 Indexer — oracle mark prices
+    dydx_targets = {sym: mkt for sym, mkt in _DYDX_MARKETS.items()
+                    if sym in targets and sym not in prices}
+    if dydx_targets:
+        try:
+            r = _SESSION.get("https://indexer.dydx.trade/v4/markets", timeout=6)
+            if r.status_code == 200:
+                markets = r.json().get("markets", {})
+                for sym, mkt_id in dydx_targets.items():
+                    mkt = markets.get(mkt_id, {})
+                    oracle_price = float(mkt.get("oraclePrice") or 0)
+                    if oracle_price > 0:
+                        prices[sym] = {
+                            "price": oracle_price,
+                            "source": "dydx_v4",
+                            "dex": "dYdX v4 (Cosmos)",
+                        }
+        except Exception as e:
+            logging.debug("[DEX] dYdX fetch failed: %s", e)
+
+    # 3. Raydium — fallback for Solana tokens not yet priced
+    ray_targets = {sym: mint for sym, mint in _RAYDIUM_MINTS.items()
+                   if sym in targets and sym not in prices}
+    if ray_targets:
+        try:
+            ids_str = ",".join(ray_targets.values())
+            r = _SESSION.get(f"https://api.raydium.io/v2/main/price?ids={ids_str}", timeout=6)
+            if r.status_code == 200:
+                ray_data = r.json()
+                for sym, mint in ray_targets.items():
+                    p = ray_data.get(mint)
+                    if p and float(p) > 0:
+                        prices[sym] = {
+                            "price": float(p),
+                            "source": "raydium",
+                            "dex": "Raydium AMM",
+                        }
+        except Exception as e:
+            logging.debug("[DEX] Raydium fetch failed: %s", e)
+
+    with _DEX_PRICE_LOCK:
+        _DEX_PRICE_CACHE[cache_key] = {"data": prices, "_ts": time.time()}
+
+    return prices

@@ -5605,6 +5605,120 @@ def page_market_overview():
         unsafe_allow_html=True,
     )
 
+    # ── Regional Exchange Premium Monitor (#89) ───────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Regional Exchange Premium",
+        "MEXC (Asia) · Bitso (LatAm/MXN) · CoinDCX (India/INR) — vs Binance global benchmark",
+        icon="🌍",
+    )
+
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _cached_regional(pair: str):
+        return _df.fetch_regional_exchange_prices(pair)
+
+    _reg_pair = st.selectbox(
+        "Base pair", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"],
+        key="reg_pair_sel",
+    )
+    _reg = _cached_regional(_reg_pair)
+    _bp  = _reg.get("binance_price")
+
+    if _bp and _bp > 0:
+        _rc1, _rc2, _rc3, _rc4 = st.columns(4)
+        _rc1.metric("Binance (Global)", f"${_bp:,.4f}" if _bp < 1 else f"${_bp:,.2f}")
+
+        _mexc_p = _reg.get("mexc_price")
+        _mexc_prem = _reg.get("mexc_premium_pct")
+        if _mexc_p:
+            _mprem_str = f"{_mexc_prem:+.4f}%" if _mexc_prem is not None else "—"
+            _rc2.metric("MEXC (Asia)", f"${_mexc_p:,.2f}", delta=_mprem_str)
+
+        _bitso_eq = _reg.get("bitso_usd_equiv")
+        _bitso_mxn = _reg.get("bitso_mxn")
+        if _bitso_eq:
+            _bitso_prem = round((_bitso_eq - _bp) / _bp * 100, 3) if _bp > 0 else 0.0
+            _rc3.metric(
+                f"Bitso (MXN→USD)",
+                f"${_bitso_eq:,.2f}",
+                delta=f"{_bitso_prem:+.3f}%",
+                help=f"MXN price: {_bitso_mxn:,.0f}" if _bitso_mxn else None,
+            )
+
+        _dcx_eq = _reg.get("coindcx_usd_equiv")
+        _dcx_inr = _reg.get("coindcx_inr")
+        if _dcx_eq:
+            _dcx_prem = round((_dcx_eq - _bp) / _bp * 100, 3) if _bp > 0 else 0.0
+            _rc4.metric(
+                "CoinDCX (INR→USD)",
+                f"${_dcx_eq:,.2f}",
+                delta=f"{_dcx_prem:+.3f}%",
+                help=f"INR price: ₹{_dcx_inr:,.0f}" if _dcx_inr else None,
+            )
+
+        # Premium summary badge
+        _premiums = [p for p in [_mexc_prem, (_bitso_eq - _bp) / _bp * 100 if _bitso_eq else None,
+                                  (_dcx_eq - _bp) / _bp * 100 if _dcx_eq else None] if p is not None]
+        if _premiums:
+            _avg_prem = sum(_premiums) / len(_premiums)
+            _prem_color = "#f59e0b" if abs(_avg_prem) > 0.3 else "#00d4aa"
+            st.markdown(
+                f'<div style="font-size:12px;color:{_prem_color};margin-top:4px">'
+                f'Avg regional premium vs Binance: <b>{_avg_prem:+.4f}%</b> · '
+                f'{"Elevated premium — regional demand signal" if _avg_prem > 0.3 else "Discount — regional selling pressure" if _avg_prem < -0.3 else "In parity — no regional arbitrage signal"}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("Regional price data loading… check connectivity.")
+    st.caption("Source: MEXC public API · Bitso ticker API · CoinDCX exchange API · 2-min cache")
+
+    # ── DEX Price Intelligence (#91) ──────────────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "DEX Price Intelligence",
+        "Jupiter (Solana) · dYdX v4 (Cosmos) · Raydium AMM — on-chain vs CEX price comparison",
+        icon="⚡",
+    )
+
+    @st.cache_data(ttl=60, show_spinner=False)
+    def _cached_dex_prices():
+        return _df.fetch_dex_prices(["JUP", "WIF", "PYTH", "SOL", "RAY", "BTC", "ETH"])
+
+    _dex_data = _cached_dex_prices()
+
+    if _dex_data:
+        # Build comparison table: DEX price vs Binance spot
+        _dex_rows = []
+        for _sym, _info in _dex_data.items():
+            _dex_price = _info.get("price", 0)
+            _dex_source = _info.get("dex", "—")
+            # Compare vs Binance spot
+            _cex_sym = f"{_sym}/USDT"
+            _cex_price = None
+            _results_now = st.session_state.get("scan_results") or []
+            for _r in _results_now:
+                if _r.get("pair") == _cex_sym:
+                    _cex_price = _r.get("current_price")
+                    break
+            if _dex_price > 0:
+                _spread_pct = round((_dex_price - _cex_price) / _cex_price * 100, 3) if _cex_price and _cex_price > 0 else None
+                _dex_rows.append({
+                    "Token":      _sym,
+                    "DEX Price":  f"${_dex_price:,.4f}" if _dex_price < 10 else f"${_dex_price:,.2f}",
+                    "Source":     _dex_source,
+                    "CEX Spread": f"{_spread_pct:+.3f}%" if _spread_pct is not None else "—",
+                })
+        if _dex_rows:
+            import pandas as _pd2
+            st.dataframe(_pd2.DataFrame(_dex_rows), use_container_width=True, hide_index=True)
+            st.caption(
+                "DEX prices: Jupiter Aggregator (Solana) · dYdX v4 oracle (Cosmos) · Raydium AMM · 1-min cache. "
+                "CEX Spread vs last scan price (run a scan to populate)."
+            )
+    else:
+        st.info("DEX price feeds loading… Jupiter / dYdX / Raydium endpoints.")
+
 
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
