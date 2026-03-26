@@ -5073,6 +5073,92 @@ def page_market_overview():
         if _kp_ts:
             st.caption(f"Source: Upbit + Binance + ExchangeRate API · {str(_kp_ts)[:19]} · Cached 5 min")
 
+    # ── Sector Rotation Dashboard (Phase 9) ───────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Sector Rotation",
+        "24h performance by sector across all 29 tracked pairs — identify which sectors are leading vs lagging",
+        icon="🔄",
+    )
+
+    from crypto_model_core import SECTOR_MAP, PAIRS
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_sector_movers():
+        return data_feeds.get_market_movers(top_n=50)
+
+    _sm = _cached_sector_movers()
+    _all_coins = _sm.get("gainers", []) + _sm.get("losers", [])
+
+    # Build symbol → 24h change map from CoinGecko movers data
+    _sym_change: dict = {}
+    for _c in _all_coins:
+        _sym = (_c.get("symbol") or "").upper()
+        _pct = _c.get("price_change_24h_pct", 0.0)
+        if _sym and _sym not in _sym_change:
+            _sym_change[_sym] = _pct
+
+    # Aggregate by sector using SECTOR_MAP
+    _sector_data: dict = {}   # sector → list of (pair, 24h_pct)
+    for _pair in PAIRS:
+        _base_sym = _pair.split("/")[0]
+        _sector   = SECTOR_MAP.get(_pair, "other")
+        _chg      = _sym_change.get(_base_sym, None)
+        if _chg is not None:
+            _sector_data.setdefault(_sector, []).append((_pair, _chg))
+
+    if _sector_data:
+        # Compute sector averages and sort by performance
+        _sector_avg = {
+            s: sum(c for _, c in pairs) / len(pairs)
+            for s, pairs in _sector_data.items()
+        }
+        _sorted_sectors = sorted(_sector_avg.items(), key=lambda x: x[1], reverse=True)
+
+        # Sector bar chart
+        _sec_names = [s.replace("_", " ").title() for s, _ in _sorted_sectors]
+        _sec_vals  = [round(v, 2) for _, v in _sorted_sectors]
+        _sec_colors = ["#00d4aa" if v >= 0 else "#f6465d" for v in _sec_vals]
+
+        _fig_sect = go.Figure(go.Bar(
+            x=_sec_names,
+            y=_sec_vals,
+            marker_color=_sec_colors,
+            text=[f"{v:+.2f}%" for v in _sec_vals],
+            textposition="outside",
+        ))
+        _fig_sect.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0", size=11),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#9ca3af"),
+            yaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#9ca3af",
+                       ticksuffix="%", zeroline=True, zerolinecolor="rgba(255,255,255,0.15)"),
+            margin=dict(l=40, r=20, t=10, b=40),
+            height=260,
+            showlegend=False,
+        )
+        st.plotly_chart(_fig_sect, use_container_width=True)
+
+        # Per-sector breakdown table
+        _rows_sect = []
+        for _s, _avg in _sorted_sectors:
+            _pairs_in = _sector_data.get(_s, [])
+            _best  = max(_pairs_in, key=lambda x: x[1]) if _pairs_in else ("—", 0)
+            _worst = min(_pairs_in, key=lambda x: x[1]) if _pairs_in else ("—", 0)
+            _rows_sect.append({
+                "Sector":         _s.replace("_", " ").title(),
+                "Avg 24h %":      f"{_avg:+.2f}%",
+                "# Pairs":        len(_pairs_in),
+                "Best Performer": f"{_best[0]} ({_best[1]:+.1f}%)",
+                "Worst":          f"{_worst[0]} ({_worst[1]:+.1f}%)",
+                "Trend":          "↑ Leading" if _avg >= 2 else ("↓ Lagging" if _avg <= -2 else "→ Neutral"),
+            })
+        st.dataframe(pd.DataFrame(_rows_sect), use_container_width=True, hide_index=True)
+        _sm_src = _sm.get("source", "N/A")
+        st.caption(f"Source: {_sm_src} · Cached 5 min · Average 24h % change per sector across all tracked pairs")
+    else:
+        st.info("Sector rotation data loading… Run a market overview scan or wait for CoinGecko data.")
+
 
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
