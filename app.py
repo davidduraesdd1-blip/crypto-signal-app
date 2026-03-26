@@ -5244,7 +5244,7 @@ def page_market_overview():
         _fr_load = st.button("Refresh Funding Rates", key="load_fr_monitor", use_container_width=True)
 
     if _fr_load:
-        st.cache_data.clear()
+        _cached_funding_batch.clear()
 
     _fr_data = _cached_funding_batch()
 
