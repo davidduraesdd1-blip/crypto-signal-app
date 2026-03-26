@@ -1860,6 +1860,74 @@ def page_dashboard():
         except Exception:
             pass
 
+    # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
+    if results:
+        st.markdown("---")
+        _ui.section_header("Signal Heatmap", "All pairs — color = signal strength (green=BUY, red=SELL, grey=HOLD)", icon="🗺️")
+
+        from crypto_model_core import SECTOR_MAP, PAIRS as _ALL_PAIRS
+
+        # Map pair → signal score for color coding
+        _sig_map = {}
+        for _r in results:
+            _p   = _r.get("pair", "")
+            _dir = _r.get("direction", "")
+            _sc  = _r.get("score", 0.0) or 0.0
+            _sig_map[_p] = (_dir, _sc)
+
+        # Build grid ordered by sector then pair name
+        _sector_order = ["store_of_value", "layer1", "payments", "defi", "exchange", "layer2", "infrastructure", "ai", "meme", "other"]
+        _by_sector: dict = {}
+        for _pp in _ALL_PAIRS:
+            _s = SECTOR_MAP.get(_pp, "other")
+            _by_sector.setdefault(_s, []).append(_pp)
+
+        _heat_html = "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;'>"
+        for _sec in _sector_order:
+            _sec_pairs = _by_sector.get(_sec, [])
+            if not _sec_pairs:
+                continue
+            # Sector label
+            _heat_html += (
+                f"<div style='width:100%;font-size:10px;text-transform:uppercase;"
+                f"letter-spacing:0.8px;color:#6b7280;margin:8px 0 4px;font-weight:600;'>"
+                f"{_sec.replace('_', ' ')}</div>"
+            )
+            _heat_html += "<div style='display:flex;flex-wrap:wrap;gap:6px;'>"
+            for _pp in _sec_pairs:
+                _base = _pp.split("/")[0]
+                _dir, _sc = _sig_map.get(_pp, ("HOLD", 0.0))
+                if "BUY" in _dir:
+                    _bg   = f"rgba(0,212,170,{min(0.85, 0.25 + abs(_sc)/100)})"
+                    _border = "#00d4aa"
+                    _tc   = "#e2e8f0"
+                elif "SELL" in _dir:
+                    _bg   = f"rgba(246,70,93,{min(0.85, 0.25 + abs(_sc)/100)})"
+                    _border = "#f6465d"
+                    _tc   = "#e2e8f0"
+                else:
+                    _bg   = "rgba(107,114,128,0.15)"
+                    _border = "#374151"
+                    _tc   = "#6b7280"
+                _sc_str = f"{_sc:+.0f}" if _sc != 0 else "—"
+                _heat_html += (
+                    f"<div style='background:{_bg};border:1px solid {_border};"
+                    f"border-radius:8px;padding:6px 10px;min-width:64px;text-align:center;"
+                    f"cursor:default;'>"
+                    f"<div style='font-size:12px;font-weight:700;color:{_tc};'>{_base}</div>"
+                    f"<div style='font-size:10px;color:{_border};margin-top:2px;font-weight:600;'>"
+                    f"{_dir.replace('STRONG_', '').replace('_BIAS', '')} {_sc_str}</div>"
+                    f"</div>"
+                )
+            _heat_html += "</div>"
+        _heat_html += "</div>"
+
+        st.markdown(_heat_html, unsafe_allow_html=True)
+        _buys  = sum(1 for d, _ in _sig_map.values() if "BUY"  in d)
+        _sells = sum(1 for d, _ in _sig_map.values() if "SELL" in d)
+        _holds = len(_sig_map) - _buys - _sells
+        st.caption(f"Signal summary: {_buys} BUY · {_sells} SELL · {_holds} HOLD · Score = composite signal strength (higher = stronger)")
+
     # ── Auto-refresh trigger (fragment-based, non-blocking) ──
     # Uses a 1s fragment for the countdown so the main page only reruns at the real interval,
     # not every second (which caused constant full-page reruns and price flickering).
