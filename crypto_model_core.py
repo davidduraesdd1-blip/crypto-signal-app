@@ -118,12 +118,38 @@ MAX_SECTOR_EXPOSURE_PCT = 40.0  # T2-7: max % of portfolio allocated to any one 
 ATR_SCALE_MIN         = 0.5    # T2-8: min ATR scaling factor (high vol → smaller position)
 ATR_SCALE_MAX         = 2.0    # T2-8: max ATR scaling factor (low vol → larger position)
 SECTOR_MAP: dict = {
-    'BTC/USDT':  'store_of_value',
-    'ETH/USDT':  'store_of_value',
-    'SOL/USDT':  'layer1',
-    'XRP/USDT':  'payments',
-    'DOGE/USDT': 'payments',
-    'BNB/USDT':  'exchange',
+    # Core
+    'BTC/USDT':    'store_of_value',
+    'ETH/USDT':    'store_of_value',
+    'SOL/USDT':    'layer1',
+    'XRP/USDT':    'payments',
+    'DOGE/USDT':   'payments',
+    'BNB/USDT':    'exchange',
+    # Tier 1
+    'TRX/USDT':    'layer1',
+    'ADA/USDT':    'layer1',
+    'BCH/USDT':    'store_of_value',
+    'LINK/USDT':   'defi',
+    'LTC/USDT':    'payments',
+    'AVAX/USDT':   'layer1',
+    'XLM/USDT':    'payments',
+    'SUI/USDT':    'layer1',
+    'TAO/USDT':    'ai',
+    # Tier 2
+    'NEAR/USDT':   'layer1',
+    'APT/USDT':    'layer1',
+    'POL/USDT':    'layer2',
+    'OP/USDT':     'layer2',
+    'ARB/USDT':    'layer2',
+    'ATOM/USDT':   'layer1',
+    'FIL/USDT':    'infrastructure',
+    'INJ/USDT':    'defi',
+    'PENDLE/USDT': 'defi',
+    'WIF/USDT':    'meme',
+    'PYTH/USDT':   'infrastructure',
+    'JUP/USDT':    'defi',
+    'HBAR/USDT':   'layer1',
+    'FLR/USDT':    'layer1',
 }
 
 KRAKEN_TESTNET_KEYS = "kraken_testnet_keys.json"
