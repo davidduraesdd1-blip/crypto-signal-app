@@ -374,14 +374,16 @@ def init_db():
                     computed_at TEXT NOT NULL,
                     pair        TEXT NOT NULL,
                     timeframe   TEXT,
-                    ic_30d      REAL,   -- Information Coefficient (corr of confidence vs 24h return), 30-day
-                    ic_7d       REAL,   -- IC over last 7 days
-                    wfe         REAL,   -- Walk Forward Efficiency = OOS_win_rate / IS_win_rate
-                    win_rate    REAL,   -- rolling 30d win rate
-                    sample_n    INTEGER -- number of resolved signals used
-                );
-                CREATE INDEX IF NOT EXISTS idx_sm_pair_ts ON signal_metrics(pair, computed_at DESC);
+                    ic_30d      REAL,
+                    ic_7d       REAL,
+                    wfe         REAL,
+                    win_rate    REAL,
+                    sample_n    INTEGER
+                )
             """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sm_pair_ts ON signal_metrics(pair, computed_at DESC)"
+            )
 
             # Backtest schema migration — add columns added after initial release
             _add_col('backtest_trades', 'gross_pnl_pct',  'REAL')
