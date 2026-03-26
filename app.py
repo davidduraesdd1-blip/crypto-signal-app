@@ -5117,7 +5117,6 @@ def page_market_overview():
         _mh4 = _oc4.get("mvrv_history", {})
         _sh4 = _oc4.get("sopr_history", {})
         if _mh4 or _sh4:
-            import pandas as pd
             from plotly.subplots import make_subplots
             _fig4 = make_subplots(rows=2, cols=1, shared_xaxes=True,
                                   subplot_titles=("MVRV Z-Score (365-day rolling)", "SOPR"),
