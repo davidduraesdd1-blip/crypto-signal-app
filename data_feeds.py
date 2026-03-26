@@ -6,14 +6,40 @@ from free public APIs. No API keys required.
 from __future__ import annotations
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from urllib.parse import urlparse
 import time
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-# PERF: module-level Session reuses TCP connections (avoids per-call TCP handshake/TLS overhead)
+# PERF: module-level Session with retry adapter (TCP reuse + auto-retry on 429/5xx)
+_retry = Retry(total=3, backoff_factor=1.0, status_forcelist=[429, 500, 502, 503, 504],
+               allowed_methods=["GET"], raise_on_status=False)
+_adapter = HTTPAdapter(max_retries=_retry)
 _SESSION = requests.Session()
+_SESSION.mount("https://", _adapter)
+_SESSION.mount("http://", _adapter)
 _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+
+# SSRF allowlist — only fetch from these known-safe domains
+_ALLOWED_HOSTS: frozenset = frozenset({
+    "api.alternative.me", "api.bybit.com", "www.okx.com", "api.kucoin.com",
+    "api-futures.kucoin.com", "api.coingecko.com", "api.binance.com",
+    "api.binance.us", "api.stlouisfed.org", "api.coinalyze.net",
+    "lunarcrush.com", "cryptopanic.com", "dogechain.info",
+    "fapi.binance.com",  # kept for reference, geo-blocked but safe
+})
+
+
+def _ssrf_check(url: str) -> bool:
+    """Return True if the URL hostname is on the allowlist."""
+    try:
+        host = urlparse(url).hostname or ""
+        return any(host == h or host.endswith("." + h) for h in _ALLOWED_HOSTS)
+    except Exception:
+        return False
 
 # ──────────────────────────────────────────────
 # BINANCE FUTURES FUNDING RATES
