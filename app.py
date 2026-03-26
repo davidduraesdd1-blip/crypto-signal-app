@@ -5318,8 +5318,6 @@ def page_market_overview():
         icon="🔄",
     )
 
-    from crypto_model_core import SECTOR_MAP, PAIRS
-
     @st.cache_data(ttl=300, show_spinner=False)
     def _cached_sector_movers():
         return data_feeds.get_top_movers(top_n=50)
@@ -5337,9 +5335,9 @@ def page_market_overview():
 
     # Aggregate by sector using SECTOR_MAP
     _sector_data: dict = {}   # sector → list of (pair, 24h_pct)
-    for _pair in PAIRS:
+    for _pair in model.PAIRS:
         _base_sym = _pair.split("/")[0]
-        _sector   = SECTOR_MAP.get(_pair, "other")
+        _sector   = model.SECTOR_MAP.get(_pair, "other")
         _chg      = _sym_change.get(_base_sym, None)
         if _chg is not None:
             _sector_data.setdefault(_sector, []).append((_pair, _chg))
