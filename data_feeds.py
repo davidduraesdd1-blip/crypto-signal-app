@@ -189,6 +189,47 @@ _COIN_MAP = {
 }
 
 _CG_BASE = "https://api.coingecko.com/api/v3"
+_BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
+
+
+# ──────────────────────────────────────────────
+# BINANCE PUBLIC API — spot klines + 24hr ticker
+# Free, unlimited, no API key required
+# ──────────────────────────────────────────────
+
+def fetch_binance_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+    """
+    Fetch OHLCV candlestick data from Binance spot public API.
+    symbol: e.g. "BTCUSDT", interval: "1m","5m","15m","1h","4h","1d","1w"
+    Returns list of [open_ts, open, high, low, close, volume, close_ts, ...] rows.
+    Free, no API key, no rate-limit issues for reasonable usage.
+    """
+    try:
+        r = _SESSION.get(
+            f"{_BINANCE_SPOT_BASE}/klines",
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        logging.debug("[Binance klines] %s/%s failed: %s", symbol, interval, e)
+    return []
+
+
+def _fetch_binance_24hr(symbol: str) -> dict | None:
+    """Fetch 24hr stats from Binance spot API. Returns raw dict or None."""
+    try:
+        r = _SESSION.get(
+            f"{_BINANCE_SPOT_BASE}/ticker/24hr",
+            params={"symbol": symbol},
+            timeout=6,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        logging.debug("[Binance 24hr] %s failed: %s", symbol, e)
+    return None
 
 
 def _fallback_onchain() -> dict:
@@ -201,8 +242,8 @@ def _fallback_onchain() -> dict:
 
 def get_onchain_metrics(pair: str) -> dict:
     """
-    Real on-chain proxy metrics from CoinGecko free API.
-    Returns same schema as the old simulated fetch_onchain_metrics() for compatibility.
+    On-chain proxy metrics. Primary: Binance spot 24hr ticker (free, unlimited).
+    Fallback: CoinGecko free API (rate-limited, used for 200d price change only).
 
     Fields:
       sopr          — SOPR proxy: 1 + 24h_price_change. >1 = profit-taking, <1 = capitulation.
@@ -212,7 +253,7 @@ def get_onchain_metrics(pair: str) -> dict:
       vol_mcap_ratio — Raw volume/mcap ratio for display.
       price_24h_pct  — 24h price change %.
       price_200d_pct — 200-day price change %.
-      source         — 'coingecko' | 'fallback'
+      source         — 'binance' | 'coingecko' | 'fallback'
     """
     now = time.time()
     with _ONCHAIN_CACHE_LOCK:
@@ -220,6 +261,48 @@ def get_onchain_metrics(pair: str) -> dict:
         if cached and (now - cached.get('_ts', 0)) < _ONCHAIN_TTL:
             return cached
 
+    # ── Try Binance spot 24hr ticker (primary — free, unlimited) ──────────────
+    binance_sym = pair.replace("/", "")  # BTC/USDT → BTCUSDT
+    ticker = _fetch_binance_24hr(binance_sym)
+    if ticker and "priceChangePercent" in ticker:
+        try:
+            price_24h  = float(ticker.get("priceChangePercent", 0))
+            volume_usd = float(ticker.get("quoteVolume", 0))  # already in USDT
+            price_now  = float(ticker.get("lastPrice", 0))
+            # Estimate market cap via circulating supply proxy (not available from Binance,
+            # so we use volume/price ratio as a relative proxy instead)
+            # net_flow uses volume directly scaled to ±400 relative to a $1B baseline
+            vol_mcap   = volume_usd / 1e9 if volume_usd else 0.0  # normalised to $1B units
+            net_flow   = 0.0 if volume_usd == 0 else round(
+                max(-400.0, min(400.0, (vol_mcap - 0.05) * 8000)), 1
+            )
+            sopr       = round(max(0.85, min(1.15, 1.0 + price_24h / 100)), 3)
+            # 200d proxy: fetch 200 daily klines from Binance, compute % change
+            price_200d = 0.0
+            klines_200 = fetch_binance_klines(binance_sym, interval="1d", limit=201)
+            if len(klines_200) >= 2:
+                first_close = float(klines_200[0][4])
+                last_close  = float(klines_200[-1][4])
+                if first_close > 0:
+                    price_200d = round((last_close - first_close) / first_close * 100, 2)
+            mvrv_z     = round(max(-3.0, min(7.0, price_200d / 57.0)), 2)
+            whale_activity = vol_mcap > 0.10
+
+            result = {
+                'sopr': sopr, 'mvrv_z': mvrv_z, 'net_flow': net_flow,
+                'whale_activity': whale_activity, 'source': 'binance',
+                'vol_mcap_ratio': round(vol_mcap, 4),
+                'price_24h_pct': round(price_24h, 2),
+                'price_200d_pct': price_200d,
+                '_ts': now,
+            }
+            with _ONCHAIN_CACHE_LOCK:
+                _ONCHAIN_CACHE[pair] = result
+            return result
+        except Exception as e:
+            logging.debug("[Binance onchain] parse error for %s: %s", pair, e)
+
+    # ── Fallback: CoinGecko (rate-limited — only used when Binance fails) ─────
     coin_id = _COIN_MAP.get(pair)
     if not coin_id:
         return _fallback_onchain()
@@ -234,7 +317,6 @@ def get_onchain_metrics(pair: str) -> dict:
         resp = _SESSION.get(url, params=params, timeout=10)
         if resp.status_code == 429:
             logging.warning(f"CoinGecko rate limited (429) for {pair} — using fallback")
-            # BUG-M04: cache the fallback so we don't hammer CoinGecko on every call
             _fb = {**_fallback_onchain(), '_ts': now}
             with _ONCHAIN_CACHE_LOCK:
                 _ONCHAIN_CACHE[pair] = _fb
@@ -251,18 +333,10 @@ def get_onchain_metrics(pair: str) -> dict:
         volume = (md.get('total_volume') or {}).get('usd') or 0.0
         mcap = (md.get('market_cap') or {}).get('usd') or 0.0
 
-        # SOPR proxy: normalised 24h return, centred on 1.0
         sopr = round(max(0.85, min(1.15, 1.0 + price_24h / 100)), 3)
-
-        # MVRV-Z proxy: 200d return scaled so +200% ≈ 3.5, -57% ≈ -1.0
         mvrv_z = round(max(-3.0, min(7.0, price_200d / 57.0)), 2)
-
-        # Net-flow proxy: volume/mcap deviation scaled to ±400
-        # BUG-RANGE-01: zero volume must be neutral (0), not extreme bearish (-400)
         vol_mcap = volume / mcap if mcap > 0 else 0.0
         net_flow = 0.0 if volume == 0 else round(max(-400.0, min(400.0, (vol_mcap - 0.05) * 8000)), 1)
-
-        # Whale activity: volume > 10% of mcap signals unusual on-chain movement
         whale_activity = vol_mcap > 0.10
 
         result = {
@@ -2756,8 +2830,9 @@ def fetch_fred_macro() -> dict:
 
 def fetch_yfinance_macro() -> dict:
     """
-    Fetch macro market data via yfinance: DXY, VIX, Gold, SPX, Oil.
-    Free, no API key required.  Returns fallback dict if yfinance not installed.
+    Fetch macro market data: DXY, VIX, Gold, SPX, Oil.
+    Primary: yfinance (free, traditional markets).
+    Fallback: Binance spot for Gold proxy (PAXG/USDT), static values for others.
     """
     _YF_FALLBACKS = {
         "dxy": 104.0, "vix": 18.0, "gold_spot": 2900.0,
@@ -2765,29 +2840,42 @@ def fetch_yfinance_macro() -> dict:
     }
 
     def _fetch():
+        result = {}
+
+        # ── Try yfinance (primary for traditional market data) ─────────────────
         try:
             import yfinance as yf
+            _MAP = {
+                "dxy":       "DX-Y.NYB",
+                "vix":       "^VIX",
+                "gold_spot": "GC=F",
+                "spx":       "^GSPC",
+                "oil":       "CL=F",
+            }
+            for key, symbol in _MAP.items():
+                try:
+                    hist = yf.Ticker(symbol).history(period="5d")
+                    if not hist.empty:
+                        result[key] = round(float(hist["Close"].iloc[-1]), 2)
+                except Exception as e:
+                    logging.debug("[yfinance] %s failed: %s", symbol, e)
         except ImportError:
-            return None
-        _MAP = {
-            "dxy":       "DX-Y.NYB",
-            "vix":       "^VIX",
-            "gold_spot": "GC=F",
-            "spx":       "^GSPC",
-            "oil":       "CL=F",
-        }
-        result = {}
-        for key, symbol in _MAP.items():
+            logging.debug("[yfinance] not installed — using Binance/fallback only")
+
+        # ── Binance fallback for gold (PAXG = PAX Gold, 1:1 troy oz) ──────────
+        if "gold_spot" not in result:
             try:
-                hist = yf.Ticker(symbol).history(period="5d")
-                if not hist.empty:
-                    result[key] = round(float(hist["Close"].iloc[-1]), 2)
+                paxg = _fetch_binance_24hr("PAXGUSDT")
+                if paxg and "lastPrice" in paxg:
+                    result["gold_spot"] = round(float(paxg["lastPrice"]), 2)
+                    logging.debug("[Binance] PAXG gold proxy: %s", result["gold_spot"])
             except Exception as e:
-                logging.debug("[yfinance] %s failed: %s", symbol, e)
+                logging.debug("[Binance gold fallback] failed: %s", e)
+
         if not result:
             return None
-        result["source"] = "yfinance"
         import datetime as _dt
+        result["source"] = "yfinance" if "dxy" in result else "binance_partial"
         result["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
         return result
 

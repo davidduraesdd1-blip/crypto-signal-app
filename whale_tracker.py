@@ -89,8 +89,8 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
     try:
         # Get latest block number
         resp = requests.get(
-            "https://api.etherscan.io/api",
-            params={"module": "proxy", "action": "eth_blockNumber"},
+            "https://api.etherscan.io/v2/api",
+            params={"chainid": 1, "module": "proxy", "action": "eth_blockNumber"},
             timeout=_TIMEOUT,
         )
         if resp.status_code != 200:
@@ -103,11 +103,11 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
             logger.debug("ETH whale: invalid block number hex %r", hex_block)
             return _estimate_eth_whale_activity(price_usd)
 
-        # Fetch recent large internal txs — use Etherscan's free account transfer endpoint
-        # alternative: fetch latest block and scan for large ETH transfers
+        # Fetch recent large txs via Etherscan v2 (multi-chain aware)
         resp2 = requests.get(
-            "https://api.etherscan.io/api",
+            "https://api.etherscan.io/v2/api",
             params={
+                "chainid":    1,
                 "module":     "account",
                 "action":     "txlist",
                 "address":    "0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe",  # EF donation addr as proxy
