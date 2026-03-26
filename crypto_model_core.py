@@ -30,7 +30,20 @@ _last_drift_result: dict = {}     # F6/F7: last concept drift check result; read
 # ──────────────────────────────────────────────
 # CONFIGURATION DEFAULTS
 # ──────────────────────────────────────────────
-PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT']
+PAIRS = [
+    # ── Core (Tier 0) — always analyzed ────────────────────────────────────
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT',
+    # ── Tier 1 — large-cap alts ─────────────────────────────────────────────
+    'TRX/USDT', 'ADA/USDT', 'BCH/USDT', 'LINK/USDT', 'LTC/USDT',
+    'AVAX/USDT', 'XLM/USDT', 'SUI/USDT', 'TAO/USDT',
+    # HYPE: on Hyperliquid DEX only (not on CEX) — skip for CEX feed
+    # ── Tier 2 — mid-cap alts & ecosystem tokens ─────────────────────────────
+    'NEAR/USDT', 'APT/USDT', 'POL/USDT', 'OP/USDT', 'ARB/USDT',
+    'ATOM/USDT', 'FIL/USDT', 'INJ/USDT', 'PENDLE/USDT', 'WIF/USDT',
+    'PYTH/USDT', 'JUP/USDT', 'HBAR/USDT', 'FLR/USDT',
+    # XDC, WFLR, FXRP, SHX, ZBCN, CC: primarily on DEX/low-liquidity CEX —
+    # added to DEX scanner in Defi Model; omitted here for CEX signal quality
+]
 TIMEFRAMES = ['1h', '4h', '1d', '1w']
 OHLCV_LIMIT      = 500  # Ichimoku (10/30/60) needs 60-bar warmup; 500 gives 440 usable bars on 1h (~18.3 days)
 SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need < 150 bars; ~40% faster OHLCV fetch

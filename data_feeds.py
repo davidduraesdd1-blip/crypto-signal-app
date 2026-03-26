@@ -206,12 +206,21 @@ _ONCHAIN_CACHE: dict = {}
 _ONCHAIN_TTL = 300  # 5-minute cache
 
 _COIN_MAP = {
-    'BTC/USDT': 'bitcoin',    'ETH/USDT': 'ethereum',   'SOL/USDT': 'solana',
-    'XRP/USDT': 'ripple',     'DOGE/USDT': 'dogecoin',  'BNB/USDT': 'binancecoin',
-    'ADA/USDT': 'cardano',    'AVAX/USDT': 'avalanche-2', 'MATIC/USDT': 'matic-network',
-    'LINK/USDT': 'chainlink', 'LTC/USDT': 'litecoin',   'DOT/USDT': 'polkadot',
-    'UNI/USDT': 'uniswap',   'ATOM/USDT': 'cosmos',    'FIL/USDT': 'filecoin',
-    'NEAR/USDT': 'near',
+    # Core
+    'BTC/USDT': 'bitcoin',       'ETH/USDT': 'ethereum',       'SOL/USDT': 'solana',
+    'XRP/USDT': 'ripple',        'DOGE/USDT': 'dogecoin',      'BNB/USDT': 'binancecoin',
+    # Tier 1
+    'TRX/USDT': 'tron',          'ADA/USDT': 'cardano',        'BCH/USDT': 'bitcoin-cash',
+    'LINK/USDT': 'chainlink',    'LTC/USDT': 'litecoin',       'AVAX/USDT': 'avalanche-2',
+    'XLM/USDT': 'stellar',       'SUI/USDT': 'sui',            'TAO/USDT': 'bittensor',
+    # Tier 2
+    'NEAR/USDT': 'near',         'APT/USDT': 'aptos',          'POL/USDT': 'matic-network',
+    'OP/USDT': 'optimism',       'ARB/USDT': 'arbitrum',       'ATOM/USDT': 'cosmos',
+    'FIL/USDT': 'filecoin',      'INJ/USDT': 'injective-protocol', 'PENDLE/USDT': 'pendle',
+    'WIF/USDT': 'dogwifcoin',    'PYTH/USDT': 'pyth-network',  'JUP/USDT': 'jupiter-exchange-solana',
+    'HBAR/USDT': 'hedera-hashgraph', 'FLR/USDT': 'flare-networks',
+    # Legacy (kept for backwards compat)
+    'MATIC/USDT': 'matic-network', 'DOT/USDT': 'polkadot',    'UNI/USDT': 'uniswap',
 }
 
 _CG_BASE = "https://api.coingecko.com/api/v3"
