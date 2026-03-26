@@ -5211,17 +5211,17 @@ def page_market_overview():
         with _colA5:
             if _oi5sg:
                 _figA5 = go.Figure()
-                _strk5 = [str(int(r["strike"])) for r in _oi5sg]
+                _strk5 = [int(r["strike"]) for r in _oi5sg]
                 _figA5.add_trace(go.Bar(name="Puts", x=_strk5,
                     y=[r["put_oi"] for r in _oi5sg], marker_color="rgba(239,68,68,0.8)"))
                 _figA5.add_trace(go.Bar(name="Calls", x=_strk5,
                     y=[r["call_oi"] for r in _oi5sg], marker_color="rgba(16,185,129,0.8)"))
                 if _mp5:
-                    _figA5.add_vline(x=str(int(_mp5)), line_dash="dash", line_color="#6366f1",
+                    _figA5.add_vline(x=int(_mp5), line_dash="dash", line_color="#6366f1",
                                      opacity=0.8, annotation_text=f"Max Pain ${_mp5:,.0f}",
                                      annotation_font_size=10)
                 if _spot5:
-                    _figA5.add_vline(x=str(int(_spot5)), line_dash="dot", line_color="#f59e0b",
+                    _figA5.add_vline(x=int(_spot5), line_dash="dot", line_color="#f59e0b",
                                      opacity=0.6, annotation_text="Spot", annotation_font_size=10)
                 _figA5.update_layout(
                     title="OI by Strike (Top 20)", barmode="stack",
