@@ -5085,7 +5085,7 @@ def page_market_overview():
 
     @st.cache_data(ttl=300, show_spinner=False)
     def _cached_sector_movers():
-        return data_feeds.get_market_movers(top_n=50)
+        return data_feeds.get_top_movers(top_n=50)
 
     _sm = _cached_sector_movers()
     _all_coins = _sm.get("gainers", []) + _sm.get("losers", [])
