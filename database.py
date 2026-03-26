@@ -650,10 +650,28 @@ def log_feedback(pair: str, direction: str, entry: float,
             conn.close()
 
 
-def get_feedback_df() -> pd.DataFrame:
+def get_feedback_df(limit: int = None) -> pd.DataFrame:
+    """Return feedback_log as a DataFrame.
+
+    Args:
+        limit: if provided, return only the most-recent N rows (ordered by
+               timestamp DESC, then re-sorted ASC for callers that expect
+               chronological order).  Avoids loading 12 000+ rows when only
+               the recent tail is needed (e.g. UI performance tab).
+    """
     conn = _get_conn()
     try:
-        df = pd.read_sql("SELECT * FROM feedback_log ORDER BY timestamp ASC", conn)
+        if limit is not None and limit > 0:
+            # Fetch the N most-recent rows, then return in ascending order
+            df = pd.read_sql(
+                "SELECT * FROM ("
+                "  SELECT * FROM feedback_log ORDER BY timestamp DESC LIMIT ?"
+                ") ORDER BY timestamp ASC",
+                conn,
+                params=(int(limit),),
+            )
+        else:
+            df = pd.read_sql("SELECT * FROM feedback_log ORDER BY timestamp ASC", conn)
     finally:
         conn.close()
     return df

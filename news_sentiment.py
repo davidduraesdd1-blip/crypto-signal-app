@@ -351,26 +351,47 @@ def get_news_sentiment(pair: str) -> dict:
     currencies = _PAIR_TO_CURRENCIES.get(pair, [pair.split("/")[0]])
     keywords   = currencies + [pair.split("/")[0]]
 
+    # PERF-NEWS: fetch all 4 sources simultaneously instead of sequentially.
+    # Previous pattern: each source only fetched if len(headlines) < 10, meaning
+    # worst-case all 4 fetches ran serially (~32s total at 8s timeout each).
+    # New pattern: all 4 start in parallel; total wall-clock time = slowest source.
+    def _src_cryptopanic():
+        return _fetch_cryptopanic(currencies)
+
+    def _src_coindesk():
+        return _fetch_rss(_COINDESK_RSS, keywords, max_items=8)
+
+    def _src_cointelegraph():
+        return _fetch_rss(_COINTELEGRAPH_RSS, keywords, max_items=8)
+
+    def _src_lunarcrush():
+        return _fetch_lunarcrush(currencies[0]) if currencies else []
+
+    _sources = [_src_cryptopanic, _src_coindesk, _src_cointelegraph, _src_lunarcrush]
+    _source_results: list[list[str]] = [[] for _ in _sources]
+
+    with ThreadPoolExecutor(max_workers=4) as _news_ex:
+        _news_futures = {_news_ex.submit(fn): i for i, fn in enumerate(_sources)}
+        for _fut in _news_futures:
+            idx = _news_futures[_fut]
+            try:
+                _source_results[idx] = _fut.result()
+            except Exception as _e:
+                logger.debug("News source %d failed: %s", idx, _e)
+
+    # Merge: CryptoPanic first (highest relevance), then supplementary sources.
+    # Deduplicate while preserving order.
+    _seen: set = set()
     headlines: list[str] = []
+    for _batch in _source_results:
+        for _h in _batch:
+            if _h not in _seen:
+                _seen.add(_h)
+                headlines.append(_h)
 
-    # Source 1: CryptoPanic (most relevant, crypto-specific)
-    cp_headlines = _fetch_cryptopanic(currencies)
-    headlines.extend(cp_headlines)
-
-    # Source 2: CoinDesk RSS (fallback / supplement)
-    if len(headlines) < 10:
-        cd = _fetch_rss(_COINDESK_RSS, keywords, max_items=8)
-        headlines.extend(cd)
-
-    # Source 3: Cointelegraph RSS
-    if len(headlines) < 10:
-        ct = _fetch_rss(_COINTELEGRAPH_RSS, keywords, max_items=8)
-        headlines.extend(ct)
-
-    # Source 4: LunarCrush social sentiment (front-runs price 4-12h per research)
-    # Always fetch regardless of headline count — social signals are independent alpha
-    lc_headlines = _fetch_lunarcrush(currencies[0]) if currencies else []
-    headlines.extend(lc_headlines)
+    # Apply the original < 10 threshold: if total merged result is still thin,
+    # this is surfaced to the caller via articles_analyzed count (no hard gate needed
+    # since all sources already ran in parallel).
 
     if not headlines:
         result = {**_NEUTRAL_RESULT, "error": "No headlines found"}

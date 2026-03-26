@@ -3938,9 +3938,38 @@ def run_scan(progress_callback=None):
     """
     _clear_partial_scan_results()   # PERF: reset partial results before each new scan
     start_time = time.time()
-    reset_kelly_cache()      # Compute Kelly once per scan — reused by all pairs (PERF-03)
-    reset_agent_acc_cache()  # Prefetch agent accuracy weights once — avoids 24+ DB queries (PERF-06)
-    fng_value, fng_category = fetch_fear_greed()
+
+    # PERF-PRESCAN: run 3 independent pre-scan tasks in parallel so they overlap
+    # with each other (was sequential: up to ~3s blocked).
+    # reset_kelly_cache → DB read; reset_agent_acc_cache → DB read; fetch_fear_greed → HTTP
+    _fng_result: list = [50, "Neutral"]  # mutable container for thread result
+
+    def _pre_kelly():
+        reset_kelly_cache()
+
+    def _pre_agent_acc():
+        reset_agent_acc_cache()
+
+    def _pre_fng():
+        try:
+            val, cat = fetch_fear_greed()
+            _fng_result[0] = val
+            _fng_result[1] = cat
+        except Exception as _e:
+            logging.warning(f"pre-scan fear_greed fetch failed: {_e}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _pre3_ex:
+        _f1 = _pre3_ex.submit(_pre_kelly)
+        _f2 = _pre3_ex.submit(_pre_agent_acc)
+        _f3 = _pre3_ex.submit(_pre_fng)
+        for _f in (_f1, _f2, _f3):
+            try:
+                _f.result()
+            except Exception as _fe:
+                logging.warning(f"pre-scan parallel task failed: {_fe}")
+
+    fng_value, fng_category = _fng_result[0], _fng_result[1]
+
     ta_ex = get_exchange_instance(TA_EXCHANGE)
     if not ta_ex:
         raise RuntimeError(

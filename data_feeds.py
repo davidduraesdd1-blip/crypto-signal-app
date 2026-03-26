@@ -809,6 +809,14 @@ def get_carry_trade_opportunities(
             pass
         return opps
 
+    # PERF-CARRY: pre-warm the multi-exchange funding rate cache for all pairs
+    # in one parallel pass so each _scan_one() worker hits the in-memory cache
+    # instead of making live HTTP calls.  get_multi_exchange_funding_rates() has
+    # a 5-minute TTL and internal parallelism — pre-fetching here means each
+    # _scan_one() call returns instantly from cache.
+    with ThreadPoolExecutor(max_workers=min(len(pairs), 8)) as _pre_ex:
+        list(_pre_ex.map(get_multi_exchange_funding_rates, pairs))
+
     all_opps: list[dict] = []
     with ThreadPoolExecutor(max_workers=4) as ex:
         for opps in ex.map(_scan_one, pairs):

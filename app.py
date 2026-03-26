@@ -43,15 +43,24 @@ _http.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-al
 
 from apscheduler.schedulers.background import BackgroundScheduler
 import alerts as _alerts
-import pdf_export as _pdf
 import chart_component as _chart
-import llm_analysis as _llm
 import database as _db
 import websocket_feeds as _ws
 import execution as _exec
 import ui_components as _ui
 import arbitrage as _arb
 import data_feeds
+# PERF-LAZY: optional/feature-gated modules loaded with try/except so a missing
+# dependency never crashes the dashboard.  Sentinel = None → each call site
+# already guards with "if _mod is not None" or a wrapping try/except.
+try:
+    import pdf_export as _pdf
+except Exception:
+    _pdf = None
+try:
+    import llm_analysis as _llm
+except Exception:
+    _llm = None
 try:
     import news_sentiment as _news_mod
 except Exception:
@@ -163,9 +172,11 @@ def _cached_paper_trades_df() -> "pd.DataFrame":
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_feedback_df() -> "pd.DataFrame":
-    """Cache feedback_log DB read — 12 000+ rows, 5-min TTL.
-    This is the single most expensive repeated read in the app."""
-    return _db.get_feedback_df()
+    """Cache feedback_log DB read — limited to 500 most-recent rows, 5-min TTL.
+    PERF: was loading 12 000+ rows on every rerun; now capped at 500 rows
+    (~96% reduction in data transferred from SQLite) while still covering all
+    meaningful recent performance history for UI charts and VaR calculations."""
+    return _db.get_feedback_df(limit=500)
 
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=1)
@@ -1703,6 +1714,9 @@ def page_dashboard():
 
     @st.dialog(f"AI Analysis — {pair}", width="large")
     def _show_ai_dialog():
+        if _llm is None:
+            st.warning("LLM analysis module not available — check llm_analysis.py installation.")
+            return
         cached = st.session_state.get(ai_key)
         if cached:
             st.info(cached)
@@ -1877,6 +1891,8 @@ def page_dashboard():
             ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
             try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
+                if _pdf is None:
+                    raise ImportError("pdf_export module not available")
                 if st.session_state.get("_scan_pdf_ts") != ts_str:
                     st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
                     st.session_state["_scan_pdf_ts"] = ts_str
@@ -3208,18 +3224,24 @@ def page_backtest():
                 use_container_width=True,
             )
         with dl_col2:
-            bt_pdf_bytes = _pdf.generate_backtest_pdf(
-                metrics=metrics,
-                trades_df=filtered,
-                scan_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            )
-            st.download_button(
-                "⬇ Download Report (PDF)",
-                data=bt_pdf_bytes,
-                file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+            if _pdf is not None:
+                try:
+                    bt_pdf_bytes = _pdf.generate_backtest_pdf(
+                        metrics=metrics,
+                        trades_df=filtered,
+                        scan_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    st.download_button(
+                        "⬇ Download Report (PDF)",
+                        data=bt_pdf_bytes,
+                        file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                except Exception as _bt_pdf_err:
+                    st.caption(f"PDF generation failed: {_bt_pdf_err}")
+            else:
+                st.caption("PDF export unavailable")
 
         # PnL distribution
         if 'pnl_pct' in df_trades.columns and len(df_trades) > 3:

@@ -154,28 +154,71 @@ def compute_var_summary(
         sortino_ratio: signal return / downside deviation
         max_drawdown_pct: maximum observed drawdown in feedback_log
     """
-    var_90 = compute_historical_var(pair, 0.90, portfolio_size_usd, position_pct)
-    var_95 = compute_historical_var(pair, 0.95, portfolio_size_usd, position_pct)
-    var_99 = compute_historical_var(pair, 0.99, portfolio_size_usd, position_pct)
-
-    # Additional metrics from PnL distribution
+    # PERF-VAR: fetch the return data once and compute all confidence levels
+    # in-memory.  Previous code called compute_historical_var() 3× (3 separate
+    # DB round-trips) then made a 4th query for Sharpe/Sortino/drawdown.
+    # New code: 1 query → compute all 3 VaR levels + risk metrics in-memory.
     cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).isoformat()
     conn = None
     try:
         conn = db._get_conn()
-        q    = "SELECT actual_pnl_pct FROM feedback_log WHERE timestamp>=? AND actual_pnl_pct IS NOT NULL"
-        args = [cutoff]
         if pair:
-            q    = "SELECT actual_pnl_pct FROM feedback_log WHERE pair=? AND timestamp>=? AND actual_pnl_pct IS NOT NULL"
-            args = [pair, cutoff]
-        rows = conn.execute(q, args).fetchall()
-    except Exception:
+            rows = conn.execute(
+                "SELECT actual_pnl_pct FROM feedback_log "
+                "WHERE pair=? AND timestamp>=? AND actual_pnl_pct IS NOT NULL",
+                (pair, cutoff),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT actual_pnl_pct FROM feedback_log "
+                "WHERE timestamp>=? AND actual_pnl_pct IS NOT NULL",
+                (cutoff,),
+            ).fetchall()
+    except Exception as _e:
+        logger.error(f"VaR summary DB read failed: {_e}")
         rows = []
     finally:
         if conn is not None:
             conn.close()
 
-    pnl = np.array([float(r[0]) for r in rows]) if rows else np.array([])
+    pnl_returns = np.array([float(r[0]) for r in rows])
+    position_usd = portfolio_size_usd * position_pct / 100
+
+    def _var_from_data(confidence: float) -> dict:
+        """Compute historical VaR/CVaR from the already-fetched pnl_returns array."""
+        if len(pnl_returns) >= _MIN_HIST_SAMPLES:
+            sorted_pnl = np.sort(pnl_returns)
+            idx        = int((1 - confidence) * len(sorted_pnl))
+            idx        = max(0, min(idx, len(sorted_pnl) - 1))
+            var_pct    = float(max(0.0, -sorted_pnl[idx]))
+            tail       = sorted_pnl[:idx]
+            cvar_pct   = float(max(0.0, -np.mean(tail))) if len(tail) > 0 else var_pct
+            return {
+                "pair":          pair or "all",
+                "confidence":    confidence,
+                "var_pct":       round(var_pct, 2),
+                "cvar_pct":      round(cvar_pct, 2),
+                "var_usd":       round(var_pct / 100 * position_usd, 2),
+                "cvar_usd":      round(cvar_pct / 100 * position_usd, 2),
+                "n_samples":     len(pnl_returns),
+                "method":        "historical",
+                "position_usd":  round(position_usd, 2),
+            }
+        else:
+            # Parametric fallback using the same shared data
+            if len(pnl_returns) >= 3:
+                mu  = float(np.mean(pnl_returns))
+                std = float(np.std(pnl_returns))
+            else:
+                mu  = 0.0
+                std = 5.0
+            return _parametric_var(pair, confidence, mu, std, position_usd, len(pnl_returns))
+
+    var_90 = _var_from_data(0.90)
+    var_95 = _var_from_data(0.95)
+    var_99 = _var_from_data(0.99)
+
+    pnl = pnl_returns  # alias for Sharpe/Sortino/drawdown block below
 
     if len(pnl) >= 5:
         mu       = float(np.mean(pnl))
