@@ -4185,6 +4185,176 @@ def run_walk_forward(n_splits: int = 4, pair: str = 'BTC/USDT',
 
 
 # ──────────────────────────────────────────────
+# INFORMATION COEFFICIENT (IC) + WALK FORWARD EFFICIENCY (WFE)
+# IC measures signal predictiveness via Spearman rank correlation.
+# WFE = out-of-sample Sharpe / in-sample Sharpe (< 0.5 = overfit warning).
+# ──────────────────────────────────────────────
+
+def compute_ic_score(pair: str = 'BTC/USDT', tf: str = '1h',
+                     lookback: int = 200, hold_bars: int = 5) -> dict:
+    """
+    Information Coefficient (IC): Spearman rank correlation between
+    signal scores and next-period returns over `lookback` bars.
+
+    IC > 0.05 = modest predictive edge
+    IC > 0.10 = strong signal quality
+    IC < 0    = signal has no predictive value (investigate indicator weights)
+
+    Returns:
+        {'ic': float, 'ic_label': str, 'n_samples': int,
+         'pair': str, 'tf': str} | {'error': str}
+    """
+    try:
+        from scipy.stats import spearmanr
+    except ImportError:
+        return {'error': 'scipy not installed — pip install scipy'}
+
+    try:
+        exchange = get_exchange_instance(TA_EXCHANGE)
+        if not exchange:
+            return {'error': 'Exchange unavailable'}
+        ohlcv = exchange.fetch_ohlcv(pair, tf, limit=lookback + hold_bars + 50)
+        if len(ohlcv) < lookback:
+            return {'error': f'Only {len(ohlcv)} bars available (need {lookback})'}
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+    except Exception as e:
+        return {'error': f'Data fetch failed: {e}'}
+
+    neutral_onchain = {'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0,
+                       'whale_activity': False, 'vol_mcap_ratio': 0.0,
+                       'price_24h_pct': 0.0, 'price_200d_pct': 0.0, 'source': 'neutral'}
+    scores, returns = [], []
+    stride = 3
+
+    for i in range(50, len(df) - hold_bars, stride):
+        df_slice = df.iloc[max(0, i - 200):i + 1].copy()
+        if len(df_slice) < 50:
+            continue
+        try:
+            conf, *_ = calculate_signal_confidence(
+                df_slice, tf, fng_value=50, fng_category='Neutral',
+                onchain_data=neutral_onchain, pair=pair,
+            )
+            future_ret = (df['close'].iloc[i + hold_bars] - df['close'].iloc[i]) / max(df['close'].iloc[i], 1e-10)
+            scores.append(float(conf))
+            returns.append(float(future_ret))
+        except Exception:
+            continue
+
+    if len(scores) < 30:
+        return {'error': f'Too few samples ({len(scores)}) for IC computation', 'ic': None}
+
+    try:
+        ic, pvalue = spearmanr(scores, returns)
+        ic = round(float(ic), 4)
+        if ic > 0.10:   label = "STRONG"
+        elif ic > 0.05: label = "MODEST"
+        elif ic > 0.0:  label = "WEAK"
+        else:           label = "NO_EDGE"
+        return {
+            'ic': ic, 'ic_label': label, 'p_value': round(float(pvalue), 4),
+            'n_samples': len(scores), 'pair': pair, 'tf': tf,
+        }
+    except Exception as e:
+        return {'error': str(e), 'ic': None}
+
+
+def compute_wfe_score(pair: str = 'BTC/USDT', tf: str = '1h',
+                      n_splits: int = 4) -> dict:
+    """
+    Walk Forward Efficiency (WFE) = out-of-sample mean accuracy / in-sample mean accuracy.
+
+    WFE > 0.8 = excellent (model generalises well)
+    WFE 0.5-0.8 = acceptable
+    WFE < 0.5 = likely overfit — reduce indicator complexity
+
+    Returns:
+        {'wfe': float, 'wfe_label': str, 'is_accuracy': float, 'oos_accuracy': float} | {'error': str}
+    """
+    try:
+        exchange = get_exchange_instance(TA_EXCHANGE)
+        if not exchange:
+            return {'error': 'Exchange unavailable'}
+        ohlcv = exchange.fetch_ohlcv(pair, tf, limit=1000)
+        df_all = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'], unit='ms')
+        df_all.set_index('timestamp', inplace=True)
+    except Exception as e:
+        return {'error': f'Data fetch failed: {e}'}
+
+    n = len(df_all)
+    if n < 200:
+        return {'error': f'Insufficient data: {n} bars'}
+
+    neutral_onchain = {'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0,
+                       'whale_activity': False, 'vol_mcap_ratio': 0.0,
+                       'price_24h_pct': 0.0, 'price_200d_pct': 0.0, 'source': 'neutral'}
+
+    hold_bars = 5
+    window_size = n // n_splits
+    is_accs, oos_accs = [], []
+    stride = 3
+
+    for split_idx in range(n_splits):
+        w_start = split_idx * window_size
+        w_end = w_start + window_size if split_idx < n_splits - 1 else n
+        df_w = df_all.iloc[w_start:w_end].copy()
+        split_pt = int(len(df_w) * 0.60)
+
+        for phase, (start_i, end_i) in [("is", (30, split_pt)), ("oos", (split_pt, len(df_w) - hold_bars))]:
+            correct = total = 0
+            for bar_idx in range(start_i, end_i, stride):
+                df_slice = df_w.iloc[max(0, bar_idx - 200):bar_idx + 1].copy()
+                if len(df_slice) < 50:
+                    continue
+                try:
+                    conf, *_ = calculate_signal_confidence(
+                        df_slice, tf, fng_value=50, fng_category='Neutral',
+                        onchain_data=neutral_onchain, pair=pair,
+                    )
+                    pred = 1 if conf >= 65 else (-1 if conf <= 45 else 0)
+                    if pred == 0:
+                        continue
+                    abs_bar = w_start + bar_idx
+                    if abs_bar + hold_bars >= n:
+                        continue
+                    future = df_all['close'].iloc[abs_bar + hold_bars]
+                    current = df_all['close'].iloc[abs_bar]
+                    ret = (future - current) / max(current, 1e-10)
+                    actual = 1 if ret > 0.001 else (-1 if ret < -0.001 else 0)
+                    if actual == 0:
+                        continue
+                    if pred == actual:
+                        correct += 1
+                    total += 1
+                except Exception:
+                    continue
+            acc = correct / total if total > 0 else None
+            if acc is not None:
+                (is_accs if phase == "is" else oos_accs).append(acc)
+
+    if not is_accs or not oos_accs:
+        return {'error': 'Insufficient signal samples for WFE', 'wfe': None}
+
+    is_mean  = float(np.mean(is_accs))
+    oos_mean = float(np.mean(oos_accs))
+    wfe = round(oos_mean / max(is_mean, 0.001), 3)
+
+    if wfe >= 0.8:   label = "EXCELLENT"
+    elif wfe >= 0.5: label = "ACCEPTABLE"
+    else:            label = "OVERFIT_WARNING"
+
+    return {
+        'wfe': wfe, 'wfe_label': label,
+        'is_accuracy':  round(is_mean * 100, 1),
+        'oos_accuracy': round(oos_mean * 100, 1),
+        'pair': pair, 'tf': tf,
+    }
+
+
+# ──────────────────────────────────────────────
 # OPTUNA ML WEIGHT OPTIMIZER
 # ──────────────────────────────────────────────
 def run_optuna_weight_optimization(n_trials: int = 50, pair: str = 'BTC/USDT',
