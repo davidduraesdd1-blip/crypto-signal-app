@@ -1711,7 +1711,6 @@ def compute_and_save_ic(pair: str, timeframe: str = "1h") -> dict:
 
     Returns: {ic_30d, ic_7d, wfe, win_rate, sample_n}
     """
-    import statistics
     from datetime import datetime, timezone, timedelta
 
     now = datetime.now(timezone.utc)
