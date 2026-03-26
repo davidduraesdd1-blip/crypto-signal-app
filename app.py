@@ -17,6 +17,26 @@ import time
 import requests
 from datetime import datetime, timedelta, timezone
 
+# ─── Security Audit Logger (#15) ────────────────────────────────────────────
+# Dedicated logger for security-relevant events; does NOT propagate to root.
+_audit_handler = logging.FileHandler(
+    os.path.join(os.path.dirname(__file__), "supergrok_audit.log"),
+    encoding="utf-8",
+)
+_audit_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [AUDIT] %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
+))
+_audit_log = logging.getLogger("supergrok.audit")
+_audit_log.addHandler(_audit_handler)
+_audit_log.setLevel(logging.INFO)
+_audit_log.propagate = False
+
+
+def audit(event: str, **ctx) -> None:
+    """Log a security-relevant user action to the audit trail."""
+    extra = " ".join(f"{k}={v!r}" for k, v in ctx.items())
+    _audit_log.info("%s %s", event, extra)
+
 # PERF: module-level Session reuses TCP connections for all requests.get() calls in this file
 _http = requests.Session()
 _http.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
@@ -52,6 +72,20 @@ try:
     import agent as _agent
 except Exception:
     _agent = None
+
+# ── Sentry error monitoring (optional — set SUPERGROK_SENTRY_DSN env var) ──
+_SENTRY_DSN = os.environ.get("SUPERGROK_SENTRY_DSN")
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            traces_sample_rate=0.05,
+            send_default_pii=False,
+        )
+        logging.getLogger(__name__).info("[App] Sentry error monitoring active")
+    except ImportError:
+        logging.getLogger(__name__).debug("[App] sentry-sdk not installed — skipping error monitoring")
 
 
 def _numpy_serializer(obj):
@@ -445,6 +479,22 @@ _bm_val = st.sidebar.toggle(
 )
 st.session_state["beginner_mode"] = _bm_val
 _ui.inject_beginner_mode_js(_bm_val)
+
+# ── Demo / Sandbox mode toggle (#67) ─────────────────────────────────────────
+_demo_val = st.sidebar.toggle(
+    "Demo / Sandbox",
+    value=st.session_state.get("demo_mode", False),
+    key="demo_mode_toggle",
+    help="Demo mode: shows synthetic placeholder data — no real API calls. Safe for screenshots and onboarding.",
+)
+st.session_state["demo_mode"] = _demo_val
+if _demo_val:
+    st.sidebar.markdown(
+        '<div style="background:#1c1200;border:1px solid rgba(251,191,36,0.3);border-radius:6px;'
+        'padding:6px 10px;font-size:11px;color:#FBBF24;margin-top:-6px">⚠️ DEMO MODE — synthetic data</div>',
+        unsafe_allow_html=True,
+    )
+_demo_mode = _demo_val
 
 # ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
 st.sidebar.markdown("")
@@ -1000,7 +1050,27 @@ def page_dashboard():
     if st.session_state.get("scan_error"):
         st.error(f"Scan failed: {st.session_state['scan_error']}")
 
-    results = st.session_state.get("scan_results", [])
+    # Demo mode (#67) — inject synthetic results so no real API needed
+    if st.session_state.get("demo_mode"):
+        results = [
+            {"pair": "BTC/USDT", "direction": "STRONG BUY", "confidence_avg_pct": 82, "high_conf": True,
+             "entry": 65000, "stop_loss": 61000, "exit": 72000, "tp1": 72000, "position_size_pct": 10,
+             "price_usd": 65000, "fng_value": 72, "fng_category": "Greed", "strategy_bias": "Trend",
+             "timeframes": {"1h": {"rsi": 58, "confidence": 82, "direction": "STRONG BUY", "regime": "Trending: Bull"}},
+             "trending": True, "consensus": 0.83},
+            {"pair": "ETH/USDT", "direction": "BUY", "confidence_avg_pct": 71, "high_conf": True,
+             "entry": 3200, "stop_loss": 2950, "exit": 3600, "tp1": 3600, "position_size_pct": 8,
+             "price_usd": 3200, "fng_value": 72, "fng_category": "Greed", "strategy_bias": "Momentum",
+             "timeframes": {"1h": {"rsi": 54, "confidence": 71, "direction": "BUY", "regime": "Trending: Bull"}},
+             "trending": False, "consensus": 0.67},
+            {"pair": "SOL/USDT", "direction": "SELL", "confidence_avg_pct": 63, "high_conf": False,
+             "entry": 145, "stop_loss": 158, "exit": 128, "tp1": 128, "position_size_pct": 5,
+             "price_usd": 145, "fng_value": 72, "fng_category": "Greed", "strategy_bias": "Reversion",
+             "timeframes": {"1h": {"rsi": 68, "confidence": 63, "direction": "SELL", "regime": "Ranging"}},
+             "trending": False, "consensus": 0.50},
+        ]
+    else:
+        results = st.session_state.get("scan_results", [])
     if not results:
         st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         return
@@ -1305,6 +1375,26 @@ def page_dashboard():
     _exec_status = _exec.get_status()
     _exec_cfg    = _exec.get_exec_config()
 
+    # ── Scan Overview — Sparkline Mini-Grid (#60) ─────────────────────────────
+    _ui.section_header("Scan Overview", "Mini sparklines — 24h price trend for each pair at a glance. Green = up, Red = down.", icon="📈")
+    _spk_cols = st.columns(min(len(sorted_results), 4))
+    for _si, _sr in enumerate(sorted_results[:12]):  # max 12 cards in grid
+        _col_idx = _si % 4
+        with _spk_cols[_col_idx]:
+            try:
+                _spk_closes = data_feeds.fetch_sparkline_closes(_sr["pair"], n=24)
+            except Exception:
+                _spk_closes = []
+            _spk_html = _ui.scan_sparkline_card_html(
+                pair      = _sr["pair"],
+                direction = _sr.get("direction", "—"),
+                conf      = _sr.get("confidence_avg_pct", 0),
+                closes    = _spk_closes,
+            )
+            st.markdown(_spk_html, unsafe_allow_html=True)
+            st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
     # ── Coin Selector Dropdown ─────────────────────────────────────────────────
     _ui.section_header("Dive Deeper — Pick a Coin", "Choose a coin below to see the full breakdown: entry price, stop loss, AI prediction, news sentiment, and more", icon="🔬")
 
@@ -1413,12 +1503,8 @@ def page_dashboard():
     bot_cols[2].metric("Suggested Trade Size", f"{pos_pct}% of funds" if pos_pct else "N/A",
                        help="How much of your total money to use. If you have $1,000, and it says 10%, use only $100. This protects you if things go wrong.")
 
-    # Confidence progress bar — visual bar is more intuitive than a raw % for beginners
-    _bar_color = "🟢" if conf >= 70 else ("🟡" if conf >= 50 else "🔴")
-    st.progress(
-        min(conf / 100.0, 1.0),
-        text=f"{_bar_color} Confidence: {_score_10}/10  ({conf:.0f}%) — {'Strong signal' if conf >= 70 else 'Moderate signal' if conf >= 50 else 'Weak signal — use caution'}",
-    )
+    # Gradient confidence bar (#62) — CSS gradient, more visual than st.progress()
+    st.markdown(_ui.gradient_confidence_bar_html(conf), unsafe_allow_html=True)
 
     # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
     _consensus     = r.get("consensus", 0.0)

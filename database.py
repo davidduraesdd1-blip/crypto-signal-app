@@ -367,6 +367,22 @@ def init_db():
             # T3-11: slippage tracking column in execution_log
             _add_col('execution_log', 'slippage_pct', 'REAL')
 
+            # IC + WFE metrics table  (#36)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS signal_metrics (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    computed_at TEXT NOT NULL,
+                    pair        TEXT NOT NULL,
+                    timeframe   TEXT,
+                    ic_30d      REAL,   -- Information Coefficient (corr of confidence vs 24h return), 30-day
+                    ic_7d       REAL,   -- IC over last 7 days
+                    wfe         REAL,   -- Walk Forward Efficiency = OOS_win_rate / IS_win_rate
+                    win_rate    REAL,   -- rolling 30d win rate
+                    sample_n    INTEGER -- number of resolved signals used
+                );
+                CREATE INDEX IF NOT EXISTS idx_sm_pair_ts ON signal_metrics(pair, computed_at DESC);
+            """)
+
             # Backtest schema migration — add columns added after initial release
             _add_col('backtest_trades', 'gross_pnl_pct',  'REAL')
             _add_col('backtest_trades', 'fee_usd',        'REAL')
@@ -1678,6 +1694,139 @@ def get_top_signals_by_accuracy(n: int = 5, days: int = 60) -> list[dict]:
             "sample_size": int(row["total"]),
         })
     return result
+
+
+# ──────────────────────────────────────────────
+# IC + WFE METRICS  (#36)
+# ──────────────────────────────────────────────
+
+def compute_and_save_ic(pair: str, timeframe: str = "1h") -> dict:
+    """
+    Compute Information Coefficient (IC) and walk-forward efficiency (WFE) for a pair.
+
+    IC = Pearson correlation between signal confidence and actual 24h return (from feedback_log).
+    WFE = ratio of out-of-sample win rate to in-sample win rate over the last 60 resolved signals.
+
+    Returns: {ic_30d, ic_7d, wfe, win_rate, sample_n}
+    """
+    import statistics
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    cutoff_30d = (now - timedelta(days=30)).isoformat()
+    cutoff_7d  = (now - timedelta(days=7)).isoformat()
+
+    result = {"pair": pair, "timeframe": timeframe, "ic_30d": None, "ic_7d": None,
+              "wfe": None, "win_rate": None, "sample_n": 0}
+
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute("""
+            SELECT confidence_avg_pct, actual_pnl_pct, was_correct, timestamp
+            FROM feedback_log
+            WHERE pair = ? AND resolved_at IS NOT NULL
+              AND actual_pnl_pct IS NOT NULL AND confidence_avg_pct IS NOT NULL
+              AND timestamp >= ?
+            ORDER BY timestamp DESC LIMIT 200
+        """, (pair, cutoff_30d)).fetchall()
+
+        if len(rows) < 5:
+            return result
+
+        # Guard against None even though SQL filters it (defensive)
+        conf_vals  = [float(r["confidence_avg_pct"]) for r in rows if r["confidence_avg_pct"] is not None]
+        ret_vals   = [float(r["actual_pnl_pct"])     for r in rows if r["actual_pnl_pct"] is not None]
+        correct    = [int(r["was_correct"] or 0)      for r in rows]
+        # Ensure lists are aligned (parallel rows)
+        min_len = min(len(conf_vals), len(ret_vals))
+        conf_vals, ret_vals = conf_vals[:min_len], ret_vals[:min_len]
+        if min_len < 5:
+            return result
+
+        # IC (30d)
+        def _pearson(x: list, y: list) -> float:
+            n = len(x)
+            if n < 2:
+                return 0.0
+            mx, my = sum(x)/n, sum(y)/n
+            num = sum((xi - mx)*(yi - my) for xi, yi in zip(x, y))
+            denom = (
+                (sum((xi - mx)**2 for xi in x) ** 0.5) *
+                (sum((yi - my)**2 for yi in y) ** 0.5)
+            )
+            return round(num / denom, 4) if denom > 1e-9 else 0.0
+
+        ic_30d = _pearson(conf_vals, ret_vals)
+        win_rate_30d = sum(correct) / len(correct) if correct else 0.0
+
+        # IC (7d) — use only recent rows
+        rows_7d = [r for r in rows if r["timestamp"] >= cutoff_7d]
+        if len(rows_7d) >= 5:
+            ic_7d = _pearson(
+                [float(r["confidence_avg_pct"]) for r in rows_7d],
+                [float(r["actual_pnl_pct"])     for r in rows_7d],
+            )
+        else:
+            ic_7d = None
+
+        # WFE = OOS win rate / IS win rate
+        # Split: first 60% = IS, last 40% = OOS
+        n = len(rows)
+        split = int(n * 0.6)
+        is_correct  = [int(rows[i]["was_correct"] or 0) for i in range(split)] if split > 0 else []
+        oos_correct = [int(rows[i]["was_correct"] or 0) for i in range(split, n)]
+        is_wr  = sum(is_correct)  / max(len(is_correct),  1)
+        oos_wr = sum(oos_correct) / max(len(oos_correct), 1)
+        wfe = round(oos_wr / max(is_wr, 0.01), 3)
+
+        result.update({
+            "ic_30d":   ic_30d,
+            "ic_7d":    ic_7d,
+            "wfe":      wfe,
+            "win_rate": round(win_rate_30d, 4),
+            "sample_n": n,
+        })
+
+        # Persist to signal_metrics table
+        conn.execute("""
+            INSERT INTO signal_metrics (computed_at, pair, timeframe, ic_30d, ic_7d, wfe, win_rate, sample_n)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (now.isoformat(), pair, timeframe,
+              ic_30d, ic_7d, wfe, round(win_rate_30d, 4), n))
+        conn.commit()
+        return result
+
+    except Exception as e:
+        logging.warning("[DB] compute_ic failed for %s: %s", pair, e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return result
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_signal_metrics(pair: str, limit: int = 30) -> list[dict]:
+    """Return last `limit` IC/WFE metric rows for a pair."""
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute("""
+            SELECT computed_at, pair, timeframe, ic_30d, ic_7d, wfe, win_rate, sample_n
+            FROM signal_metrics WHERE pair = ?
+            ORDER BY computed_at DESC LIMIT ?
+        """, (pair, limit)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logging.warning("[DB] get_signal_metrics failed: %s", e)
+        return []
+    finally:
+        if conn:
+            conn.close()
 
 
 # ──────────────────────────────────────────────

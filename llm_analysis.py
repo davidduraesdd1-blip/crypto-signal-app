@@ -146,3 +146,119 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
     except Exception as e:
         logging.warning(f"LLM explanation failed for {pair}: {e}")
         return f"AI Analysis temporarily unavailable: {str(e)[:500]}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STRUCTURED JSON OUTPUT — indicator_weights adjustment  (#31)
+# ─────────────────────────────────────────────────────────────────────────────
+# Claude receives market context and returns JSON with indicator_weights deltas.
+# Uses Anthropic tool_use to guarantee schema compliance.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_WEIGHT_SCHEMA = {
+    "name": "set_indicator_weights",
+    "description": (
+        "Return adjusted indicator weight multipliers for this market context. "
+        "Values are multipliers (1.0 = unchanged, 1.2 = 20% boost, 0.8 = 20% reduction). "
+        "Only include weights you want to change from baseline."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "core":         {"type": "number", "description": "EMA/trend core weight mult"},
+            "momentum":     {"type": "number", "description": "Momentum/MACD weight mult"},
+            "funding_rate": {"type": "number", "description": "Funding rate signal weight mult"},
+            "onchain":      {"type": "number", "description": "On-chain metrics weight mult"},
+            "fng":          {"type": "number", "description": "Fear & Greed index weight mult"},
+            "regime":       {"type": "number", "description": "Market regime signal weight mult"},
+            "cvd_div":      {"type": "number", "description": "CVD divergence weight mult"},
+            "rationale":    {"type": "string", "description": "1-2 sentence reasoning for these adjustments"},
+        },
+        "required": ["rationale"],
+    },
+}
+
+_W_CACHE: dict = {}
+_W_CACHE_LOCK = threading.Lock()
+_W_CACHE_TTL  = 1800   # 30-min cache — weights re-evaluated on significant regime shifts
+
+
+def get_claude_weight_adjustments(market_ctx: dict) -> dict:
+    """
+    Ask Claude to return structured indicator_weight multipliers for the current regime.
+
+    Args:
+        market_ctx: dict with keys like regime, fear_greed_value, m2_signal,
+                    global_m2_signal, mvrv_signal, funding_rate_pct, nupl_signal.
+
+    Returns:
+        dict of {indicator_name: multiplier} — e.g. {"onchain": 1.2, "fng": 0.9}
+        Returns empty dict on error or no API key.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "").strip()
+        except Exception:
+            pass
+    if not api_key:
+        return {}
+
+    cache_key = (
+        f"{market_ctx.get('regime','?')}|"
+        f"{market_ctx.get('fear_greed_value', 50) // 10}|"
+        f"{market_ctx.get('m2_signal','?')}|"
+        f"{market_ctx.get('mvrv_signal','?')}"
+    )
+    with _W_CACHE_LOCK:
+        cached = _W_CACHE.get(cache_key)
+        if cached and (time.time() - cached["_ts"]) < _W_CACHE_TTL:
+            return cached["weights"]
+
+    try:
+        import anthropic
+    except ImportError:
+        return {}
+
+    try:
+        client  = anthropic.Anthropic(api_key=api_key, timeout=20.0)
+        prompt  = (
+            f"Current crypto market context:\n"
+            f"- Macro regime: {market_ctx.get('regime', 'UNKNOWN')}\n"
+            f"- Fear & Greed: {market_ctx.get('fear_greed_value', 50)} "
+            f"({market_ctx.get('fear_greed_label', 'Neutral')})\n"
+            f"- Global M2 signal: {market_ctx.get('m2_signal', 'N/A')}\n"
+            f"- MVRV-Z signal: {market_ctx.get('mvrv_signal', 'N/A')}\n"
+            f"- NUPL: {market_ctx.get('nupl_signal', 'N/A')}\n"
+            f"- BTC funding rate: {market_ctx.get('funding_rate_pct', 0):.3f}%\n"
+            f"- Pi Cycle Top: {market_ctx.get('pi_cycle_signal', 'NORMAL')}\n\n"
+            "Based on this context, call set_indicator_weights to adjust the model's "
+            "indicator weights. Be conservative — only move weights ±20-30%."
+        )
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",   # Haiku: fast + cheap for structured calls
+            max_tokens=256,
+            tools=[_WEIGHT_SCHEMA],
+            tool_choice={"type": "auto"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        weights: dict = {}
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "set_indicator_weights":
+                inp = block.input or {}
+                for k, v in inp.items():
+                    if k != "rationale" and isinstance(v, (int, float)):
+                        # Clamp multipliers to 0.5–2.0 to prevent runaway adjustments
+                        weights[k] = max(0.5, min(2.0, float(v)))
+                logging.info("[LLM Weights] %s | %s", cache_key, inp.get("rationale", ""))
+                break
+
+        if weights:
+            with _W_CACHE_LOCK:
+                _W_CACHE[cache_key] = {"weights": weights, "_ts": time.time()}
+        return weights
+
+    except Exception as e:
+        logging.debug("[LLM Weights] failed: %s", e)
+        return {}

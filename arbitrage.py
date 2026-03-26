@@ -172,12 +172,95 @@ def _fetch_gateio_spot(pair: str) -> Optional[dict]:
         return None
 
 
+def _fetch_htx_spot(pair: str) -> Optional[dict]:
+    """Return {bid, ask, price} from HTX (formerly Huobi) REST ticker or None."""
+    try:
+        symbol = pair.replace("/", "").lower()   # BTC/USDT → btcusdt
+        r = requests.get(
+            f"https://api.huobi.pro/market/detail/merged?symbol={symbol}",
+            timeout=_TIMEOUT,
+        )
+        if r.status_code != 200:
+            logger.debug("HTX spot %s HTTP %s", pair, r.status_code)
+            return None
+        tick = r.json().get("tick", {})
+        bid = float((tick.get("bid") or [0])[0])
+        ask = float((tick.get("ask") or [0])[0])
+        if not bid or not ask:
+            return None
+        return {"bid": bid, "ask": ask, "price": (bid + ask) / 2}
+    except Exception as e:
+        logger.debug("HTX spot %s: %s", pair, e)
+        return None
+
+
+def _fetch_bitstamp_spot(pair: str) -> Optional[dict]:
+    """Return {bid, ask, price} from Bitstamp ticker or None."""
+    try:
+        # Bitstamp uses lowercase with no separator: BTC/USD → btcusd
+        # For USDT pairs, use the USD proxy: BTC/USDT → btcusd
+        base, quote = pair.split("/")
+        q = "usd" if quote.upper() == "USDT" else quote.lower()
+        symbol = f"{base.lower()}{q}"
+        r = requests.get(
+            f"https://www.bitstamp.net/api/v2/ticker/{symbol}/",
+            timeout=_TIMEOUT,
+        )
+        if r.status_code != 200:
+            logger.debug("Bitstamp spot %s HTTP %s", pair, r.status_code)
+            return None
+        d = r.json()
+        bid = float(d.get("bid") or 0)
+        ask = float(d.get("ask") or 0)
+        if not bid or not ask:
+            return None
+        return {"bid": bid, "ask": ask, "price": (bid + ask) / 2}
+    except Exception as e:
+        logger.debug("Bitstamp spot %s: %s", pair, e)
+        return None
+
+
+def _fetch_bitget_spot(pair: str) -> Optional[dict]:
+    """Return {bid, ask, price} from Bitget REST ticker or None."""
+    try:
+        symbol = pair.replace("/", "")   # BTC/USDT → BTCUSDT
+        r = requests.get(
+            f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={symbol}SPBL",
+            timeout=_TIMEOUT,
+        )
+        if r.status_code != 200:
+            logger.debug("Bitget spot %s HTTP %s", pair, r.status_code)
+            return None
+        data = (r.json().get("data") or [])
+        if not data:
+            return None
+        d = data[0]
+        bid = float(d.get("bidPr") or 0)
+        ask = float(d.get("askPr") or 0)
+        if not bid or not ask:
+            return None
+        return {"bid": bid, "ask": ask, "price": (bid + ask) / 2}
+    except Exception as e:
+        logger.debug("Bitget spot %s: %s", pair, e)
+        return None
+
+
 _FETCHERS: dict = {
-    "OKX":     _fetch_okx_spot,
-    "KuCoin":  _fetch_kucoin_spot,
-    "Kraken":  _fetch_kraken_spot,
-    "Gate.io": _fetch_gateio_spot,
+    "OKX":      _fetch_okx_spot,
+    "KuCoin":   _fetch_kucoin_spot,
+    "Kraken":   _fetch_kraken_spot,
+    "Gate.io":  _fetch_gateio_spot,
+    # New CeFi exchanges (#41)
+    "HTX":      _fetch_htx_spot,
+    "Bitstamp": _fetch_bitstamp_spot,
+    "Bitget":   _fetch_bitget_spot,
 }
+
+EXCHANGE_FEES.update({
+    "HTX":      {"maker": 0.0002, "taker": 0.0002},
+    "Bitstamp": {"maker": 0.0030, "taker": 0.0040},
+    "Bitget":   {"maker": 0.0002, "taker": 0.0006},
+})
 
 
 # ─── Price aggregator ─────────────────────────────────────────────────────────

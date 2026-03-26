@@ -2333,9 +2333,10 @@ def _compute_kelly_fraction() -> float | None:
             return None
         b = avg_win / avg_loss
         kelly = (b * p - (1 - p)) / b
-        # Half-Kelly, hard cap at 25% of portfolio — prevents catastrophic overbet
-        # even when model shows edge > 50% (which is often overfit on small samples)
-        return round(max(0.0, min(kelly * 0.50, 0.25)), 4)
+        # Quarter-Kelly (25% of optimal) — research consensus for live trading with limited
+        # sample sizes. Captures ~56% of geometric growth vs full Kelly but with only ~25%
+        # of the variance. Hard cap at 25% regardless of edge (#50 fractional Kelly default).
+        return round(max(0.0, min(kelly * 0.25, 0.25)), 4)
     except Exception as e:
         logging.warning(f"Kelly computation failed: {e}")
         return None

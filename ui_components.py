@@ -2254,3 +2254,98 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
     <div style="font-size:13px;color:#a8b4c8;line-height:1.5;">{fact}</div>
   </div>
 </div>"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPARKLINE MINI-CHART  (#60)
+# Inline SVG sparkline — no plotly overhead for scan overview grids
+# ─────────────────────────────────────────────────────────────────────────────
+
+def sparkline_svg(closes: list, width: int = 80, height: int = 30,
+                  color: str = "#34D399") -> str:
+    """
+    Generate an inline SVG sparkline polyline from a list of close prices.
+    Returns an empty string if fewer than 2 data points.
+    """
+    if len(closes) < 2:
+        return ""
+    lo  = min(closes)
+    hi  = max(closes)
+    rng = hi - lo or 1.0
+    pad = 2  # pixel padding top/bottom
+    xs  = [round(i / (len(closes) - 1) * width, 1) for i in range(len(closes))]
+    ys  = [round(pad + (1 - (c - lo) / rng) * (height - pad * 2), 1) for c in closes]
+    pts = " ".join(f"{x},{y}" for x, y in zip(xs, ys))
+    trend_color = "#34D399" if closes[-1] >= closes[0] else "#F6465D"
+    col = color if color != "#34D399" else trend_color
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:middle">'
+        f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="1.5" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>'
+        f'</svg>'
+    )
+
+
+def scan_sparkline_card_html(pair: str, direction: str, conf: float,
+                              closes: list) -> str:
+    """
+    Compact scan-mode card with pair name, direction badge, confidence and sparkline.
+    Used in scan overview mini-grid (#60).
+    """
+    dir_colors = {"BUY": "#34D399", "STRONG BUY": "#00D4AA",
+                  "SELL": "#F6465D", "STRONG SELL": "#EF4444"}
+    d_upper = direction.upper()
+    d_col   = next((v for k, v in dir_colors.items() if k in d_upper), "#9CA3AF")
+    spk_svg = sparkline_svg(closes)
+    conf_int = int(conf)
+    return (
+        f'<div style="background:#111827;border:1px solid #1F2937;border-left:3px solid {d_col};'
+        f'border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center">'
+        f'<div>'
+        f'<div style="font-size:12px;font-weight:700;color:#E2E8F0">{pair}</div>'
+        f'<div style="font-size:10px;color:{d_col};margin-top:1px">{direction}</div>'
+        f'<div style="font-size:10px;color:#6B7280;margin-top:1px">{conf_int}% conf</div>'
+        f'</div>'
+        f'<div>{spk_svg}</div>'
+        f'</div>'
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRADIENT CONFIDENCE BAR  (#62)
+# CSS linear-gradient progress bar — more visual than st.progress()
+# ─────────────────────────────────────────────────────────────────────────────
+
+def gradient_confidence_bar_html(conf: float) -> str:
+    """
+    Return an HTML gradient progress bar for a confidence value 0–100.
+    Color transitions: red (0%) → amber (50%) → green (100%).
+    """
+    pct = max(0, min(int(conf), 100))
+    if pct >= 70:
+        bar_color  = "linear-gradient(90deg,#34D399,#00D4AA)"
+        label_color = "#34D399"
+        label_text  = "Strong signal"
+    elif pct >= 50:
+        bar_color  = "linear-gradient(90deg,#FBBF24,#F97316)"
+        label_color = "#FBBF24"
+        label_text  = "Moderate signal"
+    else:
+        bar_color  = "linear-gradient(90deg,#EF4444,#F97316)"
+        label_color = "#EF4444"
+        label_text  = "Weak — use caution"
+    score_10 = max(0, min(10, round(pct / 10)))
+    return (
+        f'<div style="margin:8px 0 12px 0">'
+        f'<div style="display:flex;justify-content:space-between;margin-bottom:4px">'
+        f'<span style="font-size:12px;color:{label_color};font-weight:600">'
+        f'Confidence: {score_10}/10 ({pct}%)</span>'
+        f'<span style="font-size:11px;color:#6B7280">{label_text}</span>'
+        f'</div>'
+        f'<div style="background:#1F2937;border-radius:6px;height:10px;overflow:hidden">'
+        f'<div style="background:{bar_color};width:{pct}%;height:100%;border-radius:6px;'
+        f'transition:width 0.5s ease;box-shadow:0 0 8px rgba(52,211,153,0.3)"></div>'
+        f'</div>'
+        f'</div>'
+    )

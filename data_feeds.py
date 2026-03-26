@@ -23,6 +23,27 @@ _SESSION.mount("https://", _adapter)
 _SESSION.mount("http://", _adapter)
 _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
 
+# ─── Rate Limiter (token bucket — #11 security hardening) ────────────────────
+class _RateLimiter:
+    """Thread-safe token bucket rate limiter."""
+    def __init__(self, calls_per_second: float = 2.0):
+        self._interval = 1.0 / max(calls_per_second, 0.01)
+        self._lock     = threading.Lock()
+        self._last     = 0.0
+
+    def acquire(self) -> None:
+        with self._lock:
+            now  = time.time()
+            wait = self._interval - (now - self._last)
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.time()
+
+_bybit_limiter    = _RateLimiter(5.0)
+_binance_limiter  = _RateLimiter(5.0)
+_coingecko_limiter = _RateLimiter(0.5)
+_default_limiter  = _RateLimiter(2.0)
+
 # SSRF allowlist — only fetch from these known-safe domains
 _ALLOWED_HOSTS: frozenset = frozenset({
     "api.alternative.me", "api.bybit.com", "www.okx.com", "api.kucoin.com",
@@ -2863,6 +2884,135 @@ def fetch_fred_macro() -> dict:
     return cached
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GLOBAL M2 COMPOSITE — 70–110 day forward shift  (#24)
+# ─────────────────────────────────────────────────────────────────────────────
+# Methodology (Michael Howell / CrossBorderCapital):
+#   Global M2 ≈ US M2 + China M2 + Euro-area M3 + Japan M2 (FRED free series)
+#   Forward shift: BTC price tends to lag Global M2 inflections by ~90 days.
+#   Signal: compare current M2 rate-of-change to the 90-day-lagged value.
+#   BULLISH if trailing 30d M2 growth > 0 AND current M2 > 90d-ago level.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GLOBAL_M2_SERIES = {
+    "us_m2":     "M2SL",            # US M2 (billions USD)
+    "china_m2":  "MYAGM2CNM189N",   # China M2 (100M CNY → converted to USD at ~7.2)
+    "euro_m3":   "MABMM301EZM189S", # Euro area M3 (millions EUR → USD at ~1.08)
+    "japan_m2":  "MYAGM2JPM189N",   # Japan M2 (billions JPY → USD at ~150)
+}
+
+_GLOBAL_M2_FX = {
+    "china_m2":  1 / 7.2 / 100,    # 100M CNY → billions USD
+    "euro_m3":   1.08 / 1_000,     # millions EUR → billions USD
+    "japan_m2":  1 / 150,          # billions JPY → billions USD
+    "us_m2":     1.0,              # already billions USD
+}
+
+_G_M2_CACHE: dict = {}
+_G_M2_LOCK = threading.Lock()
+
+
+def fetch_global_m2_composite(lag_days: int = 90) -> dict:
+    """
+    Fetch Global M2 composite and return the 90-day-lagged forward signal.
+
+    Returns:
+        global_m2_bn       — current global M2 in billions USD
+        m2_pct_change_90d  — % change vs 90 days ago (trailing)
+        signal             — BULLISH / NEUTRAL / BEARISH
+        lag_days           — the lag applied (default 90)
+        source             — "FRED" | "fallback"
+    """
+    import datetime as _dt
+
+    def _fetch_csv(series_id: str, months: int = 6) -> list:
+        """Return last `months` monthly observations as floats."""
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+        try:
+            resp = _SESSION.get(url, timeout=12)
+            if resp.status_code != 200:
+                return []
+            lines = resp.text.strip().split("\n")[1:]  # skip header
+            vals = []
+            for line in reversed(lines):
+                parts = line.split(",")
+                if len(parts) == 2 and parts[1].strip() not in (".", ""):
+                    try:
+                        vals.append(float(parts[1].strip()))
+                    except ValueError:
+                        pass
+                if len(vals) >= months:
+                    break
+            return vals  # newest first
+        except Exception:
+            return []
+
+    def _fetch():
+        # Fetch 7 months of central bank M2/M3 series so the 90-day lag is accurate
+        components = {}
+        for key, sid in _GLOBAL_M2_SERIES.items():
+            vals = _fetch_csv(sid, months=7)
+            if vals:
+                fx = _GLOBAL_M2_FX.get(key, 1.0)
+                components[key] = [v * fx for v in vals]
+
+        if len(components) < 2:
+            return None  # not enough data — use fallback
+
+        # Require at least 2 data points per component
+        min_len = min(len(v) for v in components.values())
+        if min_len < 2:
+            return None
+
+        current_total = sum(v[0] for v in components.values())
+
+        # 90-day lag ≈ 3 monthly observations ago (index 3); fall back to oldest available
+        lag_idx   = min(3, min_len - 1)
+        old_total = sum(v[lag_idx] for v in components.values())
+        pct_change = round((current_total - old_total) / max(old_total, 1e-6) * 100, 2)
+
+        if pct_change > 1.5:
+            signal = "BULLISH"
+        elif pct_change > 0:
+            signal = "NEUTRAL"
+        else:
+            signal = "BEARISH"
+
+        return {
+            "global_m2_bn":      round(current_total, 0),
+            "m2_pct_change_90d": pct_change,
+            "signal":            signal,
+            "lag_days":          lag_days,
+            "components_bn":     {k: round(v[0], 0) for k, v in components.items()},
+            "source":            "FRED",
+            "timestamp":         _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        }
+
+    with _G_M2_LOCK:
+        cached = _G_M2_CACHE.get("global_m2")
+        if cached and (time.time() - cached["_ts"]) < 3600:
+            return cached["data"]
+    try:
+        data = _fetch()
+        if data:
+            with _G_M2_LOCK:
+                _G_M2_CACHE["global_m2"] = {"data": data, "_ts": time.time()}
+            return data
+    except Exception as e:
+        logging.debug("[GlobalM2] fetch failed: %s", e)
+
+    # Fallback
+    return {
+        "global_m2_bn":      84_000.0,
+        "m2_pct_change_90d": 1.2,
+        "signal":            "NEUTRAL",
+        "lag_days":          lag_days,
+        "components_bn":     {"us_m2": 21500, "china_m2": 38000, "euro_m3": 17000, "japan_m2": 7500},
+        "source":            "fallback",
+        "timestamp":         __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+    }
+
+
 def fetch_yfinance_macro() -> dict:
     """
     Fetch macro market data: DXY, VIX, Gold, SPX, Oil.
@@ -3297,6 +3447,19 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             elif sopr < 1.02:   sopr_signal = "NORMAL"
             else:               sopr_signal = "PROFIT_TAKING"
 
+            # NUPL = (Market Cap - Realized Cap) / Market Cap  (#25)
+            market_cap = float(rows[-1].get("CapMrktCurUSD", 0) or 0)
+            realized_cap_cur = real_caps[-1] if real_caps else 0
+            nupl = None
+            nupl_signal = "N/A"
+            if market_cap > 0 and realized_cap_cur > 0:
+                nupl = round((market_cap - realized_cap_cur) / market_cap, 4)
+                if nupl < 0:         nupl_signal = "CAPITULATION"
+                elif nupl < 0.25:    nupl_signal = "HOPE_FEAR"
+                elif nupl < 0.50:    nupl_signal = "OPTIMISM"
+                elif nupl < 0.75:    nupl_signal = "BELIEF_THRILL"
+                else:                nupl_signal = "EUPHORIA"
+
             return {
                 "mvrv_ratio":       round(cur_mvrv, 3),
                 "mvrv_z":           mvrv_z,
@@ -3305,6 +3468,8 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "sopr":             round(sopr, 4) if sopr else None,
                 "sopr_signal":      sopr_signal,
                 "active_addresses": active_addrs[-1] if active_addrs else None,
+                "nupl":             nupl,
+                "nupl_signal":      nupl_signal,
                 "mvrv_history":     {mvrv_dates[i]: round(mvrv_vals[i], 3) for i in range(len(mvrv_dates))},
                 "sopr_history":     {sopr_dates[i]: round(sopr_vals[i], 4) for i in range(len(sopr_dates))},
                 "source":           "coinmetrics_community",
@@ -3477,3 +3642,117 @@ def fetch_deribit_options_chain(currency: str = "BTC") -> dict:
 
     cached = _macro_cached_get(f"deribit_chain_{currency}", 900, _fetch)
     return cached if cached else {"error": "cache miss", "source": "deribit"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PI CYCLE TOP INDICATOR  (#26)
+# ─────────────────────────────────────────────────────────────────────────────
+# Uses 111-day SMA and 350-day SMA × 2 from BTC daily closes (Binance free).
+# Signal: when 111DMA ≥ 350DMA×2 → BUY suppressor / CYCLE_TOP warning.
+# Historically accurate to within 3 days at the 2013, 2017, 2021 cycle tops.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PI_CACHE: dict = {}
+_PI_LOCK = threading.Lock()
+
+
+def fetch_pi_cycle_top() -> dict:
+    """
+    Compute Pi Cycle Top indicator from Binance BTC/USDT daily klines (free, no key).
+
+    Returns:
+        sma_111     — 111-day simple moving average
+        sma_350x2   — 350-day SMA × 2
+        gap_pct     — % gap between sma_111 and sma_350x2 (negative = approaching top)
+        signal      — NORMAL | CAUTION | CYCLE_TOP
+        source      — "binance" | "fallback"
+    """
+    import datetime as _dt
+
+    def _fetch():
+        try:
+            url = "https://api.binance.com/api/v3/klines"
+            params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 500}
+            resp = _SESSION.get(url, params=params, timeout=15)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            closes = [float(k[4]) for k in data if k[4]]
+            if len(closes) < 380:   # 30-point buffer beyond 350 required
+                return None
+
+            sma_111  = sum(closes[-111:]) / 111
+            sma_350  = sum(closes[-350:]) / 350
+            sma_350x2 = sma_350 * 2
+            gap_pct   = round((sma_111 - sma_350x2) / sma_350x2 * 100, 2)
+
+            if gap_pct >= 0:
+                signal = "CYCLE_TOP"        # 111DMA crossed above 350DMA×2
+            elif gap_pct >= -5:
+                signal = "CAUTION"          # within 5% — approaching top zone
+            else:
+                signal = "NORMAL"
+
+            return {
+                "sma_111":    round(sma_111, 0),
+                "sma_350x2":  round(sma_350x2, 0),
+                "gap_pct":    gap_pct,
+                "signal":     signal,
+                "source":     "binance",
+                "timestamp":  _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            logging.debug("[PiCycle] fetch failed: %s", e)
+            return None
+
+    with _PI_LOCK:
+        cached = _PI_CACHE.get("pi_cycle")
+        if cached and (time.time() - cached["_ts"]) < 3600:
+            return cached["data"]
+    data = _fetch()
+    if data:
+        with _PI_LOCK:
+            _PI_CACHE["pi_cycle"] = {"data": data, "_ts": time.time()}
+        return data
+    import datetime as _dt6
+    return {"signal": "NORMAL", "gap_pct": None, "sma_111": None, "sma_350x2": None,
+            "source": "fallback", "timestamp": _dt6.datetime.now(_dt6.timezone.utc).isoformat()}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPARKLINE DATA  (#60)
+# Fetch last N 1-hour close prices for a pair — used for mini sparkline charts
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SPARKLINE_CACHE: dict = {}
+_SPARKLINE_LOCK = threading.Lock()
+_SPARKLINE_TTL  = 300  # 5 min
+
+
+def fetch_sparkline_closes(pair: str, n: int = 24) -> list[float]:
+    """
+    Return the last `n` 1-hour close prices for `pair` (e.g. "BTC/USDT").
+    Uses Binance public klines endpoint; returns empty list on error.
+    Results cached 5 minutes per pair.
+    """
+    cache_key = f"{pair}_{n}"
+    with _SPARKLINE_LOCK:
+        entry = _SPARKLINE_CACHE.get(cache_key)
+        if entry and (time.time() - entry["_ts"]) < _SPARKLINE_TTL:
+            return entry["data"]
+
+    try:
+        symbol = pair.replace("/", "")
+        url = (
+            f"https://api.binance.com/api/v3/klines"
+            f"?symbol={symbol}&interval=1h&limit={n}"
+        )
+        resp = _SESSION.get(url, timeout=6)
+        resp.raise_for_status()
+        closes = [float(k[4]) for k in resp.json() if k[4]]
+        with _SPARKLINE_LOCK:
+            _SPARKLINE_CACHE[cache_key] = {"data": closes, "_ts": time.time()}
+        return closes
+    except Exception as e:
+        logging.debug("[Sparkline] %s fetch failed: %s", pair, e)
+        return []
