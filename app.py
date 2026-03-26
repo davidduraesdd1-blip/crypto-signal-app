@@ -4341,22 +4341,23 @@ def page_market_overview():
     st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
 
     if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
+        import statistics as _stat
         with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
             _vol_rows = []
+            _first_err = None
             _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
             if _exchange:
                 for _vp in model.PAIRS:
                     try:
-                        _ohlcv = _exchange.fetch_ohlcv(_vp, "1d", limit=9)  # 9 bars → 8 returns
-                        if len(_ohlcv) >= 3:
-                            _cls   = [o[4] for o in _ohlcv if o[4] and o[4] > 0]
-                            _rets  = [
+                        _df_ohlcv = model.robust_fetch_ohlcv(_exchange, _vp, "1d", limit=9)
+                        if len(_df_ohlcv) >= 3:
+                            _cls = [v for v in _df_ohlcv["close"].tolist() if v and v > 0]
+                            _rets = [
                                 (_cls[i] - _cls[i - 1]) / _cls[i - 1]
                                 for i in range(1, len(_cls))
                                 if _cls[i - 1] > 0
                             ]
                             if len(_rets) >= 2:
-                                import statistics as _stat
                                 _daily_vol = _stat.stdev(_rets)
                                 _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
                                 _sector    = SECTOR_MAP.get(_vp, "other")
@@ -4366,9 +4367,13 @@ def page_market_overview():
                                     "Ann. Vol%": _ann_vol,
                                     "7d Close": round(_cls[-1], 4),
                                 })
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        if _first_err is None:
+                            _first_err = str(_e)[:100]
+            else:
+                _first_err = "Exchange unavailable"
             st.session_state["vol_rank_data"] = _vol_rows
+            st.session_state["vol_rank_err"]  = _first_err
 
     _vol_data = st.session_state.get("vol_rank_data")
     if _vol_data:
@@ -4405,7 +4410,8 @@ def page_market_overview():
                 },
             )
     elif _vol_data is not None and len(_vol_data) == 0:
-        st.warning("No volatility data returned — check exchange connectivity.")
+        _vol_err = st.session_state.get("vol_rank_err")
+        st.warning(f"No volatility data returned — {_vol_err}" if _vol_err else "No volatility data returned — check exchange connectivity.")
 
     st.markdown("---")
 
