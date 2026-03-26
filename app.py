@@ -3400,6 +3400,90 @@ def page_backtest():
             st.dataframe(_coin_grp, hide_index=True, use_container_width=True, height=220)
             st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
 
+    # ── IC Score (Information Coefficient) ────────────────────────────────────
+    st.markdown("---")
+    _ui.section_header("Signal Quality — Information Coefficient (IC)",
+                       "Spearman rank correlation between signal confidence scores and actual future returns. "
+                       "IC > 0.05 = modest edge · IC > 0.10 = strong signal quality",
+                       icon="🎯")
+    _ic_c1, _ic_c2, _ic_c3 = st.columns(3)
+    with _ic_c1:
+        _ic_pair = st.selectbox("Pair", model.PAIRS, index=0, key="ic_pair")
+    with _ic_c2:
+        _ic_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="ic_tf")
+    with _ic_c3:
+        _ic_hold = st.number_input("Hold Bars", 1, 20, 5, step=1, key="ic_hold",
+                                   help="How many bars ahead to measure the return")
+    if st.button("Compute IC Score", type="secondary", use_container_width=True, key="btn_ic"):
+        with st.spinner(f"Computing IC on {_ic_pair} {_ic_tf}... (~1 min)", show_time=True):
+            _ic_res = model.compute_ic_score(pair=_ic_pair, tf=_ic_tf, hold_bars=int(_ic_hold))
+        st.session_state["ic_result"] = _ic_res
+    _ic_r = st.session_state.get("ic_result")
+    if _ic_r:
+        if "error" in _ic_r and not _ic_r.get("ic"):
+            st.error(f"IC error: {_ic_r['error']}")
+        else:
+            _ic_val   = _ic_r.get("ic", 0) or 0
+            _ic_label = _ic_r.get("ic_label", "N/A")
+            _ic_n     = _ic_r.get("n_samples", 0)
+            _ic_p     = _ic_r.get("p_value")
+            _ic_color = "#10b981" if _ic_val > 0.05 else ("#ef4444" if _ic_val < 0 else "#f59e0b")
+            _ic_cols  = st.columns(4)
+            _ic_cols[0].metric("IC Score", f"{_ic_val:.4f}")
+            _ic_cols[1].metric("Signal Quality", _ic_label)
+            _ic_cols[2].metric("Samples", _ic_n)
+            _ic_cols[3].metric("p-value", f"{_ic_p:.4f}" if _ic_p is not None else "N/A")
+            st.markdown(
+                f"<div style='border:1px solid {_ic_color};border-radius:8px;"
+                f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_ic_color};'>"
+                f"<b>{_ic_label}</b> — IC = {_ic_val:+.4f} "
+                f"({'p < 0.05 — statistically significant' if (_ic_p or 1) < 0.05 else 'not statistically significant'})</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── WFE Score (Walk Forward Efficiency) ───────────────────────────────────
+    st.markdown("---")
+    _ui.section_header("Signal Quality — Walk Forward Efficiency (WFE)",
+                       "OOS accuracy ÷ IS accuracy across N time windows. "
+                       "WFE > 0.8 = excellent generalisation · WFE < 0.5 = likely overfit",
+                       icon="🔄")
+    _wfe_c1, _wfe_c2, _wfe_c3 = st.columns(3)
+    with _wfe_c1:
+        _wfe_pair = st.selectbox("Pair", model.PAIRS, index=0, key="wfe_pair")
+    with _wfe_c2:
+        _wfe_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wfe_tf")
+    with _wfe_c3:
+        _wfe_splits = st.number_input("Splits", 2, 6, 4, step=1, key="wfe_splits",
+                                      help="Number of time windows to walk forward through")
+    if st.button("Compute WFE Score", type="secondary", use_container_width=True, key="btn_wfe"):
+        with st.spinner(f"Computing WFE on {_wfe_pair} {_wfe_tf} ({int(_wfe_splits)} splits)... (~2 min)", show_time=True):
+            _wfe_res = model.compute_wfe_score(pair=_wfe_pair, tf=_wfe_tf, n_splits=int(_wfe_splits))
+        st.session_state["wfe_result"] = _wfe_res
+    _wfe_r = st.session_state.get("wfe_result")
+    if _wfe_r:
+        if "error" in _wfe_r and not _wfe_r.get("wfe"):
+            st.error(f"WFE error: {_wfe_r['error']}")
+        else:
+            _wfe_val   = _wfe_r.get("wfe", 0) or 0
+            _wfe_label = _wfe_r.get("wfe_label", "N/A")
+            _wfe_is    = _wfe_r.get("is_accuracy", 0)
+            _wfe_oos   = _wfe_r.get("oos_accuracy", 0)
+            _wfe_color = "#10b981" if _wfe_val >= 0.8 else ("#f59e0b" if _wfe_val >= 0.5 else "#ef4444")
+            _wfe_cols  = st.columns(4)
+            _wfe_cols[0].metric("WFE", f"{_wfe_val:.3f}")
+            _wfe_cols[1].metric("Assessment", _wfe_label.replace("_", " "))
+            _wfe_cols[2].metric("IS Accuracy", f"{_wfe_is:.1f}%")
+            _wfe_cols[3].metric("OOS Accuracy", f"{_wfe_oos:.1f}%")
+            st.markdown(
+                f"<div style='border:1px solid {_wfe_color};border-radius:8px;"
+                f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_wfe_color};'>"
+                f"<b>{_wfe_label.replace('_',' ')}</b> — WFE = {_wfe_val:.3f} "
+                f"(OOS {_wfe_oos:.1f}% / IS {_wfe_is:.1f}%) · "
+                f"{'Model generalises well to unseen data.' if _wfe_val >= 0.8 else 'Acceptable generalisation.' if _wfe_val >= 0.5 else 'Potential overfit — reduce indicator complexity.'}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
     # ── Stress Test ────────────────────────────────────────────────────────────
     _render_stress_test()
 
@@ -4943,6 +5027,52 @@ def page_market_overview():
 
         _ts5_ts = _oc5sg.get("timestamp", "")[:19]
         st.caption(f"Source: Deribit · {_ts5_ts} UTC · Cached 15 min")
+
+    # ── Kimchi Premium (Group 6) ──────────────────────────────────────────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Kimchi Premium",
+        "BTC price premium on Korean exchange Upbit vs global Binance price (USD-adjusted via live FX). "
+        "Persistent premium signals strong Korean retail demand — often precedes broader alt rallies.",
+        icon="🌶️",
+    )
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_kimchi():
+        return data_feeds.get_kimchi_premium()
+
+    _kp = _cached_kimchi()
+    if _kp.get("error") and not _kp.get("premium_pct"):
+        st.warning(f"Kimchi premium unavailable: {_kp.get('error')}")
+    else:
+        _kp_pct  = _kp.get("premium_pct", 0.0) or 0.0
+        _kp_sig  = _kp.get("signal", "NEUTRAL")
+        _kp_upbt = _kp.get("upbit_btc_krw")
+        _kp_bin  = _kp.get("binance_btc_usd")
+        _kp_fx   = _kp.get("usd_krw")
+        _kp_c    = "#ef4444" if _kp_pct > 3 else ("#f59e0b" if _kp_pct > 1 else "#10b981" if _kp_pct < -1 else "#6b7280")
+        _kp_cols = st.columns(5)
+        _kp_cols[0].metric("Premium", f"{_kp_pct:+.2f}%",
+                           help="Positive = Upbit BTC more expensive than Binance — Korean demand premium")
+        _kp_cols[1].metric("Signal", _kp_sig)
+        _kp_cols[2].metric("Upbit BTC", f"₩{_kp_upbt:,.0f}" if _kp_upbt else "N/A")
+        _kp_cols[3].metric("Binance BTC", f"${_kp_bin:,.0f}" if _kp_bin else "N/A")
+        _kp_cols[4].metric("USD/KRW", f"{_kp_fx:,.1f}" if _kp_fx else "N/A")
+
+        _kp_bar_color = _kp_c
+        st.markdown(
+            f"<div style='background:rgba(255,255,255,0.03);border:1px solid {_kp_bar_color};"
+            f"border-radius:8px;padding:10px 16px;margin-top:8px;font-size:13px;'>"
+            f"<span style='color:{_kp_bar_color};font-weight:600'>{_kp_sig}</span> · "
+            f"{'+' if _kp_pct >= 0 else ''}{_kp_pct:.2f}% premium — "
+            f"{'Korean demand elevated: alt rally setup' if _kp_pct > 3 else 'Moderate premium: watch for expansion' if _kp_pct > 1 else 'No premium: neutral Korean flow' if abs(_kp_pct) <= 1 else 'Negative premium: global demand exceeds Korea'}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        _kp_ts = _kp.get("cached_at", "")
+        if _kp_ts:
+            st.caption(f"Source: Upbit + Binance + ExchangeRate API · {str(_kp_ts)[:19]} · Cached 5 min")
+
 
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
