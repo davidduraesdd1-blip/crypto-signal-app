@@ -1093,7 +1093,8 @@ def page_dashboard():
 
     # ── Market regime banner + Hurst / Squeeze context ────────────────────────
     try:
-        _r0_tf = list(results[0].get("timeframes", {}).values())[0] if results else {}
+        _r0_tf_vals = list(results[0].get("timeframes", {}).values()) if results else []
+        _r0_tf = _r0_tf_vals[0] if _r0_tf_vals else {}
         _regime_str = _r0_tf.get("regime", "Neutral: Unknown")
         _regime_key = _regime_str.split(":")[0].strip().split(" ")[-1] if ":" in _regime_str else "Neutral"
         # Map HMM regime strings to 4-state keys

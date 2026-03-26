@@ -426,8 +426,11 @@ def fetch_fear_greed():
         if r.status_code != 200:
             logging.warning(f"Fear & Greed API returned HTTP {r.status_code}")
             return 50, "Neutral"
-        data = r.json()['data'][0]
-        return int(data['value']), data['value_classification']
+        _fng_list = r.json().get('data', [])
+        if not _fng_list:
+            return 50, "Neutral"
+        data = _fng_list[0]
+        return int(data.get('value', 50)), data.get('value_classification', 'Neutral')
     except Exception as e:
         logging.warning(f"Fear & Greed fetch failed: {e}")
         return 50, "Neutral"
@@ -592,7 +595,8 @@ def detect_hmm_regime(df) -> str:
         # Smoothing: majority vote over last 3 bars to reduce false regime switches
         recent = states[-3:] if len(states) >= 3 else states[-1:]
         from collections import Counter
-        smoothed_state = Counter(recent.tolist()).most_common(1)[0][0]
+        _mc = Counter(recent.tolist()).most_common(1)
+        smoothed_state = _mc[0][0] if _mc else bull_state
 
         if smoothed_state == bull_state:
             return "Trending"

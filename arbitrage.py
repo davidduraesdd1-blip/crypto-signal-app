@@ -134,9 +134,13 @@ def _fetch_kraken_spot(pair: str) -> Optional[dict]:
         result = r.json().get("result", {})
         if not result:
             return None
-        ticker = next(iter(result.values()))
-        bid = float(ticker["b"][0])
-        ask = float(ticker["a"][0])
+        ticker  = next(iter(result.values()))
+        _b_list = ticker.get("b", [])
+        _a_list = ticker.get("a", [])
+        if not _b_list or not _a_list:
+            return None
+        bid = float(_b_list[0])
+        ask = float(_a_list[0])
         return {"bid": bid, "ask": ask, "price": (bid + ask) / 2}
     except Exception as e:
         logger.debug("Kraken spot %s: %s", pair, e)
