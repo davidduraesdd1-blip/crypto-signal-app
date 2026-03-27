@@ -800,9 +800,16 @@ def _fetch_ccxt_fr(exchange_id: str, pair: str, now: float) -> dict:
     if ex is None:
         return _empty_result(f"{exchange_id}: not available in ccxt", now)
 
-    # Determine which symbol format this exchange uses
-    # Try standard CCXT pair format first (BTC/USDT:USDT for perps, BTC/USDT for spot)
-    perp_symbol = pair  # default: spot-format pair (BTC/USDT)
+    # Determine which symbol format this exchange uses.
+    # Most ccxt perpetual markets use "BTC/USDT:USDT" (unified margin format).
+    # Build the perp symbol from the spot pair; fall back to spot if BadSymbol.
+    if "/" in pair:
+        base_asset, quote_asset = pair.split("/", 1)
+        # Strip any existing settle suffix so we don't double-append
+        quote_clean = quote_asset.split(":")[0]
+        perp_symbol = f"{base_asset}/{quote_clean}:{quote_clean}"
+    else:
+        perp_symbol = pair
     base = pair.split("/")[0] if "/" in pair else pair
 
     try:
