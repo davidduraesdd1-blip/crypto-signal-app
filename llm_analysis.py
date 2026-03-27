@@ -237,7 +237,7 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
             "indicator weights. Be conservative — only move weights ±20-30%."
         )
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",   # Haiku: fast + cheap for structured calls
+            model="claude-haiku-4-5",   # Haiku: fast + cheap for structured calls
             max_tokens=256,
             tools=[_WEIGHT_SCHEMA],
             tool_choice={"type": "auto"},

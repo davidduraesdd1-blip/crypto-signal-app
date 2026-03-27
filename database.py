@@ -1742,10 +1742,10 @@ def compute_and_save_ic(pair: str, timeframe: str = "1h") -> dict:
     try:
         conn = _get_conn()
         rows = conn.execute("""
-            SELECT confidence_avg_pct, actual_pnl_pct, was_correct, timestamp
+            SELECT confidence, actual_pnl_pct, was_correct, timestamp
             FROM feedback_log
             WHERE pair = ? AND resolved_at IS NOT NULL
-              AND actual_pnl_pct IS NOT NULL AND confidence_avg_pct IS NOT NULL
+              AND actual_pnl_pct IS NOT NULL AND confidence IS NOT NULL
               AND timestamp >= ?
             ORDER BY timestamp DESC LIMIT 200
         """, (pair, cutoff_30d)).fetchall()
@@ -1754,7 +1754,7 @@ def compute_and_save_ic(pair: str, timeframe: str = "1h") -> dict:
             return result
 
         # Guard against None even though SQL filters it (defensive)
-        conf_vals  = [float(r["confidence_avg_pct"]) for r in rows if r["confidence_avg_pct"] is not None]
+        conf_vals  = [float(r["confidence"]) for r in rows if r["confidence"] is not None]
         ret_vals   = [float(r["actual_pnl_pct"])     for r in rows if r["actual_pnl_pct"] is not None]
         correct    = [int(r["was_correct"] or 0)      for r in rows]
         # Ensure lists are aligned (parallel rows)
