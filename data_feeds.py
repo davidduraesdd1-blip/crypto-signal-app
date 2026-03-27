@@ -1101,7 +1101,10 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
              'social_volume': int, 'source': str, 'error': str|None}
     """
     keys = _load_api_keys()
-    api_key = keys.get("lunarcrush_key", "").strip()
+    api_key = (
+        os.environ.get("LUNARCRUSH_API_KEY", "").strip()
+        or keys.get("lunarcrush_key", "").strip()
+    )
     if not api_key:
         return _no_key_result("lunarcrush", "Social sentiment: galaxy score, alt rank, social volume")
 
