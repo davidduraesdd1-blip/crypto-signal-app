@@ -2349,3 +2349,100 @@ def gradient_confidence_bar_html(conf: float) -> str:
         f'</div>'
         f'</div>'
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #62 — render_confidence_bar (signal-aware alias, spec-compliant name)
+# BUY → green gradient, SELL → red gradient, HOLD/NEUTRAL → amber/orange.
+# Width = confidence%.  Renders inline HTML via st.markdown(unsafe_allow_html=True).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_confidence_bar(confidence: float, signal: str = "") -> str:
+    """
+    #62 — Signal-aware gradient confidence bar.
+
+    Parameters
+    ----------
+    confidence : float 0-100
+    signal     : direction string — BUY | SELL | HOLD | NEUTRAL | etc.
+
+    Returns HTML string to render via st.markdown(unsafe_allow_html=True).
+    """
+    pct = max(0, min(int(confidence), 100))
+    sig_upper = (signal or "").upper()
+
+    if "BUY" in sig_upper:
+        # BUY: light green → dark green
+        bar_color   = f"linear-gradient(90deg,#6EE7B7,#00D4AA)"
+        label_color = "#00D4AA"
+        label_text  = "BUY Signal"
+    elif "SELL" in sig_upper:
+        # SELL: light red → deep red
+        bar_color   = "linear-gradient(90deg,#FCA5A5,#EF4444)"
+        label_color = "#EF4444"
+        label_text  = "SELL Signal"
+    else:
+        # HOLD / NEUTRAL: amber → orange
+        bar_color   = "linear-gradient(90deg,#FDE68A,#F59E0B)"
+        label_color = "#F59E0B"
+        label_text  = "HOLD / Neutral"
+
+    score_10 = max(0, min(10, round(pct / 10)))
+    return (
+        f'<div style="margin:8px 0 12px 0">'
+        f'<div style="display:flex;justify-content:space-between;margin-bottom:4px">'
+        f'<span style="font-size:12px;color:{label_color};font-weight:600">'
+        f'Confidence: {score_10}/10 ({pct}%) — {label_text}</span>'
+        f'</div>'
+        f'<div style="background:#1F2937;border-radius:6px;height:10px;overflow:hidden">'
+        f'<div style="background:{bar_color};width:{pct}%;height:100%;border-radius:6px;'
+        f'transition:width 0.5s ease;"></div>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #60 — render_sparkline (Plotly-based, spec-compliant name)
+# Thin Plotly wrapper; returns a go.Figure with minimal layout.
+# Green if last > first, red if declining.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_sparkline(prices: list, width: int = 120, height: int = 40):
+    """
+    #60 — Render a minimal Plotly sparkline figure.
+
+    Parameters
+    ----------
+    prices : list of float close prices (7 daily closes or hourly bars)
+    width  : figure pixel width (default 120)
+    height : figure pixel height (default 40)
+
+    Returns plotly.graph_objects.Figure — render with st.plotly_chart(fig, ...).
+    Green line if last price >= first price; red if declining.
+    """
+    try:
+        import plotly.graph_objects as _go
+    except ImportError:
+        return None
+
+    if not prices or len(prices) < 2:
+        return None
+
+    line_color = "#34D399" if prices[-1] >= prices[0] else "#F6465D"
+    fig = _go.Figure()
+    fig.add_trace(_go.Scatter(
+        y=prices, mode="lines",
+        line=dict(color=line_color, width=1.5),
+        showlegend=False,
+    ))
+    fig.update_layout(
+        width=width, height=height,
+        margin=dict(l=0, r=0, t=0, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        showlegend=False,
+    )
+    return fig

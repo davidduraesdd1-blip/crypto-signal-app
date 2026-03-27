@@ -284,3 +284,166 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
     except Exception as e:
         logging.debug("[LLM Weights] failed: %s", e)
         return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #61 — SIGNAL STORY (claude-haiku-4-5, ≤2 plain-English sentences)
+# Explains why a pair has a given signal in plain language.
+# Cache: 30 minutes per (pair, signal) key.
+# Fallback: rule-based explanation from indicator values.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STORY_CACHE: dict = {}
+_STORY_CACHE_LOCK = threading.Lock()
+_STORY_CACHE_TTL  = 1800  # 30 minutes
+
+
+def _rule_based_story(pair: str, signal: str, confidence: float, indicators: dict) -> str:
+    """
+    Fallback rule-based signal story when API is unavailable.
+    Builds a 1-2 sentence explanation from indicator values.
+    """
+    lines: list[str] = []
+    rsi      = indicators.get("rsi")
+    funding  = indicators.get("funding_rate_pct")
+    regime   = indicators.get("regime", "")
+    macd     = indicators.get("macd_div", "")
+    adx      = indicators.get("adx")
+    supertrend = indicators.get("supertrend", "")
+
+    sig_upper = (signal or "").upper()
+
+    # Lead sentence
+    conf_word = "strong" if confidence >= 75 else ("moderate" if confidence >= 60 else "weak")
+    lines.append(f"{pair} shows a {conf_word} {sig_upper} signal at {confidence:.0f}% confidence.")
+
+    # Supporting detail
+    detail_parts: list[str] = []
+    if rsi is not None:
+        try:
+            rsi_v = float(rsi)
+            if rsi_v >= 70:
+                detail_parts.append(f"RSI at {rsi_v:.0f} indicates overbought conditions")
+            elif rsi_v <= 30:
+                detail_parts.append(f"RSI at {rsi_v:.0f} indicates oversold conditions")
+            else:
+                detail_parts.append(f"RSI at {rsi_v:.0f}")
+        except (TypeError, ValueError):
+            pass
+    if funding is not None:
+        try:
+            fr = float(funding)
+            if fr > 0.03:
+                detail_parts.append(f"funding rate of {fr:+.4f}% suggests crowded longs")
+            elif fr < -0.03:
+                detail_parts.append(f"funding rate of {fr:+.4f}% suggests crowded shorts")
+        except (TypeError, ValueError):
+            pass
+    if regime:
+        detail_parts.append(f"{regime} market regime")
+    if supertrend and "N/A" not in str(supertrend):
+        detail_parts.append(f"SuperTrend {supertrend}")
+    if adx is not None:
+        try:
+            adx_v = float(adx)
+            if adx_v > 25:
+                detail_parts.append(f"ADX {adx_v:.0f} confirms trend strength")
+        except (TypeError, ValueError):
+            pass
+
+    if detail_parts:
+        lines.append(" and ".join(detail_parts[:3]).capitalize() + ".")
+    return " ".join(lines)
+
+
+def generate_signal_story(
+    pair: str,
+    signal: str,
+    confidence: float,
+    indicators: dict,
+) -> str:
+    """
+    #61 — Generate a 1-2 sentence plain-English signal explanation.
+
+    Parameters
+    ----------
+    pair       : e.g. 'BTC/USDT'
+    signal     : direction string e.g. 'BUY', 'STRONG SELL', 'NEUTRAL'
+    confidence : float 0-100
+    indicators : dict of key indicator values from the scan result
+                 (rsi, funding_rate_pct, regime, macd_div, adx, supertrend, etc.)
+
+    Returns
+    -------
+    str — 1-2 plain English sentences, no jargon.
+    Falls back to rule-based explanation if API unavailable.
+    """
+    # 30-min cache keyed on (pair, signal) — confidence bucket
+    cache_key = f"story:{pair}:{signal}:{int(confidence // 5)}"
+    now = time.time()
+    with _STORY_CACHE_LOCK:
+        cached = _STORY_CACHE.get(cache_key)
+        if cached and (now - cached["_ts"]) < _STORY_CACHE_TTL:
+            return cached["text"]
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "").strip()
+        except Exception:
+            pass
+
+    if not api_key:
+        text = _rule_based_story(pair, signal, confidence, indicators)
+        with _STORY_CACHE_LOCK:
+            _STORY_CACHE[cache_key] = {"text": text, "_ts": now}
+        return text
+
+    try:
+        import anthropic
+    except ImportError:
+        text = _rule_based_story(pair, signal, confidence, indicators)
+        with _STORY_CACHE_LOCK:
+            _STORY_CACHE[cache_key] = {"text": text, "_ts": now}
+        return text
+
+    # Build compact indicator summary string
+    ind_parts: list[str] = []
+    for k in ("rsi", "adx", "macd_div", "supertrend", "regime", "funding_rate_pct"):
+        v = indicators.get(k)
+        if v is not None and str(v) not in ("", "N/A", "nan"):
+            ind_parts.append(f"{k}={v}")
+    ind_str = ", ".join(ind_parts[:6]) if ind_parts else "standard technicals"
+
+    prompt = (
+        f"In 1-2 plain English sentences, explain why {pair} shows a {signal} signal "
+        f"at {confidence:.0f}% confidence. "
+        f"Key indicators: {ind_str}. "
+        f"Be specific, no jargon."
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
+        message = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=100,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if message.content and hasattr(message.content[0], "text"):
+            text = message.content[0].text.strip()
+        else:
+            text = _rule_based_story(pair, signal, confidence, indicators)
+    except Exception as e:
+        logging.debug("[SignalStory] API call failed: %s", e)
+        text = _rule_based_story(pair, signal, confidence, indicators)
+
+    # Evict oldest entries when cache is full
+    with _STORY_CACHE_LOCK:
+        _STORY_CACHE[cache_key] = {"text": text, "_ts": now}
+        if len(_STORY_CACHE) > 200:
+            oldest = sorted(_STORY_CACHE, key=lambda k2: _STORY_CACHE[k2]["_ts"])
+            for k2 in oldest[:100]:
+                del _STORY_CACHE[k2]
+
+    return text

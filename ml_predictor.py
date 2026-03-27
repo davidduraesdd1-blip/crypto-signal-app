@@ -355,6 +355,140 @@ def get_ml_prediction(pair: str, tf: str, df: pd.DataFrame) -> dict:
     return result
 
 
+# ─── #48 HMM Regime Detection ──────────────────────────────────────────────────
+
+_HMM_CACHE: dict = {}
+_HMM_CACHE_LOCK = threading.Lock()
+_HMM_CACHE_TTL  = 14400  # 4 hours — HMM fitting is expensive
+
+
+def fit_hmm_regime(prices: list, n_states: int = 3) -> dict:
+    """
+    #48 — 3-state Hidden Markov Model regime detection.
+
+    Parameters
+    ----------
+    prices   : list of daily BTC closing prices (last 400 days recommended)
+    n_states : number of HMM states (default 3 → Bull / Neutral / Bear)
+
+    Features : log returns + 7-day rolling volatility (std of log returns)
+
+    State labeling (by mean log return, ascending):
+      lowest mean  → Bear
+      highest mean → Bull
+      middle       → Neutral
+
+    Returns
+    -------
+    dict with keys:
+      current_state        : str  — 'Bull' | 'Neutral' | 'Bear' | 'UNKNOWN'
+      state_probabilities  : list[float]  — posterior probs for [Bear, Neutral, Bull]
+      regime_history       : list[str]    — last 20 state labels
+      confidence           : float        — max probability of current state
+      error                : str | None
+    """
+    _fallback = {
+        "current_state": "UNKNOWN", "state_probabilities": [0.0, 0.0, 0.0],
+        "regime_history": [], "confidence": 0.0, "error": "HMM unavailable",
+    }
+
+    if not prices or len(prices) < 30:
+        return {**_fallback, "error": "Insufficient price data (need >= 30)"}
+
+    # Cache on a stable key: price count + first/last price hash
+    _cache_key = f"hmm:{len(prices)}:{round(prices[0], 0)}:{round(prices[-1], 0)}"
+    now = time.time()
+    with _HMM_CACHE_LOCK:
+        cached = _HMM_CACHE.get(_cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _HMM_CACHE_TTL:
+            return {k: v for k, v in cached.items() if k != "_ts"}
+
+    try:
+        from hmmlearn.hmm import GaussianHMM
+    except ImportError:
+        logger.debug("[HMM #48] hmmlearn not installed — pip install hmmlearn")
+        result = {**_fallback, "error": "hmmlearn not installed"}
+        with _HMM_CACHE_LOCK:
+            _HMM_CACHE[_cache_key] = {**result, "_ts": now}
+        return result
+
+    try:
+        arr = np.array(prices, dtype=np.float64)
+        arr = arr[arr > 0]   # strip zeros/negatives
+        if len(arr) < 30:
+            return {**_fallback, "error": "Insufficient valid price data"}
+
+        log_ret = np.log(arr[1:] / arr[:-1])
+
+        # 7-day rolling volatility
+        window = 7
+        vol = np.array([
+            log_ret[max(0, i - window + 1): i + 1].std()
+            for i in range(len(log_ret))
+        ])
+
+        X = np.column_stack([log_ret, vol]).astype(np.float64)
+        X = X[~np.isnan(X).any(axis=1)]
+
+        if len(X) < 20:
+            return {**_fallback, "error": "Feature matrix too short after NaN drop"}
+
+        # Fit HMM — handle covariance_floor API change (hmmlearn 0.3.0+)
+        try:
+            model = GaussianHMM(
+                n_components=n_states, covariance_type="diag",
+                n_iter=50, random_state=42, covariance_floor=1e-6,
+            )
+        except TypeError:
+            model = GaussianHMM(
+                n_components=n_states, covariance_type="diag",
+                n_iter=50, random_state=42,
+            )
+
+        model.fit(X)
+        states = model.predict(X)
+        posteriors = model.predict_proba(X)
+
+        # Label states by mean log return (ascending: Bear < Neutral < Bull)
+        means = [float(X[states == s, 0].mean()) if (states == s).sum() > 0 else 0.0
+                 for s in range(n_states)]
+        sorted_states = sorted(range(n_states), key=lambda s: means[s])
+        _labels = ["Bear", "Neutral", "Bull"] if n_states == 3 else [f"State{i}" for i in range(n_states)]
+        state_label_map = {sorted_states[i]: _labels[i] for i in range(n_states)}
+
+        current_raw  = int(states[-1])
+        current_name = state_label_map.get(current_raw, "UNKNOWN")
+
+        # Reorder probabilities as [Bear, Neutral, Bull]
+        last_post = posteriors[-1]  # shape (n_states,)
+        ordered_probs = [
+            round(float(last_post[sorted_states[i]]), 3) for i in range(n_states)
+        ]
+        confidence = float(max(ordered_probs))
+
+        # Last 20 state labels for regime history
+        history_raw = states[-20:] if len(states) >= 20 else states
+        regime_history = [state_label_map.get(int(s), "UNKNOWN") for s in history_raw]
+
+        result = {
+            "current_state":       current_name,
+            "state_probabilities": ordered_probs,   # [Bear_prob, Neutral_prob, Bull_prob]
+            "regime_history":      regime_history,
+            "confidence":          round(confidence, 3),
+            "error":               None,
+        }
+        with _HMM_CACHE_LOCK:
+            _HMM_CACHE[_cache_key] = {**result, "_ts": now}
+        return result
+
+    except Exception as e:
+        logger.warning("[HMM #48] fit_hmm_regime failed: %s", e)
+        result = {**_fallback, "error": str(e)[:120]}
+        with _HMM_CACHE_LOCK:
+            _HMM_CACHE[_cache_key] = {**result, "_ts": now}
+        return result
+
+
 def invalidate_model(pair: str, tf: str) -> None:
     """Force model retraining on next prediction call."""
     key = (pair, tf)

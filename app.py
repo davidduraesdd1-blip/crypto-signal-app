@@ -1569,8 +1569,8 @@ def page_dashboard():
         ),
     )
 
-    # Gradient confidence bar (#62) — CSS gradient, more visual than st.progress()
-    st.markdown(_ui.gradient_confidence_bar_html(conf), unsafe_allow_html=True)
+    # Gradient confidence bar (#62) — signal-aware color-coded bar
+    st.markdown(_ui.render_confidence_bar(conf, direction), unsafe_allow_html=True)
 
     # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
     _consensus     = r.get("consensus", 0.0)
@@ -1758,6 +1758,84 @@ def page_dashboard():
                     f'Confidence: <span style="color:{_ml_col};font-weight:700;">{_ml_prob:.0%}</span>'
                     f' &nbsp;·&nbsp; Model accuracy: {_ml_acc:.0%}'
                     f' &nbsp;·&nbsp; <span style="color:{_ml_col};">{_ml_pred}</span></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # ── #48 HMM Regime — displayed alongside existing macro regime ────────
+                try:
+                    if pair == "BTC/USDT" and not _ml_df.empty and "close" in _ml_df.columns:
+                        _hmm_prices = list(_ml_df["close"].dropna().tail(400))
+                        _hmm_res    = _ml_mod.fit_hmm_regime(_hmm_prices)
+                        _hmm_state  = _hmm_res.get("current_state", "UNKNOWN")
+                        _hmm_conf   = _hmm_res.get("confidence", 0.0)
+                        _hmm_probs  = _hmm_res.get("state_probabilities", [0.0, 0.0, 0.0])
+                        if _hmm_state != "UNKNOWN" and not _hmm_res.get("error"):
+                            _hmm_col = (
+                                "#00d4aa" if _hmm_state == "Bull" else
+                                "#ef4444" if _hmm_state == "Bear" else
+                                "#f59e0b"
+                            )
+                            # Build state-probability mini-bar chart labels
+                            _labels = ["Bear", "Neutral", "Bull"]
+                            _bar_parts = ""
+                            for _lbl, _pb in zip(_labels, _hmm_probs):
+                                _bw = int(round(_pb * 100))
+                                _bc = "#00d4aa" if _lbl == "Bull" else "#ef4444" if _lbl == "Bear" else "#f59e0b"
+                                _bar_parts += (
+                                    f'<div style="margin-bottom:3px">'
+                                    f'<div style="display:flex;align-items:center;gap:6px">'
+                                    f'<span style="font-size:10px;color:#9ca3af;width:44px">{_lbl}</span>'
+                                    f'<div style="flex:1;background:#1f2937;border-radius:3px;height:6px">'
+                                    f'<div style="background:{_bc};width:{_bw}%;height:6px;border-radius:3px"></div>'
+                                    f'</div>'
+                                    f'<span style="font-size:10px;color:#9ca3af;width:32px;text-align:right">{_pb:.0%}</span>'
+                                    f'</div></div>'
+                                )
+                            st.markdown(
+                                f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
+                                f'padding:12px 16px;margin:8px 0;border-left:3px solid {_hmm_col};">'
+                                f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:6px;">'
+                                f'🧬 HMM Regime — Current State: '
+                                f'<span style="color:{_hmm_col}">{_hmm_state}</span>'
+                                f' ({_hmm_conf:.0%} confidence)</div>'
+                                f'{_bar_parts}'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # ── #61 Signal Story — 1-2 plain English sentences below the signal card ──
+    if _llm is not None:
+        try:
+            _story_indicators = {}
+            _story_tf_data = r.get("timeframes", {})
+            _story_first_td = (list(_story_tf_data.values()) or [{}])[0]
+            _story_indicators["rsi"]             = _story_first_td.get("rsi")
+            _story_indicators["adx"]             = _story_first_td.get("adx")
+            _story_indicators["macd_div"]        = _story_first_td.get("macd_div")
+            _story_indicators["supertrend"]      = _story_first_td.get("supertrend")
+            _story_indicators["regime"]          = _story_first_td.get("regime", "")
+            _story_indicators["funding_rate_pct"] = (
+                r.get("funding_rate_pct") or
+                (r.get("timeframes", {}).get("1h", {}) or {}).get("funding", "")
+            )
+            _story_text = _llm.generate_signal_story(pair, direction, conf, _story_indicators)
+            if _story_text:
+                _story_sig_col = (
+                    "#00d4aa" if "BUY" in direction.upper() else
+                    "#ef4444" if "SELL" in direction.upper() else
+                    "#f59e0b"
+                )
+                st.markdown(
+                    f'<div style="background:rgba(17,24,39,0.7);border-radius:8px;'
+                    f'padding:10px 14px;margin:4px 0 10px 0;border-left:2px solid {_story_sig_col};">'
+                    f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;'
+                    f'letter-spacing:0.6px;margin-bottom:4px">Signal Story</div>'
+                    f'<div style="font-size:13px;color:#c8d4e8;line-height:1.5">{_story_text}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )

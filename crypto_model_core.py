@@ -3807,6 +3807,39 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     except Exception as _cvd_e:
         logging.debug("[CVD-Div] %s fetch failed: %s", pair, _cvd_e)
 
+    # ── #34 Deribit PCR signal — post-score confidence adjustment ──────────────
+    # BEARISH_SENTIMENT (PCR > 1.2) → reduce BUY confidence by 10%
+    # BULLISH_SENTIMENT (PCR < 0.7, contrarian) → raise SELL→HOLD by 5 pts
+    # Only applied for BTC/USDT and ETH/USDT (Deribit covers these two)
+    try:
+        import data_feeds as _df_pcr
+        _base_sym_pcr = pair.split("/")[0] if "/" in pair else pair
+        if _base_sym_pcr in ("BTC", "ETH"):
+            _pcr_data = _df_pcr.fetch_deribit_pcr(currency=_base_sym_pcr)
+            _pcr_sig  = (_pcr_data or {}).get(
+                "btc_signal" if _base_sym_pcr == "BTC" else "eth_signal", "NEUTRAL"
+            )
+            if _pcr_sig == "BEARISH_SENTIMENT" and conf_avg > 50:
+                conf_avg = round(max(conf_avg * 0.90, 50.0), 1)
+                logging.debug("[PCR-#34] %s BEARISH_SENTIMENT → conf_avg: %.1f", pair, conf_avg)
+            elif _pcr_sig == "BULLISH_SENTIMENT" and conf_avg < 50:
+                conf_avg = round(min(conf_avg + 5.0, 49.9), 1)
+                logging.debug("[PCR-#34] %s BULLISH_SENTIMENT → conf_avg raised: %.1f", pair, conf_avg)
+    except Exception as _pcr_e:
+        logging.debug("[PCR-#34] %s fetch failed: %s", pair, _pcr_e)
+
+    # ── #52 Kimchi Premium signal — mild confidence adjustment ─────────────────
+    # KOREAN_PREMIUM (>3%) → retail FOMO, late-cycle → reduce BUY by 5 pts
+    try:
+        import data_feeds as _df_kimchi
+        _ki_data = _df_kimchi.fetch_kimchi_premium()
+        _ki_sig  = (_ki_data or {}).get("signal", "NEUTRAL")
+        if _ki_sig == "KOREAN_PREMIUM" and conf_avg > 50:
+            conf_avg = round(max(conf_avg - 5.0, 50.0), 1)
+            logging.debug("[Kimchi-#52] %s KOREAN_PREMIUM → conf_avg: %.1f", pair, conf_avg)
+    except Exception as _ki_e:
+        logging.debug("[Kimchi-#52] %s fetch failed: %s", pair, _ki_e)
+
     direction_avg = get_signal_direction(conf_avg)
 
     # ── MTF confirmation gate ──────────────────────────────────────────────────

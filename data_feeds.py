@@ -4693,3 +4693,174 @@ def fetch_cmc_global_metrics() -> dict:
             "active_cryptocurrencies": 0, "active_exchanges": 0,
             "source": "coinmarketcap", "error": str(e)[:120],
         }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #34 — DERIBIT PUT/CALL RATIO SIGNAL
+# Fetches open interest split by option type (PUT vs CALL) for BTC and ETH.
+# PCR = put_OI / call_OI.  Contrarian signal: crowded puts = potential rally.
+# Cached 15 minutes — Deribit public API, no key required.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PCR_CACHE: dict = {"ts": 0.0, "data": None}
+_PCR_LOCK  = threading.Lock()
+_PCR_TTL   = 900  # 15 minutes
+
+
+def _pcr_signal(pcr: float) -> str:
+    """Contrarian PCR signal thresholds."""
+    if pcr > 1.2:
+        return "BEARISH_SENTIMENT"
+    if pcr < 0.7:
+        return "BULLISH_SENTIMENT"
+    return "NEUTRAL"
+
+
+def _fetch_pcr_for_currency(currency: str) -> float:
+    """
+    Fetch put/call OI ratio for a single Deribit currency.
+    Returns PCR float or 0.0 on failure.
+    """
+    try:
+        resp = _SESSION.get(
+            "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+            params={"currency": currency, "kind": "option"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return 0.0
+        instruments = resp.json().get("result", [])
+        if not instruments:
+            return 0.0
+        put_oi  = 0.0
+        call_oi = 0.0
+        for item in instruments:
+            name = item.get("instrument_name", "")
+            parts = name.split("-")
+            if len(parts) < 4:
+                continue
+            opt_type = parts[3].upper()
+            oi       = float(item.get("open_interest") or 0.0)
+            if opt_type == "P":
+                put_oi  += oi
+            elif opt_type == "C":
+                call_oi += oi
+        if call_oi <= 0:
+            return 0.0
+        return round(put_oi / call_oi, 3)
+    except Exception as _e:
+        logging.debug("[PCR] %s fetch failed: %s", currency, _e)
+        return 0.0
+
+
+def fetch_deribit_pcr(currency: str = "BTC") -> dict:
+    """
+    #34 — Deribit Put/Call Ratio signal for BTC and ETH.
+
+    Fetches full options chain and computes aggregate OI-based P/C ratio.
+    Contrarian logic: heavy put buying (PCR > 1.2) = BEARISH_SENTIMENT (crowds fear).
+    Light put buying (PCR < 0.7) = BULLISH_SENTIMENT (overconfidence / squeeze risk).
+
+    Returns:
+        btc_pcr     : float — BTC put/call OI ratio
+        eth_pcr     : float — ETH put/call OI ratio
+        btc_signal  : str   — BEARISH_SENTIMENT | BULLISH_SENTIMENT | NEUTRAL
+        eth_signal  : str   — same
+        timestamp   : str   — ISO timestamp
+        source      : str
+        error       : str | None
+    """
+    now = time.time()
+    with _PCR_LOCK:
+        if _PCR_CACHE["data"] is not None and (now - _PCR_CACHE["ts"]) < _PCR_TTL:
+            return dict(_PCR_CACHE["data"])
+
+    _neutral = {
+        "btc_pcr": 0.0, "eth_pcr": 0.0,
+        "btc_signal": "NEUTRAL", "eth_signal": "NEUTRAL",
+        "timestamp": "", "source": "deribit", "error": "PCR unavailable",
+    }
+
+    try:
+        import datetime as _dt34
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            btc_fut = _ex.submit(_fetch_pcr_for_currency, "BTC")
+            eth_fut = _ex.submit(_fetch_pcr_for_currency, "ETH")
+            btc_pcr = btc_fut.result()
+            eth_pcr = eth_fut.result()
+
+        if btc_pcr == 0.0 and eth_pcr == 0.0:
+            return {**_neutral, "error": "No options data from Deribit"}
+
+        ts = _dt34.datetime.now(_dt34.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = {
+            "btc_pcr":    btc_pcr,
+            "eth_pcr":    eth_pcr,
+            "btc_signal": _pcr_signal(btc_pcr),
+            "eth_signal": _pcr_signal(eth_pcr),
+            "timestamp":  ts,
+            "source":     "deribit",
+            "error":      None,
+        }
+        with _PCR_LOCK:
+            _PCR_CACHE["data"] = result
+            _PCR_CACHE["ts"]   = now
+        return result
+    except Exception as e:
+        logging.warning("[PCR] fetch_deribit_pcr failed: %s", e)
+        return {**_neutral, "error": str(e)[:120]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #52 — KIMCHI PREMIUM SIGNAL (spec-compliant wrapper)
+# Thin wrapper over get_kimchi_premium() that returns the exact key schema
+# specified in upgrade #52 and applies the KOREAN_PREMIUM / KOREAN_DISCOUNT
+# signal labels used in confidence scoring.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_kimchi_premium() -> dict:
+    """
+    #52 — Kimchi Premium: BTC price on Upbit (KRW) vs Binance (USD).
+
+    premium_pct = (upbit_btc_usd - binance_btc_usd) / binance_btc_usd × 100
+
+    Signal thresholds:
+      >  3% → KOREAN_PREMIUM  (retail FOMO, late-cycle contrarian BEARISH lean)
+      < -1% → KOREAN_DISCOUNT (Korean fear / global > local)
+      else  → NEUTRAL
+
+    Returns:
+        kimchi_premium_pct : float
+        signal             : str   — KOREAN_PREMIUM | KOREAN_DISCOUNT | NEUTRAL
+        upbit_btc_usd      : float — Upbit BTC price converted to USD
+        binance_btc_usd    : float
+        error              : str | None
+    """
+    raw = get_kimchi_premium()
+    if raw.get("error") and not raw.get("upbit_btc_krw"):
+        return {
+            "kimchi_premium_pct": 0.0, "signal": "NEUTRAL",
+            "upbit_btc_usd": 0.0, "binance_btc_usd": 0.0,
+            "error": raw.get("error"),
+        }
+
+    upbit_krw   = raw.get("upbit_btc_krw", 0.0) or 0.0
+    usd_krw     = raw.get("usd_krw", 1350.0) or 1350.0
+    binance_usd = raw.get("binance_btc_usd", 0.0) or 0.0
+    upbit_usd   = (upbit_krw / usd_krw) if usd_krw > 0 else 0.0
+
+    pct = raw.get("premium_pct", 0.0) or 0.0
+    if pct > 3.0:
+        signal = "KOREAN_PREMIUM"
+    elif pct < -1.0:
+        signal = "KOREAN_DISCOUNT"
+    else:
+        signal = "NEUTRAL"
+
+    return {
+        "kimchi_premium_pct": round(pct, 3),
+        "signal":             signal,
+        "upbit_btc_usd":      round(upbit_usd, 2),
+        "binance_btc_usd":    round(binance_usd, 2),
+        "error":              None,
+    }
