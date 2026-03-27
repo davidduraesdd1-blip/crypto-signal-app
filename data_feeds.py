@@ -4708,7 +4708,9 @@ _PCR_TTL   = 900  # 15 minutes
 
 
 def _pcr_signal(pcr: float) -> str:
-    """Contrarian PCR signal thresholds."""
+    """Contrarian PCR signal thresholds.  pcr == 0.0 means fetch failed → NEUTRAL."""
+    if pcr <= 0.0:
+        return "NEUTRAL"
     if pcr > 1.2:
         return "BEARISH_SENTIMENT"
     if pcr < 0.7:
