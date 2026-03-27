@@ -4174,6 +4174,18 @@ def scan_single_pair(pair: str) -> dict | None:
         global_mkt = _data_feeds.get_global_market()
     except Exception:
         pass
+    # #26 Pi Cycle Top — fetch for single-pair calls (was missing; kill-switch never fired)
+    pi_cycle_data: dict = {}
+    try:
+        pi_cycle_data = _data_feeds.fetch_pi_cycle_top() or {}
+    except Exception:
+        pass
+    # TVL — single-pair fetch so tvl_map is populated (was missing from run_single_pair)
+    tvl_map: dict = {}
+    try:
+        tvl_map = {pair: _data_feeds.get_defillama_tvl(pair)}
+    except Exception:
+        pass
 
     master_df       = _db.get_signals_df(limit=200)
     circuit_breaker = check_drawdown_circuit_breaker()
@@ -4194,7 +4206,8 @@ def scan_single_pair(pair: str) -> dict | None:
         funding_map, oi_map, iv_map, ob_map,
         master_df, circuit_breaker, time.time(),
         trending_coins=trending_coins, global_mkt=global_mkt,
-        btc_df=btc_df, cvd_map=cvd_map,
+        btc_df=btc_df, cvd_map=cvd_map, tvl_map=tvl_map,
+        pi_cycle_data=pi_cycle_data,
     )
 
 

@@ -1930,8 +1930,8 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
     try:
         binance_sym = f"{symbol.upper()}USDT"
         klines = fetch_binance_klines(binance_sym, interval="1h", limit=24)
-        if len(klines) < 12:
-            result = {**_neutral, "error": "Insufficient candle data", "_ts": now}
+        if not klines or len(klines) < 12:
+            result = {**_neutral, "error": f"Insufficient candle data (got {len(klines)} candles, need ≥12)", "_ts": now}
             with _CVD_DIV_LOCK:
                 _CVD_DIV_CACHE[cache_key] = result
             return {k: v for k, v in result.items() if k != "_ts"}

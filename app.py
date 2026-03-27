@@ -1544,8 +1544,8 @@ def page_dashboard():
     _kelly_pos_pct = pos_pct   # default to model-computed size
     try:
         import risk_metrics as _risk_mod
-        import database as _db_kelly
-        _bt_kelly = _db_kelly.get_backtest_df()
+        # Use cached backtest DF — avoids an expensive uncached DB read on every card render
+        _bt_kelly = _cached_backtest_df()
         if not _bt_kelly.empty:
             _bt_valid = _bt_kelly[_bt_kelly['pnl_pct'].notna()]
             if len(_bt_valid) >= 20:
