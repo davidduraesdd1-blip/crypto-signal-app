@@ -12,7 +12,7 @@ SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN")
 COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 
 # ─── Tier 1 Pair Expansion (#40) ──────────────────────────────────────────────
-# 10 new assets added to the tracked pairs list.
+# 9 new assets added to the tracked pairs list (HYPE excluded — DEX-only, no CEX listing).
 # CoinGecko IDs used by data_feeds.py batch fetch functions.
 # Binance trading pairs used by OHLCV and websocket feeds.
 TIER1_PAIRS: list[str] = [
