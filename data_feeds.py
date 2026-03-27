@@ -812,8 +812,11 @@ def _fetch_ccxt_fr(exchange_id: str, pair: str, now: float) -> dict:
         if rate == 0.0:
             # Some exchanges store it as fundingRates list or different key
             rate = float(fr_data.get("rate") or fr_data.get("funding_rate") or 0.0)
-        next_ts = int(fr_data.get("fundingDatetime") or fr_data.get("nextFundingDatetime") or 0)
-        if isinstance(next_ts, str):
+        _next_raw = fr_data.get("fundingDatetime") or fr_data.get("nextFundingDatetime") or 0
+        try:
+            # ccxt may return an ISO datetime string or a numeric ms timestamp
+            next_ts = int(_next_raw) if not isinstance(_next_raw, str) else 0
+        except (TypeError, ValueError):
             next_ts = 0
         mark_price = float(fr_data.get("markPrice") or fr_data.get("mark") or 0.0)
         return {
@@ -862,7 +865,7 @@ def get_multi_exchange_funding_rates(pair: str) -> dict[str, dict]:
     Returns: {
       "okx": {...}, "binance": {...}, "bybit": {...}, "kucoin": {...},
       "bitfinex": {...}, "mexc": {...}, "htx": {...}, "phemex": {...},
-      "woox": {...}, "bithumb": {...}, "cryptocom": {...}, "ascendex": {...},
+      "woo": {...}, "bithumb": {...}, "cryptocom": {...}, "ascendex": {...},
       "lbank": {...}, "coinex": {...}
     }
     """
@@ -876,7 +879,7 @@ def get_multi_exchange_funding_rates(pair: str) -> dict[str, dict]:
     core_futs: dict = {}
     # New ccxt exchanges
     ccxt_exchanges = [
-        "bitfinex", "mexc", "htx", "phemex", "woox",
+        "bitfinex", "mexc", "htx", "phemex", "woo",
         "bithumb", "cryptocom", "ascendex", "lbank", "coinex",
     ]
 
@@ -4251,9 +4254,9 @@ def fetch_deribit_options_data() -> dict:
 # FX rates from exchangerate-api.com (free, no key)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_REGIONAL_CACHE: dict = {"ts": 0.0, "data": None}
-_REGIONAL_LOCK  = threading.Lock()
-_REGIONAL_TTL   = 300  # 5-minute cache
+_REGPREM_CACHE: dict = {"ts": 0.0, "data": None}
+_REGPREM_LOCK  = threading.Lock()
+_REGPREM_TTL   = 300  # 5-minute cache
 
 _FX_CACHE: dict = {"ts": 0.0, "rates": None}
 _FX_LOCK  = threading.Lock()
@@ -4320,9 +4323,9 @@ def fetch_regional_premiums() -> dict:
         }
     """
     now = time.time()
-    with _REGIONAL_LOCK:
-        if _REGIONAL_CACHE["data"] is not None and (now - _REGIONAL_CACHE["ts"]) < _REGIONAL_TTL:
-            return dict(_REGIONAL_CACHE["data"])
+    with _REGPREM_LOCK:
+        if _REGPREM_CACHE["data"] is not None and (now - _REGPREM_CACHE["ts"]) < _REGPREM_TTL:
+            return dict(_REGPREM_CACHE["data"])
 
     _neutral = {
         "mexico_pct": 0.0, "brazil_pct": 0.0,
@@ -4415,9 +4418,9 @@ def fetch_regional_premiums() -> dict:
             "source":          "regional_exchanges",
             "error":           None,
         }
-        with _REGIONAL_LOCK:
-            _REGIONAL_CACHE["data"] = result
-            _REGIONAL_CACHE["ts"]   = now
+        with _REGPREM_LOCK:
+            _REGPREM_CACHE["data"] = result
+            _REGPREM_CACHE["ts"]   = now
         return result
 
     except Exception as e:
@@ -4455,8 +4458,7 @@ def fetch_cmc_global_metrics() -> dict:
 
     Returns empty dict (with error key) if COINMARKETCAP_API_KEY is not set.
     """
-    import os as _os_cmc
-    api_key = _os_cmc.environ.get("COINMARKETCAP_API_KEY", "").strip()
+    api_key = _os.environ.get("COINMARKETCAP_API_KEY", "").strip()
     if not api_key:
         # Also check alerts_config.json (same pattern as other paid APIs)
         try:

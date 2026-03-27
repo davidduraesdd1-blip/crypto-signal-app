@@ -35,7 +35,7 @@ FEATURES: dict = {
     "mexc":             True,
     "htx":              True,
     "phemex":           True,
-    "woox":             True,
+    "woo":              True,
     "bithumb":          True,
     "cryptocom":        True,
     "ascendex":         True,
