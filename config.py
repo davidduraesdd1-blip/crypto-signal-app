@@ -9,6 +9,7 @@ ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
 CRYPTOPANIC_API_KEY: str | None = os.environ.get("CRYPTOPANIC_API_KEY")
 COINGECKO_API_KEY: str | None = os.environ.get("SUPERGROK_COINGECKO_API_KEY")
 SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN")
+COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 
 # ─── Feature Flags ────────────────────────────────────────────────────────────
 # auto-enabled when the corresponding key is set — no code changes needed
@@ -19,6 +20,8 @@ FEATURES: dict = {
     "cryptopanic_news": bool(CRYPTOPANIC_API_KEY),
     # Market data
     "coingecko_pro":    bool(COINGECKO_API_KEY),
+    # CMC global metrics — requires free API key
+    "coinmarketcap":    bool(COINMARKETCAP_API_KEY),
     # Error monitoring
     "sentry":           bool(SENTRY_DSN),
     # Always-on free APIs
@@ -27,6 +30,20 @@ FEATURES: dict = {
     "coingecko_free":   True,
     "fear_greed":       True,
     "fred_m2":          True,
+    # Always-on: 10 new ccxt exchanges (free public funding rate data)
+    "bitfinex":         True,
+    "mexc":             True,
+    "htx":              True,
+    "phemex":           True,
+    "woox":             True,
+    "bithumb":          True,
+    "cryptocom":        True,
+    "ascendex":         True,
+    "lbank":            True,
+    "coinex":           True,
+    # Always-on: extra data sources (free public APIs)
+    "deribit_options":  True,
+    "regional_premiums": True,
 }
 
 

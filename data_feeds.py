@@ -14,6 +14,13 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+try:
+    import ccxt
+    _CCXT_AVAILABLE = True
+except ImportError:
+    _CCXT_AVAILABLE = False
+    logging.warning("ccxt not installed — new exchange funding rates will be unavailable")
+
 # PERF: module-level Session with retry adapter (TCP reuse + auto-retry on 429/5xx)
 _retry = Retry(total=3, backoff_factor=1.0, status_forcelist=[429, 500, 502, 503, 504],
                allowed_methods=["GET"], raise_on_status=False)
@@ -54,6 +61,20 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     # Phase 9 additions
     "api.mexc.com", "bitso.com", "api.coindcx.com",  # regional exchanges (#89)
     "price.jup.ag", "indexer.dydx.trade", "api.raydium.io",  # DEX feeds (#91)
+    # Phase 13 additions — new exchanges and data sources
+    "www.deribit.com",                          # Deribit options OI + IV
+    "api.exchangerate-api.com",                 # FX rates for regional premiums
+    "pro-api.coinmarketcap.com",                # CoinMarketCap global metrics
+    "api.mercadobitcoin.net",                   # Mercado Bitcoin (BRL)
+    "api.upbit.com",                            # Upbit (KRW)
+    "api.bitfinex.com",                         # Bitfinex
+    "api.phemex.com",                           # Phemex
+    "api.woox.io",                              # WOO X
+    "api.bithumb.com",                          # Bithumb
+    "api.crypto.com",                           # Crypto.com
+    "ascendex.com",                             # AscendEX
+    "api.lbank.info",                           # LBank
+    "api.coinex.com",                           # CoinEx
 })
 
 
@@ -735,13 +756,115 @@ def _fetch_kucoin_fr(pair: str, now: float) -> dict:
     return _empty_result("KuCoin N/A", now)
 
 
+# ──────────────────────────────────────────────
+# CCXT-BASED FUNDING RATE FETCHERS
+# 10 new exchanges: Bitfinex, MEXC, HTX, Phemex, WOO X,
+# Bithumb, Crypto.com, AscendEX, LBank, CoinEx
+# All use free public endpoints — no API key required
+# ──────────────────────────────────────────────
+
+# ccxt exchange singleton cache — avoid recreating on every call
+_ccxt_exchange_cache: dict = {}
+_ccxt_exchange_lock = threading.Lock()
+
+
+def _get_ccxt_exchange(exchange_id: str):
+    """Return a cached ccxt exchange instance (public mode, rate-limit enabled)."""
+    if not _CCXT_AVAILABLE:
+        return None
+    with _ccxt_exchange_lock:
+        if exchange_id not in _ccxt_exchange_cache:
+            try:
+                exchange_class = getattr(ccxt, exchange_id, None)
+                if exchange_class is None:
+                    return None
+                _ccxt_exchange_cache[exchange_id] = exchange_class({
+                    "enableRateLimit": True,
+                    "timeout": 10000,
+                })
+            except Exception as _e:
+                logging.debug("ccxt exchange init failed (%s): %s", exchange_id, _e)
+                return None
+        return _ccxt_exchange_cache[exchange_id]
+
+
+def _fetch_ccxt_fr(exchange_id: str, pair: str, now: float) -> dict:
+    """
+    Fetch funding rate from a ccxt-supported exchange using fetch_funding_rate().
+    Returns standard funding rate dict compatible with _empty_result() schema.
+    Falls back to fetch_funding_rates() (bulk) if per-symbol call fails.
+    """
+    if not _CCXT_AVAILABLE:
+        return _empty_result(f"{exchange_id}: ccxt not installed", now)
+    ex = _get_ccxt_exchange(exchange_id)
+    if ex is None:
+        return _empty_result(f"{exchange_id}: not available in ccxt", now)
+
+    # Determine which symbol format this exchange uses
+    # Try standard CCXT pair format first (BTC/USDT:USDT for perps, BTC/USDT for spot)
+    perp_symbol = pair  # default: spot-format pair (BTC/USDT)
+    base = pair.split("/")[0] if "/" in pair else pair
+
+    try:
+        # Attempt per-symbol fetch_funding_rate (most exchanges support this)
+        fr_data = ex.fetch_funding_rate(perp_symbol)
+        rate = float(fr_data.get("fundingRate") or 0.0)
+        if rate == 0.0:
+            # Some exchanges store it as fundingRates list or different key
+            rate = float(fr_data.get("rate") or fr_data.get("funding_rate") or 0.0)
+        next_ts = int(fr_data.get("fundingDatetime") or fr_data.get("nextFundingDatetime") or 0)
+        if isinstance(next_ts, str):
+            next_ts = 0
+        mark_price = float(fr_data.get("markPrice") or fr_data.get("mark") or 0.0)
+        return {
+            "funding_rate":      rate,
+            "funding_rate_pct":  round(rate * 100, 4),
+            "next_funding_time": next_ts,
+            "mark_price":        mark_price,
+            "signal":            _funding_signal(rate),
+            "source":            exchange_id,
+            "error":             None,
+            "_ts":               now,
+        }
+    except ccxt.BadSymbol:
+        # Exchange doesn't list this pair — not an error, just N/A
+        return _empty_result(f"{exchange_id}: pair not listed", now)
+    except ccxt.NotSupported:
+        # fetch_funding_rate not implemented — try fetch_funding_rates (bulk)
+        try:
+            rates_dict = ex.fetch_funding_rates([perp_symbol])
+            fr_data = rates_dict.get(perp_symbol) or {}
+            rate = float(fr_data.get("fundingRate") or fr_data.get("rate") or 0.0)
+            return {
+                "funding_rate":      rate,
+                "funding_rate_pct":  round(rate * 100, 4),
+                "next_funding_time": 0,
+                "mark_price":        0.0,
+                "signal":            _funding_signal(rate),
+                "source":            exchange_id,
+                "error":             None,
+                "_ts":               now,
+            }
+        except Exception as _e2:
+            logging.debug("_fetch_ccxt_fr bulk fallback %s %s: %s", exchange_id, pair, _e2)
+            return _empty_result(f"{exchange_id} N/A", now)
+    except Exception as _e:
+        logging.debug("_fetch_ccxt_fr %s %s: %s", exchange_id, pair, _e)
+        return _empty_result(f"{exchange_id} N/A", now)
+
+
 def get_multi_exchange_funding_rates(pair: str) -> dict[str, dict]:
     """
-    Fetch funding rates from OKX, Binance, Bybit, and KuCoin for a single pair
-    using 4 parallel threads. Always returns all 4 keys; failed exchanges get an
-    error-flagged result dict. 5-minute cache.
+    Fetch funding rates from OKX, Binance, Bybit, KuCoin, and 10 new ccxt exchanges
+    for a single pair using parallel threads. Always returns all exchange keys;
+    failed exchanges get an error-flagged result dict. 5-minute cache.
 
-    Returns: {"okx": {...}, "binance": {...}, "bybit": {...}, "kucoin": {...}}
+    Returns: {
+      "okx": {...}, "binance": {...}, "bybit": {...}, "kucoin": {...},
+      "bitfinex": {...}, "mexc": {...}, "htx": {...}, "phemex": {...},
+      "woox": {...}, "bithumb": {...}, "cryptocom": {...}, "ascendex": {...},
+      "lbank": {...}, "coinex": {...}
+    }
     """
     now = time.time()
     with _MULTI_FR_LOCK:
@@ -749,14 +872,26 @@ def get_multi_exchange_funding_rates(pair: str) -> dict[str, dict]:
         if cached and (now - cached.get("_ts", 0)) < _MULTI_FR_TTL:
             return cached["data"]
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {
-            "okx":     ex.submit(_fetch_okx_fr,     pair, now),
-            "binance": ex.submit(_fetch_binance_fr,  pair, now),
-            "bybit":   ex.submit(_fetch_bybit_fr,    pair, now),
-            "kucoin":  ex.submit(_fetch_kucoin_fr,   pair, now),
+    # Core exchanges (direct REST — proven reliable)
+    core_futs: dict = {}
+    # New ccxt exchanges
+    ccxt_exchanges = [
+        "bitfinex", "mexc", "htx", "phemex", "woox",
+        "bithumb", "cryptocom", "ascendex", "lbank", "coinex",
+    ]
+
+    with ThreadPoolExecutor(max_workers=14) as ex:
+        core_futs = {
+            "okx":     ex.submit(_fetch_okx_fr,    pair, now),
+            "binance": ex.submit(_fetch_binance_fr, pair, now),
+            "bybit":   ex.submit(_fetch_bybit_fr,   pair, now),
+            "kucoin":  ex.submit(_fetch_kucoin_fr,  pair, now),
         }
-        result = {name: f.result() for name, f in futs.items()}
+        ccxt_futs = {
+            exch_id: ex.submit(_fetch_ccxt_fr, exch_id, pair, now)
+            for exch_id in ccxt_exchanges
+        }
+        result = {name: f.result() for name, f in {**core_futs, **ccxt_futs}.items()}
 
     with _MULTI_FR_LOCK:
         _MULTI_FR_CACHE[pair] = {"data": result, "_ts": now}
@@ -4001,3 +4136,402 @@ def fetch_dex_prices(tokens: list = None) -> dict:
         _DEX_PRICE_CACHE[cache_key] = {"data": prices, "_ts": time.time()}
 
     return prices
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DERIBIT OPTIONS OPEN INTEREST + IMPLIED VOLATILITY
+# Free public API — no auth required — BTC and ETH options only
+# GET https://www.deribit.com/api/v2/public/get_book_summary_by_currency
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DERIBIT_OI_CACHE: dict = {"ts": 0.0, "data": None}
+_DERIBIT_OI_LOCK  = threading.Lock()
+_DERIBIT_OI_TTL   = 300  # 5-minute cache
+
+_DERIBIT_OI_URL = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
+
+
+def fetch_deribit_options_data() -> dict:
+    """
+    Fetch BTC and ETH options open interest and implied volatility from Deribit.
+    Uses the free public endpoint — no API key required.
+
+    Returns:
+        btc_oi        : float  — total BTC options open interest (in BTC)
+        eth_oi        : float  — total ETH options open interest (in ETH)
+        btc_iv_30d    : float  — weighted average mark IV across BTC options (%)
+        eth_iv_30d    : float  — weighted average mark IV across ETH options (%)
+        btc_oi_usd    : float  — BTC OI in approximate USD (OI * mark price)
+        eth_oi_usd    : float  — ETH OI in approximate USD
+        source        : str    — 'deribit'
+        error         : str | None
+    """
+    now = time.time()
+    with _DERIBIT_OI_LOCK:
+        if _DERIBIT_OI_CACHE["data"] is not None and (now - _DERIBIT_OI_CACHE["ts"]) < _DERIBIT_OI_TTL:
+            return dict(_DERIBIT_OI_CACHE["data"])
+
+    _neutral = {
+        "btc_oi": 0.0, "eth_oi": 0.0,
+        "btc_iv_30d": 0.0, "eth_iv_30d": 0.0,
+        "btc_oi_usd": 0.0, "eth_oi_usd": 0.0,
+        "source": "deribit", "error": "Deribit OI unavailable",
+    }
+
+    def _fetch_currency(currency: str) -> tuple[float, float, float]:
+        """Returns (total_oi, weighted_iv, oi_usd)."""
+        try:
+            resp = _SESSION.get(
+                _DERIBIT_OI_URL,
+                params={"currency": currency, "kind": "option"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return 0.0, 0.0, 0.0
+            instruments = resp.json().get("result", [])
+            if not instruments:
+                return 0.0, 0.0, 0.0
+
+            total_oi = 0.0
+            iv_weighted_sum = 0.0
+            iv_weight_total = 0.0
+            oi_usd = 0.0
+
+            for inst in instruments:
+                oi = float(inst.get("open_interest") or 0.0)
+                mark_price = float(inst.get("mark_price") or 0.0)
+                underlying_price = float(inst.get("underlying_price") or 0.0)
+                mark_iv = float(inst.get("mark_iv") or 0.0)
+
+                total_oi += oi
+                if mark_iv > 0 and oi > 0:
+                    iv_weighted_sum += mark_iv * oi
+                    iv_weight_total += oi
+                if underlying_price > 0:
+                    oi_usd += oi * underlying_price
+                elif mark_price > 0:
+                    oi_usd += oi * mark_price
+
+            weighted_iv = iv_weighted_sum / iv_weight_total if iv_weight_total > 0 else 0.0
+            return round(total_oi, 2), round(weighted_iv, 2), round(oi_usd, 0)
+        except Exception as _e:
+            logging.debug("[DeribitOI] %s fetch failed: %s", currency, _e)
+            return 0.0, 0.0, 0.0
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            btc_fut = ex.submit(_fetch_currency, "BTC")
+            eth_fut = ex.submit(_fetch_currency, "ETH")
+            btc_oi, btc_iv, btc_oi_usd = btc_fut.result()
+            eth_oi, eth_iv, eth_oi_usd = eth_fut.result()
+
+        result = {
+            "btc_oi":      btc_oi,
+            "eth_oi":      eth_oi,
+            "btc_iv_30d":  btc_iv,
+            "eth_iv_30d":  eth_iv,
+            "btc_oi_usd":  btc_oi_usd,
+            "eth_oi_usd":  eth_oi_usd,
+            "source":      "deribit",
+            "error":       None,
+        }
+        with _DERIBIT_OI_LOCK:
+            _DERIBIT_OI_CACHE["data"] = result
+            _DERIBIT_OI_CACHE["ts"]   = now
+        return result
+    except Exception as e:
+        logging.warning("[DeribitOI] fetch failed: %s", e)
+        return {**_neutral, "error": str(e)[:120]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REGIONAL EXCHANGE PREMIUMS
+# Fetches BTC price from regional exchanges and computes premium vs Binance.
+# Regional exchanges: Bitso (MXN), Mercado Bitcoin (BRL), CoinDCX (INR), Upbit (KRW)
+# FX rates from exchangerate-api.com (free, no key)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_REGIONAL_CACHE: dict = {"ts": 0.0, "data": None}
+_REGIONAL_LOCK  = threading.Lock()
+_REGIONAL_TTL   = 300  # 5-minute cache
+
+_FX_CACHE: dict = {"ts": 0.0, "rates": None}
+_FX_LOCK  = threading.Lock()
+_FX_TTL   = 3600  # 1-hour cache for FX rates
+
+
+def _fetch_fx_rates() -> dict:
+    """Fetch USD FX rates from exchangerate-api.com (free, no key). Returns {currency: rate_to_usd}."""
+    now = time.time()
+    with _FX_LOCK:
+        if _FX_CACHE["rates"] is not None and (now - _FX_CACHE["ts"]) < _FX_TTL:
+            return dict(_FX_CACHE["rates"])
+
+    try:
+        resp = _SESSION.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=10)
+        if resp.status_code == 200:
+            rates = resp.json().get("rates", {})
+            with _FX_LOCK:
+                _FX_CACHE["rates"] = rates
+                _FX_CACHE["ts"]    = now
+            return rates
+    except Exception as e:
+        logging.debug("[FX] exchangerate-api fetch failed: %s", e)
+
+    # Fallback: approximate rates as of early 2025
+    return {"MXN": 17.5, "BRL": 5.0, "INR": 84.0, "KRW": 1350.0, "USD": 1.0}
+
+
+def _fetch_binance_btc_price() -> float:
+    """Fetch current BTC/USDT price from Binance spot."""
+    try:
+        r = _SESSION.get(
+            f"{_BINANCE_SPOT_BASE}/ticker/price",
+            params={"symbol": "BTCUSDT"},
+            timeout=6,
+        )
+        if r.status_code == 200:
+            return float(r.json().get("price", 0))
+    except Exception as e:
+        logging.debug("[RegionalPrem] Binance BTC price failed: %s", e)
+    return 0.0
+
+
+def fetch_regional_premiums() -> dict:
+    """
+    Fetch BTC premiums on regional exchanges vs Binance global price.
+    Computes premium as: ((regional_price_usd / binance_price) - 1) * 100
+
+    Regional exchanges:
+      - Bitso (Mexico, MXN): BTC/MXN
+      - Mercado Bitcoin (Brazil, BRL): BTC/BRL via REST API
+      - CoinDCX (India, INR): BTC/INR
+      - Upbit (South Korea, KRW): BTC/KRW
+
+    Returns:
+        {
+          "mexico_pct":  float,   # Bitso BTC/MXN premium vs Binance (%)
+          "brazil_pct":  float,   # Mercado Bitcoin premium (%)
+          "india_pct":   float,   # CoinDCX premium (%)
+          "korea_pct":   float,   # Upbit premium / kimchi premium (%)
+          "binance_btc_usd": float,
+          "source": "regional_exchanges",
+          "error": str | None
+        }
+    """
+    now = time.time()
+    with _REGIONAL_LOCK:
+        if _REGIONAL_CACHE["data"] is not None and (now - _REGIONAL_CACHE["ts"]) < _REGIONAL_TTL:
+            return dict(_REGIONAL_CACHE["data"])
+
+    _neutral = {
+        "mexico_pct": 0.0, "brazil_pct": 0.0,
+        "india_pct":  0.0, "korea_pct":  0.0,
+        "binance_btc_usd": 0.0,
+        "source": "regional_exchanges", "error": "Regional premiums unavailable",
+    }
+
+    try:
+        # Fetch FX rates and Binance reference price in parallel
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            fx_fut  = _ex.submit(_fetch_fx_rates)
+            btc_fut = _ex.submit(_fetch_binance_btc_price)
+            fx_rates   = fx_fut.result()
+            binance_btc = btc_fut.result()
+
+        if binance_btc <= 0:
+            return {**_neutral, "error": "Binance BTC price unavailable"}
+
+        premiums: dict[str, float] = {}
+
+        # ── Bitso (Mexico) — BTC/MXN ─────────────────────────────────────────
+        try:
+            r = _SESSION.get("https://bitso.com/api/v3/ticker/?book=btc_mxn", timeout=10)
+            if r.status_code == 200:
+                last_mxn = float(r.json().get("payload", {}).get("last", 0) or 0)
+                mxn_rate = fx_rates.get("MXN", 17.5)
+                if last_mxn > 0 and mxn_rate > 0:
+                    btc_usd_bitso = last_mxn / mxn_rate
+                    premiums["mexico_pct"] = round((btc_usd_bitso / binance_btc - 1) * 100, 3)
+        except Exception as _e:
+            logging.debug("[RegionalPrem] Bitso failed: %s", _e)
+        premiums.setdefault("mexico_pct", 0.0)
+
+        # ── Mercado Bitcoin (Brazil) — BTC/BRL ───────────────────────────────
+        try:
+            r = _SESSION.get("https://www.mercadobitcoin.net/api/BTC/ticker/", timeout=10)
+            if r.status_code == 200:
+                last_brl = float(r.json().get("ticker", {}).get("last", 0) or 0)
+                brl_rate = fx_rates.get("BRL", 5.0)
+                if last_brl > 0 and brl_rate > 0:
+                    btc_usd_mb = last_brl / brl_rate
+                    premiums["brazil_pct"] = round((btc_usd_mb / binance_btc - 1) * 100, 3)
+        except Exception as _e:
+            logging.debug("[RegionalPrem] MercadoBitcoin failed: %s", _e)
+        premiums.setdefault("brazil_pct", 0.0)
+
+        # ── CoinDCX (India) — BTC/INR ─────────────────────────────────────────
+        try:
+            r = _SESSION.get("https://api.coindcx.com/exchange/ticker", timeout=10)
+            if r.status_code == 200:
+                tickers = r.json()
+                btc_inr_ticker = next(
+                    (t for t in tickers if t.get("market") in ("BTCINR", "BTC_INR")), None
+                )
+                if btc_inr_ticker:
+                    last_inr = float(btc_inr_ticker.get("last_price", 0) or 0)
+                    inr_rate = fx_rates.get("INR", 84.0)
+                    if last_inr > 0 and inr_rate > 0:
+                        btc_usd_dcx = last_inr / inr_rate
+                        premiums["india_pct"] = round((btc_usd_dcx / binance_btc - 1) * 100, 3)
+        except Exception as _e:
+            logging.debug("[RegionalPrem] CoinDCX failed: %s", _e)
+        premiums.setdefault("india_pct", 0.0)
+
+        # ── Upbit (South Korea) — BTC/KRW (kimchi premium) ───────────────────
+        try:
+            r = _SESSION.get(
+                "https://api.upbit.com/v1/ticker",
+                params={"markets": "KRW-BTC"},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                last_krw = float(data[0].get("trade_price", 0) if data else 0)
+                krw_rate = fx_rates.get("KRW", 1350.0)
+                if last_krw > 0 and krw_rate > 0:
+                    btc_usd_upbit = last_krw / krw_rate
+                    premiums["korea_pct"] = round((btc_usd_upbit / binance_btc - 1) * 100, 3)
+        except Exception as _e:
+            logging.debug("[RegionalPrem] Upbit failed: %s", _e)
+        premiums.setdefault("korea_pct", 0.0)
+
+        result = {
+            "mexico_pct":      premiums["mexico_pct"],
+            "brazil_pct":      premiums["brazil_pct"],
+            "india_pct":       premiums["india_pct"],
+            "korea_pct":       premiums["korea_pct"],
+            "binance_btc_usd": round(binance_btc, 2),
+            "source":          "regional_exchanges",
+            "error":           None,
+        }
+        with _REGIONAL_LOCK:
+            _REGIONAL_CACHE["data"] = result
+            _REGIONAL_CACHE["ts"]   = now
+        return result
+
+    except Exception as e:
+        logging.warning("[RegionalPrem] fetch failed: %s", e)
+        return {**_neutral, "error": str(e)[:120]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COINMARKETCAP GLOBAL METRICS
+# Requires COINMARKETCAP_API_KEY env var (free tier at coinmarketcap.com)
+# Returns total market cap, BTC dominance, ETH dominance, 24h volume
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CMC_CACHE: dict = {"ts": 0.0, "data": None}
+_CMC_LOCK  = threading.Lock()
+_CMC_TTL   = 600  # 10-minute cache
+
+_CMC_GLOBAL_URL = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest"
+
+
+def fetch_cmc_global_metrics() -> dict:
+    """
+    Fetch global crypto market metrics from CoinMarketCap.
+    Requires COINMARKETCAP_API_KEY environment variable (free tier: 333 req/day).
+
+    Returns:
+        total_market_cap_usd  : float — total crypto market cap in USD
+        btc_dominance_pct     : float — BTC % of total market cap
+        eth_dominance_pct     : float — ETH % of total market cap
+        total_volume_24h      : float — 24h total trading volume USD
+        active_cryptocurrencies: int  — number of active cryptocurrencies
+        active_exchanges      : int   — number of active exchanges
+        source                : str   — 'coinmarketcap'
+        error                 : str | None
+
+    Returns empty dict (with error key) if COINMARKETCAP_API_KEY is not set.
+    """
+    import os as _os_cmc
+    api_key = _os_cmc.environ.get("COINMARKETCAP_API_KEY", "").strip()
+    if not api_key:
+        # Also check alerts_config.json (same pattern as other paid APIs)
+        try:
+            keys = _load_api_keys()
+            api_key = keys.get("coinmarketcap_key", "").strip()
+        except Exception:
+            pass
+
+    if not api_key:
+        return {
+            "total_market_cap_usd": 0.0, "btc_dominance_pct": 0.0,
+            "eth_dominance_pct": 0.0, "total_volume_24h": 0.0,
+            "active_cryptocurrencies": 0, "active_exchanges": 0,
+            "source": "coinmarketcap",
+            "error": "COINMARKETCAP_API_KEY not set — add to env or alerts_config.json",
+        }
+
+    now = time.time()
+    with _CMC_LOCK:
+        if _CMC_CACHE["data"] is not None and (now - _CMC_CACHE["ts"]) < _CMC_TTL:
+            return dict(_CMC_CACHE["data"])
+
+    try:
+        resp = _SESSION.get(
+            _CMC_GLOBAL_URL,
+            headers={"X-CMC_PRO_API_KEY": api_key, "Accept": "application/json"},
+            timeout=10,
+        )
+        if resp.status_code == 401:
+            return {
+                "total_market_cap_usd": 0.0, "btc_dominance_pct": 0.0,
+                "eth_dominance_pct": 0.0, "total_volume_24h": 0.0,
+                "active_cryptocurrencies": 0, "active_exchanges": 0,
+                "source": "coinmarketcap", "error": "Invalid CMC API key (401)",
+            }
+        if resp.status_code != 200:
+            return {
+                "total_market_cap_usd": 0.0, "btc_dominance_pct": 0.0,
+                "eth_dominance_pct": 0.0, "total_volume_24h": 0.0,
+                "active_cryptocurrencies": 0, "active_exchanges": 0,
+                "source": "coinmarketcap",
+                "error": f"CMC API HTTP {resp.status_code}",
+            }
+
+        body = resp.json()
+        data = body.get("data", {})
+        quote = data.get("quote", {}).get("USD", {})
+
+        total_mcap   = float(quote.get("total_market_cap", 0) or 0)
+        btc_dom      = float(data.get("btc_dominance", 0) or 0)
+        eth_dom      = float(data.get("eth_dominance", 0) or 0)
+        total_vol    = float(quote.get("total_volume_24h", 0) or 0)
+        active_coins = int(data.get("active_cryptocurrencies", 0) or 0)
+        active_exch  = int(data.get("active_exchanges", 0) or 0)
+
+        result = {
+            "total_market_cap_usd":   round(total_mcap, 0),
+            "btc_dominance_pct":      round(btc_dom, 2),
+            "eth_dominance_pct":      round(eth_dom, 2),
+            "total_volume_24h":       round(total_vol, 0),
+            "active_cryptocurrencies": active_coins,
+            "active_exchanges":        active_exch,
+            "source":                 "coinmarketcap",
+            "error":                  None,
+        }
+        with _CMC_LOCK:
+            _CMC_CACHE["data"] = result
+            _CMC_CACHE["ts"]   = now
+        return result
+
+    except Exception as e:
+        logging.warning("[CMC] global metrics fetch failed: %s", e)
+        return {
+            "total_market_cap_usd": 0.0, "btc_dominance_pct": 0.0,
+            "eth_dominance_pct": 0.0, "total_volume_24h": 0.0,
+            "active_cryptocurrencies": 0, "active_exchanges": 0,
+            "source": "coinmarketcap", "error": str(e)[:120],
+        }
