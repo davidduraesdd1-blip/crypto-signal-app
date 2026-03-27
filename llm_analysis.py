@@ -304,11 +304,12 @@ def _rule_based_story(pair: str, signal: str, confidence: float, indicators: dic
     Builds a 1-2 sentence explanation from indicator values.
     """
     lines: list[str] = []
-    rsi      = indicators.get("rsi")
-    funding  = indicators.get("funding_rate_pct")
-    regime   = indicators.get("regime", "")
-    macd     = indicators.get("macd_div", "")
-    adx      = indicators.get("adx")
+    rsi        = indicators.get("rsi")
+    funding    = indicators.get("funding_rate_pct")
+    regime_raw = indicators.get("regime", "")
+    # Extract compact regime label (e.g. "Trending" from "Regime: Trending (ADX...)")
+    regime     = regime_raw.split("(")[0].replace("Regime:", "").strip() if regime_raw else ""
+    adx        = indicators.get("adx")
     supertrend = indicators.get("supertrend", "")
 
     sig_upper = (signal or "").upper()
@@ -352,7 +353,10 @@ def _rule_based_story(pair: str, signal: str, confidence: float, indicators: dic
             pass
 
     if detail_parts:
-        lines.append(" and ".join(detail_parts[:3]).capitalize() + ".")
+        combined = " and ".join(detail_parts[:3])
+        # Capitalize only the first character, preserve case of rest
+        combined = combined[:1].upper() + combined[1:] if combined else combined
+        lines.append(combined + ".")
     return " ".join(lines)
 
 
