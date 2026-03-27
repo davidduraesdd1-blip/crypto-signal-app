@@ -1133,6 +1133,27 @@ def page_dashboard():
             f"Signals may be less reliable than usual. The model is auto-retuning. Use extra caution."
         )
 
+    # ── #26 Pi Cycle Top Kill-Switch banner ──────────────────────────────────
+    # Check if any result carries the active flag (all results share the same pi_cycle state)
+    _pi_active_any = any(r.get("pi_cycle_active", False) for r in results)
+    if _pi_active_any:
+        # Guard: gap_pct may be None if fallback path was taken in fetch_pi_cycle_top()
+        _pi_gap = results[0].get("pi_cycle_gap_pct") if results else None
+        _pi_gap = float(_pi_gap) if _pi_gap is not None else 0.0
+        st.error(
+            "🔴 **Pi Cycle Top Active** — The 111-day moving average has crossed above "
+            "the 350-day MA × 2. This indicator has signalled every Bitcoin cycle top "
+            f"within 3 days (2013, 2017, 2021). Gap: {_pi_gap:+.2f}%. "
+            "All BUY signals are capped at 30% confidence. Consider reducing exposure or taking profits."
+        )
+    elif any(r.get("pi_cycle_signal") == "CAUTION" for r in results):
+        _pi_gap = results[0].get("pi_cycle_gap_pct") if results else None
+        _pi_gap = float(_pi_gap) if _pi_gap is not None else 0.0
+        st.warning(
+            f"⚠️ **Pi Cycle Top Approaching** — Gap between 111DMA and 350DMA×2 is only "
+            f"{abs(_pi_gap):.1f}%. Historically this precedes cycle tops — use caution with new BUY entries."
+        )
+
     # High-confidence alert banner
     hc = [r for r in results if r.get("high_conf")]
     if hc:
@@ -1484,6 +1505,14 @@ def page_dashboard():
             unsafe_allow_html=True,
         )
 
+    # #26 Pi Cycle Top warning on the coin detail card
+    _r_pi_flags = r.get("signal_flags", [])
+    if "PI_CYCLE_TOP_WARNING" in _r_pi_flags:
+        st.warning(
+            "⚠️ **PI_CYCLE_TOP_WARNING** — Confidence capped at 30% (cycle top indicator active). "
+            "Exercise extreme caution with new BUY entries."
+        )
+
     # ── Row 1: Price · Entry · Stop Loss ──────────────────────────────────────
     top_cols = st.columns(3)
     _live_tick = _ws.get_price(pair)
@@ -1511,8 +1540,34 @@ def page_dashboard():
     _score_10 = max(1, min(10, round(conf / 10)))
     bot_cols[1].metric("Confidence Score", f"{_score_10}/10  ({conf:.0f}%)",
                        help="How confident the model is. 7+/10 = strong signal. 5 or below = uncertain — don't trade this. Like a teacher grading the signal.")
-    bot_cols[2].metric("Suggested Trade Size", f"{pos_pct}% of funds" if pos_pct else "N/A",
-                       help="How much of your total money to use. If you have $1,000, and it says 10%, use only $100. This protects you if things go wrong.")
+    # #50 Fractional Kelly position sizing — display recommended size from Kelly formula
+    _kelly_pos_pct = pos_pct   # default to model-computed size
+    try:
+        import risk_metrics as _risk_mod
+        import database as _db_kelly
+        _bt_kelly = _db_kelly.get_backtest_df()
+        if not _bt_kelly.empty:
+            _bt_valid = _bt_kelly[_bt_kelly['pnl_pct'].notna()]
+            if len(_bt_valid) >= 20:
+                _wins_k   = _bt_valid[_bt_valid['pnl_pct'] > 0]
+                _losses_k = _bt_valid[_bt_valid['pnl_pct'] <= 0]
+                if len(_wins_k) > 0 and len(_losses_k) > 0:
+                    _wr  = len(_wins_k) / len(_bt_valid)
+                    _aw  = float(_wins_k['pnl_pct'].mean()) / 100
+                    _al  = float(abs(_losses_k['pnl_pct'].mean())) / 100
+                    _kf  = _risk_mod.compute_kelly_fraction(_wr, _aw, _al, fraction=0.25)
+                    _kelly_pos_pct = _kf.get("recommended_position_pct", pos_pct)
+    except Exception:
+        pass
+    bot_cols[2].metric(
+        "Suggested Trade Size",
+        f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "N/A",
+        help=(
+            "How much of your total money to use — sized by the Kelly Criterion "
+            "(fractional Kelly at 25%). If you have $1,000 and it says 10%, use $100. "
+            "This protects you if things go wrong."
+        ),
+    )
 
     # Gradient confidence bar (#62) — CSS gradient, more visual than st.progress()
     st.markdown(_ui.gradient_confidence_bar_html(conf), unsafe_allow_html=True)

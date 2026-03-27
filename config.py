@@ -11,6 +11,53 @@ COINGECKO_API_KEY: str | None = os.environ.get("SUPERGROK_COINGECKO_API_KEY")
 SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN")
 COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 
+# ─── Tier 1 Pair Expansion (#40) ──────────────────────────────────────────────
+# 10 new assets added to the tracked pairs list.
+# CoinGecko IDs used by data_feeds.py batch fetch functions.
+# Binance trading pairs used by OHLCV and websocket feeds.
+TIER1_PAIRS: list[str] = [
+    "TRX/USDT", "ADA/USDT", "BCH/USDT", "LINK/USDT", "LTC/USDT",
+    "AVAX/USDT", "XLM/USDT", "SUI/USDT", "TAO/USDT",
+    # HYPE: Hyperliquid DEX only — no CEX listing; handled by DEX scanner in Defi Model
+]
+
+TIER1_COINGECKO_IDS: dict[str, str] = {
+    "TRX/USDT":   "tron",
+    "ADA/USDT":   "cardano",
+    "BCH/USDT":   "bitcoin-cash",
+    "LINK/USDT":  "chainlink",
+    "LTC/USDT":   "litecoin",
+    "AVAX/USDT":  "avalanche-2",
+    "XLM/USDT":   "stellar",
+    "SUI/USDT":   "sui",
+    "TAO/USDT":   "bittensor",
+}
+
+TIER1_BINANCE_PAIRS: dict[str, str] = {
+    "TRX/USDT":   "TRXUSDT",
+    "ADA/USDT":   "ADAUSDT",
+    "BCH/USDT":   "BCHUSDT",
+    "LINK/USDT":  "LINKUSDT",
+    "LTC/USDT":   "LTCUSDT",
+    "AVAX/USDT":  "AVAXUSDT",
+    "XLM/USDT":   "XLMUSDT",
+    "SUI/USDT":   "SUIUSDT",
+    "TAO/USDT":   "TAOUSDT",
+}
+
+# Default weight allocation in the model (1.0 = same as core pairs)
+TIER1_DEFAULT_WEIGHTS: dict[str, float] = {
+    "TRX/USDT":  1.0,
+    "ADA/USDT":  1.0,
+    "BCH/USDT":  0.9,
+    "LINK/USDT": 1.0,
+    "LTC/USDT":  0.9,
+    "AVAX/USDT": 1.0,
+    "XLM/USDT":  0.8,
+    "SUI/USDT":  0.9,
+    "TAO/USDT":  0.9,
+}
+
 # ─── Feature Flags ────────────────────────────────────────────────────────────
 # auto-enabled when the corresponding key is set — no code changes needed
 FEATURES: dict = {

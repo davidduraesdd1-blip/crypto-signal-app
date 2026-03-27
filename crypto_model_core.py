@@ -3543,12 +3543,15 @@ def run_monte_carlo(trades_df: pd.DataFrame, n_sim: int = 1000,
 def _scan_pair(pair, ta_ex, fng_value, fng_category,
                funding_map, oi_map, iv_map, ob_map,
                master_df, circuit_breaker, start_time,
-               trending_coins=None, global_mkt=None, btc_df=None, cvd_map=None, tvl_map=None):
+               trending_coins=None, global_mkt=None, btc_df=None, cvd_map=None, tvl_map=None,
+               pi_cycle_data=None):
     """Process one pair across all timeframes. Called from ThreadPoolExecutor workers."""
     if trending_coins is None:
         trending_coins = []
     if global_mkt is None:
         global_mkt = {}
+    if pi_cycle_data is None:
+        pi_cycle_data = {}
     onchain_data = fetch_onchain_metrics(pair)
     # DefiLlama TVL — pre-fetched by run_scan() parallel batch (PERF-09); fall back to live call
     tvl_data = (tvl_map or {}).get(pair)
@@ -3784,6 +3787,26 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     except Exception:
         _macro_adj = {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
 
+    # ── #33 CVD Divergence from data_feeds — post-score confidence adjustment ───
+    # fetch_cvd_divergence() uses 24 hourly Binance klines (separate from the
+    # compute_cvd_divergence() OHLCV approximation used in the per-TF scoring above).
+    # Effect: BEARISH_DIV reduces BUY confidence by 15%; BULLISH_DIV upgrades SELL→HOLD.
+    try:
+        import data_feeds as _df_cvddiv
+        _base_sym = pair.split("/")[0] if "/" in pair else pair
+        _cvd_div_data = _df_cvddiv.fetch_cvd_divergence(symbol=_base_sym)
+        _cvd_div_sig  = (_cvd_div_data or {}).get("signal", "NO_DIVERGENCE")
+        if _cvd_div_sig == "BEARISH_DIVERGENCE" and conf_avg > 50:
+            # BUY signal with bearish CVD divergence → reduce confidence by 15%
+            conf_avg = round(max(conf_avg * 0.85, 50.0), 1)
+            logging.debug("[CVD-Div] %s BEARISH_DIV → conf_avg capped: %.1f", pair, conf_avg)
+        elif _cvd_div_sig == "BULLISH_DIVERGENCE" and conf_avg < 50:
+            # SELL signal with bullish CVD divergence → push toward HOLD (raise toward 50)
+            conf_avg = round(min(conf_avg + 7.0, 49.9), 1)
+            logging.debug("[CVD-Div] %s BULLISH_DIV → conf_avg raised: %.1f", pair, conf_avg)
+    except Exception as _cvd_e:
+        logging.debug("[CVD-Div] %s fetch failed: %s", pair, _cvd_e)
+
     direction_avg = get_signal_direction(conf_avg)
 
     # ── MTF confirmation gate ──────────────────────────────────────────────────
@@ -3858,6 +3881,21 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     if _cb_triggered and direction_avg not in ('NEUTRAL', 'LOW VOL', 'NO DATA'):
         effective_direction = 'NEUTRAL'  # Downgrade — no new entries during drawdown protection
 
+    # ── #26 Pi Cycle Top Kill-Switch ─────────────────────────────────────────
+    # When 111DMA ≥ 350DMA×2, apply BUY suppressor: cap confidence at 30% and
+    # append PI_CYCLE_TOP_WARNING flag to any BUY signals.
+    _pi_signal   = (pi_cycle_data or {}).get("signal", "NORMAL")
+    _pi_gap_pct  = (pi_cycle_data or {}).get("gap_pct", None)
+    _pi_active   = _pi_signal == "CYCLE_TOP"
+    _pi_flags: list = []
+
+    if _pi_active and "BUY" in effective_direction:
+        _pi_flags.append("PI_CYCLE_TOP_WARNING")
+        conf_avg = min(conf_avg, 30.0)   # Hard cap at 30% confidence
+        # Downgrade STRONG BUY → BUY during cycle top
+        if effective_direction == "STRONG BUY":
+            effective_direction = "BUY"
+
     result = {
         'pair':               pair,
         'price_usd':          round(current_price, 4) if current_price else None,
@@ -3890,6 +3928,11 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         'blood_in_streets':   ("BLOOD_IN_STREETS" if fng_value <= 25 else "EXTREME_FEAR" if fng_value <= 30 else "NORMAL"),
         'macro_regime':       _macro_adj.get("regime", "MACRO_NEUTRAL"),
         'macro_adj_pts':      _macro_adj.get("adjustment", 0.0),
+        # #26 Pi Cycle Top
+        'pi_cycle_signal':    _pi_signal,
+        'pi_cycle_active':    _pi_active,
+        'pi_cycle_gap_pct':   _pi_gap_pct,
+        'signal_flags':       _pi_flags,
     }
     if risk_info:
         _sup = None if _cb_triggered else risk_info['stop_loss']
@@ -4014,6 +4057,8 @@ def run_scan(progress_callback=None):
         "trending": (lambda: _safe(_data_feeds.get_trending_coins,               default=[], label="Trending coins")),
         "global":   (lambda: _safe(_data_feeds.get_global_market,                default={}, label="Global market")),
         "tvl":      (lambda: _safe(_tvl_batch,                                   default={}, label="DefiLlama TVL")),
+        # #26 Pi Cycle Top — fetched once per scan, applies to all BTC-correlated pairs
+        "pi_cycle": (lambda: _safe(_data_feeds.fetch_pi_cycle_top,               default={}, label="Pi Cycle Top")),
     }
 
     _pre_results = {}
@@ -4030,6 +4075,8 @@ def run_scan(progress_callback=None):
     trending_coins = _pre_results.get("trending", [])
     global_mkt     = _pre_results.get("global",   {})
     tvl_map        = _pre_results.get("tvl",      {})
+    # #26 Pi Cycle Top — module-level result shared across all pairs
+    pi_cycle_data  = _pre_results.get("pi_cycle", {}) or {}
 
     # PERF-02: limit to recent 200 rows — only used for BTC correlation; full table scan is wasteful
     master_df = _db.get_signals_df(limit=200)
@@ -4053,6 +4100,7 @@ def run_scan(progress_callback=None):
             master_df, circuit_breaker, start_time,
             trending_coins=trending_coins, global_mkt=global_mkt,
             btc_df=btc_df_for_scan, cvd_map=cvd_map, tvl_map=tvl_map,
+            pi_cycle_data=pi_cycle_data,
         )
         with result_lock:
             completed[0] += 1

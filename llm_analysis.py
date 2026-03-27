@@ -2,8 +2,14 @@
 llm_analysis.py — LLM-powered signal explanation via Claude API.
 Uses claude-sonnet-4-6 to generate natural language rationale for each trading signal.
 Requires ANTHROPIC_API_KEY environment variable (same key used by Claude Code).
+
+#31 Structured JSON Output:
+  - get_signal_explanation() forces JSON schema via system prompt instruction
+  - get_claude_weight_adjustments() uses Anthropic tool_use (guaranteed schema)
+  - All json.loads() wrapped with try/except + fallback to default weights
 """
 
+import json
 import math
 import os
 import time
@@ -109,9 +115,14 @@ Market Context:
 
 Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like a Bloomberg analyst."""
 
-        # Prompt caching: cache_control on the system prompt prefix achieves
-        # up to 85% latency reduction and 90% cost reduction for repeated analysis
-        # (Anthropic docs: cache hit latency drops from 11.5s → 2.4s on long prompts)
+        # ── #31 Structured JSON schema output ────────────────────────────────────
+        # System prompt instructs Claude to return ONLY valid JSON matching the
+        # exact schema.  This eliminates markdown wrappers, stray commentary, etc.
+        # The text field is extracted from the JSON to maintain backward compatibility
+        # with all callers that expect a plain string return value.
+        _SIGNAL_JSON_SCHEMA = (
+            '{"explanation": "<3-4 sentence Bloomberg-style analyst prose, no bullet points>"}'
+        )
         system_content = [
             {
                 "type": "text",
@@ -119,21 +130,32 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
                     "You are a professional crypto trading analyst. "
                     "You analyze trading signals and explain them in clear, concise Bloomberg-style prose. "
                     "Always be specific about the indicators and their values. "
-                    "Never use bullet points or headers — write in flowing sentences only."
+                    "Never use bullet points or headers — write in flowing sentences only. "
+                    f"You MUST respond with ONLY valid JSON matching this exact schema: {_SIGNAL_JSON_SCHEMA}. "
+                    "No other text, no markdown code fences, no commentary outside the JSON object."
                 ),
                 "cache_control": {"type": "ephemeral"},  # cache this system block
             }
         ]
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=300,
+            max_tokens=400,
             system=system_content,
             messages=[{"role": "user", "content": prompt}],
         )
 
         if not message.content or not hasattr(message.content[0], 'text'):
             return "AI analysis unavailable: empty response from model."
-        text = message.content[0].text.strip()
+        raw_text = message.content[0].text.strip()
+
+        # ── Parse JSON response — fallback to raw text if parsing fails ──────────
+        try:
+            parsed = json.loads(raw_text)
+            text = str(parsed.get("explanation", raw_text)).strip()
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            logging.warning("[LLM #31] JSON parse failed for %s — using raw text fallback", pair)
+            # Strip any stray markdown code fences if present
+            text = raw_text.replace("```json", "").replace("```", "").strip()
         with _CACHE_LOCK:
             _CACHE[cache_key] = {"text": text, "_ts": time.time()}
             # Evict oldest half when cache is full

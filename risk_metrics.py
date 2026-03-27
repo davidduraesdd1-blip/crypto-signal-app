@@ -1,6 +1,7 @@
 """
 risk_metrics.py — Crypto Signal Model v5.9.13
 Value at Risk (VaR) and Conditional VaR (CVaR/Expected Shortfall) for signal portfolios.
+Fractional Kelly position sizing (#50).
 
 Two methods:
   1. Historical VaR  — uses actual_pnl_pct from feedback_log (most accurate, data-driven)
@@ -341,3 +342,90 @@ def compute_portfolio_risk(
         "n_positions":        n,
         "portfolio_size_usd": portfolio_size_usd,
     }
+
+
+# ─── Fractional Kelly Position Sizing (#50) ───────────────────────────────────
+
+_KELLY_MAX_POSITION = 0.20   # 20% hard cap (20% of portfolio regardless of edge)
+
+
+def compute_kelly_fraction(
+    win_rate: float,
+    avg_win: float,
+    avg_loss: float,
+    fraction: float = 0.25,
+) -> dict:
+    """
+    Compute fractional Kelly position size from historical win/loss stats.
+
+    Standard Kelly formula: f* = (win_rate * b - (1 - win_rate)) / b
+    where b = avg_win / avg_loss (reward-to-risk ratio).
+
+    Fractional Kelly applies a conservative multiplier (default 25%) to reduce
+    variance while retaining most of the geometric growth benefit.
+
+    Args:
+        win_rate:  Historical win rate (0.0–1.0), e.g. 0.55 for 55% winners.
+        avg_win:   Average winning trade return (positive float, e.g. 0.08 for 8%).
+        avg_loss:  Average losing trade return (positive float, e.g. 0.04 for 4%).
+        fraction:  Fractional Kelly multiplier (default 0.25 = 25% = conservative).
+
+    Returns:
+        dict with:
+            full_kelly:               float — unconstrained Kelly fraction
+            fractional_kelly:         float — full_kelly × fraction
+            fraction_used:            float — the multiplier applied (0.25 by default)
+            recommended_position_pct: float — final position size as % of portfolio (capped at 20%)
+
+    Edge cases:
+        - Returns zeros if win_rate, avg_win, avg_loss are invalid/zero.
+        - full_kelly is clamped to [0, 1.0] before fractional scaling.
+        - recommended_position_pct is clamped to [0, 20.0].
+    """
+    try:
+        if (
+            not isinstance(win_rate, (int, float))
+            or not isinstance(avg_win, (int, float))
+            or not isinstance(avg_loss, (int, float))
+            or avg_win <= 0
+            or avg_loss <= 0
+            or not (0.0 <= win_rate <= 1.0)
+        ):
+            return {
+                "full_kelly": 0.0,
+                "fractional_kelly": 0.0,
+                "fraction_used": fraction,
+                "recommended_position_pct": 0.0,
+                "error": "Invalid inputs (win_rate must be 0-1, avg_win/avg_loss must be >0)",
+            }
+
+        b = avg_win / avg_loss   # reward-to-risk ratio
+        # Standard Kelly: (b × p − (1 − p)) / b
+        full_kelly = (b * win_rate - (1 - win_rate)) / b
+
+        # Clamp full Kelly to [0.0, 1.0]: negative Kelly = no edge; >1.0 = theoretically
+        # impossible with typical win rates but guard against extreme inputs.
+        full_kelly = max(0.0, min(full_kelly, 1.0))
+
+        # Apply fractional multiplier (default 25% of full Kelly — conservative)
+        fractional_kelly = full_kelly * fraction
+
+        # Hard cap: never exceed 20% of portfolio regardless of computed edge
+        recommended = round(min(fractional_kelly, _KELLY_MAX_POSITION) * 100, 2)
+
+        return {
+            "full_kelly":               round(full_kelly, 4),
+            "fractional_kelly":         round(fractional_kelly, 4),
+            "fraction_used":            fraction,
+            "recommended_position_pct": recommended,   # as % of portfolio (e.g. 12.5 = 12.5%)
+        }
+
+    except Exception as e:
+        logger.warning("compute_kelly_fraction failed: %s", e)
+        return {
+            "full_kelly": 0.0,
+            "fractional_kelly": 0.0,
+            "fraction_used": fraction,
+            "recommended_position_pct": 0.0,
+            "error": str(e),
+        }
