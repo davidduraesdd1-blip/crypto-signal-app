@@ -387,6 +387,9 @@ def compute_kelly_fraction(
             not isinstance(win_rate, (int, float))
             or not isinstance(avg_win, (int, float))
             or not isinstance(avg_loss, (int, float))
+            or not math.isfinite(float(win_rate))
+            or not math.isfinite(float(avg_win))
+            or not math.isfinite(float(avg_loss))
             or avg_win <= 0
             or avg_loss <= 0
             or not (0.0 <= win_rate <= 1.0)
@@ -396,7 +399,7 @@ def compute_kelly_fraction(
                 "fractional_kelly": 0.0,
                 "fraction_used": fraction,
                 "recommended_position_pct": 0.0,
-                "error": "Invalid inputs (win_rate must be 0-1, avg_win/avg_loss must be >0)",
+                "error": "Invalid inputs (win_rate must be 0-1, avg_win/avg_loss must be >0 and finite)",
             }
 
         b = avg_win / avg_loss   # reward-to-risk ratio
