@@ -2384,7 +2384,7 @@ def fetch_defillama_top_yields(min_apy: float = 5.0, max_apy: float = 50.0, top_
                 p for p in pools
                 if p.get("apy") and min_apy <= p["apy"] <= max_apy
                 and p.get("tvlUsd", 0) > 1_000_000
-                and not p.get("ilRisk")  # skip high-IL pools for signal purity
+                and p.get("ilRisk") != "yes"  # skip high-IL pools for signal purity
             ]
             filtered.sort(key=lambda x: x.get("tvlUsd", 0), reverse=True)
             result = filtered[:top_n]
