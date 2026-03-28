@@ -2530,6 +2530,56 @@ def page_config():
 
     st.markdown("---")
 
+    # ── Indicator Weights — Bayesian Calibration (#49) ──
+    st.markdown("---")
+    _ui.section_header(
+        "Indicator Weights (Bayesian Calibration)",
+        "Beta-distribution Bayesian update of indicator weights based on resolved trade outcomes",
+        icon="⚖️",
+    )
+    try:
+        _bay_detail = _db.get_bayesian_weights_detail()
+        _bay_c1, _bay_c2 = st.columns([2, 3])
+        with _bay_c1:
+            if st.button("Recalibrate Bayesian Weights", type="secondary",
+                         use_container_width=True, key="btn_bayesian_recal"):
+                with st.spinner("Running Bayesian weight recalibration...", show_time=True):
+                    _new_bw = _db.bayesian_recalibrate_weights(prior_strength=10.0)
+                    st.session_state["bayesian_new_weights"] = _new_bw
+                    st.success(f"Weights recalibrated. Reload app to apply.")
+                    _bay_detail = _db.get_bayesian_weights_detail()
+        with _bay_c2:
+            _cur_bw = st.session_state.get("bayesian_new_weights", {})
+            if not _bay_detail and not _cur_bw:
+                st.caption("No Bayesian weights saved yet. Click **Recalibrate** to compute from feedback log.")
+            else:
+                _display_bw = _bay_detail if _bay_detail else [
+                    {"indicator": k, "weight": v, "wins": "—", "losses": "—"}
+                    for k, v in (_cur_bw or {}).items()
+                ]
+                if _display_bw:
+                    _bw_df_raw = pd.DataFrame(_display_bw)
+                    _bw_df = _bw_df_raw[[c for c in ["indicator", "weight", "wins", "losses"] if c in _bw_df_raw.columns]]
+                    _bw_df = _bw_df.rename(columns={"indicator": "Indicator", "weight": "Weight", "wins": "Wins", "losses": "Losses"})
+                    if "Weight" in _bw_df.columns:
+                        _bw_df["Weight %"] = (_bw_df["Weight"].astype(float) * 100).round(1).astype(str) + "%"
+                    st.dataframe(_bw_df, use_container_width=True, hide_index=True)
+                    # Horizontal bar chart of weights
+                    if _display_bw and "weight" in _display_bw[0]:
+                        _bw_fig = go.Figure(go.Bar(
+                            x=[round(float(r.get("weight", 0)) * 100, 1) for r in _display_bw],
+                            y=[r.get("indicator", "") for r in _display_bw],
+                            orientation="h",
+                            marker_color="#00d4aa",
+                        ))
+                        _bw_fig.update_layout(
+                            height=220, margin=dict(l=0, r=0, t=10, b=0),
+                            xaxis_title="Weight (%)",
+                        )
+                        st.plotly_chart(_bw_fig, use_container_width=True)
+    except Exception as _bay_err:
+        st.caption(f"Bayesian weights card error: {_bay_err}")
+
     # ── ML Weight Optimizer ──
     _ui.section_header("ML Weight Optimizer", "Bayesian optimization finds indicator weights that maximize directional accuracy on historical data", icon="🤖")
     st.caption(
@@ -3637,6 +3687,72 @@ def page_backtest():
             )
 
     # ── Performance Attribution ────────────────────────────────────────────────
+    # ── IC & WFE Quick Card (DB-based, Batch 3 #36) ───────────────────────────
+    try:
+        st.divider()
+        _ui.section_header(
+            "IC & WFE Metrics",
+            "Information Coefficient (Spearman) and Walk-Forward Efficiency from resolved trade feedback",
+            icon="🎯",
+        )
+        _ic_wfe_c1, _ic_wfe_c2 = st.columns(2)
+        with _ic_wfe_c1:
+            st.markdown("**Information Coefficient (IC)**")
+            if st.button("Compute IC from Feedback Log", key="btn_ic_db", use_container_width=True):
+                with st.spinner("Computing Spearman IC...", show_time=True):
+                    st.session_state["ic_db_result"] = _db.compute_and_save_ic(lookback_days=30)
+            _ic_db = st.session_state.get("ic_db_result")
+            if _ic_db:
+                _ic_db_val = _ic_db.get("ic")
+                _ic_db_note = _ic_db.get("ic_note")
+                if _ic_db_val is not None:
+                    _ic_color = "#10b981" if _ic_db_val > 0.05 else ("#ef4444" if _ic_db_val < 0 else "#f59e0b")
+                    _ic_skill = _ic_db.get("skill", "WEAK")
+                    _ic_n     = _ic_db.get("n_samples", 0)
+                    _ic_p     = _ic_db.get("ic_pvalue")
+                    _ic_cols  = st.columns(3)
+                    _ic_cols[0].metric("IC (30d)", f"{_ic_db_val:+.4f}")
+                    _ic_cols[1].metric("Skill", _ic_skill)
+                    _ic_cols[2].metric("n", _ic_n)
+                    st.markdown(
+                        f"<div style='border:1px solid {_ic_color};border-radius:8px;"
+                        f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_ic_color};'>"
+                        f"IC = {_ic_db_val:+.4f} · <b>{_ic_skill}</b>"
+                        f"{' · p=' + f'{_ic_p:.4f}' if _ic_p is not None else ''}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif _ic_db_note:
+                    st.caption(f"IC: {_ic_db_note}")
+        with _ic_wfe_c2:
+            st.markdown("**Walk-Forward Efficiency (WFE)**")
+            if st.button("Compute WFE from Backtest DB", key="btn_wfe_db", use_container_width=True):
+                with st.spinner("Computing WFE from backtest trades...", show_time=True):
+                    st.session_state["wfe_db_result"] = _db.compute_wfe()
+            _wfe_db = st.session_state.get("wfe_db_result")
+            if _wfe_db:
+                _wfe_db_val = _wfe_db.get("wfe")
+                _wfe_db_note = _wfe_db.get("note")
+                if _wfe_db_val is not None:
+                    _wfe_grade = _wfe_db.get("grade", "POOR")
+                    _wfe_color = "#10b981" if _wfe_db_val > 0.9 else ("#f59e0b" if _wfe_db_val > 0.7 else ("#f59e0b" if _wfe_db_val > 0.5 else "#ef4444"))
+                    _wfe_cols2 = st.columns(3)
+                    _wfe_cols2[0].metric("WFE", f"{_wfe_db_val:.3f}")
+                    _wfe_cols2[1].metric("Grade", _wfe_grade)
+                    _wfe_cols2[2].metric("IS Sharpe", f"{_wfe_db.get('is_sharpe', 0):.3f}")
+                    st.markdown(
+                        f"<div style='border:1px solid {_wfe_color};border-radius:8px;"
+                        f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_wfe_color};'>"
+                        f"WFE = {_wfe_db_val:.3f} · <b>{_wfe_grade}</b> · "
+                        f"OOS Sharpe {_wfe_db.get('oos_sharpe', 0):.3f}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif _wfe_db_note:
+                    st.caption(f"WFE: {_wfe_db_note}")
+    except Exception as _ic_wfe_err:
+        st.caption(f"IC & WFE card error: {_ic_wfe_err}")
+
     if not df_trades.empty and "exit_reason" in df_trades.columns:
         st.divider()
         _ui.section_header(
@@ -3793,6 +3909,63 @@ def page_backtest():
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+    # ── Walk-Forward Rolling Window Optimization (#51) ─────────────────────────
+    st.markdown("---")
+    _ui.section_header(
+        "Walk-Forward Rolling Window Optimization",
+        "Finds optimal BUY confidence threshold by testing 50–80% across rolling windows of resolved signals",
+        icon="⚙️",
+    )
+    try:
+        _wfo_c1, _wfo_c2 = st.columns([1, 3])
+        with _wfo_c1:
+            _wfo_lb = st.number_input("Lookback Days", min_value=30, max_value=180,
+                                      value=90, step=10, key="wfo_lookback_days")
+            _wfo_nw = st.number_input("Windows", min_value=2, max_value=8,
+                                      value=4, step=1, key="wfo_n_windows")
+            if st.button("Run WFO", type="primary", use_container_width=True, key="btn_wfo_db"):
+                with st.spinner(f"Running {int(_wfo_nw)}-window WFO ({int(_wfo_lb)}d lookback)...", show_time=True):
+                    st.session_state["wfo_opt_result"] = _db.run_walkforward_optimization(
+                        lookback_days=int(_wfo_lb), n_windows=int(_wfo_nw)
+                    )
+        with _wfo_c2:
+            # Show cached result if available, or try to load from DB
+            _wfo_r = st.session_state.get("wfo_opt_result")
+            if _wfo_r is None:
+                _wfo_r = _db.get_latest_wfo_result()
+            if _wfo_r and not _wfo_r.get("error"):
+                _opt_t   = _wfo_r.get("optimal_threshold", 65.0)
+                _avg_oos = _wfo_r.get("avg_oos_win_rate")
+                _rec     = _wfo_r.get("recommendation", "")
+                _wfo_m1, _wfo_m2, _wfo_m3 = st.columns(3)
+                _wfo_m1.metric("Optimal BUY Threshold", f"{int(_opt_t)}%",
+                               help="Confidence threshold that maximized win rate in IS periods")
+                _wfo_m2.metric("Avg OOS Win Rate",
+                               f"{_avg_oos:.1f}%" if _avg_oos is not None else "N/A",
+                               help="Average win rate in out-of-sample test periods")
+                _wfo_m3.metric("Windows Used", _wfo_r.get("n_windows", "N/A"))
+                if _rec:
+                    st.info(_rec)
+                _wfo_wr_data = _wfo_r.get("window_results", [])
+                if _wfo_wr_data:
+                    _wfo_df = pd.DataFrame(_wfo_wr_data)
+                    _disp_cols = [c for c in ["window", "optimal_thresh", "is_win_rate", "oos_win_rate", "oos_buy_signals"] if c in _wfo_df.columns]
+                    if _disp_cols:
+                        st.dataframe(
+                            _wfo_df[_disp_cols].rename(columns={
+                                "window": "Window", "optimal_thresh": "IS Best Threshold (%)",
+                                "is_win_rate": "IS Win Rate (%)", "oos_win_rate": "OOS Win Rate (%)",
+                                "oos_buy_signals": "OOS BUY Signals",
+                            }),
+                            use_container_width=True, hide_index=True,
+                        )
+            elif _wfo_r and _wfo_r.get("error"):
+                st.caption(f"WFO: {_wfo_r.get('recommendation', _wfo_r.get('error', ''))}")
+            else:
+                st.caption("Click **Run WFO** to find the optimal confidence threshold for BUY signals.")
+    except Exception as _wfo_err:
+        st.caption(f"WFO card error: {_wfo_err}")
 
     # ── Stress Test ────────────────────────────────────────────────────────────
     _render_stress_test()
@@ -5830,6 +6003,62 @@ def page_market_overview():
     else:
         st.caption("Regional price data loading… check connectivity.")
     st.caption("Source: MEXC public API · Bitso ticker API · CoinDCX exchange API · 2-min cache")
+
+    # ── Exchange Price Comparison — HTX / Bitstamp / Bitget (#41 Batch 3) ──────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "Exchange Price Comparison",
+        "Binance · HTX · Bitstamp · Bitget — real-time price spread across major CeFi exchanges",
+        icon="💱",
+    )
+    with st.expander("Show CeFi Price Comparison", expanded=False):
+        try:
+            @st.cache_data(ttl=300, show_spinner=False)
+            def _cached_exch_compare(pair: str):
+                return data_feeds.fetch_exchange_price_comparison(pair)
+
+            _ec_pair = st.selectbox(
+                "Pair", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"],
+                key="exch_compare_pair_sel",
+            )
+            _ec = _cached_exch_compare(_ec_pair)
+
+            _ec_prices = {
+                "Binance":  _ec.get("binance"),
+                "HTX":      _ec.get("htx"),
+                "Bitstamp": _ec.get("bitstamp"),
+                "Bitget":   _ec.get("bitget"),
+            }
+            _ec_valid = {k: v for k, v in _ec_prices.items() if v is not None and v > 0}
+
+            if _ec_valid:
+                _ec_cols = st.columns(len(_ec_prices))
+                for _i, (_ex_name, _ex_price) in enumerate(_ec_prices.items()):
+                    if _ex_price is not None and _ex_price > 0:
+                        _ec_cols[_i].metric(_ex_name, f"${_ex_price:,.2f}")
+                    else:
+                        _ec_cols[_i].metric(_ex_name, "N/A")
+
+                _spread = _ec.get("spread_pct", 0.0)
+                _cheapest = _ec.get("cheapest", "N/A")
+                _most_exp = _ec.get("most_expensive", "N/A")
+                _spread_color = "#f59e0b" if _spread > 0.1 else "#00d4aa"
+                st.markdown(
+                    f"<div style='font-size:12px;color:{_spread_color};margin-top:4px'>"
+                    f"Spread: <b>{_spread:.4f}%</b> · "
+                    f"Cheapest: <b>{_cheapest.upper()}</b> · "
+                    f"Most expensive: <b>{_most_exp.upper()}</b>"
+                    f"{'  — Elevated spread: arbitrage opportunity' if _spread > 0.1 else '  — Prices in parity'}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("Exchange price data loading… check connectivity.")
+            if _ec.get("error"):
+                st.caption(f"Note: {_ec['error']}")
+            st.caption("Source: Binance spot · HTX (Huobi) · Bitstamp · Bitget · 5-min cache")
+        except Exception as _ec_err:
+            st.caption(f"Exchange price comparison error: {_ec_err}")
 
     # ── DEX Price Intelligence (#91) ──────────────────────────────────────────
     _ui.gradient_divider()

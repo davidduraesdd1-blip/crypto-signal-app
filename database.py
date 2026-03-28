@@ -23,6 +23,13 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 
+try:
+    from scipy.stats import spearmanr as _spearmanr
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+    logging.warning("scipy not installed — IC Spearman correlation will use fallback")
+
 logger = logging.getLogger(__name__)
 
 DB_FILE = "crypto_model.db"
@@ -384,6 +391,51 @@ def init_db():
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sm_pair_ts ON signal_metrics(pair, computed_at DESC)"
             )
+
+            # IC history table (#36 — Spearman IC per lookback window)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ic_history (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    computed_at  TEXT NOT NULL,
+                    ic_value     REAL,
+                    ic_pvalue    REAL,
+                    n_samples    INTEGER,
+                    lookback_days INTEGER
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ic_history_ts ON ic_history(computed_at DESC)"
+            )
+
+            # Bayesian weights table (#49)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS bayesian_weights (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    updated_at TEXT NOT NULL,
+                    indicator  TEXT NOT NULL,
+                    weight     REAL,
+                    alpha      REAL,
+                    beta       REAL,
+                    wins       INTEGER,
+                    losses     INTEGER
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bw_indicator ON bayesian_weights(indicator, updated_at DESC)"
+            )
+
+            # Walk-forward optimization cache (#51)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wfo_cache (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    computed_at         TEXT NOT NULL,
+                    lookback_days       INTEGER,
+                    n_windows           INTEGER,
+                    optimal_threshold   REAL,
+                    avg_oos_win_rate    REAL,
+                    window_results_json TEXT
+                )
+            """)
 
             # Backtest schema migration — add columns added after initial release
             _add_col('backtest_trades', 'gross_pnl_pct',  'REAL')
@@ -1783,8 +1835,8 @@ def compute_and_save_ic(pair: str, timeframe: str = "1h") -> dict:
         rows_7d = [r for r in rows if r["timestamp"] >= cutoff_7d]
         if len(rows_7d) >= 5:
             ic_7d = _pearson(
-                [float(r["confidence_avg_pct"]) for r in rows_7d],
-                [float(r["actual_pnl_pct"])     for r in rows_7d],
+                [float(r["confidence"]) for r in rows_7d if r["confidence"] is not None],
+                [float(r["actual_pnl_pct"]) for r in rows_7d if r["actual_pnl_pct"] is not None],
             )
         else:
             ic_7d = None
@@ -1843,6 +1895,601 @@ def get_signal_metrics(pair: str, limit: int = 30) -> list[dict]:
     except Exception as e:
         logging.warning("[DB] get_signal_metrics failed: %s", e)
         return []
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
+# IC (SPEARMAN) + WFE FUNCTIONS  (#36 — batch 3)
+# ──────────────────────────────────────────────
+
+def compute_and_save_ic(lookback_days: int = 30) -> dict:
+    """
+    Compute Information Coefficient (IC) using Spearman rank correlation between
+    predicted signal direction (+1 BUY / -1 SELL / 0 HOLD) and actual 24h return.
+
+    Queries feedback_log for the last `lookback_days` of resolved signals.
+    Saves result to ic_history table.
+
+    Returns:
+        {"ic": float, "ic_pvalue": float, "n_samples": int, "lookback_days": int,
+         "skill": "STRONG"|"MODERATE"|"WEAK"}
+    """
+    _default = {"ic": None, "ic_pvalue": None, "n_samples": 0,
+                "lookback_days": lookback_days, "skill": "WEAK",
+                "ic_note": "insufficient data"}
+
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT direction, confidence, actual_pnl_pct
+            FROM feedback_log
+            WHERE resolved_at IS NOT NULL
+              AND actual_pnl_pct IS NOT NULL
+              AND direction IS NOT NULL
+              AND timestamp >= datetime('now', ?)
+            ORDER BY timestamp DESC
+            """,
+            (f"-{int(lookback_days)} days",),
+        ).fetchall()
+
+        if len(rows) < 10:
+            return _default
+
+        # Map direction → predicted direction integer
+        def _dir_to_int(d: str) -> int:
+            d_up = str(d).upper()
+            if "BUY" in d_up:  return 1
+            if "SELL" in d_up: return -1
+            return 0
+
+        pred_dirs = [_dir_to_int(r["direction"]) for r in rows]
+        act_rets   = [float(r["actual_pnl_pct"]) for r in rows]
+
+        # Remove HOLDs (0) for clean correlation
+        pairs_filtered = [(p, a) for p, a in zip(pred_dirs, act_rets) if p != 0]
+        if len(pairs_filtered) < 10:
+            return _default
+
+        pred_clean = [p for p, _ in pairs_filtered]
+        ret_clean  = [a for _, a in pairs_filtered]
+        n = len(pred_clean)
+
+        # Compute Spearman correlation
+        if _SCIPY_AVAILABLE:
+            ic_val, ic_p = _spearmanr(pred_clean, ret_clean)
+            ic_val = float(ic_val) if ic_val is not None and not np.isnan(ic_val) else 0.0
+            ic_p   = float(ic_p)   if ic_p   is not None and not np.isnan(ic_p)   else 1.0
+        else:
+            # Fallback: manual Spearman via rank correlation
+            def _rank(lst):
+                sorted_lst = sorted(enumerate(lst), key=lambda x: x[1])
+                ranks = [0.0] * len(lst)
+                for rank, (idx, _) in enumerate(sorted_lst, start=1):
+                    ranks[idx] = float(rank)
+                return ranks
+            pred_ranks = _rank(pred_clean)
+            ret_ranks  = _rank(ret_clean)
+            n_r = len(pred_ranks)
+            mean_p = sum(pred_ranks) / n_r
+            mean_r = sum(ret_ranks) / n_r
+            num    = sum((p - mean_p) * (r - mean_r) for p, r in zip(pred_ranks, ret_ranks))
+            denom  = (
+                sum((p - mean_p) ** 2 for p in pred_ranks) ** 0.5 *
+                sum((r - mean_r) ** 2 for r in ret_ranks)  ** 0.5
+            )
+            ic_val = round(num / denom, 4) if denom > 1e-9 else 0.0
+            ic_p   = 1.0  # Can't compute p-value without scipy
+
+        ic_val = round(ic_val, 4)
+        abs_ic = abs(ic_val)
+        if abs_ic > 0.1:    skill = "STRONG"
+        elif abs_ic > 0.05: skill = "MODERATE"
+        else:               skill = "WEAK"
+
+        # Persist to ic_history
+        computed_at = datetime.now(timezone.utc).isoformat()
+        with _write_lock:
+            conn2 = _get_conn()
+            try:
+                conn2.execute(
+                    "INSERT INTO ic_history (computed_at, ic_value, ic_pvalue, n_samples, lookback_days) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (computed_at, ic_val, ic_p, n, int(lookback_days)),
+                )
+                conn2.commit()
+            finally:
+                conn2.close()
+
+        return {
+            "ic": ic_val, "ic_pvalue": round(ic_p, 4), "n_samples": n,
+            "lookback_days": int(lookback_days), "skill": skill, "ic_note": None,
+        }
+    except Exception as e:
+        logger.warning("[DB] compute_and_save_ic failed: %s", e)
+        return _default
+    finally:
+        if conn:
+            conn.close()
+
+
+def compute_wfe() -> dict:
+    """
+    Walk-Forward Efficiency (WFE) = IS Sharpe / OOS Sharpe.
+    Uses last 90 days of backtest_trades, split 70% IS / 30% OOS.
+
+    Returns:
+        {"wfe": float, "is_sharpe": float, "oos_sharpe": float,
+         "grade": "EXCELLENT"|"GOOD"|"FAIR"|"POOR"}
+    """
+    _default = {"wfe": None, "is_sharpe": None, "oos_sharpe": None, "grade": "POOR",
+                "note": "insufficient data"}
+
+    def _sharpe(returns: list) -> float:
+        if len(returns) < 2:
+            return 0.0
+        arr = np.array(returns, dtype=float)
+        std = float(np.std(arr, ddof=1))
+        if std < 1e-9:
+            return 0.0
+        return round(float(np.mean(arr)) / std, 4)
+
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT pnl_pct, timestamp
+            FROM backtest_trades
+            WHERE pnl_pct IS NOT NULL
+              AND timestamp >= datetime('now', '-90 days')
+            ORDER BY timestamp ASC
+            """
+        ).fetchall()
+
+        if len(rows) < 10:
+            return _default
+
+        all_pnl = [float(r["pnl_pct"]) for r in rows]
+        n = len(all_pnl)
+        split = max(1, int(n * 0.70))
+        is_returns  = all_pnl[:split]
+        oos_returns = all_pnl[split:]
+
+        if len(is_returns) < 2 or len(oos_returns) < 2:
+            return _default
+
+        is_sharpe  = _sharpe(is_returns)
+        oos_sharpe = _sharpe(oos_returns)
+
+        if abs(is_sharpe) < 1e-9:
+            wfe = 0.0
+        else:
+            wfe = round(oos_sharpe / is_sharpe, 4)
+
+        if wfe > 0.9:   grade = "EXCELLENT"
+        elif wfe > 0.7: grade = "GOOD"
+        elif wfe > 0.5: grade = "FAIR"
+        else:           grade = "POOR"
+
+        return {
+            "wfe": wfe, "is_sharpe": round(is_sharpe, 4),
+            "oos_sharpe": round(oos_sharpe, 4), "grade": grade,
+            "n_samples": n, "is_n": split, "oos_n": n - split,
+        }
+    except Exception as e:
+        logger.warning("[DB] compute_wfe failed: %s", e)
+        return _default
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
+# BAYESIAN WEIGHT RECALIBRATION  (#49)
+# ──────────────────────────────────────────────
+
+# Base weights for Bayesian prior (indicators and their prior win probability)
+_BAYESIAN_BASE_WEIGHTS: dict = {
+    "rsi":          0.20,
+    "macd":         0.15,
+    "supertrend":   0.15,
+    "adx":          0.12,
+    "funding_rate": 0.10,
+    "on_chain":     0.10,
+    "sentiment":    0.08,
+    "volume":       0.10,
+}
+
+
+def bayesian_recalibrate_weights(prior_strength: float = 10.0) -> dict:
+    """
+    Update indicator weights using Bayesian Beta distribution update.
+
+    For each indicator, uses the historical signal_correct data in feedback_log
+    to compute wins/losses, then updates a Beta prior.
+
+    Prior: Beta(alpha=prior_strength * base_weight, beta=prior_strength * (1-base_weight))
+    Posterior mean: (alpha + wins) / (alpha + wins + beta + losses)
+
+    Returns: dict of {indicator: weight} normalized to sum to 1.0
+    """
+    _fallback = dict(_BAYESIAN_BASE_WEIGHTS)
+
+    conn = None
+    try:
+        conn = _get_conn()
+
+        # Count wins and losses across all resolved signals (proxy per indicator via snap columns)
+        # For indicators without dedicated snap columns, use overall win/loss from was_correct
+        rows = conn.execute(
+            """
+            SELECT was_correct, snap_rsi, snap_macd_hist, snap_adx,
+                   snap_volume_ok, direction, confidence
+            FROM feedback_log
+            WHERE resolved_at IS NOT NULL AND was_correct IS NOT NULL
+            ORDER BY timestamp DESC LIMIT 500
+            """
+        ).fetchall()
+
+        if len(rows) < 20:
+            logger.info("[Bayesian] Insufficient resolved feedback (%d rows) — using defaults", len(rows))
+            return _fallback
+
+        # Compute per-indicator wins/losses
+        # For RSI: snap_rsi present → use directional correctness
+        # For MACD: snap_macd_hist (>0 = bullish signal)
+        # For ADX: snap_adx > 25 = trending (trustworthy signal)
+        # For volume: snap_volume_ok = 1
+        # For all: use was_correct as win proxy
+
+        def _indicator_wins_losses(indicator: str) -> tuple:
+            wins = 0
+            losses = 0
+            for r in rows:
+                wc = r["was_correct"]
+                if wc is None:
+                    continue
+                if indicator == "rsi":
+                    rsi = r["snap_rsi"]
+                    if rsi is None: continue
+                    # RSI signal was useful if in overbought/oversold territory
+                    relevant = (rsi < 35 or rsi > 65)
+                    if not relevant: continue
+                elif indicator == "macd":
+                    macd_h = r["snap_macd_hist"]
+                    if macd_h is None: continue
+                    dir_str = str(r["direction"] or "").upper()
+                    # MACD histogram sign should match trade direction
+                    is_aligned = (macd_h > 0 and "BUY" in dir_str) or (macd_h < 0 and "SELL" in dir_str)
+                    if not is_aligned: continue
+                elif indicator == "adx":
+                    adx = r["snap_adx"]
+                    if adx is None: continue
+                    if float(adx) < 20: continue  # ADX only relevant in trending markets
+                elif indicator == "volume":
+                    vol_ok = r["snap_volume_ok"]
+                    if vol_ok is None or int(vol_ok) != 1: continue
+                elif indicator == "funding_rate":
+                    # Use high-confidence signals as proxy for funding rate agreement
+                    conf = r["confidence"]
+                    if conf is None or float(conf) < 65: continue
+                # For all other indicators (supertrend, on_chain, sentiment): use all rows
+                if int(wc) == 1:
+                    wins += 1
+                else:
+                    losses += 1
+            return wins, losses
+
+        updated_weights = {}
+        for indicator, base_w in _BAYESIAN_BASE_WEIGHTS.items():
+            wins, losses = _indicator_wins_losses(indicator)
+            alpha = prior_strength * base_w
+            beta  = prior_strength * (1.0 - base_w)
+            posterior_mean = (alpha + wins) / (alpha + wins + beta + losses)
+            updated_weights[indicator] = round(float(posterior_mean), 6)
+
+        # Normalize to sum to 1.0
+        total = sum(updated_weights.values())
+        if total > 0:
+            updated_weights = {k: round(v / total, 6) for k, v in updated_weights.items()}
+        else:
+            updated_weights = _fallback
+
+        # Save to bayesian_weights table
+        computed_at = datetime.now(timezone.utc).isoformat()
+        with _write_lock:
+            conn2 = _get_conn()
+            try:
+                for indicator, base_w in _BAYESIAN_BASE_WEIGHTS.items():
+                    wins, losses = _indicator_wins_losses(indicator)
+                    alpha = prior_strength * base_w
+                    beta  = prior_strength * (1.0 - base_w)
+                    w = updated_weights.get(indicator, base_w)
+                    conn2.execute(
+                        "INSERT INTO bayesian_weights "
+                        "(updated_at, indicator, weight, alpha, beta, wins, losses) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (computed_at, indicator, w,
+                         round(alpha + wins, 4), round(beta + losses, 4),
+                         wins, losses),
+                    )
+                conn2.commit()
+            finally:
+                conn2.close()
+
+        return updated_weights
+
+    except Exception as e:
+        logger.warning("[DB] bayesian_recalibrate_weights failed: %s", e)
+        return _fallback
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_bayesian_weights(latest_only: bool = True) -> dict:
+    """
+    Load most recent Bayesian weights from DB.
+    Returns dict of {indicator: weight} or empty dict if none saved yet.
+    """
+    conn = None
+    try:
+        conn = _get_conn()
+        if latest_only:
+            # Get the most recent computed_at timestamp
+            row = conn.execute(
+                "SELECT updated_at FROM bayesian_weights ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return {}
+            latest_ts = row["updated_at"]
+            rows = conn.execute(
+                "SELECT indicator, weight FROM bayesian_weights WHERE updated_at = ?",
+                (latest_ts,),
+            ).fetchall()
+            return {r["indicator"]: float(r["weight"]) for r in rows}
+        else:
+            rows = conn.execute(
+                "SELECT indicator, weight FROM bayesian_weights ORDER BY id DESC LIMIT 100"
+            ).fetchall()
+            return {r["indicator"]: float(r["weight"]) for r in rows}
+    except Exception as e:
+        logger.warning("[DB] get_bayesian_weights failed: %s", e)
+        return {}
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_bayesian_weights_detail() -> list:
+    """Return all indicator rows from the latest Bayesian calibration run."""
+    conn = None
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT updated_at FROM bayesian_weights ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return []
+        latest_ts = row["updated_at"]
+        rows = conn.execute(
+            """SELECT indicator, weight, alpha, beta, wins, losses, updated_at
+               FROM bayesian_weights WHERE updated_at = ?
+               ORDER BY weight DESC""",
+            (latest_ts,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("[DB] get_bayesian_weights_detail failed: %s", e)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
+# WALK-FORWARD ROLLING WINDOW OPTIMIZATION  (#51)
+# ──────────────────────────────────────────────
+
+_WFO_CACHE: dict = {}
+_WFO_CACHE_LOCK = threading.Lock()
+_WFO_CACHE_TTL  = 86400  # 24 hours
+
+
+def run_walkforward_optimization(lookback_days: int = 90, n_windows: int = 4) -> dict:
+    """
+    Walk-forward rolling window optimization for confidence threshold.
+
+    Splits last `lookback_days` of resolved feedback into `n_windows` windows.
+    For each window: finds optimal BUY threshold on IS period, evaluates on OOS.
+
+    Thresholds tested: 50, 55, 60, 65, 70, 75, 80 (%)
+
+    Returns:
+        {"optimal_threshold": float, "avg_oos_win_rate": float, "n_windows": int,
+         "window_results": [...], "recommendation": str}
+    """
+    _default = {
+        "optimal_threshold": 65.0, "avg_oos_win_rate": None,
+        "n_windows": n_windows, "window_results": [],
+        "recommendation": "Use default threshold 65% for BUY signals (insufficient data for WFO)",
+        "error": "insufficient data",
+    }
+
+    # Check cache first
+    cache_key = (int(lookback_days), int(n_windows))
+    with _WFO_CACHE_LOCK:
+        cached = _WFO_CACHE.get(cache_key)
+        if cached and (datetime.now(timezone.utc).timestamp() - cached.get("_ts", 0)) < _WFO_CACHE_TTL:
+            result = dict(cached)
+            result.pop("_ts", None)
+            return result
+
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT confidence, direction, was_correct, timestamp
+            FROM feedback_log
+            WHERE resolved_at IS NOT NULL
+              AND was_correct IS NOT NULL
+              AND confidence IS NOT NULL
+              AND direction IS NOT NULL
+              AND timestamp >= datetime('now', ?)
+            ORDER BY timestamp ASC
+            """,
+            (f"-{int(lookback_days)} days",),
+        ).fetchall()
+
+        if len(rows) < n_windows * 10:
+            return _default
+
+        rows_list = [dict(r) for r in rows]
+        n_total   = len(rows_list)
+        window_size = n_total // n_windows
+        thresholds  = [50, 55, 60, 65, 70, 75, 80]
+
+        window_results = []
+        oos_win_rates  = []
+
+        for i in range(n_windows):
+            start_idx = i * window_size
+            end_idx   = start_idx + window_size if i < n_windows - 1 else n_total
+            window    = rows_list[start_idx:end_idx]
+            w_n       = len(window)
+            if w_n < 8:
+                continue
+
+            # IS = first 60% of window, OOS = last 40%
+            is_split = max(1, int(w_n * 0.60))
+            is_data  = window[:is_split]
+            oos_data = window[is_split:]
+
+            if len(is_data) < 4 or len(oos_data) < 4:
+                continue
+
+            # Find best IS threshold for BUY signals
+            best_thresh = 65.0
+            best_is_wr  = 0.0
+            for thresh in thresholds:
+                buys = [r for r in is_data
+                        if "BUY" in str(r.get("direction", "")).upper()
+                        and float(r.get("confidence", 0)) >= thresh]
+                if len(buys) < 2:
+                    continue
+                wr = sum(1 for r in buys if int(r.get("was_correct", 0)) == 1) / len(buys)
+                if wr > best_is_wr:
+                    best_is_wr  = wr
+                    best_thresh = float(thresh)
+
+            # Evaluate on OOS using best IS threshold
+            oos_buys = [r for r in oos_data
+                        if "BUY" in str(r.get("direction", "")).upper()
+                        and float(r.get("confidence", 0)) >= best_thresh]
+            if len(oos_buys) >= 2:
+                oos_wr = sum(1 for r in oos_buys if int(r.get("was_correct", 0)) == 1) / len(oos_buys)
+                oos_win_rates.append(oos_wr)
+            else:
+                oos_wr = None
+
+            window_results.append({
+                "window":          i + 1,
+                "is_n":            len(is_data),
+                "oos_n":           len(oos_data),
+                "optimal_thresh":  best_thresh,
+                "is_win_rate":     round(best_is_wr * 100, 1),
+                "oos_win_rate":    round(oos_wr * 100, 1) if oos_wr is not None else None,
+                "oos_buy_signals": len(oos_buys),
+            })
+
+        if not window_results:
+            return _default
+
+        # Aggregate optimal threshold (mode of window optima)
+        thresh_votes: dict = {}
+        for wr in window_results:
+            t = wr["optimal_thresh"]
+            thresh_votes[t] = thresh_votes.get(t, 0) + 1
+        best_global_thresh = max(thresh_votes, key=lambda k: thresh_votes[k])
+
+        avg_oos = (sum(oos_win_rates) / len(oos_win_rates)) if oos_win_rates else None
+
+        result = {
+            "optimal_threshold": float(best_global_thresh),
+            "avg_oos_win_rate":  round(avg_oos * 100, 1) if avg_oos is not None else None,
+            "n_windows":         len(window_results),
+            "window_results":    window_results,
+            "recommendation":    (
+                f"Use threshold {int(best_global_thresh)}% for BUY signals "
+                f"(avg OOS win rate: {avg_oos*100:.1f}%)" if avg_oos is not None
+                else f"Use threshold {int(best_global_thresh)}% for BUY signals"
+            ),
+        }
+
+        # Persist to DB
+        computed_at = datetime.now(timezone.utc).isoformat()
+        with _write_lock:
+            conn2 = _get_conn()
+            try:
+                conn2.execute(
+                    "INSERT INTO wfo_cache "
+                    "(computed_at, lookback_days, n_windows, optimal_threshold, "
+                    " avg_oos_win_rate, window_results_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (computed_at, int(lookback_days), len(window_results),
+                     float(best_global_thresh),
+                     round(avg_oos * 100, 1) if avg_oos is not None else None,
+                     json.dumps(window_results)),
+                )
+                conn2.commit()
+            finally:
+                conn2.close()
+
+        # Update in-memory cache
+        with _WFO_CACHE_LOCK:
+            _WFO_CACHE[cache_key] = {**result, "_ts": datetime.now(timezone.utc).timestamp()}
+
+        return result
+
+    except Exception as e:
+        logger.warning("[DB] run_walkforward_optimization failed: %s", e)
+        return _default
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_latest_wfo_result() -> dict:
+    """Return the most recent WFO result from DB cache."""
+    conn = None
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            """SELECT computed_at, optimal_threshold, avg_oos_win_rate,
+                      n_windows, window_results_json
+               FROM wfo_cache ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            return {}
+        wr = json.loads(row["window_results_json"] or "[]") if row["window_results_json"] else []
+        return {
+            "computed_at":       row["computed_at"],
+            "optimal_threshold": row["optimal_threshold"],
+            "avg_oos_win_rate":  row["avg_oos_win_rate"],
+            "n_windows":         row["n_windows"],
+            "window_results":    wr,
+            "recommendation":    (
+                f"Use threshold {int(row['optimal_threshold'] or 65)}% for BUY signals"
+            ),
+        }
+    except Exception as e:
+        logger.warning("[DB] get_latest_wfo_result failed: %s", e)
+        return {}
     finally:
         if conn:
             conn.close()

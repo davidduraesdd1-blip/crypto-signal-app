@@ -75,6 +75,10 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "ascendex.com",                             # AscendEX
     "api.lbank.info",                           # LBank
     "api.coinex.com",                           # CoinEx
+    # Batch 3 additions (#41) — new CeFi exchanges
+    "api.huobi.pro",                            # HTX (formerly Huobi)
+    "www.bitstamp.net",                         # Bitstamp
+    "api.bitget.com",                           # Bitget
 })
 
 
@@ -4866,3 +4870,229 @@ def fetch_kimchi_premium() -> dict:
         "binance_btc_usd":    round(binance_usd, 2),
         "error":              None,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #41 — NEW CeFi EXCHANGE DATA SOURCES (Batch 3)
+# HTX (formerly Huobi), Bitstamp, Bitget — direct REST, no CCXT required
+# 5-minute cache on each fetcher
+# ══════════════════════════════════════════════════════════════════════════════
+
+_HTX_PRICE_CACHE: dict = {}
+_HTX_CACHE_LOCK  = threading.Lock()
+_BITSTAMP_PRICE_CACHE: dict = {}
+_BITSTAMP_CACHE_LOCK  = threading.Lock()
+_BITGET_PRICE_CACHE: dict = {}
+_BITGET_CACHE_LOCK    = threading.Lock()
+_EXCH_COMPARE_CACHE: dict = {}
+_EXCH_COMPARE_LOCK    = threading.Lock()
+_CEFI_PRICE_TTL = 300  # 5 minutes
+
+
+def fetch_htx_price(symbol: str) -> "Optional[float]":
+    """
+    Fetch last price from HTX (Huobi) public API.
+    symbol: CCXT format e.g. "BTC/USDT" or raw "btcusdt"
+    Returns float price or None on error.
+    """
+    # Normalise to HTX format: lowercase, no slash
+    htx_sym = symbol.lower().replace("/", "")
+    cache_key = htx_sym
+    now = time.time()
+    with _HTX_CACHE_LOCK:
+        cached = _HTX_PRICE_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _CEFI_PRICE_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get(
+            "https://api.huobi.pro/market/detail/merged",
+            params={"symbol": htx_sym},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            tick = resp.json().get("tick", {})
+            price = float(tick.get("close") or 0.0)
+            if price > 0:
+                with _HTX_CACHE_LOCK:
+                    _HTX_PRICE_CACHE[cache_key] = {"price": price, "_ts": now}
+                return price
+    except Exception as e:
+        logging.debug("[HTX] price fetch failed for %s: %s", symbol, e)
+    with _HTX_CACHE_LOCK:
+        _HTX_PRICE_CACHE[cache_key] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_bitstamp_price(pair: str) -> "Optional[float]":
+    """
+    Fetch last price from Bitstamp public API.
+    pair: CCXT format e.g. "BTC/USDT" or "BTC/USD"; converted to "btcusd" or "btcusdt".
+    Returns float price or None on error.
+    """
+    # Normalise: BTC/USDT → btcusdt, BTC/USD → btcusd
+    bitstamp_pair = pair.lower().replace("/", "")
+    cache_key = bitstamp_pair
+    now = time.time()
+    with _BITSTAMP_CACHE_LOCK:
+        cached = _BITSTAMP_PRICE_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _CEFI_PRICE_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get(
+            f"https://www.bitstamp.net/api/v2/ticker/{bitstamp_pair}/",
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            price_str = resp.json().get("last", "0")
+            price = float(price_str) if price_str else 0.0
+            if price > 0:
+                with _BITSTAMP_CACHE_LOCK:
+                    _BITSTAMP_PRICE_CACHE[cache_key] = {"price": price, "_ts": now}
+                return price
+    except Exception as e:
+        logging.debug("[Bitstamp] price fetch failed for %s: %s", pair, e)
+    with _BITSTAMP_CACHE_LOCK:
+        _BITSTAMP_PRICE_CACHE[cache_key] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_bitget_price(symbol: str) -> "Optional[float]":
+    """
+    Fetch last price from Bitget public spot API.
+    symbol: e.g. "BTC/USDT" or "BTCUSDT"; Bitget uses uppercase e.g. "BTCUSDT".
+    Returns float price or None on error.
+    """
+    bitget_sym = symbol.upper().replace("/", "")
+    cache_key = bitget_sym
+    now = time.time()
+    with _BITGET_CACHE_LOCK:
+        cached = _BITGET_PRICE_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _CEFI_PRICE_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get(
+            "https://api.bitget.com/api/v2/spot/market/tickers",
+            params={"symbol": bitget_sym},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            data_list = resp.json().get("data", [])
+            if data_list:
+                price_str = data_list[0].get("lastPr", "0") or "0"
+                price = float(price_str) if price_str else 0.0
+                if price > 0:
+                    with _BITGET_CACHE_LOCK:
+                        _BITGET_PRICE_CACHE[cache_key] = {"price": price, "_ts": now}
+                    return price
+    except Exception as e:
+        logging.debug("[Bitget] price fetch failed for %s: %s", symbol, e)
+    with _BITGET_CACHE_LOCK:
+        _BITGET_PRICE_CACHE[cache_key] = {"price": None, "_ts": now}
+    return None
+
+
+def _fetch_binance_spot_price(symbol: str) -> "Optional[float]":
+    """Fetch last price from Binance spot public API. symbol = e.g. 'BTCUSDT'."""
+    try:
+        resp = _SESSION.get(
+            f"https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": symbol.upper().replace("/", "")},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            price = float(resp.json().get("price", 0) or 0)
+            return price if price > 0 else None
+    except Exception as e:
+        logging.debug("[Binance spot] price fetch failed for %s: %s", symbol, e)
+    return None
+
+
+def fetch_exchange_price_comparison(base_pair: str = "BTC/USDT") -> dict:
+    """
+    Fetch current price from Binance, HTX, Bitstamp, and Bitget for the given pair.
+    Computes spread between highest and lowest price.
+
+    Returns:
+        {"binance": float|None, "htx": float|None, "bitstamp": float|None, "bitget": float|None,
+         "spread_pct": float, "cheapest": str, "most_expensive": str,
+         "pair": str, "error": str|None}
+
+    5-minute cache.
+    """
+    cache_key = base_pair
+    now = time.time()
+    with _EXCH_COMPARE_LOCK:
+        cached = _EXCH_COMPARE_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _CEFI_PRICE_TTL:
+            result = dict(cached)
+            result.pop("_ts", None)
+            return result
+
+    _neutral = {
+        "pair": base_pair, "binance": None, "htx": None,
+        "bitstamp": None, "bitget": None,
+        "spread_pct": 0.0, "cheapest": "N/A", "most_expensive": "N/A",
+        "error": None,
+    }
+
+    # Normalise symbol formats
+    symbol_no_slash = base_pair.replace("/", "")  # BTCUSDT
+    # Bitstamp uses lowercase and may need USD instead of USDT
+    bitstamp_pair = base_pair.lower().replace("/", "")  # btcusdt — bitstamp supports usdt pairs
+
+    # Fetch in parallel
+    try:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            f_binance  = ex.submit(_fetch_binance_spot_price, symbol_no_slash)
+            f_htx      = ex.submit(fetch_htx_price,           symbol_no_slash)
+            f_bitstamp = ex.submit(fetch_bitstamp_price,      bitstamp_pair)
+            f_bitget   = ex.submit(fetch_bitget_price,        symbol_no_slash)
+        prices = {
+            "binance":  f_binance.result(),
+            "htx":      f_htx.result(),
+            "bitstamp": f_bitstamp.result(),
+            "bitget":   f_bitget.result(),
+        }
+    except Exception as e:
+        logging.warning("[ExchCompare] parallel fetch failed for %s: %s", base_pair, e)
+        result = {**_neutral, "error": str(e)[:80], "_ts": now}
+        with _EXCH_COMPARE_LOCK:
+            _EXCH_COMPARE_CACHE[cache_key] = result
+        r = dict(result)
+        r.pop("_ts", None)
+        return r
+
+    valid = {k: v for k, v in prices.items() if v is not None and v > 0}
+
+    spread_pct   = 0.0
+    cheapest     = "N/A"
+    most_exp     = "N/A"
+
+    if len(valid) >= 2:
+        min_ex   = min(valid, key=lambda k: valid[k])
+        max_ex   = max(valid, key=lambda k: valid[k])
+        min_p    = valid[min_ex]
+        max_p    = valid[max_ex]
+        spread_pct = round((max_p - min_p) / min_p * 100, 4) if min_p > 0 else 0.0
+        cheapest   = min_ex
+        most_exp   = max_ex
+
+    result = {
+        "pair":            base_pair,
+        "binance":         prices["binance"],
+        "htx":             prices["htx"],
+        "bitstamp":        prices["bitstamp"],
+        "bitget":          prices["bitget"],
+        "spread_pct":      spread_pct,
+        "cheapest":        cheapest,
+        "most_expensive":  most_exp,
+        "error":           None if valid else "All exchanges unavailable",
+        "_ts":             now,
+    }
+
+    with _EXCH_COMPARE_LOCK:
+        _EXCH_COMPARE_CACHE[cache_key] = result
+
+    r = dict(result)
+    r.pop("_ts", None)
+    return r

@@ -216,10 +216,36 @@ _GC_MULT = {
 _GC_LENGTHS = (50, 100, 200)  # fast=50, base=100, slow=200 bars
 
 def _load_weights():
+    # 1. Try Bayesian-calibrated weights first (#49 — most accurate when data is available)
+    try:
+        bayesian_w = _db.get_bayesian_weights(latest_only=True)
+        if bayesian_w:
+            # Bayesian weights cover indicator-level keys; merge into DEFAULT_WEIGHTS
+            # by mapping indicator names to weight keys where they overlap
+            _BAYESIAN_TO_WEIGHT_KEY: dict = {
+                "rsi":          "core",
+                "macd":         "momentum",
+                "supertrend":   "supertrend",
+                "adx":          "adx",
+                "funding_rate": "funding_rate",
+                "on_chain":     "onchain",
+                "sentiment":    "agents",
+                "volume":       "bonus",
+            }
+            merged = DEFAULT_WEIGHTS.copy()
+            for bk, wk in _BAYESIAN_TO_WEIGHT_KEY.items():
+                if bk in bayesian_w and wk in merged:
+                    # Blend: 50% Bayesian + 50% existing to avoid overriding completely
+                    merged[wk] = round(0.5 * bayesian_w[bk] + 0.5 * merged[wk], 6)
+            return merged
+    except Exception as _e:
+        logging.debug("Bayesian weight load failed, falling back to DB weights: %s", _e)
+
+    # 2. Try gradient-descent/manual weights from DB
     loaded = _db.load_weights()
     if loaded:
         return loaded
-    # Fallback: read legacy JSON file if DB is empty (e.g. first run before migration)
+    # 3. Fallback: read legacy JSON file if DB is empty (e.g. first run before migration)
     if os.path.exists(DYNAMIC_WEIGHTS_FILE):
         try:
             with open(DYNAMIC_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
