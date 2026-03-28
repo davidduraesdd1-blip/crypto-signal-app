@@ -1494,7 +1494,7 @@ def page_dashboard():
             for _t2r in _t2_sorted:
                 _t2_tp = _t2r.get("tp1")
                 _t2_rows.append({
-                    "Coin":       _t2r["pair"],
+                    "Coin":       _t2r.get("pair", "N/A"),
                     "Signal":     _t2r.get("direction", "N/A"),
                     "Strength":   f"{_t2r.get('confidence_avg_pct', 0)}%",
                     "Entry":      f"${_t2r['entry']:,.4f}"   if _t2r.get("entry")    else "N/A",

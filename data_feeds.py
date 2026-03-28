@@ -5148,7 +5148,9 @@ def fetch_mexc_price(symbol: str) -> "Optional[float]":
 def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
     """
     Fetch last price from Bitso public API for a given book (e.g. 'btc_mxn').
-    Converts from MXN to USD using Binance USDCMXN rate (fallback: 17.5).
+    Converts from MXN to USD using Binance USDTMXN rate (fallback: 17.0).
+    Note: Binance does not list USDCMXN — USDTMXN is also unavailable on Binance
+    spot (MXN pairs not offered), so the hardcoded fallback of 17.0 is always used.
     Returns float price in USD or None on error. 5-min cache.
     """
     now = time.time()
@@ -5168,17 +5170,20 @@ def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
             if last_local > 0:
                 # Determine currency from book name (e.g. btc_mxn → MXN)
                 currency = book.split("_")[-1].upper()
-                # Fetch FX rate: try Binance USDCMXN or fallback
-                mxn_rate = 17.5  # default fallback
+                # Fetch FX rate: try Binance USDT{currency}; Binance doesn't list MXN
+                # pairs so the fallback rate of 17.0 MXN/USD is used in practice.
+                mxn_rate = 17.0  # hardcoded fallback (Binance has no USDTMXN pair)
                 try:
-                    fx_sym = f"USDC{currency}"
+                    fx_sym = f"USDT{currency}"
                     r2 = _SESSION.get(
                         "https://api.binance.com/api/v3/ticker/price",
                         params={"symbol": fx_sym},
                         timeout=4,
                     )
                     if r2.status_code == 200:
-                        mxn_rate = float(r2.json().get("price", 17.5) or 17.5)
+                        _fx_price = float(r2.json().get("price", 0) or 0)
+                        if _fx_price > 0:
+                            mxn_rate = _fx_price
                 except Exception:
                     pass
                 price_usd = round(last_local / mxn_rate, 2) if mxn_rate > 0 else None
@@ -5217,7 +5222,12 @@ def fetch_coindcx_price(pair: str = "BTCINR") -> "Optional[float]":
 
         resp = _SESSION.get("https://api.coindcx.com/exchange/ticker", timeout=8)
         if resp.status_code == 200:
-            for ticker in resp.json():
+            _ticker_list = resp.json()
+            if not isinstance(_ticker_list, list):
+                raise ValueError(f"CoinDCX ticker API returned unexpected type: {type(_ticker_list)}")
+            for ticker in _ticker_list:
+                if not isinstance(ticker, dict):
+                    continue
                 if ticker.get("market") == target_market:
                     last_local = float(ticker.get("last_price", 0) or 0)
                     if last_local > 0:
