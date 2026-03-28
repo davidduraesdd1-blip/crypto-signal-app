@@ -294,6 +294,12 @@ def _cached_resolved_feedback_df(days: int = 365) -> "pd.DataFrame":
     return _db.get_resolved_feedback_df(days=days)
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=30)
+def _cached_confidence_history(pair: str, days: int = 30) -> list:
+    """Cache confidence history per pair — 5-min TTL."""
+    return _db.get_confidence_history(pair, days=days)
+
+
 @st.cache_data(ttl=60, show_spinner=False, max_entries=1)
 def _cached_db_stats() -> dict:
     """Cache DB stats summary — 60s TTL."""
@@ -1008,6 +1014,21 @@ with st.sidebar.expander("🔗 Wallet Import (Beta)", expanded=False):
                     st.error(f"Zerion fetch error: {_ze}")
     elif _wallet_addr:
         st.error("Invalid Ethereum address format")
+
+# ──────────────────────────────────────────────
+# SIDEBAR: PERSONAL API KEYS (#18)
+# Stored in session state only — never written to disk.
+# ──────────────────────────────────────────────
+with st.sidebar.expander("🔑 API Keys (Session Only)", expanded=False):
+    st.caption("Keys stored in session only — never saved to disk.")
+    _user_cg = st.text_input("CoinGecko Pro Key", type="password", key="user_cg_key")
+    _user_ant = st.text_input("Anthropic Key (override)", type="password", key="user_anthropic_key")
+    if st.button("Apply", key="btn_apply_user_keys"):
+        if _user_cg:
+            st.session_state["runtime_coingecko_key"] = _user_cg
+        if _user_ant:
+            st.session_state["runtime_anthropic_key"] = _user_ant
+        st.success("Applied for this session")
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -2204,6 +2225,54 @@ def page_dashboard():
                         st.success(f"Iceberg placed — ID: {_ir['order_id']}")
                     else:
                         st.error(f"Iceberg failed: {_ir['error']}")
+
+    # ── Confidence History (Pro Mode only) ─────────────────────────────────
+    if not st.session_state.get("beginner_mode", True):
+        try:
+            _ch_history = _cached_confidence_history(pair, days=30)
+            if _ch_history:
+                _ch_ts    = [h["timestamp"] for h in _ch_history]
+                _ch_conf  = [h["confidence"] for h in _ch_history]
+                _ch_sigs  = [h["signal"] for h in _ch_history]
+                _ch_colors = [
+                    "#00C853" if s == "BUY" else "#D50000" if s == "SELL" else "#9E9E9E"
+                    for s in _ch_sigs
+                ]
+                _ch_fig = go.Figure()
+                _ch_fig.add_trace(go.Scatter(
+                    x=_ch_ts,
+                    y=_ch_conf,
+                    mode="lines+markers",
+                    name="Confidence %",
+                    line=dict(color="#818cf8", width=1.5),
+                    marker=dict(color=_ch_colors, size=6),
+                    hovertemplate="%{x}<br>Confidence: %{y:.1f}%<extra></extra>",
+                ))
+                _ch_fig.update_layout(
+                    height=160,
+                    margin=dict(l=0, r=0, t=24, b=0),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    title=dict(
+                        text=f"Confidence History — {pair} (last 30 days)  "
+                             '<span style="color:#00C853">● BUY</span> '
+                             '<span style="color:#D50000">● SELL</span> '
+                             '<span style="color:#9E9E9E">● HOLD</span>',
+                        font=dict(size=11),
+                        x=0,
+                    ),
+                    yaxis=dict(
+                        range=[0, 100],
+                        ticksuffix="%",
+                        gridcolor="#222",
+                        tickfont=dict(size=9),
+                    ),
+                    xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
+                    showlegend=False,
+                )
+                st.plotly_chart(_ch_fig, use_container_width=True, key=f"conf_hist_{pair}")
+        except Exception:
+            pass
 
     st.markdown("---")
 

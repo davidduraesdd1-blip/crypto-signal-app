@@ -1655,10 +1655,14 @@ def get_trending_coins() -> list[str]:
             return cached
 
     try:
+        _cg_key = _get_runtime_key("coingecko_key", "")
+        _cg_headers: dict = {"Accept": "application/json"}
+        if _cg_key:
+            _cg_headers["x-cg-pro-api-key"] = _cg_key
         resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/search/trending",
             timeout=10,
-            headers={"Accept": "application/json"},
+            headers=_cg_headers,
         )
         if resp.status_code == 200:
             coins = resp.json().get("coins", [])
@@ -1733,10 +1737,14 @@ def get_global_market() -> dict:
             return dict(_GLOBAL_CACHE)
 
     try:
+        _cg_key = _get_runtime_key("coingecko_key", "")
+        _cg_hdrs: dict = {"Accept": "application/json"}
+        if _cg_key:
+            _cg_hdrs["x-cg-pro-api-key"] = _cg_key
         resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/global",
             timeout=10,
-            headers={"Accept": "application/json"},
+            headers=_cg_hdrs,
         )
         if resp.status_code == 200:
             data  = resp.json().get("data", {})
@@ -5637,6 +5645,22 @@ def fetch_ccxt_ticker(exchange_id: str, symbol: str) -> "dict | None":
 # API KEY VALIDATION ON STARTUP  (#17 security hardening)
 # Lightweight connectivity checks — no auth needed for public endpoints.
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _get_runtime_key(key_name: str, default: str = "") -> str:
+    """Return a per-session API key override stored in st.session_state.
+
+    The UI expander (#18) lets users paste a personal key (e.g. CoinGecko Pro)
+    that is stored as ``runtime_<key_name>`` in Streamlit session state for the
+    duration of the browser session — never written to disk.  Falls back to
+    *default* when Streamlit is not running (e.g. background scheduler threads).
+    """
+    try:
+        import streamlit as st
+        val = st.session_state.get(f"runtime_{key_name}", "")
+        return val if val else default
+    except Exception:
+        return default
+
 
 def validate_api_keys() -> dict:
     """Test each configured API key with a lightweight connectivity check.

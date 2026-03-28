@@ -2841,6 +2841,67 @@ def get_pnl_trades_df(limit: int = 200) -> "pd.DataFrame":
 
 
 # ──────────────────────────────────────────────
+# CONFIDENCE HISTORY  (Batch 9 — signal confidence trend chart)
+# ──────────────────────────────────────────────
+
+def get_confidence_history(pair: str, days: int = 30) -> list:
+    """Return the last *days* of confidence scores for *pair* from daily_signals.
+
+    Each element is a dict:
+        {"timestamp": str, "confidence": float, "signal": str}
+
+    The list is ordered chronologically (oldest first) so callers can plot it
+    directly as a time-series.  Returns an empty list when no rows exist.
+    """
+    conn = None
+    try:
+        conn = _get_conn()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        rows = conn.execute(
+            """
+            SELECT scan_timestamp, confidence_avg_pct, direction
+            FROM   daily_signals
+            WHERE  pair = ?
+              AND  scan_timestamp >= ?
+            ORDER  BY scan_timestamp ASC
+            """,
+            (pair, cutoff),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            ts_raw = row[0] or ""
+            conf_raw = row[1]
+            direction_raw = row[2] or "HOLD"
+            try:
+                conf_val = float(conf_raw) if conf_raw is not None else 0.0
+            except (TypeError, ValueError):
+                conf_val = 0.0
+            # Normalise direction to BUY / SELL / HOLD for colour coding
+            d_upper = direction_raw.upper()
+            if "BUY" in d_upper:
+                sig = "BUY"
+            elif "SELL" in d_upper:
+                sig = "SELL"
+            else:
+                sig = "HOLD"
+            result.append({
+                "timestamp":  ts_raw,
+                "confidence": conf_val,
+                "signal":     sig,
+            })
+        return result
+    except Exception as e:
+        logger.warning("[DB] get_confidence_history(%s) failed: %s", pair, e)
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
 # DB INTEGRITY CHECK  (#14 security hardening)
 # ──────────────────────────────────────────────
 
