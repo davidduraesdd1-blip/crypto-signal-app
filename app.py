@@ -2555,6 +2555,22 @@ def _run_scan_thread():
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
         _write_scan_status(running=False, timestamp=ts, error=None)
+        # ── P&L entry/exit recording (Batch 8) ────────────────────────────────
+        # On BUY: open a P&L entry. On SELL: close the matching open entry.
+        try:
+            for _r in results:
+                _pair_pnl = _r.get("pair")
+                _dir_pnl  = _r.get("direction", "")
+                _px_pnl   = _r.get("price_usd") or _r.get("price") or 0
+                _conf_pnl = _r.get("confidence_avg_pct") or _r.get("confidence") or 0
+                if not _pair_pnl or not _px_pnl:
+                    continue
+                if "BUY" in str(_dir_pnl).upper():
+                    _db.record_pnl_entry(_pair_pnl, _dir_pnl, float(_px_pnl), float(_conf_pnl))
+                elif "SELL" in str(_dir_pnl).upper():
+                    _db.record_pnl_exit(_pair_pnl, float(_px_pnl))
+        except Exception as _pnl_err:
+            logging.warning("[App] P&L recording error: %s", _pnl_err)
         # Check paper position exits using fresh scan prices
         _scan_closed = []  # APP-01: initialize before try so it's always defined
         try:
@@ -4061,6 +4077,67 @@ def page_backtest():
                     st.caption(f"WFE: {_wfe_db_note}")
     except Exception as _ic_wfe_err:
         st.caption(f"IC & WFE card error: {_ic_wfe_err}")
+
+    # ── P&L Tracking Summary (Batch 8) ────────────────────────────────────────
+    try:
+        st.divider()
+        _ui.section_header(
+            "Live P&L Tracking",
+            "Real-time signal entry/exit P&L tracked across BUY/SELL signal pairs. "
+            "Entries recorded on BUY signals; exits on matching SELL signals.",
+            icon="💰",
+        )
+        _pnl_sum = _db.get_pnl_summary()
+        _pnl_n = _pnl_sum.get("total_trades", 0)
+        if _pnl_n == 0:
+            st.info(
+                "No closed P&L trades yet. P&L entries are recorded automatically when "
+                "BUY signals are generated, and closed when matching SELL signals are detected."
+            )
+        else:
+            _pnl_c1, _pnl_c2, _pnl_c3, _pnl_c4 = st.columns(4)
+            _pnl_c1.metric("Closed Trades", _pnl_n)
+            _pnl_c2.metric(
+                "Win Rate",
+                f"{_pnl_sum.get('win_rate_pct', 0):.1f}%",
+                help="% of closed trades with positive P&L",
+            )
+            _pnl_c3.metric(
+                "Avg P&L / Trade",
+                f"{_pnl_sum.get('avg_pnl_pct', 0):+.2f}%",
+                help="Mean P&L per closed trade",
+            )
+            _pnl_c4.metric(
+                "Est. Annualised Return",
+                f"{_pnl_sum.get('annualized_return_pct', 0):+.1f}%",
+                help="Rough CAGR-style estimate based on average holding period",
+            )
+            _pnl_c5, _pnl_c6, _pnl_c7 = st.columns(3)
+            _pnl_c5.metric("Best Trade", f"{_pnl_sum.get('best_trade_pct', 0):+.2f}%")
+            _pnl_c6.metric("Worst Trade", f"{_pnl_sum.get('worst_trade_pct', 0):+.2f}%")
+            _pnl_c7.metric("Open Positions", _pnl_sum.get("open_positions", 0))
+
+            with st.expander("P&L Trade Log", expanded=False):
+                _pnl_df = _db.get_pnl_trades_df(limit=200)
+                if not _pnl_df.empty:
+                    _pnl_df_disp = _pnl_df.rename(columns={
+                        "pair": "Pair", "entry_signal": "Entry Signal",
+                        "entry_price": "Entry $", "exit_price": "Exit $",
+                        "pnl_pct": "P&L %", "holding_hours": "Held (h)",
+                        "entry_time": "Entry Time", "exit_time": "Exit Time",
+                    })
+                    st.dataframe(
+                        _pnl_df_disp.style.format({
+                            "P&L %": "{:+.2f}", "Held (h)": "{:.1f}",
+                            "Entry $": "{:.4f}", "Exit $": "{:.4f}",
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.caption("No closed P&L trades in log.")
+    except Exception as _pnl_err:
+        st.caption(f"P&L tracking card error: {_pnl_err}")
 
     if not df_trades.empty and "exit_reason" in df_trades.columns:
         st.divider()

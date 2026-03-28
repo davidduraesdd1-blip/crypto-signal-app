@@ -97,36 +97,65 @@ TIER2_DEFAULT_WEIGHTS: dict[str, float] = {pair: 1.0 / 20 for pair in TIER2_PAIR
 # auto-enabled when the corresponding key is set — no code changes needed
 FEATURES: dict = {
     # AI / LLM
-    "ai_analysis":      bool(ANTHROPIC_API_KEY),
+    "ai_analysis":       bool(ANTHROPIC_API_KEY),
+    "anthropic_ai":      bool(ANTHROPIC_API_KEY),
     # News
-    "cryptopanic_news": bool(CRYPTOPANIC_API_KEY),
+    "cryptopanic_news":  bool(CRYPTOPANIC_API_KEY),
     # Market data
-    "coingecko_pro":    bool(COINGECKO_API_KEY),
+    "coingecko_pro":     bool(COINGECKO_API_KEY) or bool(os.environ.get("SUPERGROK_COINGECKO_PRO_KEY", "")),
     # CMC global metrics — requires free API key
-    "coinmarketcap":    bool(COINMARKETCAP_API_KEY),
+    "coinmarketcap":     bool(COINMARKETCAP_API_KEY),
     # Error monitoring
-    "sentry":           bool(SENTRY_DSN),
+    "sentry":            bool(SENTRY_DSN),
+    # Zerion DeFi portfolio
+    "zerion":            bool(ZERION_API_KEY),
+    # Optional libraries — updated at runtime after import checks
+    "ccxt":              False,   # updated at runtime after import check
+    "hmmlearn":          False,   # updated at runtime after import check
+    "scipy":             False,   # updated at runtime after import check
     # Always-on free APIs
-    "binance":          True,
-    "bybit":            True,
-    "coingecko_free":   True,
-    "fear_greed":       True,
-    "fred_m2":          True,
+    "binance":           True,
+    "bybit":             True,
+    "coingecko_free":    True,
+    "fear_greed":        True,
+    "fred_m2":           True,
     # Always-on: 10 new ccxt exchanges (free public funding rate data)
-    "bitfinex":         True,
-    "mexc":             True,
-    "htx":              True,
-    "phemex":           True,
-    "woo":              True,
-    "bithumb":          True,
-    "cryptocom":        True,
-    "ascendex":         True,
-    "lbank":            True,
-    "coinex":           True,
+    "bitfinex":          True,
+    "mexc":              True,
+    "htx":               True,
+    "phemex":            True,
+    "woo":               True,
+    "bithumb":           True,
+    "cryptocom":         True,
+    "ascendex":          True,
+    "lbank":             True,
+    "coinex":            True,
     # Always-on: extra data sources (free public APIs)
-    "deribit_options":  True,
+    "deribit":           True,   # public endpoint, no key needed
+    "deribit_options":   True,
     "regional_premiums": True,
+    "tier2_pairs":       True,   # available by default
 }
+
+# ─── Runtime library checks ───────────────────────────────────────────────────
+# Update FEATURES flags based on whether optional libraries are installed.
+try:
+    import ccxt as _ccxt_check  # noqa: F401
+    FEATURES["ccxt"] = True
+except ImportError:
+    pass
+
+try:
+    import hmmlearn as _hmmlearn_check  # noqa: F401
+    FEATURES["hmmlearn"] = True
+except ImportError:
+    pass
+
+try:
+    import scipy as _scipy_check  # noqa: F401
+    FEATURES["scipy"] = True
+except ImportError:
+    pass
 
 
 def feature_enabled(name: str) -> bool:

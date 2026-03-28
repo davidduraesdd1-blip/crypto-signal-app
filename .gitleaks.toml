@@ -1,7 +1,7 @@
-title = "RWA Infinity Model - Gitleaks Config"
+title = "SuperGrok Mathematically Model - Gitleaks Config"
 
 [allowlist]
-description = "Allowlist for known safe patterns"
+description = "Allowlist for test/demo data and known safe patterns"
 paths = [
     ".streamlit/secrets.toml.example",
     "requirements.txt",
@@ -11,4 +11,8 @@ regexes = [
     '''your[_-]?api[_-]?key[_-]?here''',
     '''sk-ant-example''',
     '''REPLACE_WITH_YOUR_KEY''',
+    # Test / demo data patterns
+    '''DEMO_''',
+    '''test_key_''',
+    '''placeholder_''',
 ]

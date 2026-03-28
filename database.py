@@ -437,6 +437,26 @@ def init_db():
                 )
             """)
 
+            # P&L tracking table (Batch 8 — Enhanced Pair P&L Tracking)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pnl_tracking (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pair          TEXT NOT NULL,
+                    entry_price   REAL NOT NULL,
+                    entry_signal  TEXT NOT NULL,
+                    entry_time    TEXT NOT NULL,
+                    confidence    REAL,
+                    exit_price    REAL,
+                    exit_time     TEXT,
+                    pnl_pct       REAL,
+                    holding_hours REAL,
+                    status        TEXT DEFAULT 'open'
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pnl_pair ON pnl_tracking(pair, status)"
+            )
+
             # Backtest schema migration — add columns added after initial release
             _add_col('backtest_trades', 'gross_pnl_pct',  'REAL')
             _add_col('backtest_trades', 'fee_usd',        'REAL')
@@ -498,7 +518,7 @@ _VALID_TABLES = frozenset([
     'feedback_log', 'daily_signals', 'backtest_trades', 'paper_trades',
     'positions', 'dynamic_weights', 'weights_log', 'scan_cache',
     'scan_status', 'alerts_log', 'execution_log', 'arb_opportunities',
-    'agent_log',
+    'agent_log', 'pnl_tracking',
 ])
 
 # Pre-built COUNT(*) queries per table — eliminates f-string SQL construction (SEC-CRITICAL-01).
@@ -2620,6 +2640,203 @@ def get_latest_wfo_result() -> dict:
         return {}
     finally:
         if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
+# P&L TRACKING  (Batch 8 — Enhanced Pair P&L)
+# ──────────────────────────────────────────────
+
+def record_pnl_entry(pair: str, signal: str, price: float, confidence: float = None) -> None:
+    """Record a BUY signal entry into the P&L tracking table.
+
+    If an open entry already exists for this pair it is left as-is (deduplication).
+    Only the most recent open entry per pair is used when recording exits.
+    """
+    entry_time = datetime.now(timezone.utc).isoformat()
+    with _write_lock:
+        conn = None
+        try:
+            conn = _get_conn()
+            # Only insert if there is no open position for this pair already
+            existing = conn.execute(
+                "SELECT id FROM pnl_tracking WHERE pair=? AND status='open' ORDER BY id DESC LIMIT 1",
+                (pair,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """INSERT INTO pnl_tracking
+                       (pair, entry_price, entry_signal, entry_time, confidence, status)
+                       VALUES (?, ?, ?, ?, ?, 'open')""",
+                    (pair, float(price), signal, entry_time, confidence),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("[DB] record_pnl_entry failed: %s", e)
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def record_pnl_exit(pair: str, price: float) -> Optional[dict]:
+    """Close the most recent open P&L entry for *pair* and compute P&L.
+
+    Returns a dict with the closed trade details, or None if no open entry exists.
+    P&L formula: pnl_pct = (exit_price - entry_price) / entry_price * 100  (BUY entries).
+    """
+    exit_time = datetime.now(timezone.utc).isoformat()
+    with _write_lock:
+        conn = None
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                """SELECT id, entry_price, entry_signal, entry_time, confidence
+                   FROM pnl_tracking
+                   WHERE pair=? AND status='open'
+                   ORDER BY id DESC LIMIT 1""",
+                (pair,),
+            ).fetchone()
+            if row is None:
+                return None
+
+            entry_price = row["entry_price"]
+            entry_time_str = row["entry_time"]
+            pnl_pct = (float(price) - entry_price) / entry_price * 100 if entry_price else 0.0
+
+            # Compute holding hours
+            try:
+                entry_dt = datetime.fromisoformat(entry_time_str)
+                exit_dt  = datetime.fromisoformat(exit_time)
+                holding_hours = (exit_dt - entry_dt).total_seconds() / 3600.0
+            except Exception:
+                holding_hours = None
+
+            conn.execute(
+                """UPDATE pnl_tracking
+                   SET exit_price=?, exit_time=?, pnl_pct=?, holding_hours=?, status='closed'
+                   WHERE id=?""",
+                (float(price), exit_time, round(pnl_pct, 4), holding_hours, row["id"]),
+            )
+            conn.commit()
+
+            return {
+                "pair":          pair,
+                "entry_price":   entry_price,
+                "entry_signal":  row["entry_signal"],
+                "entry_time":    entry_time_str,
+                "exit_price":    float(price),
+                "exit_time":     exit_time,
+                "pnl_pct":       round(pnl_pct, 4),
+                "holding_hours": holding_hours,
+            }
+        except Exception as e:
+            logger.warning("[DB] record_pnl_exit failed: %s", e)
+            return None
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def get_pnl_summary() -> dict:
+    """Return aggregate P&L statistics for all closed trades.
+
+    Returns:
+        dict with keys:
+            total_trades     — number of closed P&L entries
+            win_rate_pct     — % of trades with pnl_pct > 0
+            avg_pnl_pct      — mean P&L per trade
+            best_trade_pct   — highest single-trade P&L
+            worst_trade_pct  — lowest single-trade P&L
+            total_pnl_pct    — sum of all P&L values
+            annualized_return_pct — rough annualised estimate (CAGR-style)
+            open_positions   — count of still-open entries
+    """
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT pnl_pct, holding_hours FROM pnl_tracking WHERE status='closed'"
+        ).fetchall()
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM pnl_tracking WHERE status='open'"
+        ).fetchone()[0]
+
+        if not rows:
+            return {
+                "total_trades": 0,
+                "win_rate_pct": 0.0,
+                "avg_pnl_pct": 0.0,
+                "best_trade_pct": 0.0,
+                "worst_trade_pct": 0.0,
+                "total_pnl_pct": 0.0,
+                "annualized_return_pct": 0.0,
+                "open_positions": open_count,
+            }
+
+        pnls    = [r["pnl_pct"] for r in rows if r["pnl_pct"] is not None]
+        hours   = [r["holding_hours"] for r in rows if r["holding_hours"] is not None]
+
+        n       = len(pnls)
+        wins    = sum(1 for p in pnls if p > 0)
+        avg_pnl = sum(pnls) / n if n else 0.0
+        total   = sum(pnls)
+
+        # Rough annualised return: compound each trade then annualise by average holding period
+        avg_hours = sum(hours) / len(hours) if hours else 24.0
+        avg_hours = max(avg_hours, 0.25)  # guard against near-zero
+        compound_factor = 1.0
+        for p in pnls:
+            compound_factor *= (1 + p / 100.0)
+        total_hours = avg_hours * n
+        years = total_hours / 8760.0
+        if years > 0 and compound_factor > 0:
+            annualized = (compound_factor ** (1.0 / years) - 1) * 100
+        else:
+            annualized = 0.0
+
+        return {
+            "total_trades":           n,
+            "win_rate_pct":           round(wins / n * 100, 1) if n else 0.0,
+            "avg_pnl_pct":            round(avg_pnl, 3),
+            "best_trade_pct":         round(max(pnls), 3),
+            "worst_trade_pct":        round(min(pnls), 3),
+            "total_pnl_pct":          round(total, 3),
+            "annualized_return_pct":  round(annualized, 1),
+            "open_positions":         open_count,
+        }
+    except Exception as e:
+        logger.warning("[DB] get_pnl_summary failed: %s", e)
+        return {
+            "total_trades": 0, "win_rate_pct": 0.0, "avg_pnl_pct": 0.0,
+            "best_trade_pct": 0.0, "worst_trade_pct": 0.0, "total_pnl_pct": 0.0,
+            "annualized_return_pct": 0.0, "open_positions": 0,
+        }
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def get_pnl_trades_df(limit: int = 200) -> "pd.DataFrame":
+    """Return closed P&L trades as a DataFrame for display in the UI."""
+    conn = None
+    try:
+        conn = _get_conn()
+        df = pd.read_sql_query(
+            """SELECT pair, entry_signal, entry_price, exit_price, pnl_pct,
+                      holding_hours, entry_time, exit_time
+               FROM pnl_tracking
+               WHERE status='closed'
+               ORDER BY id DESC
+               LIMIT ?""",
+            conn,
+            params=(limit,),
+        )
+        return df
+    except Exception as e:
+        logger.warning("[DB] get_pnl_trades_df failed: %s", e)
+        return pd.DataFrame()
+    finally:
+        if conn is not None:
             conn.close()
 
 
