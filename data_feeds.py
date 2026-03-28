@@ -52,6 +52,11 @@ _SESSION = _build_session()
 class RateLimiter:
     """Token bucket rate limiter for API calls."""
     def __init__(self, calls_per_second: float = 1.0):
+        if calls_per_second <= 0:
+            raise ValueError(
+                f"RateLimiter: calls_per_second must be > 0, got {calls_per_second!r}. "
+                "A zero rate would cause acquire() to busy-loop until timeout."
+            )
         self._rate = calls_per_second
         self._tokens = calls_per_second
         self._last_refill = time.time()
