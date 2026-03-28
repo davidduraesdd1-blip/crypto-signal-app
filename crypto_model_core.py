@@ -900,9 +900,11 @@ def agent_vote_lstm(df, hold_bars: int = 5):
             _entry_mlp = _mlp_model_cache.get(_mlp_cache_key)
             if _entry_mlp and _now_mlp < _entry_mlp["expires"]:
                 _cached_mlp = _entry_mlp["model"]
-                _cached_scaler = _entry_mlp["scaler"]
+                _cached_scaler = _entry_mlp.get("scaler")  # BUG-MLP01: use .get() so missing key returns None safely
 
-        if _cached_mlp is None:
+        # BUG-MLP01: if model cached but scaler is missing/None (corrupt cache entry),
+        # treat as a cache miss and retrain both from scratch to keep them in sync.
+        if _cached_mlp is None or _cached_scaler is None:
             X_list, y_list = [], []
             for i in range(n_train):
                 seq = features[i:i + seq_len]
