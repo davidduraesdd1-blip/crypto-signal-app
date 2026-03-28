@@ -2613,7 +2613,12 @@ def _run_scan_thread():
         _scan_state["progress_pair"] = f"Connecting to {model.TA_EXCHANGE.upper()}..."
     _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
     try:
-        _include_t2 = st.session_state.get("include_tier2", False)
+        # st.session_state is only available in the Streamlit request context;
+        # background threads (APScheduler) have no session — use safe fallback.
+        try:
+            _include_t2 = st.session_state.get("include_tier2", False)
+        except Exception:
+            _include_t2 = False
         results = model.run_scan(progress_callback=_progress_cb, include_tier2=_include_t2)
         model.append_to_master(results)
         # F1/F2/F4/F6/F7: resolve past outcomes, update weights, check drift

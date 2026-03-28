@@ -4186,15 +4186,9 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
         if r.status_code == 200:
             last_mxn = float((r.json().get("payload") or {}).get("last", 0) or 0)
             result["bitso_mxn"] = last_mxn
-            # MXN→USD conversion via USDCMXN on Binance
-            try:
-                r2 = _SESSION.get(
-                    "https://api.binance.com/api/v3/ticker/price?symbol=USDCMXN",
-                    timeout=4,
-                )
-                mxn_rate = float(r2.json().get("price", 17.5) or 17.5) if r2.status_code == 200 else 17.5
-            except Exception:
-                mxn_rate = 17.5
+            # MXN→USD conversion: Binance has no MXN spot pairs (USDCMXN / USDTMXN
+            # are not listed), so use a hardcoded fallback rate.
+            mxn_rate = 17.5
             result["bitso_usd_equiv"] = round(last_mxn / mxn_rate, 2) if mxn_rate > 0 else None
     except Exception as e:
         result["errors"].append(f"bitso:{e}")
