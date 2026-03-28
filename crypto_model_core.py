@@ -4971,6 +4971,52 @@ def run_cointegration_scan(pairs=None, tf='1d', lookback=100):
     return results, None
 
 
+# ──────────────────────────────────────────────
+# #35 CCXT OHLCV FALLBACK HELPER
+# Prefers CCXT OHLCV (richer data) over direct Binance API when available.
+# ──────────────────────────────────────────────
+
+def _get_ohlcv_with_ccxt_fallback(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> "list | None":
+    """
+    Try CCXT first (higher quality, unified format), fall back to direct Binance API.
+
+    Args:
+        symbol:    e.g. "BTC/USDT"
+        timeframe: e.g. "1h", "4h", "1d"
+        limit:     number of candles
+
+    Returns:
+        List of [timestamp_ms, open, high, low, close, volume] candles, or None on failure.
+        CCXT result is already in this format; Binance klines are converted.
+    """
+    try:
+        import data_feeds as _df_ohlcv
+        _ccxt_avail = getattr(_df_ohlcv, "_CCXT_AVAILABLE", False)
+        if _ccxt_avail:
+            # Convert "BTC/USDT" → "BTCUSDT" for Binance via CCXT
+            _ccxt_result = _df_ohlcv.fetch_ccxt_ohlcv(
+                "binance", symbol, timeframe, limit
+            )
+            if _ccxt_result:
+                return _ccxt_result
+        # Fall back to direct Binance klines API
+        _binance_sym = symbol.replace("/", "")
+        _klines = _df_ohlcv.fetch_binance_klines(_binance_sym, interval=timeframe, limit=limit)
+        if _klines:
+            # Normalise Binance kline format → [ts_ms, open, high, low, close, volume]
+            return [
+                [int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])]
+                for k in _klines
+            ]
+    except Exception as _e:
+        logging.debug("[OHLCV fallback] %s %s failed: %s", symbol, timeframe, _e)
+    return None
+
+
 def main():
     print(f"\nCrypto Model {VERSION}")
     print(f"Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}\n")

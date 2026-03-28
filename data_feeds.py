@@ -5477,3 +5477,113 @@ def fetch_dex_vs_cex_spread(symbol: str = "BTC") -> dict:
     _out = dict(_result)
     _out.pop("_ts", None)
     return _out
+
+
+# ──────────────────────────────────────────────
+# CCXT OHLCV + TICKER  (#35)
+# Optional enhancement — available when ccxt is installed.
+# Falls back gracefully if not available.
+# ──────────────────────────────────────────────
+
+# Caches keyed on (exchange_id, symbol, timeframe) for OHLCV
+# and (exchange_id, symbol) for ticker
+_CCXT_OHLCV_CACHE: dict = {}
+_CCXT_OHLCV_LOCK  = threading.Lock()
+_CCXT_OHLCV_TTL   = 300  # 5 minutes
+
+_CCXT_TICKER_CACHE: dict = {}
+_CCXT_TICKER_LOCK  = threading.Lock()
+_CCXT_TICKER_TTL   = 60   # 1 minute
+
+
+def fetch_ccxt_ohlcv(
+    exchange_id: str,
+    symbol: str,
+    timeframe: str = "1h",
+    limit: int = 100,
+) -> "list | None":
+    """
+    Fetch OHLCV candles via CCXT for any supported exchange.
+
+    Returns a list of [timestamp_ms, open, high, low, close, volume] candles,
+    or None if CCXT is not installed or the request fails.
+
+    5-minute cache keyed on (exchange_id, symbol, timeframe).
+    """
+    if not _CCXT_AVAILABLE:
+        return None
+
+    _cache_key = (exchange_id, symbol, timeframe, limit)
+    _now = time.time()
+    with _CCXT_OHLCV_LOCK:
+        _hit = _CCXT_OHLCV_CACHE.get(_cache_key)
+        if _hit and (_now - _hit["ts"]) < _CCXT_OHLCV_TTL:
+            return _hit["data"]
+
+    ex = _get_ccxt_exchange(exchange_id)
+    if ex is None:
+        return None
+
+    try:
+        candles = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+        if candles:
+            with _CCXT_OHLCV_LOCK:
+                _CCXT_OHLCV_CACHE[_cache_key] = {"data": candles, "ts": _now}
+        return candles if candles else None
+    except ccxt.NetworkError as _ne:
+        logging.debug("[CCXT OHLCV] NetworkError %s %s: %s", exchange_id, symbol, _ne)
+        return None
+    except ccxt.ExchangeError as _ee:
+        logging.debug("[CCXT OHLCV] ExchangeError %s %s: %s", exchange_id, symbol, _ee)
+        return None
+    except Exception as _e:
+        logging.debug("[CCXT OHLCV] %s %s failed: %s", exchange_id, symbol, _e)
+        return None
+
+
+def fetch_ccxt_ticker(exchange_id: str, symbol: str) -> "dict | None":
+    """
+    Fetch a ticker dict via CCXT for any supported exchange.
+
+    Returns a ccxt ticker dict with keys: 'last', 'bid', 'ask', 'volume', 'change',
+    or None if CCXT is not installed or the request fails.
+
+    1-minute cache keyed on (exchange_id, symbol).
+    """
+    if not _CCXT_AVAILABLE:
+        return None
+
+    _cache_key = (exchange_id, symbol)
+    _now = time.time()
+    with _CCXT_TICKER_LOCK:
+        _hit = _CCXT_TICKER_CACHE.get(_cache_key)
+        if _hit and (_now - _hit["ts"]) < _CCXT_TICKER_TTL:
+            return _hit["data"]
+
+    ex = _get_ccxt_exchange(exchange_id)
+    if ex is None:
+        return None
+
+    try:
+        ticker = ex.fetch_ticker(symbol)
+        if ticker:
+            _result = {
+                "last":   ticker.get("last"),
+                "bid":    ticker.get("bid"),
+                "ask":    ticker.get("ask"),
+                "volume": ticker.get("baseVolume") or ticker.get("quoteVolume"),
+                "change": ticker.get("change") or ticker.get("percentage"),
+            }
+            with _CCXT_TICKER_LOCK:
+                _CCXT_TICKER_CACHE[_cache_key] = {"data": _result, "ts": _now}
+            return _result
+        return None
+    except ccxt.NetworkError as _ne:
+        logging.debug("[CCXT Ticker] NetworkError %s %s: %s", exchange_id, symbol, _ne)
+        return None
+    except ccxt.ExchangeError as _ee:
+        logging.debug("[CCXT Ticker] ExchangeError %s %s: %s", exchange_id, symbol, _ee)
+        return None
+    except Exception as _e:
+        logging.debug("[CCXT Ticker] %s %s failed: %s", exchange_id, symbol, _e)
+        return None

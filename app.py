@@ -403,6 +403,19 @@ st.set_page_config(
 # ── Professional CSS design system (must come before any st.* calls) ──
 _ui.inject_css()
 
+# ── #59 UI/UX Refresh — global signal/card color variables ────────────────────
+SIGNAL_CSS = """
+<style>
+.signal-buy  { color: #00C853; font-weight: bold; }
+.signal-sell { color: #D50000; font-weight: bold; }
+.signal-hold { color: #FF6D00; font-weight: bold; }
+.metric-positive { color: #00C853; }
+.metric-negative { color: #D50000; }
+.card-container  { background: #1E1E1E; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+</style>
+"""
+st.markdown(SIGNAL_CSS, unsafe_allow_html=True)
+
 # ── Beginner / Advanced mode toggle (persisted in session state) ──────────────
 if "beginner_mode" not in st.session_state:
     st.session_state["beginner_mode"] = True   # default: Simple view for new users
@@ -1437,9 +1450,16 @@ def page_dashboard():
 
     # ── Scan Overview — Sparkline Mini-Grid (#60) ─────────────────────────────
     _ui.section_header("Scan Overview", "Mini sparklines — 24h price trend for each pair at a glance. Green = up, Red = down.", icon="📈")
-    _spk_cols = st.columns(min(len(sorted_results), 4))
+    # #59 Mobile-responsive layout: 2-column grid on wide screens; note if only 1 result
+    _spk_n_results = len(sorted_results)
+    if _spk_n_results == 1:
+        st.caption("Single result — showing in single-column layout.")
+        _spk_n_cols = 1
+    else:
+        _spk_n_cols = min(_spk_n_results, 4)  # up to 4 columns; CSS grid handles responsive wrap
+    _spk_cols = st.columns(_spk_n_cols)
     for _si, _sr in enumerate(sorted_results[:12]):  # max 12 cards in grid
-        _col_idx = _si % 4
+        _col_idx = _si % _spk_n_cols
         with _spk_cols[_col_idx]:
             try:
                 _spk_closes = data_feeds.fetch_sparkline_closes(_sr["pair"], n=24)
@@ -1621,7 +1641,7 @@ def page_dashboard():
     # Score out of 10 alongside % — research shows teens prefer a 1-10 scale
     _score_10 = max(1, min(10, round(conf / 10)))
     bot_cols[1].metric("Confidence Score", f"{_score_10}/10  ({conf:.0f}%)",
-                       help="How confident the model is. 7+/10 = strong signal. 5 or below = uncertain — don't trade this. Like a teacher grading the signal.")
+                       help="How strongly our model agrees on the signal direction. Above 65% = actionable. 7+/10 = strong signal. 5 or below = uncertain — don't trade this.")
     # #50 Fractional Kelly position sizing — display recommended size from Kelly formula
     _kelly_pos_pct = pos_pct   # default to model-computed size
     try:
@@ -1645,14 +1665,54 @@ def page_dashboard():
         "Suggested Trade Size",
         f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "N/A",
         help=(
-            "How much of your total money to use — sized by the Kelly Criterion "
-            "(fractional Kelly at 25%). If you have $1,000 and it says 10%, use $100. "
-            "This protects you if things go wrong."
+            "Recommended position size as % of portfolio based on historical win rate. "
+            "Fractional Kelly (25%) reduces risk of ruin. "
+            "If you have $1,000 and it says 10%, use $100."
         ),
     )
 
     # Gradient confidence bar (#62) — signal-aware color-coded bar
     st.markdown(_ui.render_confidence_bar(conf, direction), unsafe_allow_html=True)
+
+    # ── #59 Key metrics row with beginner tooltips ─────────────────────────────
+    _km_tf1 = (list(r.get("timeframes", {}).values()) or [{}])[0]
+    try:
+        _km_rsi_raw = _km_tf1.get("rsi")
+        _km_rsi = float(_km_rsi_raw) if _km_rsi_raw is not None else None
+    except (TypeError, ValueError):
+        _km_rsi = None
+    try:
+        _km_adx_raw = _km_tf1.get("adx")
+        _km_adx = float(_km_adx_raw) if _km_adx_raw is not None else None
+    except (TypeError, ValueError):
+        _km_adx = None
+    try:
+        _km_fr_raw = r.get("funding_rate_pct") or (r.get("timeframes", {}).get("1h", {}) or {}).get("funding")
+        _km_fr = float(_km_fr_raw) if _km_fr_raw is not None else None
+    except (TypeError, ValueError):
+        _km_fr = None
+    _km_chg = (_ws.get_price(pair) or {}).get("change_24h_pct")
+    _km_c1, _km_c2, _km_c3, _km_c4 = st.columns(4)
+    _km_c1.metric(
+        "Current Price",
+        f"${price:,.4f}" if price else "N/A",
+        delta=f"{_km_chg:+.2f}% 24h" if _km_chg is not None else None,
+    )
+    _km_c2.metric(
+        "RSI (1h)",
+        f"{_km_rsi:.1f}" if _km_rsi is not None else "N/A",
+        help="RSI above 70 = overbought, below 30 = oversold. Best range: 40-60 for entries.",
+    )
+    _km_c3.metric(
+        "ADX (1h)",
+        f"{_km_adx:.1f}" if _km_adx is not None else "N/A",
+        help="Trend strength indicator. Above 25 = strong trend. Below 20 = choppy/ranging.",
+    )
+    _km_c4.metric(
+        "Funding Rate",
+        f"{_km_fr:+.4f}%" if _km_fr is not None else "N/A",
+        help="Positive = longs pay shorts (bullish market). Negative = shorts pay longs (bearish market). Extreme values warn of reversals.",
+    )
 
     # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
     _consensus     = r.get("consensus", 0.0)
@@ -4051,6 +4111,150 @@ def page_backtest():
                 st.caption("Click **Run WFO** to find the optimal confidence threshold for BUY signals.")
     except Exception as _wfo_err:
         st.caption(f"WFO card error: {_wfo_err}")
+
+    # ── Walk-Forward Validation Details (#90) ─────────────────────────────────
+    st.markdown("---")
+    with st.expander("Walk-Forward Validation Details", expanded=False):
+        try:
+            _wfv_c1, _wfv_c2 = st.columns([1, 3])
+            with _wfv_c1:
+                _wfv_nw = st.number_input(
+                    "Windows", min_value=4, max_value=12, value=8, step=1,
+                    key="wfv_n_windows",
+                    help="Number of rolling windows to divide backtest history into",
+                )
+                if st.button("Run WFE Validation", type="primary",
+                             use_container_width=True, key="btn_wfv"):
+                    with st.spinner("Computing WFE validation across windows...", show_time=True):
+                        st.session_state["wfv_result"] = _db.run_detailed_wfe_validation(
+                            n_windows=int(_wfv_nw)
+                        )
+            with _wfv_c2:
+                _wfv_r = st.session_state.get("wfv_result")
+                if _wfv_r is None:
+                    st.caption("Click **Run WFE Validation** to analyse model stability across rolling windows.")
+                elif _wfv_r.get("error"):
+                    st.caption(f"WFE Validation: {_wfv_r.get('recommendation', _wfv_r.get('error', ''))}")
+                else:
+                    # ── Summary badges ────────────────────────────────────────
+                    _wfv_grade   = _wfv_r.get("grade", "POOR")
+                    _wfv_avg_wfe = _wfv_r.get("avg_wfe")
+                    _wfv_stab    = _wfv_r.get("stability_score")
+                    _wfv_oos_sh  = _wfv_r.get("avg_oos_sharpe")
+                    _wfv_oos_wr  = _wfv_r.get("avg_oos_win_rate")
+                    _grade_color = {
+                        "EXCELLENT": "#10b981",
+                        "GOOD":      "#10b981",
+                        "FAIR":      "#f59e0b",
+                        "POOR":      "#ef4444",
+                    }.get(_wfv_grade, "#6b7280")
+
+                    _wfv_m1, _wfv_m2, _wfv_m3, _wfv_m4 = st.columns(4)
+                    _wfv_m1.metric("Avg WFE", f"{_wfv_avg_wfe:.3f}" if _wfv_avg_wfe is not None else "N/A",
+                                   help="Average Walk-Forward Efficiency across all windows. >0.7 = good.")
+                    _wfv_m2.metric("Grade", _wfv_grade,
+                                   help="EXCELLENT≥0.9 · GOOD≥0.7 · FAIR≥0.5 · POOR<0.5")
+                    _wfv_m3.metric("Stability Score", f"{_wfv_stab:.3f}" if _wfv_stab is not None else "N/A",
+                                   help="Std dev of WFE across windows. Lower = more consistent.")
+                    _wfv_m4.metric("Avg OOS Win Rate", f"{_wfv_oos_wr:.1f}%" if _wfv_oos_wr is not None else "N/A")
+
+                    # Recommendation banner
+                    _wfv_rec = _wfv_r.get("recommendation", "")
+                    if _wfv_rec:
+                        st.markdown(
+                            f"<div style='border:1px solid {_grade_color};border-radius:8px;"
+                            f"padding:10px 14px;margin:8px 0;font-size:13px;color:{_grade_color};'>"
+                            f"<b>{_wfv_grade}</b> — {_wfv_rec}"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    _wfv_windows = _wfv_r.get("windows", [])
+                    if _wfv_windows:
+                        _wfv_ids     = [w["window_id"]   for w in _wfv_windows]
+                        _wfv_is_sh   = [w["is_sharpe"]   for w in _wfv_windows]
+                        _wfv_oos_sh2 = [w["oos_sharpe"]  for w in _wfv_windows]
+                        _wfv_wfes    = [w["wfe"]         for w in _wfv_windows]
+
+                        # ── Line chart: IS Sharpe vs OOS Sharpe ──────────────
+                        _wfv_line = go.Figure()
+                        _wfv_line.add_trace(go.Scatter(
+                            x=_wfv_ids, y=_wfv_is_sh,
+                            name="IS Sharpe",
+                            mode="lines+markers",
+                            line=dict(color="#60a5fa", width=2),
+                            marker=dict(size=7),
+                        ))
+                        _wfv_line.add_trace(go.Scatter(
+                            x=_wfv_ids, y=_wfv_oos_sh2,
+                            name="OOS Sharpe",
+                            mode="lines+markers",
+                            line=dict(color="#34d399", width=2, dash="dot"),
+                            marker=dict(size=7),
+                        ))
+                        _wfv_line.update_layout(
+                            title="IS Sharpe vs OOS Sharpe per Window",
+                            height=240,
+                            margin=dict(l=10, r=10, t=36, b=10),
+                            paper_bgcolor="#0e1117",
+                            plot_bgcolor="#0e1117",
+                            font=dict(color="#fafafa", size=11),
+                            legend=dict(orientation="h", y=1.12, x=0),
+                            xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
+                            yaxis=dict(title="Sharpe", gridcolor="#1f2937"),
+                        )
+                        st.plotly_chart(_wfv_line, use_container_width=True,
+                                        config={"displayModeBar": False})
+
+                        # ── Bar chart: WFE ratio per window ──────────────────
+                        _wfv_bar_colors = [
+                            "#10b981" if w >= 0.7 else ("#f59e0b" if w >= 0.5 else "#ef4444")
+                            for w in _wfv_wfes
+                        ]
+                        _wfv_bar = go.Figure(go.Bar(
+                            x=_wfv_ids,
+                            y=_wfv_wfes,
+                            marker_color=_wfv_bar_colors,
+                            text=[f"{w:.2f}" for w in _wfv_wfes],
+                            textposition="outside",
+                        ))
+                        _wfv_bar.add_hline(y=0.7, line_dash="dot", line_color="#10b981",
+                                           annotation_text="Good (0.7)", annotation_position="right")
+                        _wfv_bar.add_hline(y=0.5, line_dash="dot", line_color="#f59e0b",
+                                           annotation_text="Fair (0.5)", annotation_position="right")
+                        _wfv_bar.update_layout(
+                            title="WFE Ratio per Window  (green ≥0.7 · yellow ≥0.5 · red <0.5)",
+                            height=220,
+                            margin=dict(l=10, r=80, t=36, b=10),
+                            paper_bgcolor="#0e1117",
+                            plot_bgcolor="#0e1117",
+                            font=dict(color="#fafafa", size=11),
+                            xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
+                            yaxis=dict(title="WFE", range=[0, max(max(_wfv_wfes) * 1.2, 1.1)],
+                                       gridcolor="#1f2937"),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(_wfv_bar, use_container_width=True,
+                                        config={"displayModeBar": False})
+
+                        # ── Per-window detail table ───────────────────────────
+                        _wfv_tbl = pd.DataFrame([{
+                            "Window":       w["window_id"],
+                            "Start":        w["start_date"],
+                            "End":          w["end_date"],
+                            "IS Sharpe":    w["is_sharpe"],
+                            "OOS Sharpe":   w["oos_sharpe"],
+                            "WFE":          w["wfe"],
+                            "IS Win %":     w["is_win_rate"],
+                            "OOS Win %":    w["oos_win_rate"],
+                            "Opt Thresh %": int(w["optimal_threshold"]),
+                            "IS Trades":    w["n_trades_is"],
+                            "OOS Trades":   w["n_trades_oos"],
+                        } for w in _wfv_windows])
+                        st.dataframe(_wfv_tbl, hide_index=True, use_container_width=True)
+
+        except Exception as _wfv_err:
+            st.caption(f"WFE Validation error: {_wfv_err}")
 
     # ── Stress Test ────────────────────────────────────────────────────────────
     _render_stress_test()

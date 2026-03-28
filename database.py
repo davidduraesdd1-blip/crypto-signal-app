@@ -2183,6 +2183,243 @@ def get_bayesian_weights_detail() -> list:
 
 
 # ──────────────────────────────────────────────
+# DETAILED WALK-FORWARD EFFICIENCY VALIDATION  (#90)
+# ──────────────────────────────────────────────
+
+_WFE_DETAIL_CACHE: dict = {}
+_WFE_DETAIL_CACHE_LOCK = threading.Lock()
+_WFE_DETAIL_CACHE_TTL  = 21600  # 6 hours
+
+
+def run_detailed_wfe_validation(n_windows: int = 8) -> dict:
+    """
+    Detailed Walk-Forward Efficiency (WFE) validation across N rolling windows.
+
+    Divides all available backtest_trades history into n_windows rolling windows.
+    For each window:
+      - IS (in-sample):  first 70% → find optimal confidence threshold, compute IS Sharpe + win rate
+      - OOS (out-of-sample): last 30% → compute OOS Sharpe + win rate at IS-optimal threshold
+      - WFE for window = OOS Sharpe / IS Sharpe (clamped to [0, 2])
+
+    Returns full per-window breakdown + aggregate metrics + grade + recommendation.
+    Cached for 6 hours at module level (computation is expensive).
+    """
+    _default = {
+        "windows": [],
+        "avg_wfe": None,
+        "avg_oos_sharpe": None,
+        "avg_oos_win_rate": None,
+        "stability_score": None,
+        "grade": "POOR",
+        "recommendation": "Insufficient backtest data for WFE validation (need ≥ 40 trades).",
+        "error": "insufficient data",
+    }
+
+    # Check module-level cache (6-hour TTL)
+    _cache_key = int(n_windows)
+    with _WFE_DETAIL_CACHE_LOCK:
+        _cached = _WFE_DETAIL_CACHE.get(_cache_key)
+        if _cached and (datetime.now(timezone.utc).timestamp() - _cached.get("_ts", 0)) < _WFE_DETAIL_CACHE_TTL:
+            result = dict(_cached)
+            result.pop("_ts", None)
+            return result
+
+    def _sharpe(returns: list) -> float:
+        if len(returns) < 2:
+            return 0.0
+        arr = np.array(returns, dtype=float)
+        std = float(np.std(arr, ddof=1))
+        if std < 1e-9:
+            return 0.0
+        return round(float(np.mean(arr)) / std, 4)
+
+    def _win_rate(returns: list) -> float:
+        if not returns:
+            return 0.0
+        return round(sum(1 for r in returns if r > 0) / len(returns) * 100, 2)
+
+    def _find_optimal_threshold(trades: list) -> tuple:
+        """Find threshold (50–80) that maximises Sharpe on IS subset. Returns (threshold, sharpe, win_rate)."""
+        thresholds = [50, 55, 60, 65, 70, 75, 80]
+        best_thresh = 65.0
+        best_sharpe = -999.0
+        best_wr = 0.0
+        for thresh in thresholds:
+            sub = [float(t["pnl_pct"]) for t in trades
+                   if float(t.get("confidence", 0) or 0) >= thresh]
+            if len(sub) < 3:
+                continue
+            sh = _sharpe(sub)
+            if sh > best_sharpe:
+                best_sharpe = sh
+                best_thresh = float(thresh)
+                best_wr = _win_rate(sub)
+        return best_thresh, max(best_sharpe, 0.0), best_wr
+
+    conn = None
+    try:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT bt.pnl_pct, bt.timestamp, bt.pair, bt.direction,
+                   COALESCE(fl.confidence, 65.0) AS confidence
+            FROM backtest_trades bt
+            LEFT JOIN feedback_log fl
+              ON fl.pair = bt.pair
+             AND fl.direction = bt.direction
+             AND DATE(fl.timestamp) = DATE(bt.timestamp)
+            WHERE bt.pnl_pct IS NOT NULL
+              AND bt.timestamp IS NOT NULL
+            ORDER BY bt.timestamp ASC
+            """
+        ).fetchall()
+
+        if len(rows) < max(n_windows * 5, 40):
+            return _default
+
+        rows_list = [dict(r) for r in rows]
+        n_total   = len(rows_list)
+        window_sz = n_total // n_windows
+
+        windows_out = []
+        wfe_vals    = []
+        oos_sharpes = []
+        oos_wrs     = []
+
+        for i in range(n_windows):
+            w_start = i * window_sz
+            w_end   = (w_start + window_sz) if i < n_windows - 1 else n_total
+            window  = rows_list[w_start:w_end]
+            w_n     = len(window)
+            if w_n < 8:
+                continue
+
+            # IS = first 70%, OOS = last 30%
+            is_end  = max(1, int(w_n * 0.70))
+            is_data  = window[:is_end]
+            oos_data = window[is_end:]
+
+            if len(is_data) < 3 or len(oos_data) < 2:
+                continue
+
+            # Dates
+            start_date = str(is_data[0].get("timestamp", ""))[:10]
+            end_date   = str(oos_data[-1].get("timestamp", ""))[:10]
+
+            # IS: find optimal threshold
+            opt_thresh, is_sharpe, is_wr = _find_optimal_threshold(is_data)
+
+            # IS returns at optimal threshold
+            is_returns = [float(t["pnl_pct"]) for t in is_data
+                          if float(t.get("confidence", 0) or 0) >= opt_thresh]
+            if len(is_returns) < 2:
+                # Fall back to all IS returns
+                is_returns = [float(t["pnl_pct"]) for t in is_data]
+            is_sharpe_final = _sharpe(is_returns)
+            is_wr_final     = _win_rate(is_returns)
+
+            # OOS: apply IS-optimal threshold
+            oos_returns = [float(t["pnl_pct"]) for t in oos_data
+                           if float(t.get("confidence", 0) or 0) >= opt_thresh]
+            if len(oos_returns) < 2:
+                oos_returns = [float(t["pnl_pct"]) for t in oos_data]
+
+            oos_sharpe_raw = _sharpe(oos_returns)
+            oos_wr_raw     = _win_rate(oos_returns)
+
+            # WFE = OOS Sharpe / IS Sharpe, clamped to [0, 2]
+            if abs(is_sharpe_final) < 1e-9:
+                wfe_window = 0.0
+            else:
+                wfe_window = float(np.clip(oos_sharpe_raw / is_sharpe_final, 0.0, 2.0))
+
+            wfe_vals.append(wfe_window)
+            oos_sharpes.append(oos_sharpe_raw)
+            oos_wrs.append(oos_wr_raw)
+
+            windows_out.append({
+                "window_id":          i + 1,
+                "start_date":         start_date,
+                "end_date":           end_date,
+                "is_sharpe":          round(is_sharpe_final, 4),
+                "oos_sharpe":         round(oos_sharpe_raw, 4),
+                "wfe":                round(wfe_window, 4),
+                "is_win_rate":        round(is_wr_final, 2),
+                "oos_win_rate":       round(oos_wr_raw, 2),
+                "optimal_threshold":  opt_thresh,
+                "n_trades_is":        len(is_returns),
+                "n_trades_oos":       len(oos_returns),
+            })
+
+        if not windows_out:
+            return _default
+
+        avg_wfe      = round(float(np.mean(wfe_vals)), 4)
+        avg_oos_sh   = round(float(np.mean(oos_sharpes)), 4)
+        avg_oos_wr   = round(float(np.mean(oos_wrs)), 2)
+        stability    = round(float(np.std(wfe_vals, ddof=1)) if len(wfe_vals) > 1 else 0.0, 4)
+
+        # Grade based on avg WFE
+        if avg_wfe >= 0.9:
+            grade = "EXCELLENT"
+        elif avg_wfe >= 0.7:
+            grade = "GOOD"
+        elif avg_wfe >= 0.5:
+            grade = "FAIR"
+        else:
+            grade = "POOR"
+
+        # Recommendation — use modal optimal threshold across windows
+        thresh_votes: dict = {}
+        for w in windows_out:
+            t = w["optimal_threshold"]
+            thresh_votes[t] = thresh_votes.get(t, 0) + 1
+        modal_thresh = max(thresh_votes, key=lambda k: thresh_votes[k])
+
+        if grade in ("EXCELLENT", "GOOD"):
+            rec = (
+                f"Model is stable (WFE={avg_wfe:.2f}, {grade}). "
+                f"Use threshold {int(modal_thresh)}% for BUY signals. "
+                f"Avg OOS Sharpe {avg_oos_sh:.2f}, OOS win rate {avg_oos_wr:.1f}%."
+            )
+        elif grade == "FAIR":
+            rec = (
+                f"Model shows moderate stability (WFE={avg_wfe:.2f}). "
+                f"Use threshold {int(modal_thresh)}% for BUY signals with extra caution. "
+                f"Consider reducing position size in low-confidence windows."
+            )
+        else:
+            rec = (
+                f"Model may be overfitting (WFE={avg_wfe:.2f}, {grade}). "
+                f"OOS performance lags IS significantly. "
+                f"Reduce indicator complexity or increase lookback period."
+            )
+
+        result = {
+            "windows":         windows_out,
+            "avg_wfe":         avg_wfe,
+            "avg_oos_sharpe":  avg_oos_sh,
+            "avg_oos_win_rate": avg_oos_wr,
+            "stability_score": stability,
+            "grade":           grade,
+            "recommendation":  rec,
+        }
+
+        # Store in module-level cache with timestamp
+        with _WFE_DETAIL_CACHE_LOCK:
+            _WFE_DETAIL_CACHE[_cache_key] = {**result, "_ts": datetime.now(timezone.utc).timestamp()}
+
+        return result
+
+    except Exception as e:
+        logger.warning("[DB] run_detailed_wfe_validation failed: %s", e)
+        return _default
+    finally:
+        if conn:
+            conn.close()
+
+
+# ──────────────────────────────────────────────
 # WALK-FORWARD ROLLING WINDOW OPTIMIZATION  (#51)
 # ──────────────────────────────────────────────
 
