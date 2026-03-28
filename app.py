@@ -17,6 +17,22 @@ import time
 import requests
 from datetime import datetime, timedelta, timezone
 
+# ─── Input validation helpers (#13 security hardening) ──────────────────────
+import re as _re
+
+
+def _sanitize_input(value: str, max_len: int = 100) -> str:
+    """Strip characters that are not alphanumeric, whitespace, dash, dot, or slash.
+    Prevents injection of shell metacharacters or SQL-injection fragments into
+    API call parameters and DB queries coming from user-controlled text inputs."""
+    return _re.sub(r"[^\w\s\-\./]", "", str(value))[:max_len].strip()
+
+
+def _clamp(value: float, min_val: float, max_val: float) -> float:
+    """Clamp a numeric UI value to [min_val, max_val] to prevent out-of-range inputs."""
+    return max(min_val, min(max_val, float(value)))
+
+
 # ─── Security Audit Logger (#15) ────────────────────────────────────────────
 # Dedicated logger for security-relevant events; does NOT propagate to root.
 _audit_handler = logging.FileHandler(
@@ -218,6 +234,12 @@ def _cached_execution_log_df(limit: int = 300) -> "pd.DataFrame":
 def _cached_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     """Cache agent_log read — 2-min TTL."""
     return _db.get_agent_log_df(limit=limit)
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
+def _cached_api_health() -> dict:
+    """Cache API health check pings — 5-min TTL (#17 security hardening)."""
+    return data_feeds.validate_api_keys()
 
 
 @st.cache_data(ttl=120, show_spinner=False, max_entries=3)
@@ -894,6 +916,20 @@ with st.sidebar.expander("📡 Live Prices", expanded=False):
                 )
         else:
             st.caption("Awaiting first tick...")
+
+# ──────────────────────────────────────────────
+# SIDEBAR: API HEALTH CHECK (#17 security hardening)
+# ──────────────────────────────────────────────
+with st.sidebar.expander("🔌 API Health", expanded=False):
+    _api_health = _cached_api_health()
+    _health_rows = []
+    for _svc, _status in _api_health.items():
+        _dot = "🟢" if _status in ("ok", "configured") else "🟠" if _status.startswith("HTTP") else "🔴"
+        _health_rows.append(f"{_dot} **{_svc.capitalize()}** — {_status}")
+    st.markdown("\n\n".join(_health_rows) if _health_rows else "No results")
+    if st.button("Recheck", key="api_health_recheck", use_container_width=True):
+        _cached_api_health.clear()
+        st.rerun()
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -2514,7 +2550,8 @@ def page_config():
     with _cp2:
         st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
         if st.button("Add Pair", key="cfg_add_custom_pair", use_container_width=True):
-            _cp_val = _custom_pair_input.strip().upper().replace(" ", "")
+            # #13: sanitize user-supplied pair string before using in API / DB calls
+            _cp_val = _sanitize_input(_custom_pair_input, max_len=20).upper().replace(" ", "")
             if "/" not in _cp_val:
                 _cp_val = _cp_val + "/USDT"
             if _cp_val and _cp_val not in _pair_options:
@@ -2524,7 +2561,10 @@ def page_config():
                 st.rerun()
             elif _cp_val in _pair_options:
                 st.info(f"{_cp_val} is already in the list.")
-    overrides["PAIRS"] = selected_pairs
+    # #13: validate selected_pairs against known TIER1 + TIER2 + model.PAIRS allowlist
+    import config as _cfg_val
+    _known_pairs = set(model.PAIRS) | set(_cfg_val.TIER1_PAIRS) | set(_cfg_val.TIER2_PAIRS) | set(_pair_options)
+    overrides["PAIRS"] = [p for p in selected_pairs if p in _known_pairs]
 
     # ── Timeframes ──
     _ui.section_header("Timeframes", "Timeframes used for multi-timeframe signal analysis", icon="⏱️")
@@ -2580,7 +2620,7 @@ def page_config():
         hc_thresh = st.slider("High-Confidence Threshold (%)", 50, 90,
                               int(model.HIGH_CONF_THRESHOLD), step=1,
                               help=_ui.HELP_HIGH_CONF_THRESH)
-        overrides["HIGH_CONF_THRESHOLD"] = float(hc_thresh)
+        overrides["HIGH_CONF_THRESHOLD"] = _clamp(float(hc_thresh), 50.0, 90.0)
     with t2:
         mtf_thresh = st.slider("MTF Alignment Threshold (%)", 10, 80,
                                int(model.HIGH_MTF_THRESHOLD), step=5,

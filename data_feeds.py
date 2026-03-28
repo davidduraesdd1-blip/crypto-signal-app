@@ -21,35 +21,70 @@ except ImportError:
     _CCXT_AVAILABLE = False
     logging.warning("ccxt not installed — new exchange funding rates will be unavailable")
 
-# PERF: module-level Session with retry adapter (TCP reuse + auto-retry on 429/5xx)
-_retry = Retry(total=3, backoff_factor=1.0, status_forcelist=[429, 500, 502, 503, 504],
-               allowed_methods=["GET"], raise_on_status=False)
-_adapter = HTTPAdapter(max_retries=_retry)
-_SESSION = requests.Session()
-_SESSION.mount("https://", _adapter)
-_SESSION.mount("http://", _adapter)
-_SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+# ─── HTTP Session with retry adapter (#12 security hardening) ────────────────
+def _build_session() -> requests.Session:
+    """Build a requests.Session with exponential backoff retry and browser User-Agent."""
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+    })
+    return session
+
+
+_SESSION = _build_session()
 
 # ─── Rate Limiter (token bucket — #11 security hardening) ────────────────────
-class _RateLimiter:
-    """Thread-safe token bucket rate limiter."""
-    def __init__(self, calls_per_second: float = 2.0):
-        self._interval = 1.0 / max(calls_per_second, 0.01)
-        self._lock     = threading.Lock()
-        self._last     = 0.0
+class RateLimiter:
+    """Token bucket rate limiter for API calls."""
+    def __init__(self, calls_per_second: float = 1.0):
+        self._rate = calls_per_second
+        self._tokens = calls_per_second
+        self._last_refill = time.time()
+        self._lock = threading.Lock()
 
-    def acquire(self) -> None:
-        with self._lock:
-            now  = time.time()
-            wait = self._interval - (now - self._last)
-            if wait > 0:
-                time.sleep(wait)
-            self._last = time.time()
+    def acquire(self, timeout: float = 30.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                now = time.time()
+                elapsed = now - self._last_refill
+                self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
+                self._last_refill = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return True
+            time.sleep(0.05)
+        return False
 
-_bybit_limiter    = _RateLimiter(5.0)
-_binance_limiter  = _RateLimiter(5.0)
-_coingecko_limiter = _RateLimiter(0.5)
-_default_limiter  = _RateLimiter(2.0)
+
+# Keep legacy alias for backwards compat
+_RateLimiter = RateLimiter
+
+_BINANCE_LIMITER   = RateLimiter(calls_per_second=5.0)   # Binance allows ~1200/min
+_COINGECKO_LIMITER = RateLimiter(calls_per_second=0.4)   # 25 req/min free
+_DERIBIT_LIMITER   = RateLimiter(calls_per_second=2.0)   # Deribit: generous
+_EXCHANGE_LIMITER  = RateLimiter(calls_per_second=1.0)   # Generic for other exchanges
+
+# Legacy module-level limiters (kept for any callers that reference them)
+_bybit_limiter    = _BINANCE_LIMITER
+_binance_limiter  = _BINANCE_LIMITER
+_coingecko_limiter = _COINGECKO_LIMITER
+_default_limiter  = _EXCHANGE_LIMITER
 
 # SSRF allowlist — only fetch from these known-safe domains
 _ALLOWED_HOSTS: frozenset = frozenset({
@@ -5587,3 +5622,51 @@ def fetch_ccxt_ticker(exchange_id: str, symbol: str) -> "dict | None":
     except Exception as _e:
         logging.debug("[CCXT Ticker] %s %s failed: %s", exchange_id, symbol, _e)
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API KEY VALIDATION ON STARTUP  (#17 security hardening)
+# Lightweight connectivity checks — no auth needed for public endpoints.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validate_api_keys() -> dict:
+    """Test each configured API key with a lightweight connectivity check.
+
+    Returns a dict mapping service name to status string:
+      "ok"         — endpoint responded 200
+      "HTTP <N>"   — endpoint responded with unexpected status
+      "error"      — connection failure / timeout
+      "configured" — key is set (Anthropic — not pinged to avoid charges)
+      "no key"     — key is missing
+    """
+    results: dict = {}
+
+    # Binance public API (no key needed)
+    try:
+        r = _SESSION.get("https://api.binance.com/api/v3/ping", timeout=5)
+        results["binance"] = "ok" if r.status_code == 200 else f"HTTP {r.status_code}"
+    except Exception:
+        results["binance"] = "error"
+
+    # CoinGecko
+    try:
+        r = _SESSION.get("https://api.coingecko.com/api/v3/ping", timeout=5)
+        results["coingecko"] = "ok" if r.status_code == 200 else f"HTTP {r.status_code}"
+    except Exception:
+        results["coingecko"] = "error"
+
+    # Deribit (public, no key)
+    try:
+        r = _SESSION.get("https://www.deribit.com/api/v2/public/get_time", timeout=5)
+        results["deribit"] = "ok" if r.status_code == 200 else f"HTTP {r.status_code}"
+    except Exception:
+        results["deribit"] = "error"
+
+    # Anthropic — just check API key is configured (don't make a call)
+    try:
+        from config import ANTHROPIC_API_KEY
+        results["anthropic"] = "configured" if ANTHROPIC_API_KEY else "no key"
+    except Exception:
+        results["anthropic"] = "no key"
+
+    return results

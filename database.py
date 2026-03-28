@@ -2624,7 +2624,30 @@ def get_latest_wfo_result() -> dict:
 
 
 # ──────────────────────────────────────────────
+# DB INTEGRITY CHECK  (#14 security hardening)
+# ──────────────────────────────────────────────
+
+def check_db_integrity() -> bool:
+    """Run PRAGMA quick_check on the database.  Returns True if the DB is healthy.
+    Called automatically on startup — logs a warning but never crashes the app."""
+    try:
+        with _get_conn() as conn:
+            result = conn.execute("PRAGMA quick_check").fetchone()
+            return bool(result and result[0] == "ok")
+    except Exception as e:
+        logging.warning("DB integrity check error: %s", e)
+        return False
+
+
+# ──────────────────────────────────────────────
 # STARTUP — runs automatically on import
 # ──────────────────────────────────────────────
 init_db()
 migrate_csv_to_db()
+
+# Run integrity check after init — log warning only, never crash
+if not check_db_integrity():
+    logging.warning(
+        "[database] PRAGMA quick_check failed — DB may be corrupted. "
+        "Consider deleting crypto_model.db and restarting."
+    )
