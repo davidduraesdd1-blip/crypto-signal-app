@@ -2211,7 +2211,7 @@ def run_detailed_wfe_validation(n_windows: int = 8) -> dict:
         "avg_oos_win_rate": None,
         "stability_score": None,
         "grade": "POOR",
-        "recommendation": "Insufficient backtest data for WFE validation (need ≥ 40 trades).",
+        "recommendation": f"Insufficient backtest data for WFE validation (need ≥ {max(n_windows * 8, 40)} trades for {n_windows} windows).",
         "error": "insufficient data",
     }
 
@@ -2274,7 +2274,7 @@ def run_detailed_wfe_validation(n_windows: int = 8) -> dict:
             """
         ).fetchall()
 
-        if len(rows) < max(n_windows * 5, 40):
+        if len(rows) < max(n_windows * 8, 40):
             return _default
 
         rows_list = [dict(r) for r in rows]
