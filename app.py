@@ -638,7 +638,6 @@ _tier2_val = st.sidebar.checkbox(
     help="Scans 20 additional mid-cap pairs (NEAR, APT, POL, OP, ARB, ATOM, FIL, INJ, PENDLE, WIF, etc.). "
          "Adds ~30-60s to scan time. Lower liquidity — signals may be less reliable.",
 )
-st.session_state["include_tier2"] = _tier2_val
 if _tier2_val:
     st.sidebar.markdown(
         '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);'
