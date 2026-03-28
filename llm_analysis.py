@@ -16,6 +16,12 @@ import time
 import logging
 import threading
 
+try:
+    from config import CLAUDE_MODEL, CLAUDE_HAIKU_MODEL
+except ImportError:
+    CLAUDE_MODEL = "claude-sonnet-4-6"
+    CLAUDE_HAIKU_MODEL = "claude-haiku-4-5"
+
 logger = logging.getLogger(__name__)
 
 _CACHE: dict = {}
@@ -142,7 +148,7 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
             }
         ]
         message = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=CLAUDE_MODEL,
             max_tokens=400,
             system=system_content,
             messages=[{"role": "user", "content": prompt}],
@@ -267,7 +273,7 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
             "indicator weights. Be conservative — only move weights ±20-30%."
         )
         response = client.messages.create(
-            model="claude-haiku-4-5",   # Haiku: fast + cheap for structured calls
+            model=CLAUDE_HAIKU_MODEL,   # Haiku: fast + cheap for structured calls
             max_tokens=256,
             tools=[_WEIGHT_SCHEMA],
             tool_choice={"type": "auto"},
@@ -438,7 +444,7 @@ def generate_signal_story(
     try:
         client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
         message = client.messages.create(
-            model="claude-haiku-4-5",
+            model=CLAUDE_HAIKU_MODEL,
             max_tokens=100,
             messages=[{"role": "user", "content": prompt}],
         )

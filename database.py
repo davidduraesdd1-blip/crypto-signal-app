@@ -2647,11 +2647,15 @@ def get_latest_wfo_result() -> dict:
 # P&L TRACKING  (Batch 8 — Enhanced Pair P&L)
 # ──────────────────────────────────────────────
 
-def record_pnl_entry(pair: str, signal: str, price: float, confidence: float = None) -> None:
+def record_pnl_entry(pair: str, signal: str, price: float, confidence: float = None) -> Optional[int]:
     """Record a BUY signal entry into the P&L tracking table.
 
     If an open entry already exists for this pair it is left as-is (deduplication).
     Only the most recent open entry per pair is used when recording exits.
+
+    Returns:
+        int row id of the newly inserted row, or None if deduplication skipped the insert
+        or an error occurred.
     """
     entry_time = datetime.now(timezone.utc).isoformat()
     with _write_lock:
@@ -2664,15 +2668,18 @@ def record_pnl_entry(pair: str, signal: str, price: float, confidence: float = N
                 (pair,),
             ).fetchone()
             if existing is None:
-                conn.execute(
+                cur = conn.execute(
                     """INSERT INTO pnl_tracking
                        (pair, entry_price, entry_signal, entry_time, confidence, status)
                        VALUES (?, ?, ?, ?, ?, 'open')""",
                     (pair, float(price), signal, entry_time, confidence),
                 )
                 conn.commit()
+                return cur.lastrowid
+            return None
         except Exception as e:
             logger.warning("[DB] record_pnl_entry failed: %s", e)
+            return None
         finally:
             if conn is not None:
                 conn.close()

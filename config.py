@@ -13,6 +13,11 @@ COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 ETHERSCAN_API_KEY: str | None = os.environ.get("ETHERSCAN_API_KEY", "")
 ZERION_API_KEY: str | None = os.environ.get("ZERION_API_KEY", "")
 
+# ─── LLM Model Constants ──────────────────────────────────────────────────────
+# Centralised model names — update here to change everywhere.
+CLAUDE_MODEL: str = "claude-sonnet-4-6"           # primary signal explanation model
+CLAUDE_HAIKU_MODEL: str = "claude-haiku-4-5"      # fast/cheap structured calls (weight adjustments)
+
 # ─── Tier 1 Pair Expansion (#40) ──────────────────────────────────────────────
 # 9 new assets added to the tracked pairs list (HYPE excluded — DEX-only, no CEX listing).
 # CoinGecko IDs used by data_feeds.py batch fetch functions.
