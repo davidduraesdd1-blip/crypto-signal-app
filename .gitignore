@@ -1,4 +1,6 @@
 # ── Secrets & credentials (NEVER commit these) ────────────────────────────────
+.env
+*.env
 alerts_config.json
 config_overrides.json
 kraken_testnet_keys.json
