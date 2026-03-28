@@ -3739,12 +3739,14 @@ def page_backtest():
                     _wfe_cols2 = st.columns(3)
                     _wfe_cols2[0].metric("WFE", f"{_wfe_db_val:.3f}")
                     _wfe_cols2[1].metric("Grade", _wfe_grade)
-                    _wfe_cols2[2].metric("IS Sharpe", f"{_wfe_db.get('is_sharpe', 0):.3f}")
+                    _wfe_is_sharpe  = _wfe_db.get("is_sharpe")  or 0.0
+                    _wfe_oos_sharpe = _wfe_db.get("oos_sharpe") or 0.0
+                    _wfe_cols2[2].metric("IS Sharpe", f"{_wfe_is_sharpe:.3f}")
                     st.markdown(
                         f"<div style='border:1px solid {_wfe_color};border-radius:8px;"
                         f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_wfe_color};'>"
                         f"WFE = {_wfe_db_val:.3f} · <b>{_wfe_grade}</b> · "
-                        f"OOS Sharpe {_wfe_db.get('oos_sharpe', 0):.3f}"
+                        f"OOS Sharpe {_wfe_oos_sharpe:.3f}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
