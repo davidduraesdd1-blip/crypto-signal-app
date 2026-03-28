@@ -119,6 +119,9 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "api.huobi.pro",                            # HTX (formerly Huobi)
     "www.bitstamp.net",                         # Bitstamp
     "api.bitget.com",                           # Bitget
+    # Batch 7 additions (#110/#111) — wallet portfolio
+    "api.zerion.io",                            # Zerion portfolio API
+    "api.etherscan.io",                         # Etherscan token list fallback
 })
 
 
@@ -5675,3 +5678,249 @@ def validate_api_keys() -> dict:
         results["anthropic"] = "no key"
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WALLET HOLDINGS IMPORT (#110 / #111)
+# Read-only portfolio fetch via Zerion public API with Etherscan fallback.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_WALLET_CACHE: dict = {}
+_WALLET_CACHE_LOCK = threading.Lock()
+_WALLET_CACHE_TTL = 300  # 5-minute TTL
+
+
+def fetch_wallet_holdings(address: str) -> dict:
+    """
+    Fetch EVM wallet token holdings from Zerion (public API, no key needed for basic).
+    Falls back to Etherscan token list if Zerion returns 401 or fails.
+
+    Returns:
+        {
+            "address": str,
+            "total_value_usd": float,
+            "tokens": [{"symbol": str, "balance": float, "value_usd": float,
+                         "contract": str, "chain": str, "change_pct_1d": float | None}],
+            "source": str,
+        }
+    5-minute TTL cache keyed on address (lowercased).
+    """
+    _addr_key = address.lower()
+    _now = time.time()
+    with _WALLET_CACHE_LOCK:
+        _hit = _WALLET_CACHE.get(f"holdings:{_addr_key}")
+        if _hit and (_now - _hit.get("_ts", 0)) < _WALLET_CACHE_TTL:
+            return {k: v for k, v in _hit.items() if k != "_ts"}
+
+    # 1. Try Zerion public portfolio endpoint
+    _zerion_url = f"https://api.zerion.io/v1/wallets/{address}/portfolio?currency=usd"
+    if _ssrf_check(_zerion_url):
+        try:
+            resp = _SESSION.get(
+                _zerion_url,
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                attrs = (data.get("data") or {}).get("attributes") or {}
+                total_val = float(attrs.get("total", {}).get("positions") or 0)
+
+                # Fetch positions for token breakdown
+                _pos_url = (
+                    f"https://api.zerion.io/v1/wallets/{address}/positions"
+                    "?filter[position_types]=wallet,deposit,staked&currency=usd&sort=value"
+                )
+                tokens = []
+                if _ssrf_check(_pos_url):
+                    try:
+                        pos_resp = _SESSION.get(
+                            _pos_url,
+                            headers={"Accept": "application/json"},
+                            timeout=10,
+                        )
+                        if pos_resp.status_code == 200:
+                            pos_data = pos_resp.json()
+                            for item in (pos_data.get("data") or []):
+                                item_attrs = (item.get("attributes") or {})
+                                qty_obj = item_attrs.get("quantity") or {}
+                                qty = float(qty_obj.get("float") or 0)
+                                val = float(item_attrs.get("value") or 0)
+                                chg = (item_attrs.get("changes") or {}).get("percent_1d")
+                                chain_id = ((item.get("relationships") or {})
+                                            .get("chain", {})
+                                            .get("data", {})
+                                            .get("id") or "ethereum")
+                                tokens.append({
+                                    "symbol":       item_attrs.get("name") or "",
+                                    "balance":      qty,
+                                    "value_usd":    val,
+                                    "contract":     "",
+                                    "chain":        chain_id,
+                                    "change_pct_1d": float(chg) if chg is not None else None,
+                                })
+                    except Exception as _pe:
+                        logging.debug("[Zerion] positions fetch error: %s", _pe)
+
+                result = {
+                    "address":         address,
+                    "total_value_usd": total_val,
+                    "tokens":          tokens,
+                    "source":          "zerion",
+                    "_ts":             _now,
+                }
+                with _WALLET_CACHE_LOCK:
+                    _WALLET_CACHE[f"holdings:{_addr_key}"] = result
+                return {k: v for k, v in result.items() if k != "_ts"}
+            elif resp.status_code not in (401, 403):
+                logging.debug("[Zerion] portfolio HTTP %s for %s", resp.status_code, address)
+        except Exception as _ze:
+            logging.debug("[Zerion] portfolio fetch error for %s: %s", address, _ze)
+
+    # 2. Fallback: Etherscan token list
+    try:
+        from config import ETHERSCAN_API_KEY  # type: ignore[import]
+        _eth_key = ETHERSCAN_API_KEY or ""
+    except ImportError:
+        _eth_key = ""
+
+    _eth_url = (
+        f"https://api.etherscan.io/v2/api"
+        f"?chainid=1&module=account&action=tokenlist"
+        f"&address={address}&apikey={_eth_key}"
+    )
+    # Etherscan is a known-safe domain — add inline guard
+    if "api.etherscan.io" in _eth_url:
+        try:
+            resp = _SESSION.get(_eth_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                tokens = []
+                for tok in (data.get("result") or []):
+                    decimals = int(tok.get("tokenDecimal") or 18)
+                    raw_bal = int(tok.get("balance") or 0)
+                    bal = raw_bal / (10 ** decimals) if decimals else raw_bal
+                    tokens.append({
+                        "symbol":       tok.get("tokenSymbol") or "",
+                        "balance":      bal,
+                        "value_usd":    0.0,  # Etherscan doesn't provide USD value
+                        "contract":     tok.get("contractAddress") or "",
+                        "chain":        "ethereum",
+                        "change_pct_1d": None,
+                    })
+                result = {
+                    "address":         address,
+                    "total_value_usd": 0.0,
+                    "tokens":          tokens,
+                    "source":          "etherscan",
+                    "_ts":             _now,
+                }
+                with _WALLET_CACHE_LOCK:
+                    _WALLET_CACHE[f"holdings:{_addr_key}"] = result
+                return {k: v for k, v in result.items() if k != "_ts"}
+        except Exception as _ee:
+            logging.debug("[Etherscan] token list error for %s: %s", address, _ee)
+
+    return {}
+
+
+def fetch_zerion_portfolio(address: str) -> dict:
+    """
+    Fetch full portfolio breakdown from Zerion API.
+
+    Returns:
+        {
+            "address": str,
+            "total_value_usd": float,
+            "change_24h_pct": float | None,
+            "positions": [{"symbol": str, "balance": float, "value_usd": float,
+                            "price": float, "change_pct_1d": float | None, "chain": str}],
+            "chains": {chain_id: value_usd},
+            "source": "zerion",
+        }
+    5-minute TTL cache keyed on address.
+    """
+    _addr_key = address.lower()
+    _now = time.time()
+    with _WALLET_CACHE_LOCK:
+        _hit = _WALLET_CACHE.get(f"zerion:{_addr_key}")
+        if _hit and (_now - _hit.get("_ts", 0)) < _WALLET_CACHE_TTL:
+            return {k: v for k, v in _hit.items() if k != "_ts"}
+
+    _portfolio_url = f"https://api.zerion.io/v1/wallets/{address}/portfolio?currency=usd"
+    _positions_url = (
+        f"https://api.zerion.io/v1/wallets/{address}/positions"
+        "?filter[position_types]=wallet,deposit,staked&currency=usd&sort=value"
+    )
+
+    total_val = 0.0
+    change_24h_pct = None
+    positions: list = []
+    chains: dict = {}
+
+    if _ssrf_check(_portfolio_url):
+        try:
+            resp = _SESSION.get(
+                _portfolio_url,
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                attrs = (data.get("data") or {}).get("attributes") or {}
+                total_val = float((attrs.get("total") or {}).get("positions") or 0)
+                chg = (attrs.get("changes") or {}).get("percent_1d")
+                if chg is not None:
+                    change_24h_pct = float(chg)
+        except Exception as _pe:
+            logging.debug("[Zerion] portfolio overview error for %s: %s", address, _pe)
+
+    if _ssrf_check(_positions_url):
+        try:
+            pos_resp = _SESSION.get(
+                _positions_url,
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            if pos_resp.status_code == 200:
+                pos_data = pos_resp.json()
+                for item in (pos_data.get("data") or []):
+                    item_attrs = item.get("attributes") or {}
+                    qty_obj = item_attrs.get("quantity") or {}
+                    qty = float(qty_obj.get("float") or 0)
+                    val = float(item_attrs.get("value") or 0)
+                    price = float(item_attrs.get("price") or 0)
+                    chg = (item_attrs.get("changes") or {}).get("percent_1d")
+                    chain_id = ((item.get("relationships") or {})
+                                .get("chain", {})
+                                .get("data", {})
+                                .get("id") or "ethereum")
+                    chains[chain_id] = chains.get(chain_id, 0.0) + val
+                    positions.append({
+                        "symbol":       item_attrs.get("name") or "",
+                        "balance":      qty,
+                        "value_usd":    val,
+                        "price":        price,
+                        "change_pct_1d": float(chg) if chg is not None else None,
+                        "chain":        chain_id,
+                        "contract":     "",
+                    })
+        except Exception as _qe:
+            logging.debug("[Zerion] positions error for %s: %s", address, _qe)
+
+    if not positions and not total_val:
+        return {}
+
+    result = {
+        "address":         address,
+        "total_value_usd": total_val,
+        "change_24h_pct":  change_24h_pct,
+        "positions":       positions,
+        "tokens":          positions,  # alias for wallet holdings compat
+        "chains":          chains,
+        "source":          "zerion",
+        "_ts":             _now,
+    }
+    with _WALLET_CACHE_LOCK:
+        _WALLET_CACHE[f"zerion:{_addr_key}"] = result
+    return {k: v for k, v in result.items() if k != "_ts"}

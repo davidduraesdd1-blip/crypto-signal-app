@@ -99,18 +99,34 @@ except Exception:
     _agent = None
 
 # ── Sentry error monitoring (optional — set SUPERGROK_SENTRY_DSN env var) ──
-_SENTRY_DSN = os.environ.get("SUPERGROK_SENTRY_DSN")
-if _SENTRY_DSN:
-    try:
-        import sentry_sdk
-        sentry_sdk.init(
+
+def _scrub_sentry_event(event, hint):
+    """Remove PII and API keys from Sentry events before sending."""
+    # Scrub request data
+    if "request" in event:
+        event["request"].pop("cookies", None)
+        event["request"].pop("headers", None)
+    # Scrub environment variables that might contain keys
+    if "extra" in event:
+        for key in list(event.get("extra", {}).keys()):
+            if any(x in key.upper() for x in ["KEY", "SECRET", "TOKEN", "PASSWORD"]):
+                event["extra"][key] = "[REDACTED]"
+    return event
+
+
+try:
+    import sentry_sdk as _sentry_sdk
+    _SENTRY_DSN = os.environ.get("SUPERGROK_SENTRY_DSN", "")
+    if _SENTRY_DSN:
+        _sentry_sdk.init(
             dsn=_SENTRY_DSN,
-            traces_sample_rate=0.05,
-            send_default_pii=False,
+            traces_sample_rate=0.1,
+            profiles_sample_rate=0.0,
+            before_send=_scrub_sentry_event,
         )
         logging.getLogger(__name__).info("[App] Sentry error monitoring active")
-    except ImportError:
-        logging.getLogger(__name__).debug("[App] sentry-sdk not installed — skipping error monitoring")
+except ImportError:
+    pass
 
 
 def _numpy_serializer(obj):
@@ -132,6 +148,30 @@ def _numpy_serializer(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     return str(obj)
+
+
+def _export_scan_results(results: list, format: str = "csv") -> bytes:
+    """Export scan results to CSV or JSON bytes."""
+    import json as _json_mod
+
+    if not results:
+        return b""
+
+    df_rows = [{
+        "pair":         r.get("pair"),
+        "signal":       r.get("direction") or r.get("signal"),
+        "confidence":   r.get("confidence_avg_pct") or r.get("confidence"),
+        "price":        r.get("price_usd") or r.get("price"),
+        "rsi":          r.get("rsi"),
+        "funding_rate": r.get("funding_rate"),
+        "timestamp":    r.get("timestamp") or r.get("scan_timestamp"),
+    } for r in results]
+
+    if format == "csv":
+        df_out = pd.DataFrame(df_rows)
+        return df_out.to_csv(index=False).encode("utf-8")
+    else:
+        return _json_mod.dumps(results, default=_numpy_serializer, indent=2).encode("utf-8")
 
 
 # ──────────────────────────────────────────────
@@ -930,6 +970,44 @@ with st.sidebar.expander("🔌 API Health", expanded=False):
     if st.button("Recheck", key="api_health_recheck", use_container_width=True):
         _cached_api_health.clear()
         st.rerun()
+
+# ──────────────────────────────────────────────
+# SIDEBAR: WALLET PORTFOLIO IMPORT (#110 / #111)
+# ──────────────────────────────────────────────
+with st.sidebar.expander("🔗 Wallet Import (Beta)", expanded=False):
+    _wallet_addr = st.text_input(
+        "EVM Wallet Address",
+        placeholder="0x...",
+        key="wallet_address",
+        help="Read-only portfolio import. We never request signing or private keys.",
+    )
+    if _wallet_addr and len(_wallet_addr) == 42 and _wallet_addr.startswith("0x"):
+        st.caption("✓ Valid Ethereum address")
+        if st.button("Import Positions", key="btn_import_wallet"):
+            with st.spinner("Fetching wallet holdings..."):
+                try:
+                    _wallet_data = data_feeds.fetch_wallet_holdings(_wallet_addr)
+                    if _wallet_data:
+                        st.session_state["wallet_holdings"] = _wallet_data
+                        st.success(f"Imported {len(_wallet_data.get('tokens', []))} positions")
+                    else:
+                        st.warning("No holdings found or fetch failed.")
+                except Exception as _we:
+                    st.error(f"Wallet import error: {_we}")
+        # Also offer full Zerion portfolio
+        if st.button("Full Portfolio (Zerion)", key="btn_zerion_portfolio"):
+            with st.spinner("Fetching full portfolio..."):
+                try:
+                    _zerion_data = data_feeds.fetch_zerion_portfolio(_wallet_addr)
+                    if _zerion_data:
+                        st.session_state["zerion_portfolio"] = _zerion_data
+                        st.success(f"Loaded portfolio: ${_zerion_data.get('total_value_usd', 0):,.2f}")
+                    else:
+                        st.warning("No portfolio data found.")
+                except Exception as _ze:
+                    st.error(f"Zerion fetch error: {_ze}")
+    elif _wallet_addr:
+        st.error("Invalid Ethereum address format")
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -2180,23 +2258,24 @@ def page_dashboard():
 
     # Export buttons
     if results:
-        df_export = pd.DataFrame([{k: v for k, v in r.items() if k != "timeframes"} for r in results])
         col_csv, col_json, col_pdf = st.columns(3)
         with col_csv:
             st.download_button(
-                "⬇ Download CSV",
-                data=df_export.to_csv(index=False),
-                file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                "📥 Export CSV",
+                data=_export_scan_results(results, "csv"),
+                file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True,
+                key="dl_scan_csv",
             )
         with col_json:
             st.download_button(
-                "⬇ Download JSON",
-                data=json.dumps(results, default=_numpy_serializer, indent=2),
-                file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                "📥 Export JSON",
+                data=_export_scan_results(results, "json"),
+                file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
                 use_container_width=True,
+                key="dl_scan_json",
             )
         with col_pdf:
             ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2273,6 +2352,48 @@ def page_dashboard():
                 _agent.supervisor.stop()
         except Exception:
             pass
+
+    # ── Connected Wallet Panel (#110 / #111) ──────────────────────────────────
+    _wh = st.session_state.get("wallet_holdings")
+    _zp = st.session_state.get("zerion_portfolio")
+    if _wh or _zp:
+        st.markdown("---")
+        _ui.section_header("Connected Wallet", "Read-only portfolio import", icon="🔗")
+        _portfolio = _zp or _wh  # prefer full Zerion portfolio when available
+        _wh_c1, _wh_c2, _wh_c3 = st.columns(3)
+        _wh_c1.metric("Total Value", f"${_portfolio.get('total_value_usd', 0):,.2f}")
+        _wh_c2.metric("Address", (_portfolio.get('address', '') or '')[:10] + "…")
+        _wh_c3.metric("Source", (_portfolio.get('source') or 'zerion').upper())
+
+        # 24h change (Zerion only)
+        if _zp and _zp.get("change_24h_pct") is not None:
+            _chg = _zp.get("change_24h_pct", 0.0)
+            st.metric("24h Change", f"{_chg:+.2f}%", delta=f"{_chg:+.2f}%")
+
+        # Top holdings
+        _tokens = _portfolio.get("tokens") or _portfolio.get("positions") or []
+        if _tokens:
+            with st.expander("Top Holdings", expanded=True):
+                _top5 = sorted(_tokens, key=lambda x: x.get("value_usd") or 0, reverse=True)[:5]
+                _tok_rows = []
+                for _tok in _top5:
+                    _tok_rows.append({
+                        "Symbol":     _tok.get("symbol", ""),
+                        "Balance":    f"{_tok.get('balance', 0):,.4f}",
+                        "Value USD":  f"${_tok.get('value_usd', 0):,.2f}",
+                        "24h %":      f"{_tok.get('change_pct_1d', 0):+.2f}%" if _tok.get('change_pct_1d') is not None else "—",
+                        "Chain":      _tok.get("chain") or "Ethereum",
+                    })
+                if _tok_rows:
+                    st.dataframe(pd.DataFrame(_tok_rows), use_container_width=True, hide_index=True)
+
+        # Chain breakdown (Zerion full portfolio)
+        if _zp and _zp.get("chains"):
+            with st.expander("Chain Breakdown", expanded=False):
+                _chain_data = _zp["chains"]
+                _chain_rows = [{"Chain": c, "Value USD": f"${v:,.2f}"} for c, v in _chain_data.items()]
+                if _chain_rows:
+                    st.dataframe(pd.DataFrame(_chain_rows), use_container_width=True, hide_index=True)
 
     # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
     if results:

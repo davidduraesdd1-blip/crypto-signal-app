@@ -8,8 +8,9 @@ import os
 ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
 CRYPTOPANIC_API_KEY: str | None = os.environ.get("CRYPTOPANIC_API_KEY")
 COINGECKO_API_KEY: str | None = os.environ.get("SUPERGROK_COINGECKO_API_KEY")
-SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN")
+SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN", "")
 COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
+ETHERSCAN_API_KEY: str | None = os.environ.get("ETHERSCAN_API_KEY", "")
 
 # ─── Tier 1 Pair Expansion (#40) ──────────────────────────────────────────────
 # 9 new assets added to the tracked pairs list (HYPE excluded — DEX-only, no CEX listing).
