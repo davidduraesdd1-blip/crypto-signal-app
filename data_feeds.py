@@ -59,7 +59,7 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "lunarcrush.com", "cryptopanic.com", "dogechain.info",
     "fapi.binance.com",  # kept for reference, geo-blocked but safe
     # Phase 9 additions
-    "api.mexc.com", "bitso.com", "api.coindcx.com",  # regional exchanges (#89)
+    "api.mexc.com", "bitso.com", "api.bitso.com", "api.coindcx.com",  # regional exchanges (#89)
     "price.jup.ag", "indexer.dydx.trade", "api.raydium.io",  # DEX feeds (#91)
     # Phase 13 additions — new exchanges and data sources
     "www.deribit.com",                          # Deribit options OI + IV
@@ -5096,3 +5096,374 @@ def fetch_exchange_price_comparison(base_pair: str = "BTC/USDT") -> dict:
     r = dict(result)
     r.pop("_ts", None)
     return r
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BATCH 4 — #89 REGIONAL EXCHANGE INDIVIDUAL FETCHERS
+# Standalone wrappers used by fetch_regional_price_comparison()
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MEXC_PRICE_CACHE: dict = {}
+_MEXC_PRICE_LOCK = threading.Lock()
+_BITSO_PRICE_CACHE: dict = {}
+_BITSO_PRICE_LOCK = threading.Lock()
+_COINDCX_PRICE_CACHE: dict = {}
+_COINDCX_PRICE_LOCK = threading.Lock()
+_REGIONAL_COMP_CACHE: dict = {}
+_REGIONAL_COMP_LOCK = threading.Lock()
+_REGIONAL_COMP_TTL = 300  # 5-min cache
+
+
+def fetch_mexc_price(symbol: str) -> "Optional[float]":
+    """
+    Fetch last price from MEXC public spot API.
+    symbol: Binance-format string e.g. 'BTCUSDT'.
+    Returns float or None on error. 5-min cache.
+    """
+    sym = symbol.upper().replace("/", "")
+    now = time.time()
+    with _MEXC_PRICE_LOCK:
+        cached = _MEXC_PRICE_CACHE.get(sym)
+        if cached and (now - cached.get("_ts", 0)) < _REGIONAL_COMP_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get(
+            f"https://api.mexc.com/api/v3/ticker/price",
+            params={"symbol": sym},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            price = float(resp.json().get("price", 0) or 0)
+            if price > 0:
+                with _MEXC_PRICE_LOCK:
+                    _MEXC_PRICE_CACHE[sym] = {"price": price, "_ts": now}
+                return price
+    except Exception as e:
+        logging.debug("[MEXC] price fetch failed for %s: %s", symbol, e)
+    with _MEXC_PRICE_LOCK:
+        _MEXC_PRICE_CACHE[sym] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
+    """
+    Fetch last price from Bitso public API for a given book (e.g. 'btc_mxn').
+    Converts from MXN to USD using Binance USDCMXN rate (fallback: 17.5).
+    Returns float price in USD or None on error. 5-min cache.
+    """
+    now = time.time()
+    with _BITSO_PRICE_LOCK:
+        cached = _BITSO_PRICE_CACHE.get(book)
+        if cached and (now - cached.get("_ts", 0)) < _REGIONAL_COMP_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get(
+            f"https://api.bitso.com/v3/ticker/",
+            params={"book": book},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            last_str = (resp.json().get("payload") or {}).get("last", "0") or "0"
+            last_local = float(last_str)
+            if last_local > 0:
+                # Determine currency from book name (e.g. btc_mxn → MXN)
+                currency = book.split("_")[-1].upper()
+                # Fetch FX rate: try Binance USDCMXN or fallback
+                mxn_rate = 17.5  # default fallback
+                try:
+                    fx_sym = f"USDC{currency}"
+                    r2 = _SESSION.get(
+                        "https://api.binance.com/api/v3/ticker/price",
+                        params={"symbol": fx_sym},
+                        timeout=4,
+                    )
+                    if r2.status_code == 200:
+                        mxn_rate = float(r2.json().get("price", 17.5) or 17.5)
+                except Exception:
+                    pass
+                price_usd = round(last_local / mxn_rate, 2) if mxn_rate > 0 else None
+                if price_usd and price_usd > 0:
+                    with _BITSO_PRICE_LOCK:
+                        _BITSO_PRICE_CACHE[book] = {"price": price_usd, "_ts": now}
+                    return price_usd
+    except Exception as e:
+        logging.debug("[Bitso] price fetch failed for %s: %s", book, e)
+    with _BITSO_PRICE_LOCK:
+        _BITSO_PRICE_CACHE[book] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_coindcx_price(pair: str = "BTCINR") -> "Optional[float]":
+    """
+    Fetch last price from CoinDCX public API for a given pair (e.g. 'BTCINR').
+    CoinDCX uses 'B-{BASE}_{QUOTE}' market format internally.
+    Converts from INR to USD using Binance USDTINR rate (fallback: 83.0).
+    Returns float price in USD or None on error. 5-min cache.
+    """
+    now = time.time()
+    with _COINDCX_PRICE_LOCK:
+        cached = _COINDCX_PRICE_CACHE.get(pair)
+        if cached and (now - cached.get("_ts", 0)) < _REGIONAL_COMP_TTL:
+            return cached.get("price")
+    try:
+        # Normalize: "BTCINR" → base="BTC", quote="INR"
+        pair_upper = pair.upper()
+        if pair_upper.endswith("INR"):
+            base = pair_upper[:-3]
+            quote = "INR"
+        else:
+            base, quote = pair_upper[:-4], pair_upper[-4:]
+        target_market = f"B-{base}_{quote}"
+
+        resp = _SESSION.get("https://api.coindcx.com/exchange/ticker", timeout=8)
+        if resp.status_code == 200:
+            for ticker in resp.json():
+                if ticker.get("market") == target_market:
+                    last_local = float(ticker.get("last_price", 0) or 0)
+                    if last_local > 0:
+                        # Fetch INR/USD rate
+                        inr_rate = 83.0
+                        try:
+                            r2 = _SESSION.get(
+                                "https://api.binance.com/api/v3/ticker/price",
+                                params={"symbol": "USDTINR"},
+                                timeout=4,
+                            )
+                            if r2.status_code == 200:
+                                inr_rate = float(r2.json().get("price", 83.0) or 83.0)
+                        except Exception:
+                            pass
+                        price_usd = round(last_local / inr_rate, 2) if inr_rate > 0 else None
+                        if price_usd and price_usd > 0:
+                            with _COINDCX_PRICE_LOCK:
+                                _COINDCX_PRICE_CACHE[pair] = {"price": price_usd, "_ts": now}
+                            return price_usd
+                        break
+    except Exception as e:
+        logging.debug("[CoinDCX] price fetch failed for %s: %s", pair, e)
+    with _COINDCX_PRICE_LOCK:
+        _COINDCX_PRICE_CACHE[pair] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_regional_price_comparison(base: str = "BTC") -> dict:
+    """
+    Fetch BTC (or given base) price from MEXC, Bitso, CoinDCX, and Binance.
+    Computes arbitrage spread across all sources vs Binance global price.
+
+    Returns:
+        {
+          "mexc_usd":      float | None,
+          "bitso_usd":     float | None,
+          "coindcx_usd":   float | None,
+          "binance_usd":   float | None,
+          "max_spread_pct": float,
+          "errors":        list[str],
+        }
+    5-min cache.
+    """
+    cache_key = base.upper()
+    now = time.time()
+    with _REGIONAL_COMP_LOCK:
+        cached = _REGIONAL_COMP_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _REGIONAL_COMP_TTL:
+            r = dict(cached)
+            r.pop("_ts", None)
+            return r
+
+    sym = f"{base.upper()}USDT"
+    errors: list = []
+
+    binance_usd = None
+    try:
+        _resp = _SESSION.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": sym},
+            timeout=6,
+        )
+        if _resp.status_code == 200:
+            binance_usd = float(_resp.json().get("price", 0) or 0) or None
+    except Exception as e:
+        errors.append(f"binance:{e}")
+
+    mexc_usd = None
+    try:
+        mexc_usd = fetch_mexc_price(sym)
+    except Exception as e:
+        errors.append(f"mexc:{e}")
+
+    bitso_usd = None
+    try:
+        bitso_usd = fetch_bitso_price(f"{base.lower()}_mxn")
+    except Exception as e:
+        errors.append(f"bitso:{e}")
+
+    coindcx_usd = None
+    try:
+        coindcx_usd = fetch_coindcx_price(f"{base.upper()}INR")
+    except Exception as e:
+        errors.append(f"coindcx:{e}")
+
+    # Compute max spread across all valid prices
+    _prices = [p for p in [mexc_usd, bitso_usd, coindcx_usd, binance_usd] if p and p > 0]
+    max_spread_pct = 0.0
+    if len(_prices) >= 2:
+        _min_p = min(_prices)
+        _max_p = max(_prices)
+        max_spread_pct = round((_max_p - _min_p) / _min_p * 100, 4) if _min_p > 0 else 0.0
+
+    _result = {
+        "mexc_usd":       mexc_usd,
+        "bitso_usd":      bitso_usd,
+        "coindcx_usd":    coindcx_usd,
+        "binance_usd":    binance_usd,
+        "max_spread_pct": max_spread_pct,
+        "errors":         errors,
+        "_ts":            now,
+    }
+    with _REGIONAL_COMP_LOCK:
+        _REGIONAL_COMP_CACHE[cache_key] = _result
+
+    _out = dict(_result)
+    _out.pop("_ts", None)
+    return _out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BATCH 4 — #91 DEX INDIVIDUAL FETCHERS + DEX vs CEX SPREAD
+# Standalone wrappers for dYdX v4 and Jupiter; DEX vs CEX comparison function
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DYDX_PRICE_CACHE: dict = {}
+_DYDX_PRICE_LOCK = threading.Lock()
+_JUP_PRICE_CACHE: dict = {}
+_JUP_PRICE_LOCK = threading.Lock()
+_DEX_CEX_CACHE: dict = {}
+_DEX_CEX_LOCK = threading.Lock()
+_DEX_INDIVIDUAL_TTL = 300  # 5-min cache
+
+
+def fetch_dydx_price(market: str = "BTC-USD") -> "Optional[float]":
+    """
+    Fetch index price from dYdX v4 indexer for a given market (e.g. 'BTC-USD').
+    Returns indexPrice as float or None on error. 5-min cache.
+    """
+    now = time.time()
+    with _DYDX_PRICE_LOCK:
+        cached = _DYDX_PRICE_CACHE.get(market)
+        if cached and (now - cached.get("_ts", 0)) < _DEX_INDIVIDUAL_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get("https://indexer.dydx.trade/v4/markets", timeout=8)
+        if resp.status_code == 200:
+            mkt_data = resp.json().get("markets", {}).get(market, {})
+            index_price = float(mkt_data.get("indexPrice") or mkt_data.get("oraclePrice") or 0)
+            if index_price > 0:
+                with _DYDX_PRICE_LOCK:
+                    _DYDX_PRICE_CACHE[market] = {"price": index_price, "_ts": now}
+                return index_price
+    except Exception as e:
+        logging.debug("[dYdX] price fetch failed for %s: %s", market, e)
+    with _DYDX_PRICE_LOCK:
+        _DYDX_PRICE_CACHE[market] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_jupiter_price(token_mint: str) -> "Optional[float]":
+    """
+    Fetch token price from Jupiter Price API v6 by token mint address.
+    Common mints: SOL = 'So11111111111111111111111111111111111111112'
+    Returns float price in USD or None on error. 5-min cache.
+    """
+    now = time.time()
+    with _JUP_PRICE_LOCK:
+        cached = _JUP_PRICE_CACHE.get(token_mint)
+        if cached and (now - cached.get("_ts", 0)) < _DEX_INDIVIDUAL_TTL:
+            return cached.get("price")
+    try:
+        resp = _SESSION.get(
+            "https://price.jup.ag/v6/price",
+            params={"ids": token_mint},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            token_data = data.get(token_mint, {})
+            price = float(token_data.get("price", 0) or 0)
+            if price > 0:
+                with _JUP_PRICE_LOCK:
+                    _JUP_PRICE_CACHE[token_mint] = {"price": price, "_ts": now}
+                return price
+    except Exception as e:
+        logging.debug("[Jupiter] price fetch failed for %s: %s", token_mint, e)
+    with _JUP_PRICE_LOCK:
+        _JUP_PRICE_CACHE[token_mint] = {"price": None, "_ts": now}
+    return None
+
+
+def fetch_dex_vs_cex_spread(symbol: str = "BTC") -> dict:
+    """
+    Compare dYdX v4 oracle/index price vs Binance spot price for BTC or ETH.
+
+    Returns:
+        {
+          "symbol":       str,
+          "binance_spot": float | None,
+          "dydx_oracle":  float | None,
+          "spread_pct":   float,
+          "basis":        float,   # dYdX − Binance in USD
+        }
+    5-min cache.
+    """
+    sym_upper = symbol.upper()
+    cache_key = sym_upper
+    now = time.time()
+    with _DEX_CEX_LOCK:
+        cached = _DEX_CEX_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _DEX_INDIVIDUAL_TTL:
+            _cached_out = dict(cached)
+            _cached_out.pop("_ts", None)
+            return _cached_out
+
+    dydx_market = f"{sym_upper}-USD"
+    binance_sym = f"{sym_upper}USDT"
+
+    dydx_price = None
+    binance_price = None
+
+    try:
+        dydx_price = fetch_dydx_price(dydx_market)
+    except Exception as e:
+        logging.debug("[DEX vs CEX] dYdX fetch failed: %s", e)
+
+    try:
+        _resp = _SESSION.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": binance_sym},
+            timeout=6,
+        )
+        if _resp.status_code == 200:
+            binance_price = float(_resp.json().get("price", 0) or 0) or None
+    except Exception as e:
+        logging.debug("[DEX vs CEX] Binance fetch failed: %s", e)
+
+    spread_pct = 0.0
+    basis = 0.0
+    if dydx_price and binance_price and binance_price > 0:
+        basis = round(dydx_price - binance_price, 4)
+        spread_pct = round(basis / binance_price * 100, 4)
+
+    _result = {
+        "symbol":       sym_upper,
+        "binance_spot": binance_price,
+        "dydx_oracle":  dydx_price,
+        "spread_pct":   spread_pct,
+        "basis":        basis,
+        "_ts":          now,
+    }
+    with _DEX_CEX_LOCK:
+        _DEX_CEX_CACHE[cache_key] = _result
+
+    _out = dict(_result)
+    _out.pop("_ts", None)
+    return _out

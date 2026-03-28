@@ -507,6 +507,23 @@ if _demo_val:
     )
 _demo_mode = _demo_val
 
+# ── Tier 2 Pairs toggle (#88) ─────────────────────────────────────────────────
+_tier2_val = st.sidebar.checkbox(
+    "Include Tier 2 Pairs (20 pairs)",
+    key="include_tier2",
+    value=st.session_state.get("include_tier2", False),
+    help="Scans 20 additional mid-cap pairs (NEAR, APT, POL, OP, ARB, ATOM, FIL, INJ, PENDLE, WIF, etc.). "
+         "Adds ~30-60s to scan time. Lower liquidity — signals may be less reliable.",
+)
+st.session_state["include_tier2"] = _tier2_val
+if _tier2_val:
+    st.sidebar.markdown(
+        '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);'
+        'border-radius:6px;padding:6px 10px;font-size:11px;color:#f59e0b;margin-top:-6px">'
+        '⚠️ Tier 2 pairs have lower liquidity and may have less accurate signals</div>',
+        unsafe_allow_html=True,
+    )
+
 # ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
 st.sidebar.markdown("")
 _ui.glossary_popover()
@@ -1010,7 +1027,10 @@ def page_dashboard():
                 _prog      = _scan_state.get("progress") or _st.get("progress", 0)
                 _pair      = _scan_state.get("progress_pair") or _st.get("pair", "")
                 _running   = _scan_state["running"]
-            _total = len(model.PAIRS)
+            # Account for Tier 2 pairs when enabled
+            _t2_enabled = st.session_state.get("include_tier2", False)
+            import config as _cfg
+            _total = len(model.PAIRS) + (len(_cfg.TIER2_BINANCE_PAIRS) if _t2_enabled else 0)
 
             # Engaging loading screen: SVG progress ring + rotating crypto fun facts
             _fact_idx = int(time.time() / 4) % 15
@@ -1086,8 +1106,16 @@ def page_dashboard():
         st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         return
 
+    # Separate Tier 1 and Tier 2 results (#88)
+    tier1_results = [r for r in results if r.get("tier", 1) == 1]
+    tier2_results = [r for r in results if r.get("tier", 1) == 2]
+    # Use Tier 1 results for all main-section display logic
+    results = tier1_results if tier1_results else results
+
     if st.session_state.get("scan_timestamp"):
-        st.success(f"Scan complete — {len(results)} pairs | {st.session_state['scan_timestamp']}")
+        _t1_count = len(tier1_results) if tier1_results else len(results)
+        _t2_note = f" + {len(tier2_results)} Tier 2" if tier2_results else ""
+        st.success(f"Scan complete — {_t1_count}{_t2_note} pairs | {st.session_state['scan_timestamp']}")
 
     # ── Market stat bar (top strip with live market stats) ───────────────────
     _stat_bar_data = {}
@@ -1425,6 +1453,60 @@ def page_dashboard():
             )
             st.markdown(_spk_html, unsafe_allow_html=True)
             st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── Tier 2 Pairs Results (#88) — collapsible section ──────────────────────
+    if tier2_results:
+        with st.expander(
+            f"📊 Tier 2 Pairs — {len(tier2_results)} mid-cap coins scanned",
+            expanded=False,
+        ):
+            st.markdown(
+                '<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);'
+                'border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#f59e0b">'
+                '⚠️ <b>Tier 2 pairs have lower liquidity and may have less accurate signals.</b> '
+                'Use these results as supplementary context only — verify before acting.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            # Summary metrics for Tier 2
+            _t2_hc = [r for r in tier2_results if r.get("high_conf")]
+            _t2_buy  = sum(1 for r in tier2_results if "BUY"  in r.get("direction", ""))
+            _t2_sell = sum(1 for r in tier2_results if "SELL" in r.get("direction", ""))
+            _t2_mc = st.columns(4)
+            _t2_mc[0].metric("Tier 2 Scanned", len(tier2_results))
+            _t2_mc[1].metric("Top Picks ⚡", len(_t2_hc))
+            _t2_mc[2].metric("Buy Signals", f"▲{_t2_buy}")
+            _t2_mc[3].metric("Sell Signals", f"▼{_t2_sell}")
+            # Coin cards for Tier 2
+            _t2_sorted = sorted(
+                tier2_results,
+                key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)),
+                reverse=True,
+            )
+            _all_ws_t2 = _ws.get_all_prices()
+            st.markdown(
+                _ui.coin_cards_grid_html(_t2_sorted, ws_prices=_all_ws_t2),
+                unsafe_allow_html=True,
+            )
+            # Summary table
+            _t2_rows = []
+            for _t2r in _t2_sorted:
+                _t2_tp = _t2r.get("tp1")
+                _t2_rows.append({
+                    "Coin":       _t2r["pair"],
+                    "Signal":     _t2r.get("direction", "N/A"),
+                    "Strength":   f"{_t2r.get('confidence_avg_pct', 0)}%",
+                    "Entry":      f"${_t2r['entry']:,.4f}"   if _t2r.get("entry")    else "N/A",
+                    "Take Profit":f"${_t2_tp:,.4f}"          if _t2_tp              else "N/A",
+                    "Stop Loss":  f"${_t2r['stop_loss']:,.4f}" if _t2r.get("stop_loss") else "N/A",
+                    "Top Pick":   "⚡ Yes" if _t2r.get("high_conf") else "—",
+                })
+            if _t2_rows:
+                st.dataframe(pd.DataFrame(_t2_rows).set_index("Coin"), use_container_width=True)
+    elif st.session_state.get("include_tier2"):
+        st.info("Tier 2 scan is enabled — run a new scan to include Tier 2 pairs.")
+
     st.markdown("---")
 
     # ── Coin Selector Dropdown ─────────────────────────────────────────────────
@@ -2244,7 +2326,8 @@ def _run_scan_thread():
         _scan_state["progress_pair"] = f"Connecting to {model.TA_EXCHANGE.upper()}..."
     _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
     try:
-        results = model.run_scan(progress_callback=_progress_cb)
+        _include_t2 = st.session_state.get("include_tier2", False)
+        results = model.run_scan(progress_callback=_progress_cb, include_tier2=_include_t2)
         model.append_to_master(results)
         # F1/F2/F4/F6/F7: resolve past outcomes, update weights, check drift
         try:
@@ -6059,6 +6142,53 @@ def page_market_overview():
             if _ec.get("error"):
                 st.caption(f"Note: {_ec['error']}")
             st.caption("Source: Binance spot · HTX (Huobi) · Bitstamp · Bitget · 5-min cache")
+
+            # ── Regional Price Comparison (#89 Batch 4) ───────────────────────
+            st.markdown("---")
+            st.markdown(
+                '<span style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.7)">'
+                'Regional Exchange Comparison — MEXC (Asia) · Bitso (LatAm) · CoinDCX (India)'
+                '</span>',
+                unsafe_allow_html=True,
+            )
+            try:
+                @st.cache_data(ttl=300, show_spinner=False)
+                def _cached_regional_compare(base: str):
+                    return data_feeds.fetch_regional_price_comparison(base)
+
+                _reg_base = _ec_pair.split("/")[0]  # e.g. "BTC" from "BTC/USDT"
+                _rpc = _cached_regional_compare(_reg_base)
+                _rpc_cols = st.columns(4)
+                _rpc_labels = [
+                    ("Binance", _rpc.get("binance_usd")),
+                    ("MEXC", _rpc.get("mexc_usd")),
+                    ("Bitso (MXN)", _rpc.get("bitso_usd")),
+                    ("CoinDCX (INR)", _rpc.get("coindcx_usd")),
+                ]
+                _rpc_binance = _rpc.get("binance_usd") or 0
+                for _rpc_i, (_rpc_name, _rpc_price) in enumerate(_rpc_labels):
+                    if _rpc_price and _rpc_price > 0:
+                        _rpc_delta = None
+                        if _rpc_i > 0 and _rpc_binance > 0:
+                            _rpc_spread = round((_rpc_price - _rpc_binance) / _rpc_binance * 100, 4)
+                            _rpc_delta = f"{_rpc_spread:+.4f}%"
+                        _rpc_cols[_rpc_i].metric(_rpc_name, f"${_rpc_price:,.2f}", delta=_rpc_delta)
+                    else:
+                        _rpc_cols[_rpc_i].metric(_rpc_name, "N/A")
+                _max_sp = _rpc.get("max_spread_pct", 0.0)
+                if _max_sp > 0:
+                    _rpc_color = "#f59e0b" if _max_sp > 0.2 else "#00d4aa"
+                    st.markdown(
+                        f"<div style='font-size:12px;color:{_rpc_color};margin-top:4px'>"
+                        f"Max regional spread: <b>{_max_sp:.4f}%</b>"
+                        f"{'  — Potential arbitrage window' if _max_sp > 0.2 else '  — Prices in parity'}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.caption("Source: MEXC · Bitso · CoinDCX · Binance · 5-min cache")
+            except Exception as _rpc_err:
+                st.caption(f"Regional comparison error: {_rpc_err}")
+
         except Exception as _ec_err:
             st.caption(f"Exchange price comparison error: {_ec_err}")
 
@@ -6106,6 +6236,51 @@ def page_market_overview():
             )
     else:
         st.info("DEX price feeds loading… Jupiter / dYdX / Raydium endpoints.")
+
+    # ── DEX vs CEX Spread (#91 Batch 4) — dYdX oracle vs Binance spot ─────────
+    _ui.gradient_divider()
+    _ui.section_header(
+        "DEX vs CEX Spread",
+        "dYdX v4 oracle price vs Binance spot — basis and spread for BTC/ETH",
+        icon="🔀",
+    )
+    try:
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _cached_dex_cex_spread(sym: str):
+            return data_feeds.fetch_dex_vs_cex_spread(sym)
+
+        _dcc_cols = st.columns(2)
+        for _dcc_i, _dcc_sym in enumerate(["BTC", "ETH"]):
+            _dcc = _cached_dex_cex_spread(_dcc_sym)
+            _dcc_binance = _dcc.get("binance_spot")
+            _dcc_dydx    = _dcc.get("dydx_oracle")
+            _dcc_spread  = _dcc.get("spread_pct", 0.0)
+            _dcc_basis   = _dcc.get("basis", 0.0)
+            with _dcc_cols[_dcc_i]:
+                st.markdown(
+                    f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);'
+                    f'border-radius:8px;padding:12px 16px">'
+                    f'<div style="font-size:13px;font-weight:700;color:#e8ecf1;margin-bottom:8px">'
+                    f'{_dcc_sym} — dYdX vs Binance</div>',
+                    unsafe_allow_html=True,
+                )
+                _mc = st.columns(2)
+                _mc[0].metric("Binance Spot",  f"${_dcc_binance:,.2f}" if _dcc_binance else "N/A")
+                _mc[1].metric("dYdX Oracle",   f"${_dcc_dydx:,.2f}"   if _dcc_dydx    else "N/A")
+                if _dcc_spread is not None and (_dcc_binance or _dcc_dydx):
+                    _sp_color = "#f59e0b" if abs(_dcc_spread) > 0.05 else "#00d4aa"
+                    _basis_str = f"${_dcc_basis:+,.2f}" if _dcc_basis else "$0.00"
+                    st.markdown(
+                        f"<div style='font-size:12px;color:{_sp_color};margin-top:4px'>"
+                        f"Spread: <b>{_dcc_spread:+.4f}%</b> · Basis: <b>{_basis_str}</b>"
+                        f"{'  — Elevated DEX premium' if _dcc_spread > 0.05 else '  — DEX discount' if _dcc_spread < -0.05 else '  — In parity'}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+        st.caption("Source: dYdX v4 Indexer (Cosmos) · Binance spot API · 5-min cache")
+    except Exception as _dcc_err:
+        st.caption(f"DEX vs CEX spread error: {_dcc_err}")
 
 
 # ──────────────────────────────────────────────

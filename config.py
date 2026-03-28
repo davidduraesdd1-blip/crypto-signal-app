@@ -58,6 +58,39 @@ TIER1_DEFAULT_WEIGHTS: dict[str, float] = {
     "TAO/USDT":  0.9,
 }
 
+# ─── Tier 2 Pair Expansion (#88) ──────────────────────────────────────────────
+# 20 mid-cap alts added as an optional toggle (lower liquidity, use with caution)
+TIER2_PAIRS: list[str] = [
+    "NEAR/USDT", "APT/USDT", "POL/USDT", "OP/USDT", "ARB/USDT",
+    "ATOM/USDT", "FIL/USDT", "INJ/USDT", "PENDLE/USDT", "WIF/USDT",
+    "PYTH/USDT", "JUP/USDT", "HBAR/USDT", "FLR/USDT", "XDC/USDT",
+    "WFLR/USDT", "FXRP/USDT", "SHX/USDT", "ZBCN/USDT", "CPOOL/USDT",
+]
+
+# Binance-listed Tier 2 (subset that have Binance SPOT markets)
+TIER2_BINANCE_PAIRS: list[str] = [
+    "NEARUSDT", "APTUSDT", "POLUSDT", "OPUSDT", "ARBUSDT",
+    "ATOMUSDT", "FILUSDT", "INJUSDT", "PENDLEUSDT", "WIFUSDT",
+    "PYTHUSDT", "JUPUSDT", "HBARUSDT",
+    # FLR, XDC, WFLR, FXRP, SHX, ZBCN, CPOOL may be on smaller exchanges only
+]
+
+# CoinGecko IDs for Tier 2 (for price/market data fallback)
+TIER2_COINGECKO_IDS: dict[str, str] = {
+    "NEAR/USDT": "near", "APT/USDT": "aptos", "POL/USDT": "matic-network",
+    "OP/USDT": "optimism", "ARB/USDT": "arbitrum", "ATOM/USDT": "cosmos",
+    "FIL/USDT": "filecoin", "INJ/USDT": "injective-protocol",
+    "PENDLE/USDT": "pendle", "WIF/USDT": "dogwifcoin",
+    "PYTH/USDT": "pyth-network", "JUP/USDT": "jupiter-exchange-solana",
+    "HBAR/USDT": "hedera-hashgraph", "FLR/USDT": "flare-networks",
+    "XDC/USDT": "xdce-crowd-sale", "WFLR/USDT": "wrapped-flare",
+    "FXRP/USDT": "fxrp", "SHX/USDT": "stronghold-token",
+    "ZBCN/USDT": "zbcn", "CPOOL/USDT": "clearpool",
+}
+
+# Default equal weights for Tier 2
+TIER2_DEFAULT_WEIGHTS: dict[str, float] = {pair: 1.0 / 20 for pair in TIER2_PAIRS}
+
 # ─── Feature Flags ────────────────────────────────────────────────────────────
 # auto-enabled when the corresponding key is set — no code changes needed
 FEATURES: dict = {

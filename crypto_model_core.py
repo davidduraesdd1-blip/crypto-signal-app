@@ -19,6 +19,7 @@ import threading
 import functools
 from statsmodels.tsa.stattools import coint
 import database as _db
+import config as _config
 
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -460,6 +461,41 @@ def fetch_fear_greed():
     except Exception as e:
         logging.warning(f"Fear & Greed fetch failed: {e}")
         return 50, "Neutral"
+
+# ──────────────────────────────────────────────
+# COINGECKO PRICE FETCH (for Tier 2 non-Binance pairs)
+# ──────────────────────────────────────────────
+_CG_PRICE_CACHE: dict = {}
+_CG_PRICE_LOCK = threading.Lock()
+_CG_PRICE_TTL  = 300  # 5 min
+
+
+def fetch_coingecko_price(cg_id: str) -> float | None:
+    """
+    Fetch current USD price for a CoinGecko token ID (e.g. 'near', 'aptos').
+    5-minute cache. Returns float or None on failure.
+    """
+    now = time.time()
+    with _CG_PRICE_LOCK:
+        cached = _CG_PRICE_CACHE.get(cg_id)
+        if cached and (now - cached["_ts"]) < _CG_PRICE_TTL:
+            return cached["price"]
+    try:
+        r = _http_session.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": cg_id, "vs_currencies": "usd"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            price = float((r.json().get(cg_id) or {}).get("usd") or 0)
+            if price > 0:
+                with _CG_PRICE_LOCK:
+                    _CG_PRICE_CACHE[cg_id] = {"price": price, "_ts": now}
+                return price
+    except Exception as e:
+        logging.debug("[CG price] %s fetch failed: %s", cg_id, e)
+    return None
+
 
 # ──────────────────────────────────────────────
 # PHASE 2: ON-CHAIN METRICS (real — CoinGecko free API)
@@ -4032,11 +4068,12 @@ def _clear_partial_scan_results():
         _partial_scan_results.clear()
 
 
-def run_scan(progress_callback=None):
+def run_scan(progress_callback=None, include_tier2: bool = False):
     """
     Run full multi-timeframe scan across all pairs in parallel using ThreadPoolExecutor.
     progress_callback(pair_index, total_pairs, pair_name) called after each pair completes.
-    Returns list of result dicts in original PAIRS order.
+    include_tier2: when True, appends Tier 2 Binance-listed pairs to the scan list.
+    Returns list of result dicts in original PAIRS order (Tier 1 first, Tier 2 appended).
     """
     _clear_partial_scan_results()   # PERF: reset partial results before each new scan
     start_time = time.time()
@@ -4093,12 +4130,29 @@ def run_scan(progress_callback=None):
             logging.warning(f"{label} fetch failed: {e}")
             return default
 
+    # ── Build scan list — optionally append Tier 2 Binance pairs (#88) ────────
+    # Tier 2 pairs: convert Binance symbol format back to CCXT format (e.g. NEARUSDT → NEAR/USDT)
+    _tier2_ccxt: list[str] = []
+    if include_tier2:
+        _t2_binance = set(_config.TIER2_BINANCE_PAIRS)
+        for _t2_sym in _config.TIER2_BINANCE_PAIRS:
+            # Convert NEARUSDT → NEAR/USDT by stripping USDT suffix
+            if _t2_sym.endswith("USDT"):
+                _base = _t2_sym[:-4]
+                _ccxt_sym = f"{_base}/USDT"
+            else:
+                _ccxt_sym = _t2_sym
+            # Only add pairs not already in PAIRS to avoid duplication
+            if _ccxt_sym not in PAIRS:
+                _tier2_ccxt.append(_ccxt_sym)
+    _scan_pairs = PAIRS + _tier2_ccxt
+
     # PERF-09: DefiLlama TVL added to pre-scan parallel batch (was a serial HTTP call per pair
     # inside each scan worker, competing with OHLCV fetching and adding 2-8s of blocking).
     def _tvl_batch():
         result = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(PAIRS)) as _tvl_ex:
-            _tvl_futures = {_tvl_ex.submit(_data_feeds.get_defillama_tvl, p): p for p in PAIRS}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_scan_pairs)) as _tvl_ex:
+            _tvl_futures = {_tvl_ex.submit(_data_feeds.get_defillama_tvl, p): p for p in _scan_pairs}
             for _f in concurrent.futures.as_completed(_tvl_futures):
                 p = _tvl_futures[_f]
                 try:
@@ -4108,11 +4162,11 @@ def run_scan(progress_callback=None):
         return result
 
     _pre_scan_tasks = {
-        "funding":  (lambda: _safe(_data_feeds.get_funding_rates_batch,  PAIRS, default={}, label="Funding rates")),
-        "oi":       (lambda: _safe(_data_feeds.get_open_interest_batch,   PAIRS, default={}, label="Open interest")),
-        "iv":       (lambda: _safe(_data_feeds.get_options_iv_batch,      PAIRS, default={}, label="Options IV")),
-        "ob":       (lambda: _safe(_data_feeds.get_orderbook_batch,       PAIRS, default={}, label="Order book")),
-        "cvd":      (lambda: _safe(_data_feeds.get_cvd_batch,             PAIRS, default={}, label="CVD")),
+        "funding":  (lambda: _safe(_data_feeds.get_funding_rates_batch,  _scan_pairs, default={}, label="Funding rates")),
+        "oi":       (lambda: _safe(_data_feeds.get_open_interest_batch,   _scan_pairs, default={}, label="Open interest")),
+        "iv":       (lambda: _safe(_data_feeds.get_options_iv_batch,      _scan_pairs, default={}, label="Options IV")),
+        "ob":       (lambda: _safe(_data_feeds.get_orderbook_batch,       _scan_pairs, default={}, label="Order book")),
+        "cvd":      (lambda: _safe(_data_feeds.get_cvd_batch,             _scan_pairs, default={}, label="CVD")),
         "trending": (lambda: _safe(_data_feeds.get_trending_coins,               default=[], label="Trending coins")),
         "global":   (lambda: _safe(_data_feeds.get_global_market,                default={}, label="Global market")),
         "tvl":      (lambda: _safe(_tvl_batch,                                   default={}, label="DefiLlama TVL")),
@@ -4169,13 +4223,13 @@ def run_scan(progress_callback=None):
                 with _partial_scan_lock:
                     _partial_scan_results.append(result)
             if progress_callback:
-                progress_callback(completed[0], len(PAIRS), pair)
+                progress_callback(completed[0], len(_scan_pairs), pair)
         return result
 
-    max_workers = min(len(PAIRS), 6)  # PERF-08: raised from 4→6 — Kraken allows ≥6 concurrent requests
+    max_workers = min(len(_scan_pairs), 6)  # PERF-08: raised from 4→6 — Kraken allows ≥6 concurrent requests
     pair_results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_scan_with_progress, pair): pair for pair in PAIRS}
+        futures = {executor.submit(_scan_with_progress, pair): pair for pair in _scan_pairs}
         for future in concurrent.futures.as_completed(futures):
             pair = futures[future]
             try:
@@ -4185,8 +4239,15 @@ def run_scan(progress_callback=None):
             except Exception as e:
                 logging.warning(f"[scan] {pair} failed: {e}")
 
-    # Restore original PAIRS order
-    results = [pair_results[p] for p in PAIRS if p in pair_results]
+    # Restore original scan order: Tier 1 first, then Tier 2 appended
+    results = [pair_results[p] for p in _scan_pairs if p in pair_results]
+    # Tag Tier 2 results so UI can display them in a separate section
+    _tier2_set = set(_tier2_ccxt)
+    for r in results:
+        if r.get("pair") in _tier2_set:
+            r["tier"] = 2
+        else:
+            r.setdefault("tier", 1)
     return results
 
 
