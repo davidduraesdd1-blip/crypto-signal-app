@@ -4204,7 +4204,7 @@ def page_backtest():
                         _pnl_df_disp.style.format({
                             "P&L %": "{:+.2f}", "Held (h)": "{:.1f}",
                             "Entry $": "{:.4f}", "Exit $": "{:.4f}",
-                        }),
+                        }, na_rep="—"),
                         use_container_width=True,
                         hide_index=True,
                     )

@@ -5216,22 +5216,24 @@ def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
             if last_local > 0:
                 # Determine currency from book name (e.g. btc_mxn → MXN)
                 currency = book.split("_")[-1].upper()
-                # Fetch FX rate: try Binance USDT{currency}; Binance doesn't list MXN
-                # pairs so the fallback rate of 17.0 MXN/USD is used in practice.
-                mxn_rate = 17.0  # hardcoded fallback (Binance has no USDTMXN pair)
-                try:
-                    fx_sym = f"USDT{currency}"
-                    r2 = _SESSION.get(
-                        "https://api.binance.com/api/v3/ticker/price",
-                        params={"symbol": fx_sym},
-                        timeout=4,
-                    )
-                    if r2.status_code == 200:
-                        _fx_price = float(r2.json().get("price", 0) or 0)
-                        if _fx_price > 0:
-                            mxn_rate = _fx_price
-                except Exception:
-                    pass
+                # Binance has no MXN spot pairs (USDTMXN is not listed) so use
+                # a hardcoded fallback rate.  For other currencies (e.g. future books
+                # in BRL, ARS) a live Binance USDT{currency} fetch is attempted first.
+                mxn_rate = 17.0  # hardcoded fallback for MXN
+                if currency != "MXN":
+                    try:
+                        fx_sym = f"USDT{currency}"
+                        r2 = _SESSION.get(
+                            "https://api.binance.com/api/v3/ticker/price",
+                            params={"symbol": fx_sym},
+                            timeout=4,
+                        )
+                        if r2.status_code == 200:
+                            _fx_price = float(r2.json().get("price", 0) or 0)
+                            if _fx_price > 0:
+                                mxn_rate = _fx_price
+                    except Exception:
+                        pass
                 price_usd = round(last_local / mxn_rate, 2) if mxn_rate > 0 else None
                 if price_usd and price_usd > 0:
                     with _BITSO_PRICE_LOCK:
