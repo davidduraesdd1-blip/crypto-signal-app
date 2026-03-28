@@ -2294,6 +2294,7 @@ def page_dashboard():
                         file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
                         use_container_width=True,
+                        key="dl_scan_pdf",
                     )
                 else:
                     st.caption("PDF unavailable")
@@ -3709,6 +3710,7 @@ def page_backtest():
                 file_name="backtest_trades.csv",
                 mime="text/csv",
                 use_container_width=True,
+                key="dl_backtest_csv",
             )
         with dl_col2:
             if _pdf is not None:
@@ -3724,6 +3726,7 @@ def page_backtest():
                         file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
                         use_container_width=True,
+                        key="dl_backtest_pdf",
                     )
                 except Exception as _bt_pdf_err:
                     st.caption(f"PDF generation failed: {_bt_pdf_err}")
@@ -4601,7 +4604,8 @@ def page_trade_log():
             display_df = display_df.rename(columns={k: v for k, v in col_labels.items() if k in display_df.columns})
             st.dataframe(display_df, use_container_width=True, height=400)
             st.download_button("⬇ Download Master Log", data=df.to_csv(index=False),
-                               file_name="daily_signals_master.csv", mime="text/csv")
+                               file_name="daily_signals_master.csv", mime="text/csv",
+                               key="dl_master_log")
 
     # ── Tab 2: Paper Trades ──
     with tab_paper:
@@ -4800,7 +4804,8 @@ def page_trade_log():
 
             st.dataframe(df_closed, use_container_width=True, height=350)
             st.download_button("⬇ Download Paper Trades", data=df_closed.to_csv(index=False),
-                               file_name="paper_trades_log.csv", mime="text/csv")
+                               file_name="paper_trades_log.csv", mime="text/csv",
+                               key="dl_paper_trades")
 
     # ── Tab 3: Feedback Log ──
     with tab_feedback:
@@ -4823,7 +4828,8 @@ def page_trade_log():
 
             st.dataframe(df_fb, use_container_width=True, height=350)
             st.download_button("⬇ Download Feedback Log", data=df_fb.to_csv(index=False),
-                               file_name="feedback_log.csv", mime="text/csv")
+                               file_name="feedback_log.csv", mime="text/csv",
+                               key="dl_feedback_log")
 
     # ── Tab 4: Execution Log ──
     with tab_exec:
@@ -4857,6 +4863,7 @@ def page_trade_log():
                 data=df_exec_log.to_csv(index=False),
                 file_name=f"execution_log_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
+                key="dl_exec_log",
             )
 
     # ── Tab 5: Slippage Analytics ─────────────────────────────────────────────
@@ -4907,6 +4914,7 @@ def page_trade_log():
                     data=df_slip_valid.to_csv(index=False),
                     file_name=f"slippage_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
+                    key="dl_slippage",
                 )
 
 # ──────────────────────────────────────────────
@@ -6813,6 +6821,7 @@ def page_arbitrage():
                 data=csv_data,
                 file_name="arb_opportunities.csv",
                 mime="text/csv",
+                key="dl_arb_csv",
             )
         else:
             st.info("No historical records yet — run a scan to populate.")
@@ -6965,6 +6974,7 @@ def page_agent():
             data=_log_df.to_csv(index=False),
             file_name="agent_log.csv",
             mime="text/csv",
+            key="dl_agent_log_csv",
         )
 
 

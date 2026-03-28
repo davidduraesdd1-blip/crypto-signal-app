@@ -5,6 +5,7 @@ from free public APIs. No API keys required.
 """
 from __future__ import annotations
 
+import base64
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -5712,13 +5713,26 @@ def fetch_wallet_holdings(address: str) -> dict:
         if _hit and (_now - _hit.get("_ts", 0)) < _WALLET_CACHE_TTL:
             return {k: v for k, v in _hit.items() if k != "_ts"}
 
+    # Build Zerion auth header: Basic base64("api_key:") per Zerion API docs.
+    # Falls back to unauthenticated (public free tier) when key is absent.
+    try:
+        from config import ZERION_API_KEY as _zerion_api_key  # type: ignore[import]
+    except ImportError:
+        _zerion_api_key = ""
+    _zerion_api_key = _zerion_api_key or ""
+    if _zerion_api_key:
+        _zerion_auth = "Basic " + base64.b64encode(f"{_zerion_api_key}:".encode()).decode()
+        _zerion_headers = {"Accept": "application/json", "Authorization": _zerion_auth}
+    else:
+        _zerion_headers = {"Accept": "application/json"}
+
     # 1. Try Zerion public portfolio endpoint
     _zerion_url = f"https://api.zerion.io/v1/wallets/{address}/portfolio?currency=usd"
     if _ssrf_check(_zerion_url):
         try:
             resp = _SESSION.get(
                 _zerion_url,
-                headers={"Accept": "application/json"},
+                headers=_zerion_headers,
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -5736,7 +5750,7 @@ def fetch_wallet_holdings(address: str) -> dict:
                     try:
                         pos_resp = _SESSION.get(
                             _pos_url,
-                            headers={"Accept": "application/json"},
+                            headers=_zerion_headers,
                             timeout=10,
                         )
                         if pos_resp.status_code == 200:
@@ -5853,6 +5867,18 @@ def fetch_zerion_portfolio(address: str) -> dict:
         "?filter[position_types]=wallet,deposit,staked&currency=usd&sort=value"
     )
 
+    # Build Zerion auth header: Basic base64("api_key:") per Zerion API docs.
+    try:
+        from config import ZERION_API_KEY as _zp_api_key  # type: ignore[import]
+    except ImportError:
+        _zp_api_key = ""
+    _zp_api_key = _zp_api_key or ""
+    if _zp_api_key:
+        _zp_auth = "Basic " + base64.b64encode(f"{_zp_api_key}:".encode()).decode()
+        _zp_headers = {"Accept": "application/json", "Authorization": _zp_auth}
+    else:
+        _zp_headers = {"Accept": "application/json"}
+
     total_val = 0.0
     change_24h_pct = None
     positions: list = []
@@ -5862,7 +5888,7 @@ def fetch_zerion_portfolio(address: str) -> dict:
         try:
             resp = _SESSION.get(
                 _portfolio_url,
-                headers={"Accept": "application/json"},
+                headers=_zp_headers,
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -5879,7 +5905,7 @@ def fetch_zerion_portfolio(address: str) -> dict:
         try:
             pos_resp = _SESSION.get(
                 _positions_url,
-                headers={"Accept": "application/json"},
+                headers=_zp_headers,
                 timeout=10,
             )
             if pos_resp.status_code == 200:
