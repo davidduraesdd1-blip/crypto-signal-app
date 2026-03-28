@@ -28,6 +28,19 @@ VERSION = "v5.9.13-phase9-complete"
 _weights_lock = threading.Lock()  # Protects global weights dict from parallel scan workers
 _last_drift_result: dict = {}     # F6/F7: last concept drift check result; read by UI via get_drift_status()
 
+# PERF-17: LightGBM in-sample model cache — avoids retraining on every scan call
+# Key: (symbol_hash, tf) — symbol_hash avoids full pair string as dict key
+_lgbm_model_cache: dict = {}      # {(symbol, tf): {"model": fitted_model, "expires": float}}
+_lgbm_model_cache_lock = threading.Lock()
+
+# PERF-18: MLP/sklearn model cache — avoids retraining on every scan call
+_mlp_model_cache: dict = {}       # {(symbol, tf): {"model": fitted_model, "scaler": scaler, "expires": float}}
+_mlp_model_cache_lock = threading.Lock()
+
+# PERF-23: Per-(symbol, tf) HMM regime cache — supplements the price-hash cache in ml_predictor.py
+_hmm_regime_cache: dict = {}      # {(symbol, tf): {"result": dict, "expires": float}}
+_hmm_regime_cache_lock = threading.Lock()
+
 # ──────────────────────────────────────────────
 # CONFIGURATION DEFAULTS
 # ──────────────────────────────────────────────
@@ -54,7 +67,17 @@ SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need <
 # for 5 minutes. Eliminates 24 Kraken round-trips on every repeat scan click.
 _OHLCV_CACHE: dict       = {}
 _OHLCV_CACHE_LOCK        = threading.Lock()
-_OHLCV_CACHE_TTL         = 300  # 5 minutes
+_OHLCV_CACHE_TTL         = 300  # 5 minutes (default / fallback)
+
+# PERF-31: Timeframe-aware TTL — shorter for fast TFs (bars close quickly),
+# longer for slow TFs (bars close infrequently).  Prevents stale data on 1m
+# while avoiding unnecessary refetches on 1d/1w.
+_TF_TTL: dict = {
+    "1m":  60,   "3m":  90,   "5m":  120,
+    "15m": 180,  "30m": 240,  "1h":  300,
+    "2h":  420,  "4h":  600,  "6h":  900,
+    "12h": 1200, "1d":  1800, "1w":  3600,
+}
 
 # PERF: Enriched DataFrame cache — avoids recomputing 24 technical indicators
 # (RSI, MACD, BB, ADX, Ichimoku, SuperTrend, HMM, etc.) on every coin click.
@@ -399,11 +422,13 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
     if limit is None:
         limit = OHLCV_LIMIT
     # PERF: return cached frame — historical bars don't change; only the last bar updates
+    # PERF-31: use timeframe-aware TTL (short TFs expire faster than long TFs)
     _key = (pair, timeframe, limit)
     _now = time.time()
+    _ttl = _TF_TTL.get(timeframe, _OHLCV_CACHE_TTL)
     with _OHLCV_CACHE_LOCK:
         _hit = _OHLCV_CACHE.get(_key)
-        if _hit and (_now - _hit['ts']) < _OHLCV_CACHE_TTL:
+        if _hit and (_now - _hit['ts']) < _ttl:
             return _hit['df']
     try:
         ohlcv = ex.fetch_ohlcv(pair, timeframe, limit=limit)
@@ -593,6 +618,20 @@ def detect_hmm_regime(df) -> str:
     Falls back to ADX-based detection if hmmlearn unavailable or < 80 bars.
     Returns: 'Trending', 'Ranging', 'Neutral', or None (caller uses ADX fallback).
     """
+    # PERF-23: 15-minute TTL cache keyed by (n_bars, first_close, last_close)
+    # Avoids expensive HMM fitting on repeated calls with the same data window.
+    _hmm_key = None  # always initialize so cache-write guard never raises NameError
+    try:
+        _close_arr = df['close'].dropna().values if 'close' in df.columns else []
+        if len(_close_arr) >= 2:
+            _hmm_key = (len(_close_arr), round(float(_close_arr[0]), 2), round(float(_close_arr[-1]), 2))
+            _now_hmm = time.time()
+            with _hmm_regime_cache_lock:
+                _hmm_hit = _hmm_regime_cache.get(_hmm_key)
+                if _hmm_hit and _now_hmm < _hmm_hit["expires"]:
+                    return _hmm_hit["result"]
+    except Exception:
+        _hmm_key = None
     try:
         from hmmlearn.hmm import GaussianHMM
         min_bars = 80
@@ -661,11 +700,20 @@ def detect_hmm_regime(df) -> str:
         smoothed_state = _mc[0][0] if _mc else bull_state
 
         if smoothed_state == bull_state:
-            return "Trending"
+            _hmm_result = "Trending"
         elif smoothed_state == bear_state:
-            return "Ranging"
+            _hmm_result = "Ranging"
         else:
-            return "Neutral"
+            _hmm_result = "Neutral"
+
+        # PERF-23: store result in 15-minute cache
+        try:
+            if _hmm_key is not None:
+                with _hmm_regime_cache_lock:
+                    _hmm_regime_cache[_hmm_key] = {"result": _hmm_result, "expires": time.time() + 900}
+        except Exception:
+            pass
+        return _hmm_result
 
     except ImportError:
         return None
@@ -712,41 +760,73 @@ def agent_vote_lgbm(df, hold_bars: int = 5):
             except Exception:
                 pass  # Fall through to in-sample training
 
-        close = df['close'].values
-        bbu = df['bb_upper'].values
-        bbl = df['bb_lower'].values
-        rsi_v = df['rsi'].values
-        hist_v = df['macd_hist'].values
-        sk_v = df['stoch_k'].values
-        sd_v = df['stoch_d'].values
+        # PERF-17: check in-sample model cache (10-minute TTL) before retraining
+        # Key: (n_rows, first_close_rounded, last_close_rounded, hold_bars) — stable & fast
+        try:
+            _close_vals = df['close'].values
+            _lgbm_cache_key = (
+                len(df), hold_bars,
+                round(float(_close_vals[0]), 2) if len(_close_vals) > 0 else 0,
+                round(float(_close_vals[-1]), 2) if len(_close_vals) > 0 else 0,
+            )
+        except Exception:
+            _lgbm_cache_key = (len(df), hold_bars)
+        _now_lgbm = time.time()
+        _cached_lgbm = None
+        with _lgbm_model_cache_lock:
+            _entry_lgbm = _lgbm_model_cache.get(_lgbm_cache_key)
+            if _entry_lgbm and _now_lgbm < _entry_lgbm["expires"]:
+                _cached_lgbm = _entry_lgbm["model"]
 
-        X_rows, y_rows = [], []
-        for i in range(60, len(df) - hold_bars):
-            if np.isnan(rsi_v[i]) or np.isnan(hist_v[i]):
-                continue
-            bb_pos = (close[i] - bbl[i]) / (bbu[i] - bbl[i] + 1e-6)
-            X_rows.append([
-                rsi_v[i] / 100.0,
-                np.clip(bb_pos, 0.0, 1.0),
-                hist_v[i] / (abs(close[i]) + 1e-6),
-                sk_v[i] / 100.0,
-                sd_v[i] / 100.0,
-            ])
-            future_ret = (close[i + hold_bars] - close[i]) / (close[i] + 1e-6)
-            y_rows.append(1 if future_ret > 0.001 else 0)
+        if _cached_lgbm is None:
+            close = df['close'].values
+            bbu = df['bb_upper'].values
+            bbl = df['bb_lower'].values
+            rsi_v = df['rsi'].values
+            hist_v = df['macd_hist'].values
+            sk_v = df['stoch_k'].values
+            sd_v = df['stoch_d'].values
 
-        if len(X_rows) < 30 or len(set(y_rows)) < 2:
-            return 0.0, "LightGBM: insufficient training samples"
+            X_rows, y_rows = [], []
+            for i in range(60, len(df) - hold_bars):
+                if np.isnan(rsi_v[i]) or np.isnan(hist_v[i]):
+                    continue
+                bb_pos = (close[i] - bbl[i]) / (bbu[i] - bbl[i] + 1e-6)
+                X_rows.append([
+                    rsi_v[i] / 100.0,
+                    np.clip(bb_pos, 0.0, 1.0),
+                    hist_v[i] / (abs(close[i]) + 1e-6),
+                    sk_v[i] / 100.0,
+                    sd_v[i] / 100.0,
+                ])
+                future_ret = (close[i + hold_bars] - close[i]) / (close[i] + 1e-6)
+                y_rows.append(1 if future_ret > 0.001 else 0)
 
-        X = np.array(X_rows, dtype=np.float32)
-        y = np.array(y_rows, dtype=np.int32)
-        model = lgb.LGBMClassifier(
-            n_estimators=30, learning_rate=0.1, max_depth=3,
-            num_leaves=15, verbose=-1, random_state=42, n_jobs=1,
-        )
-        model.fit(X, y)
+            if len(X_rows) < 30 or len(set(y_rows)) < 2:
+                return 0.0, "LightGBM: insufficient training samples"
 
-        # Predict on latest bar
+            X = np.array(X_rows, dtype=np.float32)
+            y = np.array(y_rows, dtype=np.int32)
+            _cached_lgbm = lgb.LGBMClassifier(
+                n_estimators=30, learning_rate=0.1, max_depth=3,
+                num_leaves=15, verbose=-1, random_state=42, n_jobs=1,
+            )
+            _cached_lgbm.fit(X, y)
+            with _lgbm_model_cache_lock:
+                _lgbm_model_cache[_lgbm_cache_key] = {
+                    "model": _cached_lgbm,
+                    "expires": _now_lgbm + 600,  # 10-minute TTL
+                }
+        else:
+            close = df['close'].values
+            bbu = df['bb_upper'].values
+            bbl = df['bb_lower'].values
+            rsi_v = df['rsi'].values
+            hist_v = df['macd_hist'].values
+            sk_v = df['stoch_k'].values
+            sd_v = df['stoch_d'].values
+
+        # Predict on latest bar using cached or newly trained model
         bb_pos_last = (close[-1] - bbl[-1]) / (bbu[-1] - bbl[-1] + 1e-6)
         x_last = np.array([[
             rsi_v[-1] / 100.0,
@@ -756,7 +836,7 @@ def agent_vote_lgbm(df, hold_bars: int = 5):
             sd_v[-1] / 100.0,
         ]], dtype=np.float32)
 
-        prob_buy = float(model.predict_proba(x_last)[0][1])
+        prob_buy = float(_cached_lgbm.predict_proba(x_last)[0][1])
         # Map [0,1] probability → [-100, +100] vote
         score = (prob_buy - 0.5) * 200
         reason = f"LightGBM: P(up)={prob_buy:.2f}"
@@ -803,34 +883,60 @@ def agent_vote_lstm(df, hold_bars: int = 5):
         if n_train < 30:
             return 0.0, "LSTM-MLP: insufficient training samples"
 
-        X_list, y_list = [], []
-        for i in range(n_train):
-            seq = features[i:i + seq_len]
-            if np.any(~np.isfinite(seq)):
-                continue
-            future_ret = (close[i + seq_len + hold_bars] - close[i + seq_len]) / (close[i + seq_len] + 1e-10)
-            X_list.append(seq.flatten())
-            y_list.append(1 if future_ret > 0.001 else 0)
+        # PERF-18: check MLP model cache (10-minute TTL) before retraining
+        # Key: (n_rows, first_close_rounded, last_close_rounded, hold_bars) — stable fingerprint
+        try:
+            _mlp_cache_key = (
+                len(df), hold_bars,
+                round(float(close[0]), 2) if len(close) > 0 else 0,
+                round(float(close[-1]), 2) if len(close) > 0 else 0,
+            )
+        except Exception:
+            _mlp_cache_key = (len(df), hold_bars)
+        _now_mlp = time.time()
+        _cached_mlp = None
+        _cached_scaler = None
+        with _mlp_model_cache_lock:
+            _entry_mlp = _mlp_model_cache.get(_mlp_cache_key)
+            if _entry_mlp and _now_mlp < _entry_mlp["expires"]:
+                _cached_mlp = _entry_mlp["model"]
+                _cached_scaler = _entry_mlp["scaler"]
 
-        if len(X_list) < 30 or len(set(y_list)) < 2:
-            return 0.0, "LSTM-MLP: class imbalance or too few samples"
+        if _cached_mlp is None:
+            X_list, y_list = [], []
+            for i in range(n_train):
+                seq = features[i:i + seq_len]
+                if np.any(~np.isfinite(seq)):
+                    continue
+                future_ret = (close[i + seq_len + hold_bars] - close[i + seq_len]) / (close[i + seq_len] + 1e-10)
+                X_list.append(seq.flatten())
+                y_list.append(1 if future_ret > 0.001 else 0)
 
-        X = np.array(X_list, dtype=np.float32)
-        y = np.array(y_list, dtype=np.int32)
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
+            if len(X_list) < 30 or len(set(y_list)) < 2:
+                return 0.0, "LSTM-MLP: class imbalance or too few samples"
 
-        model = MLPClassifier(
-            hidden_layer_sizes=(32, 16), activation='tanh', max_iter=100,
-            random_state=42, warm_start=False, early_stopping=False,
-        )
-        model.fit(X, y)
+            X = np.array(X_list, dtype=np.float32)
+            y = np.array(y_list, dtype=np.int32)
+            _cached_scaler = StandardScaler()
+            X = _cached_scaler.fit_transform(X)
+
+            _cached_mlp = MLPClassifier(
+                hidden_layer_sizes=(32, 16), activation='tanh', max_iter=100,
+                random_state=42, warm_start=False, early_stopping=False,
+            )
+            _cached_mlp.fit(X, y)
+            with _mlp_model_cache_lock:
+                _mlp_model_cache[_mlp_cache_key] = {
+                    "model": _cached_mlp,
+                    "scaler": _cached_scaler,
+                    "expires": _now_mlp + 600,  # 10-minute TTL
+                }
 
         x_last = features[-seq_len:].flatten()
         if not np.all(np.isfinite(x_last)):
             return 0.0, "LSTM-MLP: NaN in latest features"
-        x_last = scaler.transform(x_last.reshape(1, -1))
-        prob_buy = float(model.predict_proba(x_last)[0][1])
+        x_last = _cached_scaler.transform(x_last.reshape(1, -1))
+        prob_buy = float(_cached_mlp.predict_proba(x_last)[0][1])
         score = (prob_buy - 0.5) * 200
         return round(score, 1), f"LSTM-MLP: P(up)={prob_buy:.2f}"
 
@@ -2937,9 +3043,10 @@ def run_feedback_loop():
         logging.warning(f"run_feedback_loop lgbm retrain failed: {lgbm_e}")
 
     # F6/F7: Run drift detection after weights update — store result for UI; auto-trigger Optuna if drift detected
+    # PERF-29: pass already-fetched resolved_df so check_concept_drift() skips its own 90d DB fetch
     global _last_drift_result
     try:
-        drift = check_concept_drift()
+        drift = check_concept_drift(df_90d=resolved_df)
         with _weights_lock:
             _last_drift_result = drift  # BUG-C05: lock protects against torn reads in UI thread
         if drift.get('drift_detected'):
@@ -2958,13 +3065,17 @@ def run_feedback_loop():
         logging.warning(f"Drift detection failed: {drift_e}")
 
 
-def check_concept_drift() -> dict:
+def check_concept_drift(df_90d=None) -> dict:
     """F6/F7: ADWIN-style concept drift detector.
 
     Compares 30-day win rate against 90-day win rate from resolved feedback.
     If the ratio drops below 0.75, it means recent performance has decayed
     significantly relative to historical — a signal that market regime has shifted
     and the model's indicators are no longer as effective.
+
+    Args:
+        df_90d: Optional pre-fetched 90-day resolved DataFrame (PERF-29).
+                If provided, skips the internal 90d DB fetch.
 
     Returns:
         dict with keys:
@@ -2979,7 +3090,8 @@ def check_concept_drift() -> dict:
     Drift is only flagged when we have ≥30 resolved rows in the 90-day window
     (avoids false positives early in deployment).
     """
-    resolved_90d = _db.get_resolved_feedback_df(days=90)
+    # PERF-29: accept pre-fetched df to avoid duplicate DB round-trip from run_feedback_loop()
+    resolved_90d = df_90d if df_90d is not None else _db.get_resolved_feedback_df(days=90)
     resolved_30d = _db.get_resolved_feedback_df(days=30)
 
     n_90 = len(resolved_90d)
@@ -3033,7 +3145,9 @@ def get_drift_status() -> dict:
 
 
 def show_trends():
-    master_df = _db.get_signals_df()
+    # PERF-26: bounded read — only last 10 rows per pair via server-side aggregation.
+    # Avoids loading entire daily_signals table into Python memory for a simple last-2 lookup.
+    master_df = _db.get_signals_df(limit=len(PAIRS) * 10)
     if len(master_df) < 2:
         return {}
     last_scan = master_df.sort_values('scan_timestamp').groupby('pair').tail(1)

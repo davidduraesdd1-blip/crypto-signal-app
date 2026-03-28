@@ -22,6 +22,7 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
+import concurrent.futures as _cf
 
 try:
     from scipy.stats import spearmanr as _spearmanr
@@ -806,18 +807,28 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
     if not rows:
         return 0
 
-    # PERF: collect all updates first, then commit in one executemany() call
-    # (was N individual UPDATE+commit per row = N+1 DB round-trips; now 1 round-trip)
-    now_iso = datetime.now(timezone.utc).isoformat()
-    updates = []
-    for row in rows:
+    # PERF-25: fetch prices concurrently — was sequential (N × API latency)
+    def _fetch_one(row):
         try:
             ts = datetime.fromisoformat(row['timestamp'])
             since_ms = int((ts + timedelta(days=hold_days)).timestamp() * 1000)
-            actual_price = fetch_price_fn(row['pair'], since_ms)
+            price = fetch_price_fn(row['pair'], since_ms)
+            return row, price
+        except Exception as _fe:
+            logger.warning("resolve_feedback_outcomes fetch failed for row %s: %s",
+                           row.get('id', '?'), _fe)
+            return row, None
+
+    with _cf.ThreadPoolExecutor(max_workers=8) as _ex:
+        _fetch_results = list(_ex.map(_fetch_one, rows))
+
+    # PERF-25: collect all updates, then single executemany() — no per-row DB write
+    now_iso = datetime.now(timezone.utc).isoformat()
+    updates = []
+    for row, actual_price in _fetch_results:
+        try:
             if actual_price is None:
                 continue
-
             entry = row['entry']
             direction = str(row['direction'] or '')
             if 'BUY' in direction.upper():
@@ -826,7 +837,6 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
                 pnl_pct = (entry - actual_price) / entry * 100
             else:
                 continue  # NEUTRAL/LOW VOL — skip
-
             updates.append((
                 float(actual_price), round(float(pnl_pct), 4),
                 'win' if pnl_pct > 0 else 'loss',

@@ -352,6 +352,26 @@ def _cached_top_movers(top_n: int = 3) -> list:
     return data_feeds.get_top_movers(top_n=top_n)
 
 
+# PERF-21: cached wrappers for expensive dashboard-level calls that were
+# previously invoked uncached on every Streamlit rerun.
+@st.cache_data(ttl=300, show_spinner=False, max_entries=10)
+def _cached_blood_in_streets(fng_value: int, btc_rsi) -> dict:
+    """Cache compute_blood_in_streets() — expensive composite signal, 5-min TTL."""
+    return data_feeds.compute_blood_in_streets(fng_value, btc_rsi)
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
+def _cached_macro_signal_adjustment() -> dict:
+    """Cache get_macro_signal_adjustment() — HTTP call to FRED/DXY, 5-min TTL."""
+    return data_feeds.get_macro_signal_adjustment()
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=5)
+def _cached_deribit_options_skew(currency: str) -> dict:
+    """Cache get_deribit_options_skew() — Deribit API call, 5-min TTL."""
+    return data_feeds.get_deribit_options_skew(currency)
+
+
 # ──────────────────────────────────────────────
 # MODULE-LEVEL THREAD STATE (progress only — results go to file)
 # ──────────────────────────────────────────────
@@ -361,6 +381,22 @@ _scan_state = {
     "progress": 0,
     "progress_pair": "Connecting to exchange...",
 }
+
+# PERF-30: module-level scan status dict — scan thread updates this directly
+# so the progress fragment reads from memory instead of polling SQLite every 0.5s.
+# SQLite is still written on completion (for persistence across restarts).
+_SCAN_STATUS: dict = {
+    "progress": 0,
+    "current":  "",
+    "total":    0,
+    "running":  False,
+}
+
+# PERF-24: module-level full scan results store — keeps the large nested scan output dict
+# out of st.session_state (which Streamlit re-serializes on every rerun).
+# st.session_state["scan_results"] will store only lightweight summary dicts;
+# full result accessed via _SCAN_RESULTS_STORE[pair] when a coin is selected.
+_SCAN_RESULTS_STORE: dict = {}   # {pair: full_result_dict}
 
 _bt_lock = threading.Lock()
 _bt_state = {
@@ -419,12 +455,18 @@ def _setup_autoscan(interval_minutes: int):
     """Start or replace the auto-scan job with a new interval."""
     sched = _get_scheduler()
     sched.remove_job(_AUTOSCAN_JOB_ID) if sched.get_job(_AUTOSCAN_JOB_ID) else None
+    # PERF-32: coalesce=True collapses missed/overlapping runs into one execution;
+    # max_instances=1 prevents concurrent scans; misfire_grace_time=60 gives a
+    # 60-second window to still run a missed job before discarding it.
     sched.add_job(
         lambda: _scheduled_scan(),
         trigger="interval",
         minutes=interval_minutes,
         id=_AUTOSCAN_JOB_ID,
         replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=60,
+        max_instances=1,
         next_run_time=datetime.now(timezone.utc) + timedelta(minutes=interval_minutes),
     )
 
@@ -1100,10 +1142,12 @@ def page_dashboard():
         'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
         unsafe_allow_html=True,
     )
+    # PERF-28: read all WS prices once at the top of the render — was called 3+ times per render
+    _live_prices = _ws.get_all_prices()
     # Animated live price ticker strip — top of dashboard
     try:
         _ticker_prices = []
-        _all_ws = _ws.get_all_prices()
+        _all_ws = _live_prices
         for _pair in model.PAIRS:
             _tick = _all_ws.get(_pair)
             if _tick:
@@ -1158,11 +1202,15 @@ def page_dashboard():
         if st.session_state.get("scan_timestamp"):
             st.caption(f"Last scan: {st.session_state['scan_timestamp']}")
 
-    # Progress bar while scanning — read from status file (survives reloads)
-    status = _read_scan_status()
+    # Progress bar while scanning — check in-memory state first (PERF-30), fall back to SQLite
     with _scan_lock:
         _scan_running_now2 = _scan_state["running"]
-    is_scanning = st.session_state.get("scan_running", False) or _scan_running_now2 or status.get("running", False)
+    _mem_running = _SCAN_STATUS.get("running", False)
+    if _mem_running or _scan_running_now2:
+        status = {}  # PERF-30: skip SQLite read when in-memory already shows running
+    else:
+        status = _read_scan_status()
+    is_scanning = st.session_state.get("scan_running", False) or _scan_running_now2 or _mem_running or status.get("running", False)
 
     if is_scanning:
         # PERF-FRAGMENT: st.fragment(run_every=0.5) means only this section re-renders
@@ -1170,10 +1218,18 @@ def page_dashboard():
         # st.rerun() which previously re-rendered sidebars, CSS, headers on every poll.
         @st.fragment(run_every=0.5)
         def _scan_progress():
-            _st = _read_scan_status()
+            # PERF-30: read from in-memory _SCAN_STATUS first (no DB round-trip per tick)
+            # Only fall back to SQLite if in-memory says not running (e.g. fresh restart)
+            _mem_prog = _SCAN_STATUS.get("progress", 0)
+            _mem_pair = _SCAN_STATUS.get("current", "")
+            _mem_run  = _SCAN_STATUS.get("running", False)
+            if not _mem_run:
+                _st = _read_scan_status()  # fallback to DB only when in-memory shows idle
+            else:
+                _st = {}
             with _scan_lock:
-                _prog      = _scan_state.get("progress") or _st.get("progress", 0)
-                _pair      = _scan_state.get("progress_pair") or _st.get("pair", "")
+                _prog      = _scan_state.get("progress") or _mem_prog or _st.get("progress", 0)
+                _pair      = _scan_state.get("progress_pair") or _mem_pair or _st.get("pair", "")
                 _running   = _scan_state["running"]
             # Account for Tier 2 pairs when enabled
             _t2_enabled = st.session_state.get("include_tier2", False)
@@ -1392,8 +1448,9 @@ def page_dashboard():
         pass
 
     # ── Top Movers bento card (3 gainers / 3 losers from CoinGecko) ──────────
+    # PERF-20: route through cached wrapper (2-min TTL) instead of direct API call
     try:
-        _movers = data_feeds.get_top_movers(top_n=3)
+        _movers = _cached_top_movers(top_n=3)
         _gainers = _movers.get("gainers", [])
         _losers  = _movers.get("losers", [])
         if _gainers or _losers:
@@ -1408,9 +1465,9 @@ def page_dashboard():
         _fg_val3   = results[0].get("fng_value", 50) if results else 50
         _btc_res   = next((r for r in results if r.get("pair") == "BTC/USDT"), {})
         _btc_rsi3  = (_btc_res.get("timeframes", {}).get("1d", {}) or {}).get("rsi", None)
-        _bits3     = data_feeds.compute_blood_in_streets(_fg_val3, _btc_rsi3)
+        _bits3     = _cached_blood_in_streets(_fg_val3, _btc_rsi3)
         _dca_m3    = _bits3["dca_multiplier"]
-        _macro3    = data_feeds.get_macro_signal_adjustment()
+        _macro3    = _cached_macro_signal_adjustment()
         # Only render if signal is notable (not all-normal)
         if _bits3["signal"] != "NORMAL" or _macro3["adjustment"] != 0.0:
             _bc3    = {"BLOOD_IN_STREETS": "#ef4444", "EXTREME_FEAR": "#f59e0b", "NORMAL": "#6b7280"}.get(_bits3["signal"], "#6b7280")
@@ -1418,7 +1475,7 @@ def page_dashboard():
             _dc3    = {0.0: "#ef4444", 0.5: "#f97316", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
             _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
             _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f97316", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
-            _sk3    = data_feeds.get_deribit_options_skew("BTC")
+            _sk3    = _cached_deribit_options_skew("BTC")
             _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "N/A"), "#6b7280")
             _b1, _b2, _b3, _b4 = st.columns(4)
             with _b1:
@@ -1545,8 +1602,8 @@ def page_dashboard():
         "Each card shows whether to BUY, SELL, or WAIT — score out of 10 shows how strong the signal is",
         icon="🎯",
     )
-    # PERF: pre-fetch all WS prices once — was N individual get_price() calls per result
-    _all_ws_prices = _ws.get_all_prices()
+    # PERF-28: use the single _live_prices fetched at the top of page_dashboard()
+    _all_ws_prices = _live_prices
     # Sort: high-conf first, then by confidence descending for card grid
     _grid_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
     st.markdown(
@@ -1593,13 +1650,23 @@ def page_dashboard():
     else:
         _spk_n_cols = min(_spk_n_results, 4)  # up to 4 columns; CSS grid handles responsive wrap
     _spk_cols = st.columns(_spk_n_cols)
+    _spk_pairs_12 = [_sr["pair"] for _sr in sorted_results[:12]]
+    # PERF-27: fetch all sparklines in parallel (was sequential — N × round-trip latency)
+    try:
+        from concurrent.futures import ThreadPoolExecutor as _SpkTEx
+        def _fetch_spk(pair_):
+            try:
+                return data_feeds.fetch_sparkline_closes(pair_, n=24)
+            except Exception:
+                return []
+        with _SpkTEx(max_workers=min(len(_spk_pairs_12), 12)) as _spk_ex:
+            _spk_results = dict(zip(_spk_pairs_12, _spk_ex.map(_fetch_spk, _spk_pairs_12)))
+    except Exception:
+        _spk_results = {}
     for _si, _sr in enumerate(sorted_results[:12]):  # max 12 cards in grid
         _col_idx = _si % _spk_n_cols
         with _spk_cols[_col_idx]:
-            try:
-                _spk_closes = data_feeds.fetch_sparkline_closes(_sr["pair"], n=24)
-            except Exception:
-                _spk_closes = []
+            _spk_closes = _spk_results.get(_sr["pair"], [])
             _spk_html = _ui.scan_sparkline_card_html(
                 pair      = _sr["pair"],
                 direction = _sr.get("direction", "—"),
@@ -1639,7 +1706,7 @@ def page_dashboard():
                 key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)),
                 reverse=True,
             )
-            _all_ws_t2 = _ws.get_all_prices()
+            _all_ws_t2 = _live_prices  # PERF-28: reuse single ws prices fetch
             st.markdown(
                 _ui.coin_cards_grid_html(_t2_sorted, ws_prices=_all_ws_t2),
                 unsafe_allow_html=True,
@@ -1694,6 +1761,9 @@ def page_dashboard():
         key="coin_selector",
     )
     r = _label_to_r[_selected_label]
+    # PERF-24: prefer full result from module-level store (avoids session_state serialization)
+    pair = r["pair"]
+    r = _SCAN_RESULTS_STORE.get(pair, r)  # fall back to session_state copy if store not populated
 
     # ── Selected Coin Detail Panel ─────────────────────────────────────────────
     pair        = r["pair"]
@@ -2005,12 +2075,25 @@ def page_dashboard():
             pass
 
     # ── ML Price Prediction ─────────────────────────────────────────────────────
-    # PERF: robust_fetch_ohlcv now uses 5-min OHLCV cache — no extra Kraken round-trip
+    # PERF-22: run get_enriched_df() in a background thread with 10s timeout so
+    # TA computation (RSI/MACD/BB/Ichimoku/SuperTrend etc.) doesn't block the main render thread.
     if _ml_mod is not None:
         try:
             _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
-            _ml_df = model.get_enriched_df(model.get_exchange_instance(model.TA_EXCHANGE), pair, _ml_tf)
-            if not _ml_df.empty:
+            import concurrent.futures as _cf22
+            with st.spinner("Calculating signals..."):
+                with _cf22.ThreadPoolExecutor(max_workers=1) as _ex22:
+                    _ml_future = _ex22.submit(
+                        model.get_enriched_df,
+                        model.get_exchange_instance(model.TA_EXCHANGE),
+                        pair,
+                        _ml_tf,
+                    )
+                    try:
+                        _ml_df = _ml_future.result(timeout=10)
+                    except _cf22.TimeoutError:
+                        _ml_df = None
+            if _ml_df is not None and not _ml_df.empty:
                 _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
                 _ml_pred = _ml.get("prediction", "UNCERTAIN")
                 _ml_prob = _ml.get("probability", 0.5)
@@ -2541,11 +2624,17 @@ def page_dashboard():
 
 
 def _progress_cb(done, total, pair_name):
-    """Called from background thread — updates module-level dict and status file."""
+    """Called from background thread — updates module-level dict (in-memory, no DB write per tick).
+    PERF-30: only write to SQLite at scan completion; per-tick writes were O(N) DB round-trips."""
     with _scan_lock:
         _scan_state["progress"] = done
         _scan_state["progress_pair"] = pair_name
-    _write_scan_status(running=True, progress=done, pair=pair_name)
+    # PERF-30: update in-memory status — fragment reads this directly
+    _SCAN_STATUS["progress"] = done
+    _SCAN_STATUS["current"]  = pair_name
+    _SCAN_STATUS["total"]    = total
+    _SCAN_STATUS["running"]  = True
+    # No SQLite write here — only at completion to avoid N DB writes per scan
 
 
 def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
@@ -2611,6 +2700,10 @@ def _run_scan_thread():
         _scan_state["running"] = True
         _scan_state["progress"] = 0
         _scan_state["progress_pair"] = f"Connecting to {model.TA_EXCHANGE.upper()}..."
+    # PERF-30: update in-memory status on scan start
+    _SCAN_STATUS["running"]  = True
+    _SCAN_STATUS["progress"] = 0
+    _SCAN_STATUS["current"]  = f"Connecting to {model.TA_EXCHANGE.upper()}..."
     _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
     try:
         # st.session_state is only available in the Streamlit request context;
@@ -2628,7 +2721,15 @@ def _run_scan_thread():
             logging.warning(f"Feedback loop error: {_fb_err}")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
+        # PERF-30: mark in-memory status as done; SQLite write happens here (completion only)
+        _SCAN_STATUS["running"] = False
         _write_scan_status(running=False, timestamp=ts, error=None)
+        # PERF-24: populate module-level store with full results;
+        # only lightweight summary goes into session_state to reduce rerun overhead.
+        for _rr in results:
+            _rr_pair = _rr.get("pair")
+            if _rr_pair:
+                _SCAN_RESULTS_STORE[_rr_pair] = _rr
         # ── P&L entry/exit recording (Batch 8) ────────────────────────────────
         # On BUY: open a P&L entry. On SELL: close the matching open entry.
         try:
@@ -2682,10 +2783,12 @@ def _run_scan_thread():
             logging.warning("[App] Watchlist alert check failed: %s", _e)
     except Exception as e:
         # Don't overwrite good prior results — only update status with error
+        _SCAN_STATUS["running"] = False  # PERF-30: mark in-memory as done on error
         _write_scan_status(running=False, error=str(e))
     finally:
         with _scan_lock:
             _scan_state["running"] = False
+        _SCAN_STATUS["running"] = False  # PERF-30: ensure always cleared
 
 
 def _scheduled_scan():

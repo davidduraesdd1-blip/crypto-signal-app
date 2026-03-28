@@ -12,10 +12,18 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import tempfile
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+try:
+    import joblib as _joblib
+    _JOBLIB_AVAILABLE = True
+except ImportError:
+    _JOBLIB_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +35,44 @@ _CACHE_TTL = 3600  # 1 hour
 # ─── Model store ───────────────────────────────────────────────────────────────
 _model_store: dict = {}   # {(pair, tf): fitted_model}
 _model_lock = threading.Lock()
+
+# PERF-19: disk persistence via joblib — survives Streamlit hot-reloads
+_MODEL_DISK_TTL = 3600   # 1 hour — don't load a pkl file older than this
+_TEMP_DIR = Path(tempfile.gettempdir())
+
+
+def _model_cache_path(pair: str, tf: str) -> Path:
+    """Return the temp-dir path for a (pair, tf) model pkl file."""
+    safe_pair = pair.replace("/", "_").replace("\\", "_")
+    return _TEMP_DIR / f"sgrok_{safe_pair}_{tf}.pkl"
+
+
+def _load_model_from_disk(pair: str, tf: str):
+    """Load a model dict from disk if the pkl exists and is < _MODEL_DISK_TTL old.
+    Returns the model dict or None.
+    """
+    if not _JOBLIB_AVAILABLE:
+        return None
+    path = _model_cache_path(pair, tf)
+    try:
+        if path.exists():
+            age = time.time() - path.stat().st_mtime
+            if age < _MODEL_DISK_TTL:
+                return _joblib.load(str(path))
+    except Exception as _e:
+        logger.debug("Model disk load failed for %s/%s: %s", pair, tf, _e)
+    return None
+
+
+def _save_model_to_disk(pair: str, tf: str, model_dict: dict) -> None:
+    """Persist a model dict to disk via joblib (best-effort; never raises)."""
+    if not _JOBLIB_AVAILABLE:
+        return
+    path = _model_cache_path(pair, tf)
+    try:
+        _joblib.dump(model_dict, str(path))
+    except Exception as _e:
+        logger.debug("Model disk save failed for %s/%s: %s", pair, tf, _e)
 
 # ─── Config ────────────────────────────────────────────────────────────────────
 LOOKAHEAD_BARS   = 4       # predict direction 4 bars ahead
@@ -203,15 +249,30 @@ def _train_model(df: pd.DataFrame):
 
 
 def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
-    """Return cached model or train a new one."""
+    """Return in-memory cached model, disk-cached model, or train a new one.
+
+    Cache hierarchy (PERF-19):
+    1. In-memory _model_store — zero latency, lost on Streamlit hot-reload
+    2. Disk pkl via joblib — survives hot-reloads, 1-hour TTL
+    3. Retrain from OHLCV data — last resort (slowest path)
+    """
     key = (pair, tf)
     with _model_lock:
         model = _model_store.get(key)
-    if model is None:
-        model = _train_model(df)
-        if model:
-            with _model_lock:
-                _model_store[key] = model
+    if model is not None:
+        return model
+    # Try disk cache (survives hot-reloads)
+    model = _load_model_from_disk(pair, tf)
+    if model is not None:
+        with _model_lock:
+            _model_store[key] = model
+        return model
+    # Train from scratch and persist to both memory and disk
+    model = _train_model(df)
+    if model:
+        with _model_lock:
+            _model_store[key] = model
+        _save_model_to_disk(pair, tf, model)
     return model
 
 
