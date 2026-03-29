@@ -802,7 +802,7 @@ with st.sidebar.expander("🔔 Telegram Alerts", expanded=False):
 
     col_save_tg, col_test_tg = st.columns(2)
     with col_save_tg:
-        if st.button("Save", key="tg_save", use_container_width=True):
+        if st.button("Save", key="tg_save", width="stretch"):
             _alert_cfg2.update({
                 "telegram_enabled": tg_enabled,
                 "telegram_token": tg_token.strip(),
@@ -812,7 +812,7 @@ with st.sidebar.expander("🔔 Telegram Alerts", expanded=False):
             _save_alerts_config_and_clear(_alert_cfg2)
             st.success("Saved!")
     with col_test_tg:
-        if st.button("Test", key="tg_test", use_container_width=True, disabled=not tg_enabled):
+        if st.button("Test", key="tg_test", width="stretch", disabled=not tg_enabled):
             ok, err = _alerts.send_telegram(
                 tg_token.strip(), tg_chat_id.strip(),
                 "✅ <b>Crypto Signal Model</b>\nTelegram alert test — connection successful!"
@@ -890,7 +890,7 @@ with st.sidebar.expander("📧 Email Alerts", expanded=False):
     )
     col_save_em, col_test_em = st.columns(2)
     with col_save_em:
-        if st.button("Save", key="em_save", use_container_width=True):
+        if st.button("Save", key="em_save", width="stretch"):
             _alert_cfg_em.update({
                 "email_enabled": em_enabled,
                 "email_to": em_to.strip(),
@@ -901,7 +901,7 @@ with st.sidebar.expander("📧 Email Alerts", expanded=False):
             _save_alerts_config_and_clear(_alert_cfg_em)
             st.success("Saved!")
     with col_test_em:
-        if st.button("Test", key="em_test", use_container_width=True, disabled=not em_enabled):
+        if st.button("Test", key="em_test", width="stretch", disabled=not em_enabled):
             ok, err = _alerts.send_email_alert(
                 em_from.strip(), em_pass, em_to.strip(),
                 "Crypto Signal Model — Test Alert",
@@ -941,7 +941,7 @@ with st.sidebar.expander("💬 Discord Alerts", expanded=False):
     )
     col_save_dc, col_test_dc = st.columns(2)
     with col_save_dc:
-        if st.button("Save", key="dc_save", use_container_width=True):
+        if st.button("Save", key="dc_save", width="stretch"):
             _alert_cfg_dc.update({
                 "discord_enabled": dc_enabled,
                 "discord_webhook_url": dc_webhook.strip(),
@@ -950,7 +950,7 @@ with st.sidebar.expander("💬 Discord Alerts", expanded=False):
             _save_alerts_config_and_clear(_alert_cfg_dc)
             st.success("Saved!")
     with col_test_dc:
-        if st.button("Test", key="dc_test", use_container_width=True, disabled=not dc_enabled):
+        if st.button("Test", key="dc_test", width="stretch", disabled=not dc_enabled):
             ok, err = _alerts.send_discord(
                 dc_webhook.strip(),
                 "✅ **Crypto Signal Model** — Discord alert test, connection successful!"
@@ -1004,7 +1004,7 @@ with st.sidebar.expander("📡 Live Prices", expanded=False):
             if _live_rows:
                 st.dataframe(
                     pd.DataFrame(_live_rows).set_index("Pair"),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=False,
                 )
         else:
@@ -1020,7 +1020,7 @@ with st.sidebar.expander("🔌 API Health", expanded=False):
         _dot = "🟢" if _status in ("ok", "configured") else "🟠" if _status.startswith("HTTP") else "🔴"
         _health_rows.append(f"{_dot} **{_svc.capitalize()}** — {_status}")
     st.markdown("\n\n".join(_health_rows) if _health_rows else "No results")
-    if st.button("Recheck", key="api_health_recheck", use_container_width=True):
+    if st.button("Recheck", key="api_health_recheck", width="stretch"):
         _cached_api_health.clear()
         st.rerun()
 
@@ -1175,7 +1175,7 @@ def page_dashboard():
         # init_state() is ever bypassed (e.g. session reset mid-run).
         scan_disabled = st.session_state.get("scan_running", False) or _scan_running_now
         _btn_label = "⏳ Analyzing... (this takes ~15-30s)" if scan_disabled else "🔍 Analyze All Coins Now"
-        if st.button(_btn_label, disabled=scan_disabled, type="primary", use_container_width=True):
+        if st.button(_btn_label, disabled=scan_disabled, type="primary", width="stretch"):
             st.session_state["scan_results"] = []
             st.session_state["scan_error"] = None
             _start_scan()
@@ -1596,7 +1596,7 @@ def page_dashboard():
         xaxis=dict(side="top", tickfont=dict(size=9)),
         yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
     )
-    st.plotly_chart(_hm_fig, use_container_width=True,
+    st.plotly_chart(_hm_fig, width="stretch",
                     config={"displayModeBar": False, "staticPlot": True})
 
     st.markdown("---")
@@ -1635,7 +1635,7 @@ def page_dashboard():
                 "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
                 "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
             })
-        st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), use_container_width=True)
+        st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), width="stretch")
     st.markdown("---")
 
     # Sort results: high-conf first, then by confidence descending
@@ -1730,7 +1730,7 @@ def page_dashboard():
                     "Top Pick":   "⚡ Yes" if _t2r.get("high_conf") else "—",
                 })
             if _t2_rows:
-                st.dataframe(pd.DataFrame(_t2_rows).set_index("Coin"), use_container_width=True)
+                st.dataframe(pd.DataFrame(_t2_rows).set_index("Coin"), width="stretch")
     elif st.session_state.get("include_tier2"):
         st.info("Tier 2 scan is enabled — run a new scan to include Tier 2 pairs.")
 
@@ -2023,7 +2023,7 @@ def page_dashboard():
                     "Market Mode": _ui.regime_label(td.get("regime", "")),
                     "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
                 })
-            st.dataframe(pd.DataFrame(_tf_rows).set_index("Time Period"), use_container_width=True)
+            st.dataframe(pd.DataFrame(_tf_rows).set_index("Time Period"), width="stretch")
 
     # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
     try:
@@ -2223,7 +2223,7 @@ def page_dashboard():
             st.session_state[ai_key] = explanation
             st.info(explanation)
 
-    if st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", use_container_width=True):
+    if st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", width="stretch"):
         _show_ai_dialog()
 
     # ── Order Execution ────────────────────────────────────────────────────────
@@ -2244,7 +2244,7 @@ def page_dashboard():
         with ex_c1:
             if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{pair}",
                          type="primary" if "BUY" in direction else "secondary",
-                         use_container_width=True):
+                         width="stretch"):
                 _res = _exec.place_order(pair, "BUY", _exec_size, current_price=_cur_price)
                 if _res["ok"]:
                     st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} BUY placed — ID: {_res['order_id']}")
@@ -2253,7 +2253,7 @@ def page_dashboard():
         with ex_c2:
             if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{pair}",
                          type="primary" if "SELL" in direction else "secondary",
-                         use_container_width=True):
+                         width="stretch"):
                 _res = _exec.place_order(pair, "SELL", _exec_size, current_price=_cur_price)
                 if _res["ok"]:
                     st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} SELL placed — ID: {_res['order_id']}")
@@ -2264,7 +2264,7 @@ def page_dashboard():
             if pair in _open_pos:
                 _pos_dir = _open_pos[pair].get("direction", "BUY")
                 if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{pair}",
-                             use_container_width=True):
+                             width="stretch"):
                     _res = _exec.close_position(pair, _pos_dir, _exec_size, current_price=_cur_price)
                     if _res["ok"]:
                         st.success(f"Position closed — ID: {_res['order_id']}")
@@ -2281,7 +2281,7 @@ def page_dashboard():
                 _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"twap_dir_{pair}")
                 _twap_slices = st.number_input("Slices", 2, 20, 5, key=f"twap_slices_{pair}")
                 _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key=f"twap_int_{pair}")
-                if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{pair}", use_container_width=True):
+                if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{pair}", width="stretch"):
                     _tr = _exec.place_twap_order(
                         pair, _twap_dir, _exec_size,
                         n_slices=int(_twap_slices),
@@ -2300,7 +2300,7 @@ def page_dashboard():
                 _ice_limit = st.number_input("Limit Price (0=market)", 0.0, 1e9,
                                              float(r.get("entry") or 0), step=0.01, format="%.4f",
                                              key=f"ice_lim_{pair}")
-                if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{pair}", use_container_width=True):
+                if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{pair}", width="stretch"):
                     _ir = _exec.place_iceberg_order(
                         pair, _ice_dir, _exec_size,
                         visible_pct=_ice_vis,
@@ -2357,7 +2357,7 @@ def page_dashboard():
                     xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
                     showlegend=False,
                 )
-                st.plotly_chart(_ch_fig, use_container_width=True, key=f"conf_hist_{pair}")
+                st.plotly_chart(_ch_fig, width="stretch", key=f"conf_hist_{pair}")
         except Exception:
             pass
 
@@ -2379,7 +2379,7 @@ def page_dashboard():
     with ch_c3:
         st.write("")
         load_chart = st.button(
-            "Load Chart", type="primary", use_container_width=True, key="btn_load_chart"
+            "Load Chart", type="primary", width="stretch", key="btn_load_chart"
         )
 
     if load_chart:
@@ -2421,7 +2421,7 @@ def page_dashboard():
                 data=_export_scan_results(results, "csv"),
                 file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 key="dl_scan_csv",
             )
         with col_json:
@@ -2430,7 +2430,7 @@ def page_dashboard():
                 data=_export_scan_results(results, "json"),
                 file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
                 key="dl_scan_json",
             )
         with col_pdf:
@@ -2449,7 +2449,7 @@ def page_dashboard():
                         data=_pdf_data,
                         file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
-                        use_container_width=True,
+                        width="stretch",
                         key="dl_scan_pdf",
                     )
                 else:
@@ -2499,7 +2499,7 @@ def page_dashboard():
                                               "confidence", "claude_decision",
                                               "action_taken", "claude_rationale"]
                                   if c in _ag_log_df.columns]
-                    st.dataframe(_ag_log_df[_show_cols], use_container_width=True, hide_index=True)
+                    st.dataframe(_ag_log_df[_show_cols], width="stretch", hide_index=True)
             except Exception as _ae:
                 st.caption(f"Agent log unavailable: {_ae}")
     else:
@@ -2542,7 +2542,7 @@ def page_dashboard():
                         "Chain":      _tok.get("chain") or "Ethereum",
                     })
                 if _tok_rows:
-                    st.dataframe(pd.DataFrame(_tok_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(_tok_rows), width="stretch", hide_index=True)
 
         # Chain breakdown (Zerion full portfolio)
         if _zp and _zp.get("chains"):
@@ -2550,7 +2550,7 @@ def page_dashboard():
                 _chain_data = _zp["chains"]
                 _chain_rows = [{"Chain": c, "Value USD": f"${v:,.2f}"} for c, v in _chain_data.items()]
                 if _chain_rows:
-                    st.dataframe(pd.DataFrame(_chain_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(_chain_rows), width="stretch", hide_index=True)
 
     # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
     if results:
@@ -2868,7 +2868,7 @@ def page_config():
         )
     with _cp2:
         st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button("Add Pair", key="cfg_add_custom_pair", use_container_width=True):
+        if st.button("Add Pair", key="cfg_add_custom_pair", width="stretch"):
             # #13: sanitize user-supplied pair string before using in API / DB calls
             _cp_val = _sanitize_input(_custom_pair_input, max_len=20).upper().replace(" ", "")
             if "/" not in _cp_val:
@@ -3044,7 +3044,7 @@ def page_config():
         _bay_c1, _bay_c2 = st.columns([2, 3])
         with _bay_c1:
             if st.button("Recalibrate Bayesian Weights", type="secondary",
-                         use_container_width=True, key="btn_bayesian_recal"):
+                         width="stretch", key="btn_bayesian_recal"):
                 with st.spinner("Running Bayesian weight recalibration...", show_time=True):
                     _new_bw = _db.bayesian_recalibrate_weights(prior_strength=10.0)
                     st.session_state["bayesian_new_weights"] = _new_bw
@@ -3065,7 +3065,7 @@ def page_config():
                     _bw_df = _bw_df.rename(columns={"indicator": "Indicator", "weight": "Weight", "wins": "Wins", "losses": "Losses"})
                     if "Weight" in _bw_df.columns:
                         _bw_df["Weight %"] = (_bw_df["Weight"].astype(float) * 100).round(1).astype(str) + "%"
-                    st.dataframe(_bw_df, use_container_width=True, hide_index=True)
+                    st.dataframe(_bw_df, width="stretch", hide_index=True)
                     # Horizontal bar chart of weights
                     if _display_bw and "weight" in _display_bw[0]:
                         _bw_fig = go.Figure(go.Bar(
@@ -3078,7 +3078,7 @@ def page_config():
                             height=220, margin=dict(l=0, r=0, t=10, b=0),
                             xaxis_title="Weight (%)",
                         )
-                        st.plotly_chart(_bw_fig, use_container_width=True)
+                        st.plotly_chart(_bw_fig, width="stretch")
     except Exception as _bay_err:
         st.caption(f"Bayesian weights card error: {_bay_err}")
 
@@ -3101,7 +3101,7 @@ def page_config():
         opt_tf = st.selectbox("Timeframe", model.TIMEFRAMES,
                               index=0, key="opt_tf")
 
-    if st.button("Run Optuna Optimization", type="primary", use_container_width=True):
+    if st.button("Run Optuna Optimization", type="primary", width="stretch"):
         with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}...", show_time=True):
             result = model.run_optuna_weight_optimization(
                 n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
@@ -3131,7 +3131,7 @@ def page_config():
     if lgbm_info.get("trained_at"):
         st.info(f"Current model: trained {lgbm_info['trained_at']} on {lgbm_info['n_samples']} samples")
 
-    if st.button("Retrain LightGBM from Feedback", type="secondary", use_container_width=True, key="btn_lgbm_retrain"):
+    if st.button("Retrain LightGBM from Feedback", type="secondary", width="stretch", key="btn_lgbm_retrain"):
         with st.spinner("Retraining LightGBM on resolved trade outcomes...", show_time=True):
             lgbm_r = model.retrain_lgbm_from_feedback()
         if lgbm_r.get("success"):
@@ -3176,7 +3176,7 @@ def page_config():
             type="password", placeholder="Real SOPR, MVRV-Z, active addresses",
             key="gn_key"
         )
-    if st.button("Save API Keys", use_container_width=True):
+    if st.button("Save API Keys", width="stretch"):
         _api_cfg.update({
             "lunarcrush_key":   lc_key.strip(),
             "coinglass_key":    cgl_key.strip(),
@@ -3268,10 +3268,10 @@ def page_config():
     st.markdown("---")
     save_col, reset_col = st.columns(2)
     with save_col:
-        if st.button("💾 Save Config", type="primary", use_container_width=True):
+        if st.button("💾 Save Config", type="primary", width="stretch"):
             _save_config(overrides)
     with reset_col:
-        if st.button("↺ Reset to Defaults", use_container_width=True):
+        if st.button("↺ Reset to Defaults", width="stretch"):
             _reset_config()
 
     # ── SQLite Database Stats ──────────────────────────────────────────────
@@ -3424,7 +3424,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
             _save_alerts_config_and_clear(_exec_ui_cfg)
             st.success("Execution config saved.")
 
-    if st.button("🔌 Test OKX Connection", use_container_width=False):
+    if st.button("🔌 Test OKX Connection", width="content"):
         _es = _exec.get_status()
         if not _es.get("keys_configured", False):
             st.warning("No API keys saved — enter and save keys first.")
@@ -3530,13 +3530,13 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
     else:
         _ag_c1, _ag_c2 = st.columns(2)
         with _ag_c1:
-            if st.button("▶ Start Agent Now", use_container_width=True,
+            if st.button("▶ Start Agent Now", width="stretch",
                          disabled=_agent.supervisor.is_running()):
                 _agent.supervisor.start()
                 st.success("Agent started.")
                 st.rerun()
         with _ag_c2:
-            if st.button("⏹ Stop Agent", use_container_width=True,
+            if st.button("⏹ Stop Agent", width="stretch",
                          disabled=not _agent.supervisor.is_running()):
                 _agent.supervisor.stop()
                 st.warning("Agent stop requested.")
@@ -3591,7 +3591,7 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                 st.write("")
                 st.write("")
                 _wl_enabled = st.checkbox("Enabled", value=True)
-            _wl_submitted = st.form_submit_button("Add Rule", type="primary", use_container_width=True)
+            _wl_submitted = st.form_submit_button("Add Rule", type="primary", width="stretch")
             if _wl_submitted:
                 if not _wl_name.strip():
                     st.warning("Please enter a rule name.")
@@ -3636,13 +3636,13 @@ Swagger UI: **http://{_display_host}:{_port}/docs**
                 )
             with _wl_rc2:
                 _toggle_label = "Disable" if _wl_rule.get("enabled", True) else "Enable"
-                if st.button(_toggle_label, key=f"wl_toggle_{_wl_idx}", use_container_width=True):
+                if st.button(_toggle_label, key=f"wl_toggle_{_wl_idx}", width="stretch"):
                     _watchlist[_wl_idx]["enabled"] = not _wl_rule.get("enabled", True)
                     _wl_cfg["watchlist"] = _watchlist
                     _save_alerts_config_and_clear(_wl_cfg)
                     st.rerun()
             with _wl_rc3:
-                if st.button("Delete", key=f"wl_del_{_wl_idx}", use_container_width=True):
+                if st.button("Delete", key=f"wl_del_{_wl_idx}", width="stretch"):
                     _watchlist.pop(_wl_idx)
                     _wl_cfg["watchlist"] = _watchlist
                     _save_alerts_config_and_clear(_wl_cfg)
@@ -3692,7 +3692,7 @@ def page_backtest():
     run_col, _ = st.columns([2, 6])
     with run_col:
         bt_disabled = st.session_state.get("backtest_running", False)
-        if st.button("▶ Run Backtest", disabled=bt_disabled, type="primary", use_container_width=True):
+        if st.button("▶ Run Backtest", disabled=bt_disabled, type="primary", width="stretch"):
             _start_backtest()
 
     if st.session_state.get("backtest_running", False) or _bt_state["running"]:
@@ -3859,7 +3859,7 @@ def page_backtest():
         _efig.update_xaxes(title_text="Trade #", row=2, col=1,
                            gridcolor="#222")
         _efig.update_xaxes(gridcolor="#222", row=1, col=1)
-        st.plotly_chart(_efig, use_container_width=True)
+        st.plotly_chart(_efig, width="stretch")
     elif os.path.exists("backtest_equity_curve.png"):
         st.image("backtest_equity_curve.png", caption="Equity Curve (static)")
 
@@ -3892,7 +3892,7 @@ def page_backtest():
 
         st.dataframe(
             filtered,
-            use_container_width=True, height=400,
+            width="stretch", height=400,
             column_config={
                 "pnl_pct": st.column_config.NumberColumn("PNL %", format="%.2f%%"),
                 "pnl_usd": st.column_config.NumberColumn("PNL $", format="$%.2f"),
@@ -3906,7 +3906,7 @@ def page_backtest():
                 data=filtered.to_csv(index=False),
                 file_name="backtest_trades.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 key="dl_backtest_csv",
             )
         with dl_col2:
@@ -3922,7 +3922,7 @@ def page_backtest():
                         data=bt_pdf_bytes,
                         file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
-                        use_container_width=True,
+                        width="stretch",
                         key="dl_backtest_pdf",
                     )
                 except Exception as _bt_pdf_err:
@@ -3938,7 +3938,7 @@ def page_backtest():
                                 labels={'pnl_pct': 'PnL %'})
             fig2.add_vline(x=0, line_dash="dash", line_color="red")
             fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width="stretch")
 
         # Monte Carlo simulation
         if 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
@@ -3948,7 +3948,7 @@ def page_backtest():
             with mc_c1:
                 n_mc = st.number_input("Simulations", 100, 5000, 1000, step=100,
                                        key="n_mc_sims")
-                if st.button("Run Monte Carlo", type="secondary", use_container_width=True,
+                if st.button("Run Monte Carlo", type="secondary", width="stretch",
                              key="btn_monte_carlo"):
                     with st.spinner(f"Running {int(n_mc)} Monte Carlo simulations...", show_time=True):
                         mc_res = model.run_monte_carlo(df_trades, n_sim=int(n_mc))
@@ -3986,7 +3986,7 @@ def page_backtest():
                     yaxis_title="Frequency",
                     height=300, margin=dict(l=0, r=0, t=10, b=0),
                 )
-                st.plotly_chart(fig_mc, use_container_width=True)
+                st.plotly_chart(fig_mc, width="stretch")
             elif mc_r and 'error' in mc_r:
                 st.warning(mc_r['error'])
 
@@ -4003,7 +4003,7 @@ def page_backtest():
     with wf_c3:
         wf_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wf_tf")
 
-    if st.button("Run Walk-Forward Validation", type="secondary", use_container_width=True,
+    if st.button("Run Walk-Forward Validation", type="secondary", width="stretch",
                  key="btn_wf"):
         with st.spinner(f"Running {int(wf_splits)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)", show_time=True):
             wf_res = model.run_walk_forward(n_splits=int(wf_splits), pair=wf_pair, tf=wf_tf)
@@ -4028,7 +4028,7 @@ def page_backtest():
             st.dataframe(wf_df.rename(columns={
                 'window': 'Window', 'period': 'Period',
                 'test_signals': 'Test Signals', 'accuracy_pct': 'OOS Accuracy'
-            }).set_index('Window'), use_container_width=True)
+            }).set_index('Window'), width="stretch")
 
 
     # Deep OHLCV-replay backtest
@@ -4046,7 +4046,7 @@ def page_backtest():
     with db_c4:
         db_pos = st.number_input("Position Size %", 2.0, 25.0, 10.0, step=1.0, key="db_pos")
 
-    if st.button("Run Deep Backtest", type="primary", use_container_width=True, key="btn_deep_bt"):
+    if st.button("Run Deep Backtest", type="primary", width="stretch", key="btn_deep_bt"):
         with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min)", show_time=True):
             deep_r = model.run_deep_backtest(
                 pair=db_pair, tf=db_tf, years=float(db_years), pos_pct=float(db_pos)
@@ -4084,14 +4084,14 @@ def page_backtest():
                     height=350, showlegend=True,
                     xaxis_title="Date", yaxis_title="Equity ($)",
                 )
-                st.plotly_chart(fig_dbt, use_container_width=True)
+                st.plotly_chart(fig_dbt, width="stretch")
 
                 # Trade log (first 100 rows)
                 with st.expander(f"Trade Log ({len(df_dbt)} trades)", expanded=False):
                     st.dataframe(
                         df_dbt[['timestamp', 'direction', 'confidence', 'entry', 'exit',
                                  'exit_reason', 'pnl_pct', 'pnl_usd']].head(100),
-                        use_container_width=True
+                        width="stretch"
                     )
                     csv_dbt = df_dbt.to_csv(index=False)
                     st.download_button("📥 Download Full Deep Backtest CSV", csv_dbt,
@@ -4171,7 +4171,7 @@ def page_backtest():
             yaxis=dict(range=[0, 110]),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        st.plotly_chart(_fig_cal, use_container_width=True)
+        st.plotly_chart(_fig_cal, width="stretch")
 
         # Per-pair calibration breakdown
         with st.expander("Per-Pair Calibration Breakdown", expanded=False):
@@ -4187,7 +4187,7 @@ def page_backtest():
             _pair_cal.columns = ["Pair", "Signals", "Win Rate %", "Avg Confidence %", "Conf − Win Rate"]
             st.dataframe(
                 _pair_cal.sort_values("Win Rate %", ascending=False),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
     # ── Performance Attribution ────────────────────────────────────────────────
@@ -4202,7 +4202,7 @@ def page_backtest():
         _ic_wfe_c1, _ic_wfe_c2 = st.columns(2)
         with _ic_wfe_c1:
             st.markdown("**Information Coefficient (IC)**")
-            if st.button("Compute IC from Feedback Log", key="btn_ic_db", use_container_width=True):
+            if st.button("Compute IC from Feedback Log", key="btn_ic_db", width="stretch"):
                 with st.spinner("Computing Spearman IC...", show_time=True):
                     st.session_state["ic_db_result"] = _db.compute_and_save_ic(lookback_days=30)
             _ic_db = st.session_state.get("ic_db_result")
@@ -4230,7 +4230,7 @@ def page_backtest():
                     st.caption(f"IC: {_ic_db_note}")
         with _ic_wfe_c2:
             st.markdown("**Walk-Forward Efficiency (WFE)**")
-            if st.button("Compute WFE from Backtest DB", key="btn_wfe_db", use_container_width=True):
+            if st.button("Compute WFE from Backtest DB", key="btn_wfe_db", width="stretch"):
                 with st.spinner("Computing WFE from backtest trades...", show_time=True):
                     st.session_state["wfe_db_result"] = _db.compute_wfe()
             _wfe_db = st.session_state.get("wfe_db_result")
@@ -4312,7 +4312,7 @@ def page_backtest():
                             "P&L %": "{:+.2f}", "Held (h)": "{:.1f}",
                             "Entry $": "{:.4f}", "Exit $": "{:.4f}",
                         }, na_rep="—"),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                 else:
@@ -4352,7 +4352,7 @@ def page_backtest():
             _exit_grp["How It Exited"] = _exit_grp["How It Exited"].map(
                 lambda v: _exit_label_map.get(v, v)
             )
-            st.dataframe(_exit_grp, hide_index=True, use_container_width=True)
+            st.dataframe(_exit_grp, hide_index=True, width="stretch")
             st.caption("Target = profitable exit. Stop = loss. Trailing Stop = stop that moved with price. Timeout = held too long.")
 
         # ── Buy vs Sell breakdown ───────────────────────────────────────────
@@ -4373,7 +4373,7 @@ def page_backtest():
                 .reset_index()
             )
             _dir_grp.columns = ["Signal Type", "# Trades", "Win Rate %", "Avg P&L %", "Total P&L %"]
-            st.dataframe(_dir_grp, hide_index=True, use_container_width=True)
+            st.dataframe(_dir_grp, hide_index=True, width="stretch")
             st.caption("Shows whether the model performs better on buy or sell signals historically.")
 
         # ── Per-coin breakdown ──────────────────────────────────────────────
@@ -4390,7 +4390,7 @@ def page_backtest():
                 .sort_values("AvgPnL", ascending=False)
             )
             _coin_grp.columns = ["Coin", "# Trades", "Win Rate %", "Avg P&L %"]
-            st.dataframe(_coin_grp, hide_index=True, use_container_width=True, height=220)
+            st.dataframe(_coin_grp, hide_index=True, width="stretch", height=220)
             st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
 
     # ── IC Score (Information Coefficient) ────────────────────────────────────
@@ -4407,7 +4407,7 @@ def page_backtest():
     with _ic_c3:
         _ic_hold = st.number_input("Hold Bars", 1, 20, 5, step=1, key="ic_hold",
                                    help="How many bars ahead to measure the return")
-    if st.button("Compute IC Score", type="secondary", use_container_width=True, key="btn_ic"):
+    if st.button("Compute IC Score", type="secondary", width="stretch", key="btn_ic"):
         with st.spinner(f"Computing IC on {_ic_pair} {_ic_tf}... (~1 min)", show_time=True):
             _ic_res = model.compute_ic_score(pair=_ic_pair, tf=_ic_tf, hold_bars=int(_ic_hold))
         st.session_state["ic_result"] = _ic_res
@@ -4448,7 +4448,7 @@ def page_backtest():
     with _wfe_c3:
         _wfe_splits = st.number_input("Splits", 2, 6, 4, step=1, key="wfe_splits",
                                       help="Number of time windows to walk forward through")
-    if st.button("Compute WFE Score", type="secondary", use_container_width=True, key="btn_wfe"):
+    if st.button("Compute WFE Score", type="secondary", width="stretch", key="btn_wfe"):
         with st.spinner(f"Computing WFE on {_wfe_pair} {_wfe_tf} ({int(_wfe_splits)} splits)... (~2 min)", show_time=True):
             _wfe_res = model.compute_wfe_score(pair=_wfe_pair, tf=_wfe_tf, n_splits=int(_wfe_splits))
         st.session_state["wfe_result"] = _wfe_res
@@ -4491,7 +4491,7 @@ def page_backtest():
                                       value=90, step=10, key="wfo_lookback_days")
             _wfo_nw = st.number_input("Windows", min_value=2, max_value=8,
                                       value=4, step=1, key="wfo_n_windows")
-            if st.button("Run WFO", type="primary", use_container_width=True, key="btn_wfo_db"):
+            if st.button("Run WFO", type="primary", width="stretch", key="btn_wfo_db"):
                 with st.spinner(f"Running {int(_wfo_nw)}-window WFO ({int(_wfo_lb)}d lookback)...", show_time=True):
                     st.session_state["wfo_opt_result"] = _db.run_walkforward_optimization(
                         lookback_days=int(_wfo_lb), n_windows=int(_wfo_nw)
@@ -4525,7 +4525,7 @@ def page_backtest():
                                 "is_win_rate": "IS Win Rate (%)", "oos_win_rate": "OOS Win Rate (%)",
                                 "oos_buy_signals": "OOS BUY Signals",
                             }),
-                            use_container_width=True, hide_index=True,
+                            width="stretch", hide_index=True,
                         )
             elif _wfo_r and _wfo_r.get("error"):
                 st.caption(f"WFO: {_wfo_r.get('recommendation', _wfo_r.get('error', ''))}")
@@ -4546,7 +4546,7 @@ def page_backtest():
                     help="Number of rolling windows to divide backtest history into",
                 )
                 if st.button("Run WFE Validation", type="primary",
-                             use_container_width=True, key="btn_wfv"):
+                             width="stretch", key="btn_wfv"):
                     with st.spinner("Computing WFE validation across windows...", show_time=True):
                         st.session_state["wfv_result"] = _db.run_detailed_wfe_validation(
                             n_windows=int(_wfv_nw)
@@ -4625,7 +4625,7 @@ def page_backtest():
                             xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
                             yaxis=dict(title="Sharpe", gridcolor="#1f2937"),
                         )
-                        st.plotly_chart(_wfv_line, use_container_width=True,
+                        st.plotly_chart(_wfv_line, width="stretch",
                                         config={"displayModeBar": False})
 
                         # ── Bar chart: WFE ratio per window ──────────────────
@@ -4656,7 +4656,7 @@ def page_backtest():
                                        gridcolor="#1f2937"),
                             showlegend=False,
                         )
-                        st.plotly_chart(_wfv_bar, use_container_width=True,
+                        st.plotly_chart(_wfv_bar, width="stretch",
                                         config={"displayModeBar": False})
 
                         # ── Per-window detail table ───────────────────────────
@@ -4673,7 +4673,7 @@ def page_backtest():
                             "IS Trades":    w["n_trades_is"],
                             "OOS Trades":   w["n_trades_oos"],
                         } for w in _wfv_windows])
-                        st.dataframe(_wfv_tbl, hide_index=True, use_container_width=True)
+                        st.dataframe(_wfv_tbl, hide_index=True, width="stretch")
 
         except Exception as _wfv_err:
             st.caption(f"WFE Validation error: {_wfv_err}")
@@ -4760,7 +4760,7 @@ def _render_stress_test():
                 })
         if _pair_rows:
             _stress_df = pd.DataFrame(_pair_rows)
-            st.dataframe(_stress_df, hide_index=True, use_container_width=True)
+            st.dataframe(_stress_df, hide_index=True, width="stretch")
 
 
 def _run_backtest_thread():
@@ -4833,7 +4833,7 @@ def page_trade_log():
                 fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green",
                               annotation_text=f"High-Conf ({model.HIGH_CONF_THRESHOLD}%)")
                 fig.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             # Searchable table
             st.subheader("All Records")
@@ -4860,7 +4860,7 @@ def page_trade_log():
                 'circuit_breaker_drawdown_pct': 'CB Drawdown %', 'scan_sec': 'Scan Sec',
             }
             display_df = display_df.rename(columns={k: v for k, v in col_labels.items() if k in display_df.columns})
-            st.dataframe(display_df, use_container_width=True, height=400)
+            st.dataframe(display_df, width="stretch", height=400)
             st.download_button("⬇ Download Master Log", data=df.to_csv(index=False),
                                file_name="daily_signals_master.csv", mime="text/csv",
                                key="dl_master_log")
@@ -5060,7 +5060,7 @@ def page_trade_log():
                 p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "N/A")
                 p3.metric("Cumulative PnL %", f"{total_pnl:.2f}%")
 
-            st.dataframe(df_closed, use_container_width=True, height=350)
+            st.dataframe(df_closed, width="stretch", height=350)
             st.download_button("⬇ Download Paper Trades", data=df_closed.to_csv(index=False),
                                file_name="paper_trades_log.csv", mime="text/csv",
                                key="dl_paper_trades")
@@ -5082,9 +5082,9 @@ def page_trade_log():
                                  labels={'confidence': 'Confidence (%)', 'timestamp': 'Time'})
                 fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green")
                 fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
-            st.dataframe(df_fb, use_container_width=True, height=350)
+            st.dataframe(df_fb, width="stretch", height=350)
             st.download_button("⬇ Download Feedback Log", data=df_fb.to_csv(index=False),
                                file_name="feedback_log.csv", mime="text/csv",
                                key="dl_feedback_log")
@@ -5115,7 +5115,7 @@ def page_trade_log():
                 ex_m2.metric("Live Orders", int(live_cnt))
                 ex_m3.metric("Paper Orders", int(paper_cnt))
 
-            st.dataframe(df_exec_log, use_container_width=True, height=400)
+            st.dataframe(df_exec_log, width="stretch", height=400)
             st.download_button(
                 "⬇ Download Execution Log",
                 data=df_exec_log.to_csv(index=False),
@@ -5154,7 +5154,7 @@ def page_trade_log():
                     labels={"slippage_pct": "Slippage (%)"},
                 )
                 fig_slip.update_layout(height=280, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig_slip, use_container_width=True)
+                st.plotly_chart(fig_slip, width="stretch")
 
                 # Slippage by pair
                 if "pair" in df_slip_valid.columns:
@@ -5165,7 +5165,7 @@ def page_trade_log():
                         .rename(columns={"mean": "Avg %", "max": "Max %", "count": "Orders"})
                         .sort_values("Avg %", ascending=True)
                     )
-                    st.dataframe(_slip_by_pair, hide_index=True, use_container_width=True)
+                    st.dataframe(_slip_by_pair, hide_index=True, width="stretch")
 
                 st.download_button(
                     "⬇ Download Slippage Data",
@@ -5259,7 +5259,7 @@ def page_market_overview():
         corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
     with col_run:
         st.write("")
-        run_corr = st.button("Compute Correlation", type="primary", use_container_width=True, key="run_corr")
+        run_corr = st.button("Compute Correlation", type="primary", width="stretch", key="run_corr")
 
     if run_corr:
         with st.spinner("Fetching OHLCV data...", show_time=True):
@@ -5296,7 +5296,7 @@ def page_market_overview():
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_corr, use_container_width=True,
+        st.plotly_chart(fig_corr, width="stretch",
                         config={"displayModeBar": False, "staticPlot": True})
 
         # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
@@ -5314,7 +5314,7 @@ def page_market_overview():
         except Exception:
             pass
         if high_corr_rows:
-            st.dataframe(pd.DataFrame(high_corr_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(high_corr_rows), width="stretch", hide_index=True)
         else:
             st.info("No pairs exceed the 0.75 correlation threshold for this period.")
     elif st.session_state.get("corr_error"):
@@ -5350,7 +5350,7 @@ def page_market_overview():
             ret_df = pd.DataFrame(returns_data)
             st.dataframe(
                 ret_df,
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
                 column_config={
                     "7d Return %":  st.column_config.NumberColumn(format="%.2f%%"),
                     "30d Return %": st.column_config.NumberColumn(format="%.2f%%"),
@@ -5369,7 +5369,7 @@ def page_market_overview():
                 height=300, margin=dict(l=0, r=0, t=40, b=0),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             )
-            st.plotly_chart(fig_bar, use_container_width=True,
+            st.plotly_chart(fig_bar, width="stretch",
                             config={"displayModeBar": False, "staticPlot": True})
         else:
             st.warning("Could not fetch return data.")
@@ -5447,7 +5447,7 @@ def page_market_overview():
         with st.expander("Full volatility table"):
             st.dataframe(
                 _vol_df,
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
                 column_config={
                     "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
                     "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
@@ -5477,7 +5477,7 @@ def page_market_overview():
         _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
     with _coint_col3:
         st.write("")
-        _run_coint = st.button("Scan for Pair Trades", type="primary", use_container_width=True, key="run_coint")
+        _run_coint = st.button("Scan for Pair Trades", type="primary", width="stretch", key="run_coint")
 
     if _run_coint:
         with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
@@ -5651,7 +5651,7 @@ def page_market_overview():
             yaxis=dict(tickfont=dict(size=11, color="#e0e0e0"), autorange="reversed"),
             font=dict(color="#e0e0e0"),
         )
-        st.plotly_chart(fig_heat, use_container_width=True,
+        st.plotly_chart(fig_heat, width="stretch",
                         config={"displayModeBar": False, "staticPlot": True})
 
         # Composite score table
@@ -5708,7 +5708,7 @@ def page_market_overview():
             comp_df.style
                 .map(_color_composite, subset=["Composite Score"])
                 .map(_color_dir,       subset=["Overall"]),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
 
     st.markdown("---")
@@ -5802,7 +5802,7 @@ def page_market_overview():
                 font=dict(color="#e0e0e0"),
                 showlegend=False,
             )
-            st.plotly_chart(fig_fng, use_container_width=True,
+            st.plotly_chart(fig_fng, width="stretch",
                             config={"displayModeBar": False, "staticPlot": True})
 
         with st.expander("📋 Raw F&G Data"):
@@ -5811,7 +5811,7 @@ def page_market_overview():
                     .rename(columns={"date": "Date", "value": "Value", "label": "Zone"})
                     .sort_values("Date", ascending=False)
                     .reset_index(drop=True),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
     st.markdown("---")
@@ -5837,7 +5837,7 @@ def page_market_overview():
         st.write("")
         run_fr = st.button(
             "🔍 Load Rates", type="primary",
-            use_container_width=True, key="run_fr_btn",
+            width="stretch", key="run_fr_btn",
         )
 
     if run_fr and fr_pairs_sel:
@@ -5899,7 +5899,7 @@ def page_market_overview():
             fr_df.style
                 .map(_color_fr,  subset=exch_cols)
                 .map(_color_ann, subset=ann_cols),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         st.caption(
@@ -5946,7 +5946,7 @@ def page_market_overview():
                 carry_df[["Pair", "Exchange", "Rate %", "Strategy", "Ann. Yield %"]].style
                     .map(_color_rate,        subset=["Rate %"])
                     .map(_color_carry_yield, subset=["Ann. Yield %"]),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         else:
@@ -5995,7 +5995,7 @@ def page_market_overview():
                 font=dict(color="#e0e0e0"), showlegend=False,
                 coloraxis_showscale=False,
             )
-            st.plotly_chart(fig_acc, use_container_width=True,
+            st.plotly_chart(fig_acc, width="stretch",
                             config={"displayModeBar": False, "staticPlot": True})
 
         with col_tbl:
@@ -6015,7 +6015,7 @@ def page_market_overview():
                 acc_df[["Pair", "Total", "Wins", "Win Rate %", "Avg PnL %"]].style
                     .map(_color_wr,  subset=["Win Rate %"])
                     .map(_color_pnl, subset=["Avg PnL %"]),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
 
@@ -6093,7 +6093,7 @@ def page_market_overview():
                     yaxis=dict(range=[-1, 1], gridcolor="rgba(255,255,255,0.07)"),
                     xaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
                 )
-                st.plotly_chart(_fig_c, use_container_width=True)
+                st.plotly_chart(_fig_c, width="stretch")
             else:
                 st.info("Not enough data for rolling correlations — try a smaller window.")
         else:
@@ -6195,7 +6195,7 @@ def page_market_overview():
                                 margin=dict(l=0, r=0, t=40, b=0), showlegend=False)
             _fig4.update_yaxes(gridcolor="rgba(255,255,255,0.07)")
             _fig4.update_xaxes(gridcolor="rgba(255,255,255,0.07)")
-            st.plotly_chart(_fig4, use_container_width=True)
+            st.plotly_chart(_fig4, width="stretch")
 
         _ts4 = _oc4.get("timestamp", "")[:19]
         st.caption(f"Source: CoinMetrics Community · {_ts4} UTC · Cached 1h")
@@ -6291,7 +6291,7 @@ def page_market_overview():
                     xaxis=dict(tickangle=-45, gridcolor="rgba(255,255,255,0.05)"),
                     yaxis=dict(gridcolor="rgba(255,255,255,0.07)", title="OI (contracts)"),
                 )
-                st.plotly_chart(_figA5, use_container_width=True)
+                st.plotly_chart(_figA5, width="stretch")
 
         with _colB5:
             if _ts5sg:
@@ -6312,7 +6312,7 @@ def page_market_overview():
                     xaxis=dict(title="Days to Expiry", gridcolor="rgba(255,255,255,0.05)"),
                     yaxis=dict(title="IV (%)", gridcolor="rgba(255,255,255,0.07)"),
                 )
-                st.plotly_chart(_figB5, use_container_width=True)
+                st.plotly_chart(_figB5, width="stretch")
 
         _ts5_ts = _oc5sg.get("timestamp", "")[:19]
         st.caption(f"Source: Deribit · {_ts5_ts} UTC · Cached 15 min")
@@ -6424,7 +6424,7 @@ def page_market_overview():
             height=260,
             showlegend=False,
         )
-        st.plotly_chart(_fig_sect, use_container_width=True)
+        st.plotly_chart(_fig_sect, width="stretch")
 
         # Per-sector breakdown table
         _rows_sect = []
@@ -6440,7 +6440,7 @@ def page_market_overview():
                 "Worst":          f"{_worst[0]} ({_worst[1]:+.1f}%)",
                 "Trend":          "↑ Leading" if _avg >= 2 else ("↓ Lagging" if _avg <= -2 else "→ Neutral"),
             })
-        st.dataframe(pd.DataFrame(_rows_sect), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(_rows_sect), width="stretch", hide_index=True)
         _sm_src = _sm.get("source", "N/A")
         st.caption(f"Source: {_sm_src} · Cached 5 min · Average 24h % change per sector across all tracked pairs")
     else:
@@ -6460,7 +6460,7 @@ def page_market_overview():
 
     _fr_col1, _fr_col2 = st.columns([3, 1])
     with _fr_col2:
-        _fr_load = st.button("Refresh Funding Rates", key="load_fr_monitor", use_container_width=True)
+        _fr_load = st.button("Refresh Funding Rates", key="load_fr_monitor", width="stretch")
 
     if _fr_load:
         _cached_funding_batch.clear()
@@ -6523,7 +6523,7 @@ def page_market_overview():
         with st.expander("Full funding rate table"):
             st.dataframe(
                 _fr_df,
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
                 column_config={
                     "Rate %":          st.column_config.NumberColumn(format="%.4f%%"),
                     "8h Annualised":   st.column_config.NumberColumn(format="%.1f%%"),
@@ -6868,7 +6868,7 @@ def page_market_overview():
                     "CEX Spread": f"{_spread_pct:+.3f}%" if _spread_pct is not None else "—",
                 })
         if _dex_rows:
-            st.dataframe(pd.DataFrame(_dex_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_dex_rows), width="stretch", hide_index=True)
             st.caption(
                 "DEX prices: Jupiter Aggregator (Solana) · dYdX v4 oracle (Cosmos) · Raydium AMM · 1-min cache. "
                 "CEX Spread vs last scan price (run a scan to populate)."
@@ -6935,7 +6935,7 @@ def page_arbitrage():
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
     with col_btn:
-        run_scan = st.button("🔍 Scan Now", use_container_width=True, type="primary")
+        run_scan = st.button("🔍 Scan Now", width="stretch", type="primary")
     with col_thresh:
         min_net = st.number_input(
             "Min Net Spread %",
@@ -6961,7 +6961,7 @@ def page_arbitrage():
         hist_df = _cached_arb_opportunities_df(limit=50)
         if not hist_df.empty:
             st.subheader("Recent Opportunities (DB)")
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            st.dataframe(hist_df, width="stretch", hide_index=True)
         return
 
     # ── Spot Arbitrage ──
@@ -7019,7 +7019,7 @@ def page_arbitrage():
             spot_df.style
                 .map(_color_signal, subset=["Signal"])
                 .map(_color_net,    subset=["Net Spread %"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -7064,7 +7064,7 @@ def page_arbitrage():
             })
         f_df = pd.DataFrame(f_rows)
 
-        st.dataframe(f_df, use_container_width=True, hide_index=True)
+        st.dataframe(f_df, width="stretch", hide_index=True)
         st.caption(
             "**Strategy**: Collect funding payments by holding opposite spot + perp positions. "
             "Positive funding → Short Perp + Long Spot. "
@@ -7080,7 +7080,7 @@ def page_arbitrage():
     with st.expander("📋 Historical Arbitrage Log (DB)", expanded=False):
         hist_df = _cached_arb_opportunities_df(limit=100)
         if not hist_df.empty:
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            st.dataframe(hist_df, width="stretch", hide_index=True)
             csv_data = hist_df.to_csv(index=False)
             st.download_button(
                 "⬇ Download CSV",
@@ -7124,7 +7124,7 @@ def page_agent():
         else:
             st.error("● STOPPED")
     with col_start:
-        if st.button("▶ Start", use_container_width=True, type="primary",
+        if st.button("▶ Start", width="stretch", type="primary",
                      disabled=is_running, key="agent_start_btn"):
             _ac = _cached_alerts_config()
             _ac["agent_enabled"] = True
@@ -7132,7 +7132,7 @@ def page_agent():
             _agent.supervisor.start()
             st.rerun()
     with col_stop:
-        if st.button("■ Stop", use_container_width=True,
+        if st.button("■ Stop", width="stretch",
                      disabled=not is_running, key="agent_stop_btn"):
             _ac = _cached_alerts_config()
             _ac["agent_enabled"] = False
@@ -7199,7 +7199,7 @@ def page_agent():
                 value=float(_cfg["portfolio_size_usd"]), step=500.0, format="%.0f",
             )
         if st.form_submit_button("💾 Save Agent Config", type="secondary",
-                                  use_container_width=True):
+                                  width="stretch"):
             _saved = _cached_alerts_config()
             _saved["agent_dry_run"]                  = _dry_run
             _saved["agent_interval_seconds"]         = int(_interval)
@@ -7234,7 +7234,7 @@ def page_agent():
     if _log_df.empty:
         st.info("No decisions recorded yet. Start the agent to begin logging.")
     else:
-        st.dataframe(_log_df, use_container_width=True, hide_index=True)
+        st.dataframe(_log_df, width="stretch", hide_index=True)
         st.download_button(
             "⬇ Download Agent Log CSV",
             data=_log_df.to_csv(index=False),
