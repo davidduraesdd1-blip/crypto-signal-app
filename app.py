@@ -372,6 +372,12 @@ def _cached_deribit_options_skew(currency: str) -> dict:
     return data_feeds.get_deribit_options_skew(currency)
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=60)
+def _cached_signal_win_rate(pair: str, direction: str, days: int = 90) -> dict:
+    """Cache get_signal_win_rate() DB read — 5-min TTL per pair+direction."""
+    return _db.get_signal_win_rate(pair=pair, direction=direction, days=days)
+
+
 # ──────────────────────────────────────────────
 # MODULE-LEVEL THREAD STATE (progress only — results go to file)
 # ──────────────────────────────────────────────
@@ -1925,8 +1931,7 @@ def page_dashboard():
 
     # Signal accuracy badge — shows historical win rate for this pair/direction
     try:
-        import database as _db_app
-        _acc_data = _db_app.get_signal_win_rate(pair=pair, direction=direction, days=90)
+        _acc_data = _cached_signal_win_rate(pair=pair, direction=direction, days=90)
         _acc_badge = _ui.signal_accuracy_badge_html(
             win_rate    = _acc_data.get("win_rate", 0.5),
             sample_size = _acc_data.get("sample_size", 0),
@@ -6102,7 +6107,11 @@ def page_market_overview():
                        "CoinMetrics Community API · free, no key · MVRV Z-Score · SOPR · Active Addresses",
                        icon="⛓️")
 
-    _oc4 = data_feeds.fetch_coinmetrics_onchain(days=400)
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _cached_coinmetrics_onchain(days: int):
+        return data_feeds.fetch_coinmetrics_onchain(days=days)
+
+    _oc4 = _cached_coinmetrics_onchain(400)
     if _oc4.get("error") and not _oc4.get("mvrv_z"):
         st.info(f"On-chain data loading… ({_oc4.get('error', 'CoinMetrics Community API')})")
     else:
@@ -6195,7 +6204,11 @@ def page_market_overview():
     _ui.section_header("Options Flow",
                        "Deribit public API · OI by Strike · Put/Call Ratio · Max Pain · IV Term Structure")
 
-    _oc5sg = data_feeds.fetch_deribit_options_chain(currency="BTC")
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _cached_deribit_options_chain(currency: str):
+        return data_feeds.fetch_deribit_options_chain(currency=currency)
+
+    _oc5sg = _cached_deribit_options_chain("BTC")
 
     if _oc5sg.get("error") and not _oc5sg.get("oi_by_strike"):
         st.warning(f"Options data unavailable: {_oc5sg.get('error')}")

@@ -141,24 +141,26 @@ def run_scan_job() -> None:
             logger.warning("[Scheduler] Position update error (non-critical): %s", _pe)
 
         # ── Send alerts ───────────────────────────────────────────────────────
+        # Load config once, reuse across all 4 alert channels
         try:
-            cfg = _alerts.load_alerts_config()
-            _alerts.send_scan_alerts(results, cfg)
+            _alerts_cfg = _alerts.load_alerts_config()
+        except Exception as _e:
+            logger.warning("[Scheduler] Failed to load alerts config: %s", _e)
+            _alerts_cfg = {}
+        try:
+            _alerts.send_scan_alerts(results, _alerts_cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Telegram alert failed (non-critical): %s", _e)
         try:
-            cfg = _alerts.load_alerts_config()
-            _alerts.send_scan_email_alerts(results, cfg)
+            _alerts.send_scan_email_alerts(results, _alerts_cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Email alert failed (non-critical): %s", _e)
         try:
-            cfg = _alerts.load_alerts_config()
-            _alerts.send_scan_discord_alerts(results, cfg)
+            _alerts.send_scan_discord_alerts(results, _alerts_cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Discord alert failed (non-critical): %s", _e)
         try:
-            cfg = _alerts.load_alerts_config()
-            _alerts.check_watchlist_alerts(results, cfg)
+            _alerts.check_watchlist_alerts(results, _alerts_cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Watchlist alert failed (non-critical): %s", _e)
 

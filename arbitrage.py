@@ -22,6 +22,9 @@ from typing import Optional
 
 import requests
 
+# Module-level session for TCP connection reuse across all exchange fetches
+_SESSION = requests.Session()
+
 import database as _db
 import data_feeds as _df
 
@@ -55,7 +58,7 @@ def _fetch_okx_spot(pair: str) -> Optional[dict]:
     """Return {bid, ask, price} from OKX spot ticker or None on failure."""
     try:
         symbol = pair.replace("/", "-")   # BTC/USDT → BTC-USDT
-        r = requests.get(
+        r = _SESSION.get(
             f"https://www.okx.com/api/v5/market/ticker?instId={symbol}",
             timeout=_TIMEOUT,
         )
@@ -80,7 +83,7 @@ def _fetch_kucoin_spot(pair: str) -> Optional[dict]:
     """Return {bid, ask, price} from KuCoin spot level-1 orderbook or None."""
     try:
         symbol = pair.replace("/", "-")   # BTC/USDT → BTC-USDT
-        r = requests.get(
+        r = _SESSION.get(
             f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}",
             timeout=_TIMEOUT,
         )
@@ -124,7 +127,7 @@ def _fetch_kraken_spot(pair: str) -> Optional[dict]:
         k_pair = _KRAKEN_MAP.get(pair)
         if not k_pair:
             return None
-        r = requests.get(
+        r = _SESSION.get(
             f"https://api.kraken.com/0/public/Ticker?pair={k_pair}",
             timeout=_TIMEOUT,
         )
@@ -151,7 +154,7 @@ def _fetch_gateio_spot(pair: str) -> Optional[dict]:
     """Return {bid, ask, price} from Gate.io spot ticker or None."""
     try:
         symbol = pair.replace("/", "_")   # BTC/USDT → BTC_USDT
-        r = requests.get(
+        r = _SESSION.get(
             f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={symbol}",
             timeout=_TIMEOUT,
         )
@@ -176,7 +179,7 @@ def _fetch_htx_spot(pair: str) -> Optional[dict]:
     """Return {bid, ask, price} from HTX (formerly Huobi) REST ticker or None."""
     try:
         symbol = pair.replace("/", "").lower()   # BTC/USDT → btcusdt
-        r = requests.get(
+        r = _SESSION.get(
             f"https://api.huobi.pro/market/detail/merged?symbol={symbol}",
             timeout=_TIMEOUT,
         )
@@ -202,7 +205,7 @@ def _fetch_bitstamp_spot(pair: str) -> Optional[dict]:
         base, quote = pair.split("/")
         q = "usd" if quote.upper() == "USDT" else quote.lower()
         symbol = f"{base.lower()}{q}"
-        r = requests.get(
+        r = _SESSION.get(
             f"https://www.bitstamp.net/api/v2/ticker/{symbol}/",
             timeout=_TIMEOUT,
         )
@@ -224,7 +227,7 @@ def _fetch_bitget_spot(pair: str) -> Optional[dict]:
     """Return {bid, ask, price} from Bitget REST ticker or None."""
     try:
         symbol = pair.replace("/", "")   # BTC/USDT → BTCUSDT
-        r = requests.get(
+        r = _SESSION.get(
             f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={symbol}SPBL",
             timeout=_TIMEOUT,
         )

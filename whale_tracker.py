@@ -21,6 +21,9 @@ from typing import Optional
 
 import requests
 
+# Module-level session for TCP connection reuse across all whale fetch calls
+_SESSION = requests.Session()
+
 logger = logging.getLogger(__name__)
 
 # ─── Cache ─────────────────────────────────────────────────────────────────────
@@ -52,7 +55,7 @@ def _fetch_btc_whales(price_usd: float) -> list[dict]:
     Returns list of {amount_usd, direction, txid} dicts.
     """
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://blockchain.info/unconfirmed-transactions?format=json",
             timeout=_TIMEOUT,
         )
@@ -88,7 +91,7 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
     """Fetch large recent ETH transactions from Etherscan public API."""
     try:
         # Get latest block number
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.etherscan.io/v2/api",
             params={"chainid": 1, "module": "proxy", "action": "eth_blockNumber"},
             timeout=_TIMEOUT,
@@ -104,7 +107,7 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
             return _estimate_eth_whale_activity(price_usd)
 
         # Fetch recent large txs via Etherscan v2 (multi-chain aware)
-        resp2 = requests.get(
+        resp2 = _SESSION.get(
             "https://api.etherscan.io/v2/api",
             params={
                 "chainid":    1,
@@ -155,7 +158,7 @@ def _estimate_eth_whale_activity(price_usd: float) -> list[dict]:
     using the CoinGecko large-transaction volume approximation.
     """
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/coins/ethereum",
             params={"localization": "false", "tickers": "false", "community_data": "false"},
             timeout=_TIMEOUT,
@@ -186,7 +189,7 @@ _SOL_WHALE_WALLETS = [
 def _fetch_sol_whales(price_usd: float) -> list[dict]:
     """Fetch recent large SOL transactions via Solscan public API."""
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://public-api.solscan.io/transaction/last",
             params={"limit": 20},
             headers={"Accept": "application/json"},
@@ -221,7 +224,7 @@ def _fetch_sol_whales(price_usd: float) -> list[dict]:
 def _fetch_xrp_whales(price_usd: float) -> list[dict]:
     """Fetch large XRP payments from the XRPL public data API."""
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://data.ripple.com/v2/transactions",
             params={"type": "Payment", "result": "tesSUCCESS", "limit": 30, "descending": "true"},
             timeout=_TIMEOUT,
@@ -258,7 +261,7 @@ def _fetch_xrp_whales(price_usd: float) -> list[dict]:
 def _fetch_bnb_whales(price_usd: float) -> list[dict]:
     """Fetch recent large BNB transactions from BscScan API."""
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://api.bscscan.com/api",
             params={
                 "module":  "proxy",
@@ -300,7 +303,7 @@ def _fetch_bnb_whales(price_usd: float) -> list[dict]:
 def _fetch_doge_whales(price_usd: float) -> list[dict]:
     """Rough DOGE whale estimation via known rich list API."""
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             "https://dogechain.info/api/v1/transaction/recent",
             timeout=_TIMEOUT,
         )
@@ -419,7 +422,7 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
             coin_id_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
                            "XRP": "ripple", "BNB": "binancecoin", "DOGE": "dogecoin"}
             coin_id = coin_id_map.get(pair.split("/")[0], "bitcoin")
-            r = requests.get(
+            r = _SESSION.get(
                 f"https://api.coingecko.com/api/v3/simple/price",
                 params={"ids": coin_id, "vs_currencies": "usd"},
                 timeout=_TIMEOUT,
