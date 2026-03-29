@@ -115,18 +115,23 @@ def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
 
 def _fetch_lunarcrush(ticker: str) -> list[str]:
     """
-    Fetch social sentiment headlines/signals from LunarCrush free public API.
+    Fetch social sentiment headlines/signals from LunarCrush API.
     LunarCrush Galaxy Score blends social volume + sentiment + market momentum.
     A Galaxy Score > 60 is bullish social momentum; < 40 is bearish.
     Research: LunarCrush social signals front-run price moves by 4-12 hours.
+    Uses LUNARCRUSH_API_KEY env var when available (authenticated tier).
     """
+    import os as _os
     slug = _LC_SLUG_MAP.get(ticker.upper())
     if not slug:
         return []
     try:
         url  = f"{_LUNARCRUSH_BASE}/{slug}/v1"
-        resp = _SESSION.get(url, timeout=_REQUEST_TIMEOUT,
-                            headers={"User-Agent": "CryptoBot/1.0"})
+        _lc_key = _os.environ.get("LUNARCRUSH_API_KEY", "")
+        _headers: dict = {"User-Agent": "CryptoBot/1.0"}
+        if _lc_key:
+            _headers["Authorization"] = f"Bearer {_lc_key}"
+        resp = _SESSION.get(url, timeout=_REQUEST_TIMEOUT, headers=_headers)
         if resp.status_code != 200:
             return []
         data = resp.json().get("data", {})

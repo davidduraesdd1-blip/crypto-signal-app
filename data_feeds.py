@@ -5645,17 +5645,29 @@ def fetch_ccxt_ticker(exchange_id: str, symbol: str) -> "dict | None":
 def _get_runtime_key(key_name: str, default: str = "") -> str:
     """Return a per-session API key override stored in st.session_state.
 
+    Priority: session_state (UI paste) → environment variable → default.
     The UI expander (#18) lets users paste a personal key (e.g. CoinGecko Pro)
     that is stored as ``runtime_<key_name>`` in Streamlit session state for the
-    duration of the browser session — never written to disk.  Falls back to
-    *default* when Streamlit is not running (e.g. background scheduler threads).
+    duration of the browser session — never written to disk.
+    Falls back to the env var (e.g. SUPERGROK_COINGECKO_API_KEY for coingecko_key)
+    so that keys set at deploy time are used automatically without manual paste.
     """
+    import os as _os
+    _ENV_MAP = {
+        "coingecko_key":  "SUPERGROK_COINGECKO_API_KEY",
+        "lunarcrush_key": "LUNARCRUSH_API_KEY",
+        "tiingo_key":     "SUPERGROK_TIINGO_API_KEY",
+    }
     try:
         import streamlit as st
         val = st.session_state.get(f"runtime_{key_name}", "")
-        return val if val else default
+        if val:
+            return val
     except Exception:
-        return default
+        pass
+    env_key = _ENV_MAP.get(key_name, "")
+    env_val = _os.environ.get(env_key, "") if env_key else ""
+    return env_val if env_val else default
 
 
 def validate_api_keys() -> dict:
