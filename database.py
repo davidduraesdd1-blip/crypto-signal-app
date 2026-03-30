@@ -736,7 +736,7 @@ def get_feedback_df(limit: int = None) -> pd.DataFrame:
     try:
         if limit is not None and limit > 0:
             # Fetch the N most-recent rows, then return in ascending order
-            df = pd.read_sql(
+            df = pd.read_sql_query(
                 "SELECT * FROM ("
                 "  SELECT * FROM feedback_log ORDER BY timestamp DESC LIMIT ?"
                 ") ORDER BY timestamp ASC",
@@ -744,7 +744,7 @@ def get_feedback_df(limit: int = None) -> pd.DataFrame:
                 params=(int(limit),),
             )
         else:
-            df = pd.read_sql("SELECT * FROM feedback_log ORDER BY timestamp ASC", conn)
+            df = pd.read_sql_query("SELECT * FROM feedback_log ORDER BY timestamp ASC", conn)
     finally:
         conn.close()
     return df
@@ -757,7 +757,7 @@ def get_resolved_feedback_df(days: int = 90) -> pd.DataFrame:
     """
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             "SELECT * FROM feedback_log "
             "WHERE resolved_at IS NOT NULL AND actual_pnl_pct IS NOT NULL "
             "AND timestamp > datetime('now', ?) "
@@ -983,7 +983,7 @@ def get_agent_accuracy_weights(days: int = 30) -> dict:
     agents = ['trend', 'momentum', 'meanrev', 'sentiment', 'risk', 'lgbm']
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             "SELECT vote_trend, vote_momentum, vote_meanrev, vote_sentiment, vote_risk, vote_lgbm, "
             "       was_correct, direction FROM feedback_log "
             "WHERE resolved_at IS NOT NULL AND was_correct IS NOT NULL "
@@ -1088,14 +1088,14 @@ def get_signals_df(limit: int = 500) -> pd.DataFrame:
     try:
         if limit and limit > 0:
             # Fetch newest N rows then sort ascending so callers see chronological order
-            df = pd.read_sql(
+            df = pd.read_sql_query(
                 "SELECT * FROM daily_signals ORDER BY id DESC LIMIT ?",
                 conn,
                 params=(int(limit),),
             )
             df = df.sort_values("scan_timestamp", ascending=True).reset_index(drop=True)
         else:
-            df = pd.read_sql("SELECT * FROM daily_signals ORDER BY scan_timestamp ASC", conn)
+            df = pd.read_sql_query("SELECT * FROM daily_signals ORDER BY scan_timestamp ASC", conn)
     finally:
         conn.close()
     return df
@@ -1139,7 +1139,7 @@ def get_backtest_df(run_id: str = None) -> pd.DataFrame:
     conn = _get_conn()
     try:
         if run_id:
-            df = pd.read_sql(
+            df = pd.read_sql_query(
                 "SELECT * FROM backtest_trades WHERE run_id=? ORDER BY id ASC",
                 conn, params=[run_id]
             )
@@ -1149,7 +1149,7 @@ def get_backtest_df(run_id: str = None) -> pd.DataFrame:
             ).fetchone()
             if row is None:
                 return pd.DataFrame()
-            df = pd.read_sql(
+            df = pd.read_sql_query(
                 "SELECT * FROM backtest_trades WHERE run_id=? ORDER BY id ASC",
                 conn, params=[row['run_id']]
             )
@@ -1162,7 +1162,7 @@ def get_all_backtest_runs() -> pd.DataFrame:
     """Returns a summary of every backtest run stored in the DB."""
     conn = _get_conn()
     try:
-        df = pd.read_sql("""
+        df = pd.read_sql_query("""
             SELECT run_id,
                    COUNT(*)  AS trades,
                    MIN(timestamp) AS started_at,
@@ -1204,7 +1204,7 @@ def log_closed_trade(trade: dict):
 def get_paper_trades_df() -> pd.DataFrame:
     conn = _get_conn()
     try:
-        df = pd.read_sql("SELECT * FROM paper_trades ORDER BY close_time ASC", conn)
+        df = pd.read_sql_query("SELECT * FROM paper_trades ORDER BY close_time ASC", conn)
     finally:
         conn.close()
     return df.drop(columns=['id'], errors='ignore')
@@ -1217,7 +1217,7 @@ def load_positions() -> dict:
     """Return open positions as {pair: {direction, entry, target, stop, ...}}."""
     conn = _get_conn()
     try:
-        df = pd.read_sql("SELECT * FROM positions", conn)
+        df = pd.read_sql_query("SELECT * FROM positions", conn)
     finally:
         conn.close()
     if df.empty:
@@ -1325,7 +1325,7 @@ def get_weights_history() -> pd.DataFrame:
     """Return recent weight versions (id, saved_at, source)."""
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             "SELECT id, saved_at, source FROM dynamic_weights ORDER BY id DESC LIMIT 50",
             conn
         )
@@ -1504,7 +1504,7 @@ def log_alert_sent(channel: str, pair: str, direction: str,
 def get_alerts_log_df() -> pd.DataFrame:
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             "SELECT * FROM alerts_log ORDER BY sent_at DESC LIMIT 500", conn
         )
     finally:
@@ -1540,7 +1540,7 @@ def log_execution(placed_at: str, pair: str, direction: str, side: str,
 def get_execution_log_df(limit: int = 200) -> pd.DataFrame:
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             "SELECT * FROM execution_log ORDER BY placed_at DESC LIMIT ?",
             conn,
             params=(int(limit),),
@@ -1595,13 +1595,13 @@ def get_arb_opportunities_df(limit: int = 200, arb_type: str = None) -> pd.DataF
     conn = _get_conn()
     try:
         if arb_type:
-            df = pd.read_sql(
+            df = pd.read_sql_query(
                 "SELECT * FROM arb_opportunities WHERE arb_type=? ORDER BY detected_at DESC LIMIT ?",
                 conn,
                 params=(arb_type, int(limit)),
             )
         else:
-            df = pd.read_sql(
+            df = pd.read_sql_query(
                 "SELECT * FROM arb_opportunities ORDER BY detected_at DESC LIMIT ?",
                 conn,
                 params=(int(limit),),
@@ -1650,7 +1650,7 @@ def get_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     """Return recent agent decision records as a DataFrame."""
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             "SELECT * FROM agent_log ORDER BY logged_at DESC LIMIT ?",
             conn,
             params=(int(limit),),
@@ -1732,7 +1732,7 @@ def get_signal_win_rate(pair: str = None, direction: str = None,
             params.append(f"%{direction.upper()}%")
 
         where = " AND ".join(conditions)
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             f"SELECT was_correct FROM feedback_log WHERE {where}",
             conn,
             params=params if params else None,
@@ -1762,7 +1762,7 @@ def get_top_signals_by_accuracy(n: int = 5, days: int = 60) -> list[dict]:
     """
     conn = _get_conn()
     try:
-        df = pd.read_sql(
+        df = pd.read_sql_query(
             f"""
             SELECT pair,
                    direction,

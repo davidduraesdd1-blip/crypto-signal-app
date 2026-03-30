@@ -456,6 +456,7 @@ def get_onchain_metrics(pair: str) -> dict:
         return _fallback_onchain()
 
     try:
+        _COINGECKO_LIMITER.wait()
         url = f"{_CG_BASE}/coins/{coin_id}"
         params = {
             'localization': 'false', 'tickers': 'false',
@@ -1526,6 +1527,11 @@ def get_defillama_tvl(pair: str) -> dict:
                 _TVL_CACHE[pair] = result
             return result
 
+        if not resp.text or not resp.text.strip():
+            result = {**_neutral, 'chain': chain_name, 'error': 'Empty response', '_ts': now}
+            with _TVL_CACHE_LOCK:
+                _TVL_CACHE[pair] = result
+            return result
         history = resp.json()  # [{date: unix, tvl: float}, ...]
         if not history or len(history) < 2:
             result = {**_neutral, 'chain': chain_name, 'error': 'No TVL history', '_ts': now}

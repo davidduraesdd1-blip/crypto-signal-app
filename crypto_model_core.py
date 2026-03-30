@@ -439,7 +439,21 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
             _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
         return df
     except Exception as e:
-        logging.warning(f"OHLCV failed {pair} {timeframe}: {str(e)[:60]}")
+        _e_msg = str(e)
+        # Binance fallback: primary exchange doesn't list this pair (common for tier-2 alts on Kraken)
+        if "does not have market symbol" in _e_msg or "market symbol" in _e_msg.lower():
+            try:
+                _binance = get_exchange_instance('binance')
+                if _binance:
+                    ohlcv = _binance.fetch_ohlcv(pair, timeframe, limit=limit)
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    with _OHLCV_CACHE_LOCK:
+                        _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
+                    return df
+            except Exception:
+                pass
+        logging.warning(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
         return pd.DataFrame()
 
 
@@ -666,15 +680,18 @@ def detect_hmm_regime(df) -> str:
             return None
 
         # BUG-R22: covariance_floor renamed from min_covar in hmmlearn >= 0.3.0
-        # PERF-09: n_iter reduced 80→25; 3-state crypto regime HMM converges in <20 iterations
+        # n_iter=50, tol=1e-2: looser tolerance converges faster on noisy crypto data
         try:
-            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=25,
-                                random_state=42, covariance_floor=1e-6)
+            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=50,
+                                tol=1e-2, random_state=42, covariance_floor=1e-6)
         except TypeError:
-            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=25,
-                                random_state=42)
+            model = GaussianHMM(n_components=3, covariance_type='diag', n_iter=50,
+                                tol=1e-2, random_state=42)
 
-        model.fit(X)
+        import warnings as _hmm_w
+        with _hmm_w.catch_warnings():
+            _hmm_w.filterwarnings('ignore', message='Model is not converging')
+            model.fit(X)
         states = model.predict(X)
 
         # Characterize states by (mean_return, mean_volatility) for labeling
@@ -755,7 +772,10 @@ def agent_vote_lgbm(df, hold_bars: int = 5):
                     float(df['adx'].iloc[-1]) if 'adx' in df.columns else 25.0,
                     sk_v[-1] / 100.0,
                 ]], dtype=np.float32)
-                prob_buy = float(feedback_model.predict_proba(x_last)[0][1])
+                import warnings as _lgbm_w
+                with _lgbm_w.catch_warnings():
+                    _lgbm_w.filterwarnings('ignore', message='X does not have valid feature names')
+                    prob_buy = float(feedback_model.predict_proba(x_last)[0][1])
                 score = (prob_buy - 0.5) * 200
                 return round(score, 1), f"LightGBM(feedback): P(win)={prob_buy:.2f}"
             except Exception:
@@ -837,7 +857,10 @@ def agent_vote_lgbm(df, hold_bars: int = 5):
             sd_v[-1] / 100.0,
         ]], dtype=np.float32)
 
-        prob_buy = float(_cached_lgbm.predict_proba(x_last)[0][1])
+        import warnings as _lgbm_w2
+        with _lgbm_w2.catch_warnings():
+            _lgbm_w2.filterwarnings('ignore', message='X does not have valid feature names')
+            prob_buy = float(_cached_lgbm.predict_proba(x_last)[0][1])
         # Map [0,1] probability → [-100, +100] vote
         score = (prob_buy - 0.5) * 200
         reason = f"LightGBM: P(up)={prob_buy:.2f}"
