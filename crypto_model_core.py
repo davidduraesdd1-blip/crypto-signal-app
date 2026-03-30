@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import json
 import requests
+import hashlib
 from datetime import datetime, timedelta, timezone
 import time
 import os
@@ -59,7 +60,7 @@ PAIRS = [
     # added to DEX scanner in Defi Model; omitted here for CEX signal quality
 ]
 TIMEFRAMES = ['1h', '4h', '1d', '1w']
-OHLCV_LIMIT      = 500  # Ichimoku (10/30/60) needs 60-bar warmup; 500 gives 440 usable bars on 1h (~18.3 days)
+OHLCV_LIMIT      = 500  # Ichimoku (10/30/45) needs 45-bar warmup; 500 gives 455 usable bars on 1h (~18.9 days)
 SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need < 150 bars; ~40% faster OHLCV fetch
 
 # ─── OHLCV short-term cache ─────────────────────────────────────────────────
@@ -84,7 +85,7 @@ _TF_TTL: dict = {
 # TTL slightly less than OHLCV TTL so it never serves enriched data for expired raw data.
 _ENRICHED_CACHE: dict    = {}
 _ENRICHED_CACHE_LOCK     = threading.Lock()
-_ENRICHED_CACHE_TTL      = 270  # 4.5 min — always expires before OHLCV (300s)
+_ENRICHED_CACHE_TTL      = 295  # expires just before OHLCV (300s) — prevents stale indicator recompute on unchanged bars
 TA_EXCHANGE = 'kraken'
 PAPER_EXCHANGE = 'krakenfutures'
 
@@ -618,13 +619,13 @@ def detect_hmm_regime(df) -> str:
     Falls back to ADX-based detection if hmmlearn unavailable or < 80 bars.
     Returns: 'Trending', 'Ranging', 'Neutral', or None (caller uses ADX fallback).
     """
-    # PERF-23: 15-minute TTL cache keyed by (n_bars, first_close, last_close)
-    # Avoids expensive HMM fitting on repeated calls with the same data window.
+    # PERF-23: 15-minute TTL cache keyed by MD5 hash of close prices
+    # Hash-based key prevents collisions between series with same length/first/last price.
     _hmm_key = None  # always initialize so cache-write guard never raises NameError
     try:
         _close_arr = df['close'].dropna().values if 'close' in df.columns else []
         if len(_close_arr) >= 2:
-            _hmm_key = (len(_close_arr), round(float(_close_arr[0]), 2), round(float(_close_arr[-1]), 2))
+            _hmm_key = hashlib.md5(_close_arr.astype("float32").tobytes()).hexdigest()
             _now_hmm = time.time()
             with _hmm_regime_cache_lock:
                 _hmm_hit = _hmm_regime_cache.get(_hmm_key)
@@ -1919,7 +1920,7 @@ def _enrich_df(df, tf: str = None):
     df['tenkan_sen'] = (df['high'].rolling(10).max() + df['low'].rolling(10).min()) / 2
     df['kijun_sen'] = (df['high'].rolling(30).max() + df['low'].rolling(30).min()) / 2
     df['senkou_span_a'] = (df['tenkan_sen'] + df['kijun_sen']) / 2
-    df['senkou_span_b'] = (df['high'].rolling(60).max() + df['low'].rolling(60).min()) / 2
+    df['senkou_span_b'] = (df['high'].rolling(45).max() + df['low'].rolling(45).min()) / 2  # 45 bars (~7.5d on 4H) — tighter than equity 52-period for crypto's faster cycles
     # ATR + ADX (PERF-07 / BUG-R26: compute TR once, derive both ATR and ADX from it so
     # calculate_signal_confidence reads df['atr'] and df['adx'] without re-computing)
     _tr = pd.concat([df['high'] - df['low'],
@@ -1967,8 +1968,9 @@ def _enrich_df(df, tf: str = None):
     df['supertrend_dir'] = _in_up.astype(int)  # 1=uptrend, 0=downtrend
     # Squeeze Momentum scalar columns (for current bar — stored as repeated value)
     _sqz = compute_squeeze_momentum(df)
-    df['squeeze_on']  = int(_sqz['squeeze_on'])
-    df['squeeze_mom'] = _sqz['momentum']
+    df['squeeze_on']         = int(_sqz['squeeze_on'])
+    df['squeeze_mom']        = _sqz['momentum']
+    df['squeeze_increasing'] = int(_sqz['increasing'])
     # Chandelier Exit stops
     _ce = compute_chandelier_exit(df)
     df['chandelier_long_stop']  = _ce['long_stop']  if _ce['long_stop']  is not None else np.nan
@@ -2047,10 +2049,10 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             squeeze_sig = ('BULL_SQUEEZE' if squeeze_on and squeeze_mom > 0
                            else 'BEAR_SQUEEZE' if squeeze_on and squeeze_mom < 0
                            else 'NO_SQUEEZE')
-            # BUG-SQUEEZE-01: _sqz must be defined for the scoring block below that calls
-            # _sqz.get('increasing', ...).  Fast path has no 'increasing' column, so fall
-            # back to {} — scores use the 6-pt branch instead of the 10-pt branch.
-            _sqz = {}
+            # Read pre-computed 'increasing' flag — was always {} before, causing +4pt scoring miss
+            _sqz_increasing = bool(df['squeeze_increasing'].iloc[-1]) if 'squeeze_increasing' in df.columns else False
+            _sqz = {"squeeze_on": squeeze_on, "momentum": squeeze_mom,
+                    "increasing": _sqz_increasing, "signal": squeeze_sig}
         else:
             _sqz = compute_squeeze_momentum(df)
             squeeze_on  = _sqz['squeeze_on']
@@ -2103,10 +2105,13 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         if volume_passed: momentum += 15
         score += momentum * w.get('momentum', 0.15)
 
-        # Stochastic
+        # Stochastic — dual confirmation with MACD histogram direction
+        # Bare K/D cross fires every 4-5 bars in trends; MACD alignment filters noise
         stoch_score = 0
-        if stoch_k < 20 and stoch_k > stoch_d: stoch_score += 20
-        elif stoch_k > 80 and stoch_k < stoch_d: stoch_score -= 18
+        if stoch_k < 20 and stoch_k > stoch_d:
+            stoch_score += 20 if hist > 0 else 10   # full score with MACD confirm, half without
+        elif stoch_k > 80 and stoch_k < stoch_d:
+            stoch_score -= 18 if hist < 0 else 9    # full score with MACD confirm, half without
         score += stoch_score * w.get('stoch', 0.10)
 
         # ADX
@@ -2258,7 +2263,11 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             if near_sr and bb_pos > 0.8 and rsi > 65: regime_bonus += 15
         score += regime_bonus
 
-        # Fear & Greed (T1-B: multiplier only — removed additive bias that caused +22.5pt inflation)
+        # Fear & Greed — applied selectively per strategy bias.
+        # F&G is a mean-reversion signal: extreme greed = likely reversal, not trend continuation.
+        # Trend-follow components (SuperTrend, ADX) are unaffected; mean-reversion components
+        # (RSI divergence, Bollinger, Fibonacci) receive the full multiplier.
+        # Implementation: split score into trend vs. MR portion, apply mult only to MR.
         fng_mult = 1.0
         if fng_value < 25:
             fng_mult = 1.15
@@ -2270,7 +2279,11 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                 score = min(score, 55)
         elif fng_value > 55:
             fng_mult = 0.92
-        score = score * fng_mult
+        if strategy_bias == 'Mean-Reversion':
+            score = score * fng_mult          # F&G directly relevant to mean-reversion trades
+        else:
+            # Trend-following: only partial F&G influence (0.5× the multiplier effect)
+            score = score * (1.0 + (fng_mult - 1.0) * 0.5)
 
         # On-chain
         onchain_bias = get_onchain_bias(
@@ -2480,33 +2493,52 @@ def _compute_kelly_fraction() -> float | None:
 
     Returns float in (0, 0.25] or None if insufficient data (<20 valid trades).
     Hard cap: 25% of portfolio regardless of edge (prevents catastrophic overbet).
+
+    Data source priority (D18):
+    1. Resolved live/paper feedback_log outcomes (last 90d, actual_pnl_pct) — real edge
+    2. Backtest simulation — fallback when fewer than 20 resolved live trades exist
     """
+    def _kelly_from_pnl(pnl_series) -> float | None:
+        wins   = pnl_series[pnl_series > 0]
+        losses = pnl_series[pnl_series <= 0]
+        if len(wins) < 5 or len(losses) < 5:
+            return None
+        p        = len(wins) / len(pnl_series)
+        avg_win  = wins.mean() / 100
+        avg_loss = abs(losses.mean()) / 100
+        if avg_loss == 0 or avg_win == 0:
+            return None
+        b     = avg_win / avg_loss
+        kelly = (b * p - (1 - p)) / b
+        # Quarter-Kelly: captures ~56% of geometric growth with only ~25% of variance
+        return round(max(0.0, min(kelly * 0.25, 0.25)), 4)
+
     try:
+        # Priority 1: real resolved feedback outcomes (live/paper trades)
+        try:
+            fb = _db.get_resolved_feedback_df(days=90)
+            if not fb.empty and 'actual_pnl_pct' in fb.columns:
+                fb = fb.dropna(subset=['actual_pnl_pct'])
+                fb = fb[fb['actual_pnl_pct'] != 0]
+                if len(fb) >= 20:
+                    result = _kelly_from_pnl(fb['actual_pnl_pct'])
+                    if result is not None:
+                        logging.debug("[Kelly] %d live trades win_rate=%.1f%%",
+                                      len(fb), len(fb[fb['actual_pnl_pct'] > 0]) / len(fb) * 100)
+                        return result
+        except Exception:
+            pass
+
+        # Priority 2: backtest simulation data
         bt = _db.get_backtest_df()
         if bt.empty:
             return None
         bt = bt[~bt['direction'].str.contains('NEUTRAL|LOW VOL', na=False, regex=True)]
-        # Keep ALL directional trades (wins AND losses) — Kelly requires both sides to be
-        # meaningful. The old buy_mask/sell_mask filtered to only price-correct trades,
-        # which excluded all losses and inflated the Kelly fraction to be overconfident.
         bt = bt[bt['direction'].isin(['BUY', 'STRONG BUY', 'SELL', 'STRONG SELL'])].copy()
         if len(bt) < 20:
             return None
-        wins = bt[bt['pnl_pct'] > 0]
-        losses = bt[bt['pnl_pct'] <= 0]
-        if len(losses) == 0 or len(wins) == 0:
-            return None
-        p = len(wins) / len(bt)
-        avg_win = wins['pnl_pct'].mean() / 100
-        avg_loss = abs(losses['pnl_pct'].mean()) / 100
-        if avg_loss == 0 or avg_win == 0:  # CM-17: b=0 → kelly denominator div/0
-            return None
-        b = avg_win / avg_loss
-        kelly = (b * p - (1 - p)) / b
-        # Quarter-Kelly (25% of optimal) — research consensus for live trading with limited
-        # sample sizes. Captures ~56% of geometric growth vs full Kelly but with only ~25%
-        # of the variance. Hard cap at 25% regardless of edge (#50 fractional Kelly default).
-        return round(max(0.0, min(kelly * 0.25, 0.25)), 4)
+        return _kelly_from_pnl(bt['pnl_pct'])
+
     except Exception as e:
         logging.warning(f"Kelly computation failed: {e}")
         return None
@@ -3152,19 +3184,20 @@ def show_trends():
     master_df = _db.get_signals_df(limit=len(PAIRS) * 10)
     if len(master_df) < 2:
         return {}
-    last_scan = master_df.sort_values('scan_timestamp').groupby('pair').tail(1)
-    prev_scan = master_df.sort_values('scan_timestamp').groupby('pair').tail(2).groupby('pair').head(1)
+    _sorted = master_df.sort_values('scan_timestamp')
+    last_scan = _sorted.groupby('pair').tail(1).set_index('pair')
+    prev_scan = _sorted.groupby('pair').tail(2).groupby('pair').head(1).set_index('pair')
     trends = {}
     for pair in PAIRS:
-        curr = last_scan[last_scan['pair'] == pair]
-        prev = prev_scan[prev_scan['pair'] == pair]
-        if curr.empty or prev.empty:
+        if pair not in last_scan.index or pair not in prev_scan.index:
             continue
-        curr_conf = curr['confidence_avg_pct'].values[0]
-        prev_conf = prev['confidence_avg_pct'].values[0]
+        curr = last_scan.loc[pair]
+        prev = prev_scan.loc[pair]
+        curr_conf = curr['confidence_avg_pct']
+        prev_conf = prev['confidence_avg_pct']
         change = curr_conf - prev_conf
-        curr_dir = curr['direction'].values[0]
-        prev_dir = prev['direction'].values[0]
+        curr_dir = curr['direction']
+        prev_dir = prev['direction']
         trends[pair] = {
             'conf_change': round(change, 1),
             'curr_direction': curr_dir,
@@ -3722,7 +3755,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
                funding_map, oi_map, iv_map, ob_map,
                master_df, circuit_breaker, start_time,
                trending_coins=None, global_mkt=None, btc_df=None, cvd_map=None, tvl_map=None,
-               pi_cycle_data=None):
+               pi_cycle_data=None, macro_adj=None):
     """Process one pair across all timeframes. Called from ThreadPoolExecutor workers."""
     if trending_coins is None:
         trending_coins = []
@@ -3730,6 +3763,8 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         global_mkt = {}
     if pi_cycle_data is None:
         pi_cycle_data = {}
+    if macro_adj is None:
+        macro_adj = {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
     onchain_data = fetch_onchain_metrics(pair)
     # DefiLlama TVL — pre-fetched by run_scan() parallel batch (PERF-09); fall back to live call
     tvl_data = (tvl_map or {}).get(pair)
@@ -3955,9 +3990,9 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
 
     # ── Macro signal overlay (Group 3) ────────────────────────────────────────
     # DXY / 10Y yield trend adjusts confidence ±4–8 pts.
+    # macro_adj is pre-fetched once per scan in run_scan() pre-scan batch — no per-pair FRED call.
     try:
-        import data_feeds as _df_macro
-        _macro_adj = _df_macro.get_macro_signal_adjustment()
+        _macro_adj = macro_adj or {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
         _madj_pts  = _macro_adj.get("adjustment", 0.0)
         if _madj_pts != 0.0 and conf_avg != 50:
             _sign = 1 if conf_avg > 50 else -1
@@ -4288,6 +4323,8 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         "tvl":      (lambda: _safe(_tvl_batch,                                   default={}, label="DefiLlama TVL")),
         # #26 Pi Cycle Top — fetched once per scan, applies to all BTC-correlated pairs
         "pi_cycle": (lambda: _safe(_data_feeds.fetch_pi_cycle_top,               default={}, label="Pi Cycle Top")),
+        # A5: macro adjustment fetched once here — eliminates 6× per-pair FRED calls
+        "macro_adj": (lambda: _safe(_data_feeds.get_macro_signal_adjustment,     default={"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}, label="Macro adj")),
     }
 
     _pre_results = {}
@@ -4306,6 +4343,8 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     tvl_map        = _pre_results.get("tvl",      {})
     # #26 Pi Cycle Top — module-level result shared across all pairs
     pi_cycle_data  = _pre_results.get("pi_cycle", {}) or {}
+    # A5: macro adjustment pre-fetched once — shared across all pairs (no per-pair FRED calls)
+    macro_adj_prescan = _pre_results.get("macro_adj") or {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
 
     # PERF-02: limit to recent 200 rows — only used for BTC correlation; full table scan is wasteful
     master_df = _db.get_signals_df(limit=200)
@@ -4318,7 +4357,23 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     except Exception as _e:
         logging.warning(f"StatArb BTC/USDT pre-fetch failed: {_e}")
 
-    # ── Parallel scan using thread pool ──────────────────────────────────────
+    # A6: OHLCV pre-fetch phase — pure I/O, no analysis yet.
+    # Fetches all pair × timeframe combinations in parallel so the per-pair
+    # analysis phase (HMM, indicators) hits the cache and does no network I/O.
+    max_workers = min(len(_scan_pairs), 6)
+    _ohlcv_tasks = [(p, tf) for p in _scan_pairs for tf in TIMEFRAMES]
+
+    def _prefetch_ohlcv(args):
+        _p, _tf = args
+        try:
+            robust_fetch_ohlcv(ta_ex, _p, _tf, limit=SCAN_OHLCV_LIMIT)
+        except Exception:
+            pass
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as _ohlcv_ex:
+        list(_ohlcv_ex.map(_prefetch_ohlcv, _ohlcv_tasks))
+
+    # ── Parallel analysis phase — all OHLCV already cached above ─────────────
     completed = [0]
     result_lock = threading.Lock()
 
@@ -4329,20 +4384,19 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
             master_df, circuit_breaker, start_time,
             trending_coins=trending_coins, global_mkt=global_mkt,
             btc_df=btc_df_for_scan, cvd_map=cvd_map, tvl_map=tvl_map,
-            pi_cycle_data=pi_cycle_data,
+            pi_cycle_data=pi_cycle_data, macro_adj=macro_adj_prescan,
         )
         with result_lock:
             completed[0] += 1
             if result:
                 # PERF-PROGRESSIVE: store result immediately so UI can display it
-                # without waiting for all 6 pairs to complete
+                # without waiting for all pairs to complete
                 with _partial_scan_lock:
                     _partial_scan_results.append(result)
             if progress_callback:
                 progress_callback(completed[0], len(_scan_pairs), pair)
         return result
 
-    max_workers = min(len(_scan_pairs), 6)  # PERF-08: raised from 4→6 — Kraken allows ≥6 concurrent requests
     pair_results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_scan_with_progress, pair): pair for pair in _scan_pairs}

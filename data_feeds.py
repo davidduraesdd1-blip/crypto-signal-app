@@ -33,7 +33,7 @@ def _build_session() -> requests.Session:
         allowed_methods=["GET"],
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(max_retries=retry, pool_maxsize=30, pool_connections=20)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     session.headers.update({
@@ -48,6 +48,26 @@ def _build_session() -> requests.Session:
 
 
 _SESSION = _build_session()
+
+# ─── FRED-specific session: low retries, short timeout (FRED is non-critical) ─
+def _build_fred_session() -> requests.Session:
+    """Minimal-retry session for FRED CSV endpoints — non-critical macro data."""
+    session = requests.Session()
+    retry = Retry(
+        total=1,
+        read=0,                          # never retry on ReadTimeout
+        backoff_factor=0,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_maxsize=5, pool_connections=2)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update({"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip"})
+    return session
+
+_FRED_SESSION = _build_fred_session()
 
 # ─── Rate Limiter (token bucket — #11 security hardening) ────────────────────
 class RateLimiter:
@@ -3180,16 +3200,37 @@ _FRED_MACRO_FALLBACKS_SG = {
 
 _MACRO_CACHE_SG: dict = {}
 _MACRO_CACHE_LOCK_SG = threading.Lock()
+_MACRO_INFLIGHT: dict = {}   # key → threading.Event sentinel (TOCTOU guard)
 _MACRO_TTL = 3600  # 1 hour
 
 
 def _macro_cached_get(key: str, ttl: int, fetch_fn):
-    """TTL cache wrapper for macro data."""
+    """TTL cache wrapper for macro data with TOCTOU guard.
+
+    Only one thread fetches for a given key at a time; concurrent callers
+    block on a threading.Event until the fetcher finishes, then read from cache.
+    """
     import time
+    my_event: threading.Event | None = None
+    wait_event: threading.Event | None = None
+
     with _MACRO_CACHE_LOCK_SG:
         cached = _MACRO_CACHE_SG.get(key)
         if cached and (time.time() - cached["_ts"]) < ttl:
             return cached["data"]
+        if key in _MACRO_INFLIGHT:
+            wait_event = _MACRO_INFLIGHT[key]
+        else:
+            my_event = threading.Event()
+            _MACRO_INFLIGHT[key] = my_event
+
+    if wait_event is not None:
+        wait_event.wait(timeout=90)
+        with _MACRO_CACHE_LOCK_SG:
+            cached = _MACRO_CACHE_SG.get(key)
+            return cached["data"] if cached else None
+
+    # This thread is the designated fetcher
     try:
         data = fetch_fn()
         if data:
@@ -3200,9 +3241,11 @@ def _macro_cached_get(key: str, ttl: int, fetch_fn):
         logging.debug("[MacroCache] %s fetch failed: %s", key, e)
         with _MACRO_CACHE_LOCK_SG:
             cached = _MACRO_CACHE_SG.get(key)
-            if cached:
-                return cached["data"]
-        return None
+            return cached["data"] if cached else None
+    finally:
+        my_event.set()
+        with _MACRO_CACHE_LOCK_SG:
+            _MACRO_INFLIGHT.pop(key, None)
 
 
 def fetch_fred_macro() -> dict:
@@ -3216,7 +3259,7 @@ def fetch_fred_macro() -> dict:
         for key, series_id in _FRED_MACRO_SERIES_SG.items():
             try:
                 url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-                resp = _SESSION.get(url, timeout=10)
+                resp = _FRED_SESSION.get(url, timeout=5)
                 if resp.status_code == 200:
                     lines = resp.text.strip().split("\n")
                     for line in reversed(lines[1:]):
@@ -3271,6 +3314,8 @@ _GLOBAL_M2_FX = {
 
 _G_M2_CACHE: dict = {}
 _G_M2_LOCK = threading.Lock()
+_G_M2_INFLIGHT: threading.Event | None = None
+_G_M2_INFLIGHT_LOCK = threading.Lock()
 
 
 def fetch_global_m2_composite(lag_days: int = 90) -> dict:
@@ -3290,7 +3335,7 @@ def fetch_global_m2_composite(lag_days: int = 90) -> dict:
         """Return last `months` monthly observations as floats."""
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
         try:
-            resp = _SESSION.get(url, timeout=12)
+            resp = _FRED_SESSION.get(url, timeout=5)
             if resp.status_code != 200:
                 return []
             lines = resp.text.strip().split("\n")[1:]  # skip header
@@ -3349,18 +3394,39 @@ def fetch_global_m2_composite(lag_days: int = 90) -> dict:
             "timestamp":         _dt.datetime.now(_dt.timezone.utc).isoformat(),
         }
 
-    with _G_M2_LOCK:
+    global _G_M2_INFLIGHT
+    _my_event: threading.Event | None = None
+    _wait_event: threading.Event | None = None
+
+    with _G_M2_INFLIGHT_LOCK:
         cached = _G_M2_CACHE.get("global_m2")
         if cached and (time.time() - cached["_ts"]) < 3600:
             return cached["data"]
-    try:
-        data = _fetch()
-        if data:
-            with _G_M2_LOCK:
-                _G_M2_CACHE["global_m2"] = {"data": data, "_ts": time.time()}
-            return data
-    except Exception as e:
-        logging.debug("[GlobalM2] fetch failed: %s", e)
+        if _G_M2_INFLIGHT is not None:
+            _wait_event = _G_M2_INFLIGHT
+        else:
+            _my_event = threading.Event()
+            _G_M2_INFLIGHT = _my_event
+
+    if _wait_event is not None:
+        _wait_event.wait(timeout=90)
+        with _G_M2_INFLIGHT_LOCK:
+            cached = _G_M2_CACHE.get("global_m2")
+            if cached:
+                return cached["data"]
+    elif _my_event is not None:
+        try:
+            data = _fetch()
+            if data:
+                with _G_M2_INFLIGHT_LOCK:
+                    _G_M2_CACHE["global_m2"] = {"data": data, "_ts": time.time()}
+                return data
+        except Exception as e:
+            logging.debug("[GlobalM2] fetch failed: %s", e)
+        finally:
+            _my_event.set()
+            with _G_M2_INFLIGHT_LOCK:
+                _G_M2_INFLIGHT = None
 
     # Fallback
     return {
