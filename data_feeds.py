@@ -459,7 +459,9 @@ def get_onchain_metrics(pair: str) -> dict:
             sopr       = round(max(0.85, min(1.15, 1.0 + price_24h / 100)), 3)
             # 200d proxy: fetch 200 daily klines from Binance, compute % change
             price_200d = 0.0
-            klines_200 = fetch_binance_klines(binance_sym, interval="1d", limit=201)
+            klines_200 = fetch_bybit_klines(binance_sym, interval="1d", limit=201)
+            if not klines_200 or len(klines_200) < 2:
+                klines_200 = fetch_binance_klines(binance_sym, interval="1d", limit=201)
             if len(klines_200) >= 2:
                 first_close = float(klines_200[0][4])
                 last_close  = float(klines_200[-1][4])
@@ -1549,8 +1551,9 @@ def get_defillama_tvl(pair: str) -> dict:
             return cached
 
     try:
+        from urllib.parse import quote as _url_quote
         resp = _SESSION.get(
-            f"https://api.llama.fi/v2/historicalChainTvl/{chain_name}",
+            f"https://api.llama.fi/v2/historicalChainTvl/{_url_quote(chain_name, safe='')}",
             timeout=10,
         )
         if resp.status_code != 200:
@@ -1591,7 +1594,7 @@ def get_defillama_tvl(pair: str) -> dict:
         return result
 
     except Exception as e:
-        logging.warning(f"DefiLlama TVL fetch failed for {pair}: {e}")
+        logging.debug(f"DefiLlama TVL fetch failed for {pair}: {e}")
         result = {**_neutral, 'chain': chain_name, 'error': str(e)[:80], '_ts': now}
         with _TVL_CACHE_LOCK:
             _TVL_CACHE[pair] = result
@@ -2043,7 +2046,10 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
 
     try:
         binance_sym = f"{symbol.upper()}USDT"
-        klines = fetch_binance_klines(binance_sym, interval="1h", limit=24)
+        # Try Bybit first (not geo-blocked from US Streamlit servers); fallback to Binance
+        klines = fetch_bybit_klines(binance_sym, interval="1h", limit=24)
+        if not klines or len(klines) < 12:
+            klines = fetch_binance_klines(binance_sym, interval="1h", limit=24)
         if not klines or len(klines) < 12:
             result = {**_neutral, "error": f"Insufficient candle data (got {len(klines)} candles, need ≥12)", "_ts": now}
             with _CVD_DIV_LOCK:
