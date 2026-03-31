@@ -6133,13 +6133,13 @@ def page_market_overview():
                        "CoinMetrics Community API · free, no key · MVRV Z-Score · SOPR · Active Addresses",
                        icon="⛓️")
 
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def _cached_coinmetrics_onchain(days: int):
-        return data_feeds.fetch_coinmetrics_onchain(days=days)
-
-    _oc4 = _cached_coinmetrics_onchain(400)
+    # No @st.cache_data here — it would lock in a 403 failure for 1 hour preventing retries.
+    # data_feeds.fetch_coinmetrics_onchain() has its own 1-hour in-memory cache for successes.
+    _oc4 = data_feeds.fetch_coinmetrics_onchain(400)
     if _oc4.get("error") and not _oc4.get("mvrv_z"):
-        st.info(f"On-chain data loading… ({_oc4.get('error', 'CoinMetrics Community API')})")
+        _oc_src = _oc4.get("source", "coinmetrics")
+        _oc_err = _oc4.get("error", "")
+        st.info(f"On-chain data unavailable from current server location ({_oc_src}: {_oc_err})")
     else:
         _mz4   = _oc4.get("mvrv_z")
         _ms4   = _oc4.get("mvrv_signal", "N/A")

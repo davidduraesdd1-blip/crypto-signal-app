@@ -158,6 +158,7 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "api.zerion.io",                            # Zerion portfolio API
     "api.etherscan.io",                         # Etherscan token list fallback
     "api.coinpaprika.com",                      # CoinPaprika — global market fallback
+    "api.blockchain.info",                      # Blockchain.com — on-chain MVRV + active addresses fallback
 })
 
 
@@ -3985,7 +3986,9 @@ def get_deribit_options_skew(currency: str = "BTC") -> dict:
                     except ValueError:
                         continue
                 days_to_exp = (exp - now).days
-                if not (20 <= days_to_exp <= 60):
+                # Wider window (7–90 days) and wider delta band (±0.15) so enough options
+                # qualify for both BTC and ETH — the old 20–60 / 0.08 was too narrow for ETH.
+                if not (7 <= days_to_exp <= 90):
                     continue
                 option_type = parts[3].upper()
                 mark_iv     = item.get("mark_iv")
@@ -3994,9 +3997,9 @@ def get_deribit_options_skew(currency: str = "BTC") -> dict:
                     continue
                 delta = float(delta)
                 mark_iv = float(mark_iv)
-                if option_type == "P" and abs(abs(delta) - 0.25) < 0.08:
+                if option_type == "P" and abs(abs(delta) - 0.25) < 0.15:
                     puts.append((abs(abs(delta) - 0.25), mark_iv, exp.strftime("%Y-%m-%d")))
-                elif option_type == "C" and abs(abs(delta) - 0.25) < 0.08:
+                elif option_type == "C" and abs(abs(delta) - 0.25) < 0.15:
                     calls.append((abs(abs(delta) - 0.25), mark_iv, exp.strftime("%Y-%m-%d")))
 
             if not puts or not calls:
@@ -4062,7 +4065,12 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "frequency":  "1d",
                 "page_size":  days + 10,
             }
-            resp = _SESSION.get(url, params=params, timeout=15)
+            # _NO_RETRY_SESSION: CoinMetrics Community API returns 403 from US-AWS cloud
+            # IPs (IP-based blocking). Fail fast — no point retrying a 403 3 times.
+            resp = _NO_RETRY_SESSION.get(url, params=params, timeout=12)
+            if resp.status_code == 403:
+                # Fall through to Blockchain.com fallback below
+                raise IOError("CoinMetrics HTTP 403 (IP blocked on cloud hosting)")
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}", "source": "coinmetrics"}
             rows = resp.json().get("data", [])
@@ -4150,8 +4158,52 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "error":            None,
             }
         except Exception as e:
-            logging.debug("[CoinMetrics] onchain fetch failed: %s", e)
-            return {"error": str(e), "source": "coinmetrics"}
+            logging.debug("[CoinMetrics] onchain fetch failed: %s — trying Blockchain.com fallback", e)
+            # ── Blockchain.com fallback: MVRV + active addresses (free, US-accessible) ──
+            try:
+                _bc_mvrv_url = "https://api.blockchain.info/charts/mvrv?format=json&timespan=30days&sampled=true"
+                _bc_addr_url = "https://api.blockchain.info/charts/n-unique-addresses?format=json&timespan=30days&sampled=true"
+                _r_mvrv = _NO_RETRY_SESSION.get(_bc_mvrv_url, timeout=8)
+                _r_addr = _NO_RETRY_SESSION.get(_bc_addr_url, timeout=8)
+                _mvrv_vals, _mvrv_dates = [], []
+                _active_addrs = None
+                if _r_mvrv.status_code == 200:
+                    for _pt in _r_mvrv.json().get("values", []):
+                        try:
+                            _mvrv_vals.append(float(_pt["y"]))
+                            _mvrv_dates.append(str(_pt["x"])[:10])
+                        except Exception:
+                            pass
+                if _r_addr.status_code == 200:
+                    _pts = _r_addr.json().get("values", [])
+                    if _pts:
+                        _active_addrs = int(_pts[-1]["y"])
+                if not _mvrv_vals:
+                    return {"error": str(e), "source": "coinmetrics"}
+                import statistics as _stats
+                _cur_mvrv = _mvrv_vals[-1]
+                _window   = min(365, len(_mvrv_vals))
+                _trail    = _mvrv_vals[-_window:]
+                _mean_mv  = _stats.mean(_trail)
+                _std_mv   = _stats.stdev(_trail) if len(_trail) > 1 else 1.0
+                _mvrv_z   = round((_cur_mvrv - _mean_mv) / max(_std_mv, 1e-6), 2)
+                if _mvrv_z < -0.5:  _mvrv_sig = "UNDERVALUED"
+                elif _mvrv_z < 1.5: _mvrv_sig = "FAIR_VALUE"
+                elif _mvrv_z < 3.0: _mvrv_sig = "OVERVALUED"
+                else:               _mvrv_sig = "EXTREME_HEAT"
+                return {
+                    "mvrv_ratio": round(_cur_mvrv, 3), "mvrv_z": _mvrv_z,
+                    "mvrv_signal": _mvrv_sig, "realized_cap": None,
+                    "sopr": None, "sopr_signal": "N/A",
+                    "active_addresses": _active_addrs, "nupl": None, "nupl_signal": "N/A",
+                    "mvrv_history": {_mvrv_dates[i]: round(_mvrv_vals[i], 3) for i in range(len(_mvrv_dates))},
+                    "sopr_history": {},
+                    "source": "blockchain_com", "error": None,
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                }
+            except Exception as e2:
+                logging.debug("[OnChain] Blockchain.com fallback also failed: %s", e2)
+                return {"error": str(e), "source": "coinmetrics"}
 
     with _CM_OC_LOCK:
         hit = _CM_OC_CACHE.get(cache_key)
@@ -4521,20 +4573,24 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
     except Exception as e:
         result["errors"].append(f"bitso:{e}")
 
-    # 4. CoinDCX — INR markets
+    # 4. CoinDCX — INR markets (try multiple market name formats — API naming changed over time)
     try:
-        r = _SESSION.get("https://api.coindcx.com/exchange/ticker", timeout=6)
+        r = _SESSION.get(
+            "https://api.coindcx.com/exchange/ticker",
+            timeout=6,
+            headers={"Accept": "application/json"},
+        )
         if r.status_code == 200:
             tickers = r.json()
-            target_market = f"B-{base}_INR"
+            # CoinDCX uses several historical formats: "B-BTC_INR", "BTCINR", "I-BTC_INR"
+            _possible = {f"B-{base}_INR", f"{base}INR", f"I-{base}_INR", f"{base.lower()}_inr"}
             for t in tickers:
-                if t.get("market") == target_market:
+                if t.get("market") in _possible:
                     last_inr = float(t.get("last_price", 0) or 0)
-                    result["coindcx_inr"] = last_inr
-                    # Binance does not offer INR pairs and is geo-blocked on US Cloud.
-                    # Use hardcoded fallback rate (approximately ₹83–85/USD as of 2025).
-                    inr_rate = 83.5
-                    result["coindcx_usd_equiv"] = round(last_inr / inr_rate, 2) if inr_rate > 0 else None
+                    if last_inr > 0:
+                        result["coindcx_inr"] = last_inr
+                        inr_rate = 83.5  # ₹83–85/USD as of 2025
+                        result["coindcx_usd_equiv"] = round(last_inr / inr_rate, 2)
                     break
     except Exception as e:
         result["errors"].append(f"coindcx:{e}")
@@ -5765,7 +5821,8 @@ def fetch_dydx_price(market: str = "BTC-USD") -> "Optional[float]":
         if cached and (now - cached.get("_ts", 0)) < _DEX_INDIVIDUAL_TTL:
             return cached.get("price")
     try:
-        resp = _SESSION.get("https://indexer.dydx.trade/v4/markets", timeout=8)
+        # Use _NO_RETRY_SESSION: dYdX indexer can be slow; 3× retries on timeout waste 24s+
+        resp = _NO_RETRY_SESSION.get("https://indexer.dydx.trade/v4/markets", timeout=6)
         if resp.status_code == 200:
             mkt_data = resp.json().get("markets", {}).get(market, {})
             index_price = float(mkt_data.get("indexPrice") or mkt_data.get("oraclePrice") or 0)
@@ -5774,7 +5831,28 @@ def fetch_dydx_price(market: str = "BTC-USD") -> "Optional[float]":
                     _DYDX_PRICE_CACHE[market] = {"price": index_price, "_ts": now}
                 return index_price
     except Exception as e:
-        logging.debug("[dYdX] price fetch failed for %s: %s", market, e)
+        logging.debug("[dYdX] price fetch failed for %s: %s — trying OKX SWAP fallback", market, e)
+
+    # ── OKX perpetual SWAP fallback — index/mark price is a close proxy for dYdX oracle ──
+    try:
+        _base = market.split("-")[0]  # "BTC-USD" → "BTC"
+        _okx_inst = f"{_base}-USDT-SWAP"
+        _r2 = _NO_RETRY_SESSION.get(
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": _okx_inst},
+            timeout=5,
+        )
+        if _r2.status_code == 200:
+            _d2 = _r2.json().get("data", [])
+            if _d2:
+                _perp_price = float(_d2[0].get("last", 0) or 0)
+                if _perp_price > 0:
+                    with _DYDX_PRICE_LOCK:
+                        _DYDX_PRICE_CACHE[market] = {"price": _perp_price, "_ts": now}
+                    return _perp_price
+    except Exception as e2:
+        logging.debug("[dYdX] OKX SWAP fallback also failed for %s: %s", market, e2)
+
     with _DYDX_PRICE_LOCK:
         _DYDX_PRICE_CACHE[market] = {"price": None, "_ts": now}
     return None
