@@ -22,7 +22,12 @@ from statsmodels.tsa.stattools import coint
 import database as _db
 import config as _config
 
+import warnings
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
+# hmmlearn logs convergence warnings via logging (not warnings module) — suppress them
+logging.getLogger('hmmlearn').setLevel(logging.ERROR)
+# LightGBM warns about feature names when predicting with numpy arrays — suppress globally
+warnings.filterwarnings('ignore', message='X does not have valid feature names', category=UserWarning)
 
 VERSION = "v5.9.13-phase9-complete"
 
@@ -440,14 +445,14 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
         return df
     except Exception as e:
         _e_msg = str(e)
-        # Binance fallback: primary exchange doesn't list this pair (common for tier-2 alts on Kraken)
-        # Uses direct Binance REST API — bypasses load_markets()/exchangeInfo which is geo-blocked
-        # on US servers (HTTP 451). fetch_binance_klines() calls /api/v3/klines directly.
+        # Bybit fallback: primary exchange (Kraken) doesn't list this pair for tier-2 alts.
+        # Uses Bybit V5 REST API (api.bybit.com) — NOT geo-blocked from US Streamlit Cloud servers.
+        # Binance (api.binance.com) returns HTTP 451 from US IPs — do NOT use as fallback.
         if "does not have market symbol" in _e_msg or "market symbol" in _e_msg.lower():
             try:
                 import data_feeds as _dff
                 _sym = pair.replace('/', '')  # BTC/USDT → BTCUSDT
-                _klines = _dff.fetch_binance_klines(_sym, timeframe, limit)
+                _klines = _dff.fetch_bybit_klines(_sym, timeframe, limit)
                 if _klines:
                     df = pd.DataFrame(
                         [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in _klines],

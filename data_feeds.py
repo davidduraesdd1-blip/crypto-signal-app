@@ -365,6 +365,38 @@ def fetch_binance_klines(symbol: str, interval: str = "1h", limit: int = 100) ->
     return []
 
 
+def fetch_bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+    """
+    Fetch OHLCV candlestick data from Bybit V5 spot public API.
+    Not geo-blocked from US servers (unlike Binance which returns HTTP 451).
+    symbol: e.g. "BTCUSDT"
+    interval: "1h", "4h", "1d", "1w" (mapped to Bybit values: 60, 240, D, W)
+    Returns list of [startTime, open, high, low, close, volume] rows (oldest-first).
+    """
+    _interval_map = {"1m": "1", "5m": "5", "15m": "15", "30m": "30",
+                     "1h": "60", "4h": "240", "1d": "D", "1w": "W"}
+    bybit_interval = _interval_map.get(interval, "60")
+    try:
+        r = _SESSION.get(
+            "https://api.bybit.com/v5/market/kline",
+            params={"category": "spot", "symbol": symbol,
+                    "interval": bybit_interval, "limit": limit},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            rows = data.get("result", {}).get("list", [])
+            # Bybit returns newest-first; reverse to oldest-first for consistency
+            rows = list(reversed(rows))
+            # fields: [startTime, open, high, low, close, volume, turnover]
+            # Return as [startTime(int), open, high, low, close, volume] to match Binance format
+            return [[int(row[0]), row[1], row[2], row[3], row[4], row[5]]
+                    for row in rows if len(row) >= 6]
+    except Exception as e:
+        logging.debug("[Bybit klines] %s/%s failed: %s", symbol, interval, e)
+    return []
+
+
 def _fetch_binance_24hr(symbol: str) -> dict | None:
     """Fetch 24hr stats from Binance spot API. Returns raw dict or None."""
     try:
