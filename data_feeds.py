@@ -157,6 +157,7 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     # Batch 7 additions (#110/#111) — wallet portfolio
     "api.zerion.io",                            # Zerion portfolio API
     "api.etherscan.io",                         # Etherscan token list fallback
+    "api.coinpaprika.com",                      # CoinPaprika — global market fallback
 })
 
 
@@ -1975,13 +1976,52 @@ def get_global_market() -> dict:
             return result
 
         elif resp.status_code == 429:
-            logging.debug("[GlobalMkt] CoinGecko rate-limited — reusing cache")
+            logging.debug("[GlobalMkt] CoinGecko rate-limited — trying CoinPaprika fallback")
             with _GLOBAL_LOCK:
                 if _GLOBAL_CACHE:
                     return dict(_GLOBAL_CACHE)
+            # fall through to CoinPaprika below
 
     except Exception as e:
-        logging.debug(f"[GlobalMkt] fetch failed: {e}")
+        logging.debug(f"[GlobalMkt] CoinGecko fetch failed: {e}")
+        with _GLOBAL_LOCK:
+            if _GLOBAL_CACHE:
+                return dict(_GLOBAL_CACHE)
+        # fall through to CoinPaprika below
+
+    # ── CoinPaprika fallback (free, no API key, US-accessible) ─────────────────
+    try:
+        r2 = _NO_RETRY_SESSION.get("https://api.coinpaprika.com/v1/global", timeout=8)
+        if r2.status_code == 200:
+            d2 = r2.json()
+            total_mcap = float(d2.get("market_cap_usd", 0) or 0)
+            btc_dom    = round(float(d2.get("bitcoin_dominance_percentage", 50.0) or 50.0), 2)
+            eth_dom    = round(float(d2.get("ethereum_dominance_percentage", 18.0) or 18.0), 2)
+            mcap_chg   = round(float(d2.get("market_cap_change_24h", 0) or 0), 2)
+            total_vol  = float(d2.get("volume_24h_usd", 0) or 0)
+            if btc_dom < 42.0:
+                alt_season, alt_season_label = True, "ALTSEASON"
+            elif btc_dom <= 50.0:
+                alt_season, alt_season_label = False, "MIXED"
+            else:
+                alt_season, alt_season_label = False, "BTC_DOMINANT"
+            result = {
+                "total_market_cap_usd":  total_mcap,
+                "btc_dominance":         btc_dom,
+                "eth_dominance":         eth_dom,
+                "market_cap_change_24h": mcap_chg,
+                "total_volume_24h_usd":  total_vol,
+                "altcoin_season":        alt_season,
+                "altcoin_season_label":  alt_season_label,
+                "source":                "coinpaprika",
+                "error":                 None,
+                "_ts":                   time.time(),
+            }
+            with _GLOBAL_LOCK:
+                _GLOBAL_CACHE.update(result)
+            return result
+    except Exception as e2:
+        logging.debug("[GlobalMkt] CoinPaprika fallback also failed: %s", e2)
         with _GLOBAL_LOCK:
             if _GLOBAL_CACHE:
                 return dict(_GLOBAL_CACHE)

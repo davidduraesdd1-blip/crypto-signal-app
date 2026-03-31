@@ -733,7 +733,7 @@ def detect_hmm_regime(df) -> str:
                                 tol=1e-2, random_state=42)
 
         import warnings as _hmm_w
-        with _hmm_w.catch_warnings():
+        with _hmm_w.catch_warnings(), np.errstate(divide='ignore', invalid='ignore'):
             _hmm_w.filterwarnings('ignore', message='Model is not converging')
             model.fit(X)
         if not getattr(model, 'monitor_', None) or not getattr(model.monitor_, 'converged', True):
@@ -3460,7 +3460,7 @@ def run_backtest():
     avg_pnl = df_trades['pnl_pct'].mean()
     _loss_sum = abs(losses['pnl_usd'].sum())
     profit_factor = min(wins['pnl_usd'].sum() / _loss_sum, 99.0) if len(losses) > 0 and _loss_sum > 1.0 else 99.0
-    returns = pd.Series(equity).pct_change().dropna()
+    returns = pd.Series(equity).pct_change(fill_method=None).dropna()
     n_returns = len(returns)
     sharpe = returns.mean() / returns.std() * np.sqrt(n_returns) if n_returns > 1 and returns.std() != 0 else 0
     drawdowns = (pd.Series(equity) / pd.Series(equity).cummax() - 1) * 100
@@ -5109,7 +5109,7 @@ def compute_correlation_matrix(pairs=None, lookback_days=30, tf='1d'):
 
     min_len = min(len(v) for v in closes.values())
     df_closes = pd.DataFrame({k: v[-min_len:] for k, v in closes.items()})
-    df_returns = df_closes.pct_change().dropna()
+    df_returns = df_closes.pct_change(fill_method=None).dropna()
     if df_returns.empty or len(df_returns) < 2:
         return None, "Insufficient return data for correlation"
 

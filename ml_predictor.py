@@ -124,7 +124,7 @@ def _build_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     if "atr" in df.columns:
         feat["atr_pct"]  = df["atr"] / (df["close"] + 1e-9)
     else:
-        feat["atr_pct"]  = df["close"].pct_change().abs().rolling(14).mean()
+        feat["atr_pct"]  = df["close"].pct_change(fill_method=None).abs().rolling(14).mean()
 
     # Volume ratio (vs 20-bar avg)
     vol_avg = df["volume"].rolling(20).mean()

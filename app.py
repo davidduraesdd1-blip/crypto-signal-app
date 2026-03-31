@@ -1154,7 +1154,7 @@ def _auto_refresh_fragment():
 # stable across rerenders. Defining @st.fragment inside a conditional block causes
 # Streamlit's _check_serializable to throw KeyError($$ID-...-None) on the rerender
 # where the condition is False, because the key was registered in the previous run.
-@st.fragment(run_every=0.5)
+@st.fragment(run_every=1)
 def _scan_progress():
     # Early-return when not scanning — keeps fragment registered without rendering anything.
     if not st.session_state.get("scan_running", False) and not _SCAN_STATUS.get("running", False):
@@ -6092,7 +6092,7 @@ def page_market_overview():
         if len(_frames) >= 2:
             _df_ts  = pd.DataFrame(_frames).sort_index()
             _df_ts.index = pd.to_datetime(_df_ts.index)
-            _df_ret = _df_ts.pct_change().dropna()
+            _df_ret = _df_ts.pct_change(fill_method=None).dropna()
             _factors = [c for c in _df_ret.columns if c != "BTC"]
             _corr_res = {}
             for _fac in _factors:
