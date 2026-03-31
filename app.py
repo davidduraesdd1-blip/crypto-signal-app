@@ -47,6 +47,11 @@ _audit_log.addHandler(_audit_handler)
 _audit_log.setLevel(logging.INFO)
 _audit_log.propagate = False
 
+# Suppress "Connection pool is full" warnings from urllib3 — these come from CCXT's
+# internal HTTP sessions during concurrent agent scans and are benign (connections are
+# discarded, not failed). Raising to ERROR hides noise without masking real failures.
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+
 
 def audit(event: str, **ctx) -> None:
     """Log a security-relevant user action to the audit trail."""
@@ -1145,6 +1150,70 @@ def _auto_refresh_fragment():
         st.rerun()   # full page rerun only when the interval actually expires
 
 
+# ── Scan progress fragment — defined at module level so its session-state key is ──
+# stable across rerenders. Defining @st.fragment inside a conditional block causes
+# Streamlit's _check_serializable to throw KeyError($$ID-...-None) on the rerender
+# where the condition is False, because the key was registered in the previous run.
+@st.fragment(run_every=0.5)
+def _scan_progress():
+    # Early-return when not scanning — keeps fragment registered without rendering anything.
+    if not st.session_state.get("scan_running", False) and not _SCAN_STATUS.get("running", False):
+        with _scan_lock:
+            if not _scan_state["running"]:
+                return
+    # PERF-30: read from in-memory _SCAN_STATUS first (no DB round-trip per tick)
+    # Only fall back to SQLite if in-memory says not running (e.g. fresh restart)
+    _mem_prog = _SCAN_STATUS.get("progress", 0)
+    _mem_pair = _SCAN_STATUS.get("current", "")
+    _mem_run  = _SCAN_STATUS.get("running", False)
+    if not _mem_run:
+        _st = _read_scan_status()  # fallback to DB only when in-memory shows idle
+    else:
+        _st = {}
+    with _scan_lock:
+        _prog      = _scan_state.get("progress") or _mem_prog or _st.get("progress", 0)
+        _pair      = _scan_state.get("progress_pair") or _mem_pair or _st.get("pair", "")
+        _running   = _scan_state["running"]
+    # Account for Tier 2 pairs when enabled
+    _t2_enabled = st.session_state.get("include_tier2", False)
+    import config as _cfg
+    _total = len(model.PAIRS) + (len(_cfg.TIER2_BINANCE_PAIRS) if _t2_enabled else 0)
+
+    # Engaging loading screen: SVG progress ring + rotating crypto fun facts
+    _fact_idx = int(time.time() / 4) % 15
+    st.markdown(
+        _ui.loading_screen_html(_prog, _total, _pair, fact_index=_fact_idx),
+        unsafe_allow_html=True,
+    )
+
+    # Progressive card grid — real cards for completed pairs + skeletons for pending
+    _partial = model.get_partial_scan_results()
+    _n_done  = len(_partial)
+    _n_wait  = _total - _n_done
+    if _n_done > 0:
+        st.markdown(
+            f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
+            f'font-weight:600;margin:4px 0 8px 0;">'
+            f'⚡ {_n_done} of {_total} coins ready — more arriving...</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        _ui.coin_cards_grid_html(_partial, ws_prices=_ws.get_all_prices())
+        + (_ui.skeleton_cards_html(_n_wait) if _n_wait > 0 else ""),
+        unsafe_allow_html=True,
+    )
+
+    # Detect completion → trigger full-page rerun to show final results
+    if not _st.get("running", False) and not _running:
+        cached = _read_scan_results()
+        if cached is not None:
+            st.session_state["scan_results"] = cached
+            st.session_state["scan_error"]     = _st.get("error")
+            st.session_state["scan_timestamp"] = _st.get("timestamp")
+        st.session_state["scan_running"] = False
+        st.rerun()  # Full page rerun — shows complete results
+
+
 def page_dashboard():
     st.markdown(
         '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
@@ -1221,65 +1290,11 @@ def page_dashboard():
         status = _read_scan_status()
     is_scanning = st.session_state.get("scan_running", False) or _scan_running_now2 or _mem_running or status.get("running", False)
 
+    # PERF-FRAGMENT: _scan_progress is defined at module level (above page_dashboard) so its
+    # fragment session-state key ($$ID-...-None) stays registered across rerenders, preventing
+    # the KeyError that occurred when the fragment was defined inside this conditional block.
+    _scan_progress()  # always called — early-returns immediately when not scanning
     if is_scanning:
-        # PERF-FRAGMENT: st.fragment(run_every=0.5) means only this section re-renders
-        # every 0.5 seconds — NOT the entire page. Eliminates time.sleep(0.3) + full
-        # st.rerun() which previously re-rendered sidebars, CSS, headers on every poll.
-        @st.fragment(run_every=0.5)
-        def _scan_progress():
-            # PERF-30: read from in-memory _SCAN_STATUS first (no DB round-trip per tick)
-            # Only fall back to SQLite if in-memory says not running (e.g. fresh restart)
-            _mem_prog = _SCAN_STATUS.get("progress", 0)
-            _mem_pair = _SCAN_STATUS.get("current", "")
-            _mem_run  = _SCAN_STATUS.get("running", False)
-            if not _mem_run:
-                _st = _read_scan_status()  # fallback to DB only when in-memory shows idle
-            else:
-                _st = {}
-            with _scan_lock:
-                _prog      = _scan_state.get("progress") or _mem_prog or _st.get("progress", 0)
-                _pair      = _scan_state.get("progress_pair") or _mem_pair or _st.get("pair", "")
-                _running   = _scan_state["running"]
-            # Account for Tier 2 pairs when enabled
-            _t2_enabled = st.session_state.get("include_tier2", False)
-            import config as _cfg
-            _total = len(model.PAIRS) + (len(_cfg.TIER2_BINANCE_PAIRS) if _t2_enabled else 0)
-
-            # Engaging loading screen: SVG progress ring + rotating crypto fun facts
-            _fact_idx = int(time.time() / 4) % 15
-            st.markdown(
-                _ui.loading_screen_html(_prog, _total, _pair, fact_index=_fact_idx),
-                unsafe_allow_html=True,
-            )
-
-            # Progressive card grid — real cards for completed pairs + skeletons for pending
-            _partial = model.get_partial_scan_results()
-            _n_done  = len(_partial)
-            _n_wait  = _total - _n_done
-            if _n_done > 0:
-                st.markdown(
-                    f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
-                    f'font-weight:600;margin:4px 0 8px 0;">'
-                    f'⚡ {_n_done} of {_total} coins ready — more arriving...</div>',
-                    unsafe_allow_html=True,
-                )
-            st.markdown(
-                _ui.coin_cards_grid_html(_partial, ws_prices=_ws.get_all_prices())
-                + (_ui.skeleton_cards_html(_n_wait) if _n_wait > 0 else ""),
-                unsafe_allow_html=True,
-            )
-
-            # Detect completion → trigger full-page rerun to show final results
-            if not _st.get("running", False) and not _running:
-                cached = _read_scan_results()
-                if cached is not None:
-                    st.session_state["scan_results"] = cached
-                    st.session_state["scan_error"]     = _st.get("error")
-                    st.session_state["scan_timestamp"] = _st.get("timestamp")
-                st.session_state["scan_running"] = False
-                st.rerun()  # Full page rerun — shows complete results
-
-        _scan_progress()
         return  # Don't render the results section while scan is in progress
 
     # On page load, always try to restore results from cache file if session is empty
@@ -3684,6 +3699,25 @@ def _reset_config():
     except Exception as e:
         st.error(f"Reset failed: {e}")
 
+# ── Backtest progress fragment — module level to keep session-state key stable ──
+@st.fragment(run_every=1)
+def _backtest_progress():
+    # Early-return when not running — keeps fragment registered without rendering anything.
+    if not st.session_state.get("backtest_running", False) and not _bt_state["running"]:
+        return
+    with _bt_lock:
+        _still_running = _bt_state["running"]
+        _bt_results    = _bt_state["results"]
+        _bt_error      = _bt_state["error"]
+    if not _still_running and st.session_state.get("backtest_running", False):
+        st.session_state["backtest_results"] = _bt_results
+        st.session_state["backtest_error"]   = _bt_error
+        st.session_state["backtest_running"] = False
+        st.rerun()
+    else:
+        st.info("Running backtest — fetching historical candles for each signal... (2–5 min)")
+
+
 # ──────────────────────────────────────────────
 # PAGE 3: BACKTEST VIEWER
 # ──────────────────────────────────────────────
@@ -3700,22 +3734,9 @@ def page_backtest():
         if st.button("▶ Run Backtest", disabled=bt_disabled, type="primary", width="stretch"):
             _start_backtest()
 
-    if st.session_state.get("backtest_running", False) or _bt_state["running"]:
-        # PERF: fragment polls every 1s — only this widget re-renders, not the full page
-        @st.fragment(run_every=1)
-        def _backtest_progress():
-            with _bt_lock:
-                _still_running = _bt_state["running"]
-                _bt_results    = _bt_state["results"]
-                _bt_error      = _bt_state["error"]
-            if not _still_running and st.session_state.get("backtest_running", False):
-                st.session_state["backtest_results"] = _bt_results
-                st.session_state["backtest_error"]   = _bt_error
-                st.session_state["backtest_running"] = False
-                st.rerun()
-            else:
-                st.info("Running backtest — fetching historical candles for each signal... (2–5 min)")
-        _backtest_progress()
+    # _backtest_progress is defined at module level (above page_backtest) — always called
+    # here so its fragment key stays registered across rerenders (prevents $$ID KeyError).
+    _backtest_progress()
 
     if st.session_state.get("backtest_error"):
         st.error(f"Backtest failed: {st.session_state['backtest_error']}")

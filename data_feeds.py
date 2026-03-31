@@ -69,6 +69,20 @@ def _build_fred_session() -> requests.Session:
 
 _FRED_SESSION = _build_fred_session()
 
+# ─── No-retry session: for hosts that may be DNS-unreachable from Streamlit Cloud ─
+def _build_no_retry_session() -> requests.Session:
+    """Session with zero retries — used for DEX endpoints (e.g. price.jup.ag) that
+    are DNS-unreachable from US-AWS. Avoids the 3× retry × 4s = 12s blocking that
+    _SESSION would impose on every failed DNS lookup."""
+    s = requests.Session()
+    a = HTTPAdapter(max_retries=0, pool_maxsize=5, pool_connections=2)
+    s.mount("https://", a)
+    s.mount("http://", a)
+    s.headers.update({"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip"})
+    return s
+
+_NO_RETRY_SESSION = _build_no_retry_session()
+
 # ─── Rate Limiter (token bucket — #11 security hardening) ────────────────────
 class RateLimiter:
     """Token bucket rate limiter for API calls."""
@@ -4557,7 +4571,7 @@ def fetch_dex_prices(tokens: list = None) -> dict:
     if jup_targets:
         try:
             ids_str = ",".join(jup_targets.values())
-            r = _SESSION.get(f"https://price.jup.ag/v6/price?ids={ids_str}", timeout=6)
+            r = _NO_RETRY_SESSION.get(f"https://price.jup.ag/v6/price?ids={ids_str}", timeout=4)
             if r.status_code == 200:
                 jup_data = r.json().get("data", {})
                 for sym, mint in jup_targets.items():
@@ -5738,10 +5752,10 @@ def fetch_jupiter_price(token_mint: str) -> "Optional[float]":
         if cached and (now - cached.get("_ts", 0)) < _DEX_INDIVIDUAL_TTL:
             return cached.get("price")
     try:
-        resp = _SESSION.get(
+        resp = _NO_RETRY_SESSION.get(
             "https://price.jup.ag/v6/price",
             params={"ids": token_mint},
-            timeout=8,
+            timeout=4,
         )
         if resp.status_code == 200:
             data = resp.json().get("data", {})
