@@ -390,8 +390,13 @@ def fetch_okx_klines(symbol: str, interval: str = "1h", limit: int = 100) -> lis
                 # OKX returns newest-first; reverse to oldest-first for consistency
                 rows = list(reversed(rows))
                 # fields: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
-                return [[int(row[0]), row[1], row[2], row[3], row[4], row[5]]
-                        for row in rows if len(row) >= 6]
+                try:
+                    return [[int(row[0]) if str(row[0]).isdigit() else 0,
+                             row[1], row[2], row[3], row[4], row[5]]
+                            for row in rows if len(row) >= 6]
+                except (ValueError, TypeError) as _kl_err:
+                    logging.debug("[OKX klines] row parse error: %s", _kl_err)
+                    return []
     except Exception as e:
         logging.debug("[OKX klines] %s/%s failed: %s", symbol, interval, e)
     return []
@@ -558,8 +563,11 @@ def get_onchain_metrics(pair: str) -> dict:
             if not klines_200 or len(klines_200) < 2:
                 klines_200 = fetch_binance_klines(binance_sym, interval="1d", limit=201)
             if len(klines_200) >= 2:
-                first_close = float(klines_200[0][4])
-                last_close  = float(klines_200[-1][4])
+                try:
+                    first_close = float(klines_200[0][4])
+                    last_close  = float(klines_200[-1][4])
+                except (ValueError, TypeError, IndexError):
+                    first_close, last_close = 0.0, 0.0
                 if first_close > 0:
                     price_200d = round((last_close - first_close) / first_close * 100, 2)
             mvrv_z     = round(max(-3.0, min(7.0, price_200d / 57.0)), 2)
@@ -669,7 +677,10 @@ def get_open_interest(pair: str) -> dict:
             data = resp.json()
             items = data.get('data', [])
             if items and data.get('code') == '0':
-                oi_usd = float(items[0].get('oiUsd', 0))
+                try:
+                    oi_usd = float(items[0].get('oiUsd', 0))
+                except (ValueError, TypeError):
+                    oi_usd = 0.0
                 if oi_usd > 500_000_000:
                     signal = 'HIGH'
                 elif oi_usd < 50_000_000:

@@ -299,6 +299,8 @@ def place_order(
         price_now = float(_raw_price)
         market    = ex.market(symbol)
         ct_size   = float(market.get("contractSize") or 1.0)
+        if ct_size <= 0:
+            ct_size = 1.0
         qty       = max(1, round(size_usd / (price_now * ct_size)))
         # EXEC-02: hard cap on contract qty to prevent runaway orders from bad data
         if qty > 1000:
@@ -595,6 +597,8 @@ def place_iceberg_order(
         price_now = float(_raw_price)
         market    = ex.market(symbol)
         ct_size   = float(market.get("contractSize") or 1.0)
+        if ct_size <= 0:
+            ct_size = 1.0
         total_qty = max(1, round(size_usd / (price_now * ct_size)))
         visible_qty = max(1, round(total_qty * visible_pct))
         p = float(limit_price or price_now)

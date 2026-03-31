@@ -41,7 +41,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-DB_FILE = "crypto_model.db"
+import os as _os
+DB_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "crypto_model.db")
 
 # Single write lock — mirrors _log_lock used in crypto_model_core.py
 _write_lock = threading.Lock()

@@ -580,7 +580,10 @@ You MUST call exactly one tool."""
     try:
         # AG-14: add timeout to prevent a hung API call from stalling the agent
         # loop for up to 10 minutes (SDK default) — 45s is sufficient for Claude
-        client   = _anthropic.Anthropic(api_key=api_key, timeout=45.0)
+        try:
+            client = _anthropic.Anthropic(api_key=api_key, timeout=45.0)
+        except TypeError:
+            client = _anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model      = "claude-sonnet-4-6",
             max_tokens = 512,

@@ -323,7 +323,10 @@ def update_positions(current_prices):
         direction = pos['direction']
         target = pos['target']
         stop = pos['stop']
-        _et_raw = datetime.fromisoformat(pos['entry_time'].replace("Z", "+00:00"))
+        _et_str = pos.get('entry_time') or ""
+        if not _et_str:
+            continue
+        _et_raw = datetime.fromisoformat(_et_str.replace("Z", "+00:00"))
         # Normalise to UTC-aware so subtraction never raises TypeError
         entry_time = _et_raw if _et_raw.tzinfo is not None else _et_raw.replace(tzinfo=timezone.utc)
         size_pct = pos['size_pct']
@@ -733,6 +736,8 @@ def detect_hmm_regime(df) -> str:
         with _hmm_w.catch_warnings():
             _hmm_w.filterwarnings('ignore', message='Model is not converging')
             model.fit(X)
+        if not getattr(model, 'monitor_', None) or not getattr(model.monitor_, 'converged', True):
+            return None  # graceful fallback — HMM did not converge
         states = model.predict(X)
 
         # Characterize states by (mean_return, mean_volatility) for labeling

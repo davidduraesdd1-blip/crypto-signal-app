@@ -739,12 +739,13 @@ with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
             _setup_autoscan(interval_min)
         next_t = _get_next_autoscan_time()
         if next_t:
-            # Strip timezone for display (APScheduler may return tz-aware)
+            # Use timezone-aware comparison (APScheduler may return tz-aware)
             try:
-                next_t_naive = next_t.replace(tzinfo=None)
+                if next_t.tzinfo is None:
+                    next_t = next_t.replace(tzinfo=timezone.utc)
+                delta = next_t - datetime.now(timezone.utc)
             except Exception:
-                next_t_naive = next_t
-            delta = next_t_naive - datetime.now()
+                delta = timedelta(0)
             total_secs = delta.total_seconds()
             # BUG-L05: clamp negative deltas (overdue jobs) before computing mins/secs
             total_secs = max(0.0, total_secs)
@@ -3257,10 +3258,11 @@ def page_config():
     _next_t = _get_next_autoscan_time()
     if _next_t:
         try:
-            _next_t = _next_t.replace(tzinfo=None)
+            if _next_t.tzinfo is None:
+                _next_t = _next_t.replace(tzinfo=timezone.utc)
+            _delta = _next_t - datetime.now(timezone.utc)
         except Exception:
-            pass
-        _delta = _next_t - datetime.now()
+            _delta = timedelta(0)
         _total_secs_cfg = max(0.0, _delta.total_seconds())  # APP-04: clamp before modulo to avoid -1%60=59
         _m = int(_total_secs_cfg // 60)
         _s = int(_total_secs_cfg % 60)

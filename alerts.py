@@ -196,6 +196,8 @@ def format_scan_alert(results: list, min_confidence: float = 70) -> str | None:
     Includes TP1/TP2/TP3, leverage recommendation, and MTF confirmation.
     Returns None if no signals meet the confidence threshold.
     """
+    if not results:
+        return None
     from datetime import datetime, timezone
     eligible = [r for r in results if r.get("confidence_avg_pct", 0) >= min_confidence]
     if not eligible:
@@ -317,6 +319,8 @@ def format_email_body(results: list, min_confidence: float = 70) -> str | None:
     Includes TP1/TP2/TP3, leverage recommendation, and MTF confirmation.
     Returns None if no eligible signals.
     """
+    if not results:
+        return None
     from datetime import datetime, timezone
     eligible = [r for r in results if r.get("confidence_avg_pct", 0) >= min_confidence]
     if not eligible:
@@ -426,6 +430,8 @@ def format_discord_message(results: list, min_confidence: float = 70) -> str | N
     Discord uses markdown (**, *, ~~, `) not HTML.
     Returns None if no signals meet the threshold.
     """
+    if not results:
+        return None
     from datetime import datetime, timezone
     eligible = [r for r in results if r.get("confidence_avg_pct", 0) >= min_confidence]
     if not eligible:
