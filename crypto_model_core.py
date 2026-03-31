@@ -441,13 +441,21 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
     except Exception as e:
         _e_msg = str(e)
         # Binance fallback: primary exchange doesn't list this pair (common for tier-2 alts on Kraken)
+        # Uses direct Binance REST API — bypasses load_markets()/exchangeInfo which is geo-blocked
+        # on US servers (HTTP 451). fetch_binance_klines() calls /api/v3/klines directly.
         if "does not have market symbol" in _e_msg or "market symbol" in _e_msg.lower():
             try:
-                _binance = get_exchange_instance('binance')
-                if _binance:
-                    ohlcv = _binance.fetch_ohlcv(pair, timeframe, limit=limit)
-                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                import data_feeds as _dff
+                _sym = pair.replace('/', '')  # BTC/USDT → BTCUSDT
+                _klines = _dff.fetch_binance_klines(_sym, timeframe, limit)
+                if _klines:
+                    df = pd.DataFrame(
+                        [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in _klines],
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+                    )
+                    df = df.astype({'open': float, 'high': float, 'low': float,
+                                    'close': float, 'volume': float})
+                    df['timestamp'] = pd.to_datetime(df['timestamp'].astype('int64'), unit='ms')
                     with _OHLCV_CACHE_LOCK:
                         _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
                     return df

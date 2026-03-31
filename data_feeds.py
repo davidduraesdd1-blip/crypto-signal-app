@@ -456,7 +456,7 @@ def get_onchain_metrics(pair: str) -> dict:
         return _fallback_onchain()
 
     try:
-        _COINGECKO_LIMITER.wait()
+        _COINGECKO_LIMITER.acquire()
         url = f"{_CG_BASE}/coins/{coin_id}"
         params = {
             'localization': 'false', 'tickers': 'false',

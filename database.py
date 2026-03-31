@@ -18,9 +18,17 @@ import threading
 import json
 import os
 import logging
+import warnings
 from typing import Optional
 import pandas as pd
 import numpy as np
+
+# pandas 2.x warns on sqlite3 DBAPI2 connections — suppress globally for this module
+warnings.filterwarnings(
+    'ignore',
+    message='pandas only supports SQLAlchemy connectable',
+    category=UserWarning,
+)
 from datetime import datetime, timedelta, timezone
 import concurrent.futures as _cf
 

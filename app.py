@@ -5404,7 +5404,7 @@ def page_market_overview():
                             if len(_rets) >= 2:
                                 _daily_vol = _stat.stdev(_rets)
                                 _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
-                                _sector    = SECTOR_MAP.get(_vp, "other")
+                                _sector    = model.SECTOR_MAP.get(_vp, "other")
                                 _vol_rows.append({
                                     "Asset":    _vp.replace("/USDT", ""),
                                     "Sector":   _sector.replace("_", " ").title(),
