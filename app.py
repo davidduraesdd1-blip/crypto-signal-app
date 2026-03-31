@@ -235,16 +235,19 @@ def _cached_feedback_df() -> "pd.DataFrame":
     return _db.get_feedback_df(limit=500)
 
 
-@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_global_market() -> dict:
-    """Cache CoinGecko global market stats — HTTP call, 5-min TTL."""
+    """Return CoinGecko global market stats. data_feeds.py has its own 5-min in-memory
+    cache so this does not hit the network on every Streamlit re-run. @st.cache_data is
+    intentionally NOT used here — it would lock in the $0M fallback for 5 minutes when
+    CoinGecko rate-limits the first cold-start call, preventing retry on subsequent renders."""
     import data_feeds as _df
     return _df.get_global_market()
 
 
-@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_trending_coins() -> list:
-    """Cache CoinGecko trending coins — HTTP call, 5-min TTL."""
+    """Return CoinGecko trending coins. data_feeds.py has its own in-memory cache.
+    @st.cache_data removed for same reason as _cached_global_market — avoids locking
+    in empty-list fallback when CoinGecko rate-limits on first cold-start call."""
     import data_feeds as _df
     return _df.get_trending_coins()
 
