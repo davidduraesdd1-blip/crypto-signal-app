@@ -454,14 +454,15 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
         return df
     except Exception as e:
         _e_msg = str(e)
-        # OKX REST fallback: Kraken doesn't list tier-2 alts (TRX, XLM, SUI, TAO, etc.)
-        # Uses OKX V5 public candles API (www.okx.com) — confirmed accessible from US Streamlit
-        # Cloud servers. Binance returns HTTP 451 from US IPs; Bybit also times out from US.
-        # OKX is already used successfully for funding rates, OI, and order books in data_feeds.py.
+        # REST fallback chain: Kraken doesn't list tier-2 alts (TRX, XLM, SUI, TAO, etc.)
+        # 1st: OKX V5 (www.okx.com) — confirmed accessible from US Streamlit Cloud servers.
+        # 2nd: Gate.io v4 (api.gateio.ws) — covers tokens OKX doesn't list (e.g. TAO/Bittensor).
+        # Binance returns HTTP 451 from US IPs; Bybit times out from US.
         if "does not have market symbol" in _e_msg or "market symbol" in _e_msg.lower():
+            import data_feeds as _dff
+            # --- OKX fallback ---
             try:
-                import data_feeds as _dff
-                _okx_sym = pair.replace('/', '-')  # BTC/USDT → BTC-USDT (OKX format)
+                _okx_sym = pair.replace('/', '-')  # BTC/USDT → BTC-USDT
                 _klines = _dff.fetch_okx_klines(_okx_sym, timeframe, limit)
                 if _klines:
                     df = pd.DataFrame(
@@ -476,6 +477,23 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
                     return df
             except Exception as _oe:
                 logging.debug("OKX REST fallback %s %s: %s", pair, timeframe, str(_oe)[:80])
+            # --- Gate.io fallback (tokens not listed on OKX, e.g. TAO) ---
+            try:
+                _gateio_sym = pair.replace('/', '_').replace('-', '_')  # BTC/USDT → BTC_USDT
+                _klines = _dff.fetch_gateio_klines(_gateio_sym, timeframe, limit)
+                if _klines:
+                    df = pd.DataFrame(
+                        [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in _klines],
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+                    )
+                    df = df.astype({'open': float, 'high': float, 'low': float,
+                                    'close': float, 'volume': float})
+                    df['timestamp'] = pd.to_datetime(df['timestamp'].astype('int64'), unit='ms')
+                    with _OHLCV_CACHE_LOCK:
+                        _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
+                    return df
+            except Exception as _ge:
+                logging.debug("Gate.io REST fallback %s %s: %s", pair, timeframe, str(_ge)[:80])
         logging.warning(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
         return pd.DataFrame()
 

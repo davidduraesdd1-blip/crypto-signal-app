@@ -397,6 +397,38 @@ def fetch_okx_klines(symbol: str, interval: str = "1h", limit: int = 100) -> lis
     return []
 
 
+def fetch_gateio_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+    """
+    Fetch OHLCV candlestick data from Gate.io v4 spot public API.
+    Gate.io is accessible from US Streamlit Cloud servers and covers tokens not
+    listed on OKX (e.g. TAO/Bittensor).
+    symbol: e.g. "TAO_USDT" (use pair.replace('/', '_').replace('-', '_'))
+    interval: "1h", "4h", "1d", "1w" — mapped to Gate.io values: 1h, 4h, 1d, 7d
+    Returns list of [startTime(int ms), open, high, low, close, volume] rows (oldest-first).
+    Gate.io response: [ts_sec, vol, close, high, low, open, quote_vol, ...]
+    """
+    _interval_map = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                     "1h": "1h", "4h": "4h", "1d": "1d", "1w": "7d"}
+    gateio_interval = _interval_map.get(interval, "1h")
+    limit = min(limit, 1000)  # Gate.io max is 1000 per request
+    try:
+        r = _SESSION.get(
+            "https://api.gateio.ws/api/v4/spot/candlesticks",
+            params={"currency_pair": symbol, "interval": gateio_interval, "limit": limit},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            if isinstance(rows, list) and rows:
+                # Gate.io fields: [ts_sec, vol, close, high, low, open, quote_vol, closed]
+                # Convert to [ts_ms, open, high, low, close, volume]
+                return [[int(row[0]) * 1000, row[5], row[3], row[4], row[2], row[1]]
+                        for row in rows if len(row) >= 6]
+    except Exception as e:
+        logging.debug("[Gate.io klines] %s/%s failed: %s", symbol, interval, e)
+    return []
+
+
 def fetch_bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
     """
     Fetch OHLCV candlestick data from Bybit V5 spot public API.
