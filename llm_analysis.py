@@ -24,6 +24,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ── Credit exhaustion circuit breaker ────────────────────────────────────────
+# Set to True when a 400 "credit balance" error is received from Anthropic.
+# All subsequent Claude calls are skipped until the process restarts.
+# Mirrors the same pattern used in news_sentiment.py.
+_llm_credits_exhausted: bool = False
+_llm_credits_lock = threading.Lock()
+
 _CACHE: dict = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL  = 3600   # 1 hour — re-explain if direction or confidence bucket changes
@@ -58,6 +65,12 @@ def get_signal_explanation(pair: str, result: dict) -> str:
             "AI Analysis unavailable — ANTHROPIC_API_KEY not set. "
             "Add it to your environment variables to enable this feature."
         )
+
+    # Short-circuit if credits are exhausted — avoids repeated 400 errors
+    global _llm_credits_exhausted
+    with _llm_credits_lock:
+        if _llm_credits_exhausted:
+            return "AI Analysis unavailable — Claude API credit balance exhausted."
 
     # Cache key: pair + direction + 5-point confidence bucket
     # LLM-02/03: guard against None and NaN in confidence value
@@ -163,7 +176,7 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
             parsed = json.loads(raw_text)
             text = str(parsed.get("explanation", raw_text)).strip()
         except (json.JSONDecodeError, ValueError, AttributeError):
-            logging.warning("[LLM #31] JSON parse failed for %s — using raw text fallback", pair)
+            logging.debug("[LLM #31] JSON parse failed for %s — using raw text fallback", pair)
             # Strip any stray markdown code fences if present
             text = raw_text.replace("```json", "").replace("```", "").strip()
         with _CACHE_LOCK:
@@ -176,8 +189,16 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
         return text
 
     except Exception as e:
-        logging.warning(f"LLM explanation failed for {pair}: {e}")
-        return f"AI Analysis temporarily unavailable: {str(e)[:500]}"
+        err_str = str(e)
+        # Detect credit exhaustion (HTTP 400 with "credit balance" in body)
+        if "credit" in err_str.lower() and ("400" in err_str or "balance" in err_str.lower()):
+            global _llm_credits_exhausted
+            with _llm_credits_lock:
+                _llm_credits_exhausted = True
+            logging.info("[LLM] Claude credit balance exhausted — disabling LLM explanation calls")
+            return "AI Analysis unavailable — Claude API credit balance exhausted."
+        logging.info(f"LLM explanation failed for {pair}: {err_str[:120]}")
+        return f"AI Analysis temporarily unavailable: {err_str[:200]}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,6 +261,11 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
             pass
     if not api_key:
         return {}
+
+    # Short-circuit if credits are exhausted
+    with _llm_credits_lock:
+        if _llm_credits_exhausted:
+            return {}
 
     cache_key = (
         f"{market_ctx.get('regime','?')}|"
@@ -412,7 +438,10 @@ def generate_signal_story(
         except Exception:
             pass
 
-    if not api_key:
+    # Short-circuit if credits are exhausted
+    with _llm_credits_lock:
+        _credits_gone = _llm_credits_exhausted
+    if not api_key or _credits_gone:
         text = _rule_based_story(pair, signal, confidence, indicators)
         with _STORY_CACHE_LOCK:
             _STORY_CACHE[cache_key] = {"text": text, "_ts": now}

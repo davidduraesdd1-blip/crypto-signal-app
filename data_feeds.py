@@ -275,7 +275,7 @@ def get_funding_rate(pair: str) -> dict:
     try:
         resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
         if resp.status_code == 429:
-            logging.warning(f"OKX funding rate: rate limited (429) for {pair}")
+            logging.debug(f"OKX funding rate: rate limited (429) for {pair}")
         elif resp.status_code == 200:
             data = resp.json()
             items = data.get("data", [])
@@ -292,7 +292,7 @@ def get_funding_rate(pair: str) -> dict:
     try:
         resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
         if resp.status_code == 429:
-            logging.warning(f"Bybit funding rate: rate limited (429) for {pair}")
+            logging.debug(f"Bybit funding rate: rate limited (429) for {pair}")
         elif resp.status_code == 200:
             data = resp.json()
             items = data.get("result", {}).get("list", [])
@@ -462,7 +462,36 @@ def fetch_bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> l
 
 
 def _fetch_binance_24hr(symbol: str) -> dict | None:
-    """Fetch 24hr stats from Binance spot API. Returns raw dict or None."""
+    """Fetch 24hr stats. Primary: OKX ticker (accessible from US Cloud). Fallback: Binance.
+    Returns a dict with keys matching Binance 24hr ticker format (normalised).
+    """
+    # OKX primary
+    okx_sym = symbol  # e.g. BTCUSDT
+    if okx_sym.endswith("USDT"):
+        okx_sym = okx_sym[:-4] + "-USDT"
+    try:
+        r = _SESSION.get(
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": okx_sym},
+            timeout=6,
+        )
+        if r.status_code == 200:
+            data_list = r.json().get("data", [])
+            if data_list:
+                d = data_list[0]
+                # Normalise to Binance-compatible keys used by get_onchain_metrics()
+                last_price = float(d.get("last", 0) or 0)
+                open_24h   = float(d.get("open24h", 0) or 0)
+                pct_change = ((last_price - open_24h) / open_24h * 100) if open_24h > 0 else 0.0
+                return {
+                    "lastPrice":          str(last_price),
+                    "priceChangePercent": str(round(pct_change, 4)),
+                    "quoteVolume":        str(float(d.get("volCcy24h", 0) or 0)),
+                    "_source":            "okx",
+                }
+    except Exception as e:
+        logging.debug("[OKX 24hr] %s failed: %s", symbol, e)
+    # Binance fallback (may be geo-blocked on US Cloud but try anyway)
     try:
         r = _SESSION.get(
             f"{_BINANCE_SPOT_BASE}/ticker/24hr",
@@ -565,7 +594,7 @@ def get_onchain_metrics(pair: str) -> dict:
         }
         resp = _SESSION.get(url, params=params, timeout=10)
         if resp.status_code == 429:
-            logging.warning(f"CoinGecko rate limited (429) for {pair} — using fallback")
+            logging.debug(f"CoinGecko rate limited (429) for {pair} — using fallback")
             _fb = {**_fallback_onchain(), '_ts': now}
             with _ONCHAIN_CACHE_LOCK:
                 _ONCHAIN_CACHE[pair] = _fb
@@ -601,7 +630,7 @@ def get_onchain_metrics(pair: str) -> dict:
         return result
 
     except Exception as e:
-        logging.warning(f"CoinGecko onchain fetch failed for {pair}: {e}")
+        logging.debug(f"CoinGecko onchain fetch failed for {pair}: {e}")
         _fb = {**_fallback_onchain(), '_ts': now}
         with _ONCHAIN_CACHE_LOCK:
             _ONCHAIN_CACHE[pair] = _fb
@@ -652,7 +681,7 @@ def get_open_interest(pair: str) -> dict:
                     _OI_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.warning(f"OI fetch failed for {pair}: {e}")
+        logging.debug(f"OI fetch failed for {pair}: {e}")
 
     result = {'oi_usd': 0.0, 'signal': 'N/A', 'error': 'OI unavailable', '_ts': now}
     with _OI_CACHE_LOCK:
@@ -730,7 +759,7 @@ def get_options_iv(pair: str) -> dict:
                     _IV_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.warning(f"Deribit IV fetch failed for {pair}: {e}")
+        logging.debug(f"Deribit IV fetch failed for {pair}: {e}")
 
     result = {'iv': 0.0, 'iv_percentile': 50.0, 'signal': 'N/A', 'source': None,
               'error': 'IV unavailable', '_ts': now}
@@ -800,7 +829,7 @@ def get_orderbook_depth(pair: str, levels: int = 20) -> dict:
                     _OB_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.warning(f"OB depth fetch failed for {pair}: {e}")
+        logging.debug(f"OB depth fetch failed for {pair}: {e}")
 
     result = {'imbalance': 0.0, 'signal': 'N/A', 'bid_vol': 0.0, 'ask_vol': 0.0,
               'error': 'OB unavailable', '_ts': now}
@@ -903,7 +932,7 @@ def _fetch_kucoin_fr(pair: str, now: float) -> dict:
         url  = _KUCOIN_FUNDING_URL.format(symbol=sym)
         resp = _SESSION.get(url, timeout=6)
         if resp.status_code == 429:
-            logging.warning(f"KuCoin funding rate: rate limited (429) for {pair}")
+            logging.debug(f"KuCoin funding rate: rate limited (429) for {pair}")
             return _empty_result("KuCoin: rate limited", now)
         if resp.status_code == 200:
             data = resp.json()
@@ -1318,7 +1347,7 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
             _LC_CACHE[pair] = err_result
         return err_result
     except Exception as e:
-        logging.warning(f"LunarCrush fetch failed for {pair}: {e}")
+        logging.debug(f"LunarCrush fetch failed for {pair}: {e}")
         err_result = {**_no_key_result("lunarcrush", str(e)), "_ts": now}
         with _LC_CACHE_LOCK:
             _LC_CACHE[pair] = err_result
@@ -1388,7 +1417,7 @@ def get_coinglass_liquidations(pair: str) -> dict:
             _CG_LIQ_CACHE[pair] = err_result
         return err_result
     except Exception as e:
-        logging.warning(f"Coinglass liquidation fetch failed for {pair}: {e}")
+        logging.debug(f"Coinglass liquidation fetch failed for {pair}: {e}")
         err_result = {**_no_key_result("coinglass", str(e)), "_ts": now}
         with _CG_LIQ_LOCK:
             _CG_LIQ_CACHE[pair] = err_result
@@ -1468,7 +1497,7 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
             _CQ_CACHE[pair] = err_result
         return err_result
     except Exception as e:
-        logging.warning(f"CryptoQuant flow fetch failed for {pair}: {e}")
+        logging.debug(f"CryptoQuant flow fetch failed for {pair}: {e}")
         err_result = {**_no_key_result("cryptoquant", str(e)), "_ts": now}
         with _CQ_LOCK:
             _CQ_CACHE[pair] = err_result
@@ -1534,14 +1563,14 @@ def get_glassnode_onchain(pair: str) -> dict:
                 if d and isinstance(d, list) and d[-1].get("v") is not None:
                     sopr = round(float(d[-1]["v"]), 3)
         except Exception as _e:
-            logging.warning("Glassnode SOPR parse error: %s", _e)
+            logging.debug("Glassnode SOPR parse error: %s", _e)
         try:
             if mvrv_resp.status_code == 200:
                 d = mvrv_resp.json()
                 if d and isinstance(d, list) and d[-1].get("v") is not None:
                     mvrv_z = round(float(d[-1]["v"]), 2)
         except Exception as _e:
-            logging.warning("Glassnode MVRV-Z parse error: %s", _e)
+            logging.debug("Glassnode MVRV-Z parse error: %s", _e)
 
         # Composite signal: SOPR < 1 (capitulation) + MVRV-Z < 0 (undervalued) = BULLISH
         if sopr is not None and mvrv_z is not None:
@@ -1561,7 +1590,7 @@ def get_glassnode_onchain(pair: str) -> dict:
             _GN_CACHE[pair] = result
         return result
     except Exception as e:
-        logging.warning(f"Glassnode fetch failed for {pair}: {e}")
+        logging.debug(f"Glassnode fetch failed for {pair}: {e}")
         return _no_key_result("glassnode", str(e))
 
 
@@ -1755,7 +1784,7 @@ def get_token_unlock_schedule(pair: str) -> dict:
             _UNLOCK_CACHE[pair] = result
         return result
     except Exception as e:
-        logging.warning(f"Token unlock fetch failed for {pair}: {e}")
+        logging.debug(f"Token unlock fetch failed for {pair}: {e}")
         result = {
             "signal": "N/A", "next_unlock_days": None, "unlock_pct_supply": None,
             "source": "tokenomist", "error": str(e), "_ts": now,
@@ -2208,7 +2237,7 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
         return {k: v for k, v in result.items() if k != "_ts"}
 
     except Exception as e:
-        logging.warning("[CVD-Div] %s: %s", symbol, e)
+        logging.debug("[CVD-Div] %s: %s", symbol, e)
         result = {**_neutral, "error": str(e)[:120], "_ts": now}
         with _CVD_DIV_LOCK:
             _CVD_DIV_CACHE[cache_key] = result
@@ -2753,7 +2782,7 @@ def get_fear_greed() -> dict:
             _FNG2_CACHE.update({**result, "_ts": now})
         return result
     except Exception as e:
-        logging.warning("Fear & Greed fetch failed: %s", e)
+        logging.debug("Fear & Greed fetch failed: %s", e)
         return {"value": 50, "label": "Neutral", "bias": 0.0, "signal": "NEUTRAL", "error": str(e)}
 
 
@@ -3079,7 +3108,8 @@ _TAKER_RATIO_LOCK = threading.Lock()
 def get_taker_buy_sell_ratio(pair: str) -> dict:
     """
     Fetch taker buy/sell volume ratio.
-    Primary: Bybit v5 (no US geo-block). fapi.binance.com removed — geo-blocked.
+    Primary: OKX v5 taker stats (accessible from US Streamlit Cloud).
+    Fallback: Bybit v5 (may time out from US Cloud — kept as secondary).
     Reflects aggressive order flow: >0.55 buy_pct = buy-side pressure.
 
     Returns: buy_pct, sell_pct, signal, source, cached_at
@@ -3094,32 +3124,67 @@ def get_taker_buy_sell_ratio(pair: str) -> dict:
 
     result = None
 
-    # --- Bybit v5 (primary — no US geo-block) ---
+    # --- OKX primary (accessible from US Streamlit Cloud) ---
+    # OKX provides taker volume via /api/v5/rubik/stat/taker-volume
+    okx_sym = pair.replace("/", "").upper()
+    if okx_sym.endswith("USDT"):
+        okx_ccy = okx_sym[:-4]  # BTC
+    else:
+        okx_ccy = okx_sym.rstrip("USDTBTCETH")
     try:
         resp = _SESSION.get(
-            "https://api.bybit.com/v5/market/taker-volume",
-            params={"category": "linear", "symbol": symbol, "period": "5min", "limit": 1},
-            timeout=6,
+            "https://www.okx.com/api/v5/rubik/stat/taker-volume",
+            params={"ccy": okx_ccy, "instType": "contracts", "period": "5m"},
+            timeout=5,
         )
-        resp.raise_for_status()
-        rows = resp.json().get("result", {}).get("list", [])
-        if rows:
-            row = rows[0]
-            buy_ratio  = float(row.get("buyRatio", 0.5))
-            sell_ratio = float(row.get("sellRatio", 0.5))
-            total      = buy_ratio + sell_ratio
-            buy_pct    = buy_ratio / total if total > 0 else 0.5
-            sell_pct   = 1.0 - buy_pct
-            signal     = "BUY_DOMINANT" if buy_pct > 0.55 else ("SELL_DOMINANT" if buy_pct < 0.45 else "BALANCED")
-            result = {
-                "buy_pct": round(buy_pct, 4),
-                "sell_pct": round(sell_pct, 4),
-                "signal": signal,
-                "source": "bybit",
-                "cached_at": now,
-            }
+        if resp.status_code == 200:
+            rows = resp.json().get("data", [])
+            if rows:
+                row = rows[0]  # most recent [ts, sellVol, buyVol]
+                sell_vol = float(row[1]) if len(row) > 1 else 0.0
+                buy_vol  = float(row[2]) if len(row) > 2 else 0.0
+                total = buy_vol + sell_vol
+                if total > 0:
+                    buy_pct  = buy_vol / total
+                    sell_pct = sell_vol / total
+                    signal   = "BUY_DOMINANT" if buy_pct > 0.55 else ("SELL_DOMINANT" if buy_pct < 0.45 else "BALANCED")
+                    result = {
+                        "buy_pct": round(buy_pct, 4),
+                        "sell_pct": round(sell_pct, 4),
+                        "signal": signal,
+                        "source": "okx",
+                        "cached_at": now,
+                    }
     except Exception as e:
-        logging.debug("Bybit taker buy/sell ratio failed for %s: %s", symbol, e)
+        logging.debug("OKX taker buy/sell ratio failed for %s: %s", symbol, e)
+
+    # --- Bybit fallback (may time out from US Cloud — reduced timeout to avoid hanging) ---
+    if result is None:
+        try:
+            resp = _SESSION.get(
+                "https://api.bybit.com/v5/market/taker-volume",
+                params={"category": "linear", "symbol": symbol, "period": "5min", "limit": 1},
+                timeout=4,
+            )
+            resp.raise_for_status()
+            rows = resp.json().get("result", {}).get("list", [])
+            if rows:
+                row = rows[0]
+                buy_ratio  = float(row.get("buyRatio", 0.5))
+                sell_ratio = float(row.get("sellRatio", 0.5))
+                total      = buy_ratio + sell_ratio
+                buy_pct    = buy_ratio / total if total > 0 else 0.5
+                sell_pct   = 1.0 - buy_pct
+                signal     = "BUY_DOMINANT" if buy_pct > 0.55 else ("SELL_DOMINANT" if buy_pct < 0.45 else "BALANCED")
+                result = {
+                    "buy_pct": round(buy_pct, 4),
+                    "sell_pct": round(sell_pct, 4),
+                    "signal": signal,
+                    "source": "bybit",
+                    "cached_at": now,
+                }
+        except Exception as e:
+            logging.debug("Bybit taker buy/sell ratio failed for %s: %s", symbol, e)
 
     if result is None:
         result = {"error": "all sources failed", "signal": "UNKNOWN", "cached_at": now}
@@ -4214,13 +4279,15 @@ def fetch_pi_cycle_top() -> dict:
 
     def _fetch():
         try:
-            url = "https://api.binance.com/api/v3/klines"
-            params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 500}
-            resp = _SESSION.get(url, params=params, timeout=15)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            closes = [float(k[4]) for k in data if k[4]]
+            # Primary: OKX (US-accessible — Binance returns HTTP 451 from US Streamlit Cloud)
+            okx_rows = fetch_okx_klines("BTC-USDT", interval="1d", limit=500)
+            if okx_rows and len(okx_rows) >= 380:
+                closes = [float(r[4]) for r in okx_rows if len(r) >= 5]
+            else:
+                # Fallback: Gate.io (timeout=5, no retry adapter)
+                import requests as _req_direct2
+                gateio_rows = fetch_gateio_klines("BTC_USDT", interval="1d", limit=500)
+                closes = [float(r[4]) for r in gateio_rows if len(r) >= 5] if gateio_rows else []
             if len(closes) < 380:   # 30-point buffer beyond 350 required
                 return None
 
@@ -4285,20 +4352,30 @@ def fetch_sparkline_closes(pair: str, n: int = 24) -> list[float]:
             return entry["data"]
 
     try:
-        symbol = pair.replace("/", "")
-        url = (
-            f"https://api.binance.com/api/v3/klines"
-            f"?symbol={symbol}&interval=1h&limit={n}"
-        )
-        resp = _SESSION.get(url, timeout=6)
-        resp.raise_for_status()
-        closes = [float(k[4]) for k in resp.json() if k[4]]
-        with _SPARKLINE_LOCK:
-            _SPARKLINE_CACHE[cache_key] = {"data": closes, "_ts": time.time()}
-        return closes
+        # Primary: OKX (US-accessible — Binance returns HTTP 451 from US Streamlit Cloud)
+        okx_sym = pair.replace("/", "-")  # BTC/USDT → BTC-USDT
+        okx_rows = fetch_okx_klines(okx_sym, interval="1h", limit=n)
+        if okx_rows:
+            closes = [float(r[4]) for r in okx_rows if len(r) >= 5]
+            if closes:
+                with _SPARKLINE_LOCK:
+                    _SPARKLINE_CACHE[cache_key] = {"data": closes, "_ts": time.time()}
+                return closes
     except Exception as e:
-        logging.debug("[Sparkline] %s fetch failed: %s", pair, e)
-        return []
+        logging.debug("[Sparkline] OKX %s fetch failed: %s", pair, e)
+    try:
+        # Fallback: Gate.io (covers tokens not on OKX)
+        gateio_sym = pair.replace("/", "_").replace("-", "_")
+        gateio_rows = fetch_gateio_klines(gateio_sym, interval="1h", limit=n)
+        if gateio_rows:
+            closes = [float(r[4]) for r in gateio_rows if len(r) >= 5]
+            if closes:
+                with _SPARKLINE_LOCK:
+                    _SPARKLINE_CACHE[cache_key] = {"data": closes, "_ts": time.time()}
+                return closes
+    except Exception as e:
+        logging.debug("[Sparkline] Gate.io %s fetch failed: %s", pair, e)
+    return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4335,16 +4412,20 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
         "coindcx_inr": None, "coindcx_usd_equiv": None, "errors": [],
     }
 
-    # 1. Binance baseline
+    # 1. OKX baseline (US-accessible — replaces Binance which returns HTTP 451 from US)
     try:
+        okx_sym = pair.replace("/", "-")  # BTC/USDT → BTC-USDT
         r = _SESSION.get(
-            f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}",
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": okx_sym},
             timeout=5,
         )
         if r.status_code == 200:
-            result["binance_price"] = float(r.json().get("price", 0) or 0)
+            _okx_data = r.json().get("data", [])
+            if _okx_data and r.json().get("code") == "0":
+                result["binance_price"] = float(_okx_data[0].get("last", 0) or 0)
     except Exception as e:
-        result["errors"].append(f"binance:{e}")
+        result["errors"].append(f"okx:{e}")
 
     # 2. MEXC — same symbol format, no auth required
     try:
@@ -4385,14 +4466,9 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
                 if t.get("market") == target_market:
                     last_inr = float(t.get("last_price", 0) or 0)
                     result["coindcx_inr"] = last_inr
-                    try:
-                        r2 = _SESSION.get(
-                            "https://api.binance.com/api/v3/ticker/price?symbol=USDTINR",
-                            timeout=4,
-                        )
-                        inr_rate = float(r2.json().get("price", 83.5) or 83.5) if r2.status_code == 200 else 83.5
-                    except Exception:
-                        inr_rate = 83.5
+                    # Binance does not offer INR pairs and is geo-blocked on US Cloud.
+                    # Use hardcoded fallback rate (approximately ₹83–85/USD as of 2025).
+                    inr_rate = 83.5
                     result["coindcx_usd_equiv"] = round(last_inr / inr_rate, 2) if inr_rate > 0 else None
                     break
     except Exception as e:
@@ -4631,7 +4707,7 @@ def fetch_deribit_options_data() -> dict:
             _DERIBIT_OI_CACHE["ts"]   = now
         return result
     except Exception as e:
-        logging.warning("[DeribitOI] fetch failed: %s", e)
+        logging.debug("[DeribitOI] fetch failed: %s", e)
         return {**_neutral, "error": str(e)[:120]}
 
 
@@ -4674,7 +4750,23 @@ def _fetch_fx_rates() -> dict:
 
 
 def _fetch_binance_btc_price() -> float:
-    """Fetch current BTC/USDT price from Binance spot."""
+    """Fetch current BTC/USDT price. Primary: OKX (accessible from US Cloud). Fallback: Binance."""
+    # OKX primary
+    try:
+        r = _SESSION.get(
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": "BTC-USDT"},
+            timeout=6,
+        )
+        if r.status_code == 200:
+            data_list = r.json().get("data", [])
+            if data_list:
+                price = float(data_list[0].get("last", 0) or 0)
+                if price > 0:
+                    return price
+    except Exception as e:
+        logging.debug("[RegionalPrem] OKX BTC price failed: %s", e)
+    # Binance fallback (geo-blocked on US Cloud but try anyway)
     try:
         r = _SESSION.get(
             f"{_BINANCE_SPOT_BASE}/ticker/price",
@@ -4812,7 +4904,7 @@ def fetch_regional_premiums() -> dict:
         return result
 
     except Exception as e:
-        logging.warning("[RegionalPrem] fetch failed: %s", e)
+        logging.debug("[RegionalPrem] fetch failed: %s", e)
         return {**_neutral, "error": str(e)[:120]}
 
 
@@ -4918,7 +5010,7 @@ def fetch_cmc_global_metrics() -> dict:
         return result
 
     except Exception as e:
-        logging.warning("[CMC] global metrics fetch failed: %s", e)
+        logging.debug("[CMC] global metrics fetch failed: %s", e)
         return {
             "total_market_cap_usd": 0.0, "btc_dominance_pct": 0.0,
             "eth_dominance_pct": 0.0, "total_volume_24h": 0.0,
@@ -5041,7 +5133,7 @@ def fetch_deribit_pcr(currency: str = "BTC") -> dict:
             _PCR_CACHE["ts"]   = now
         return result
     except Exception as e:
-        logging.warning("[PCR] fetch_deribit_pcr failed: %s", e)
+        logging.debug("[PCR] fetch_deribit_pcr failed: %s", e)
         return {**_neutral, "error": str(e)[:120]}
 
 
@@ -5220,18 +5312,32 @@ def fetch_bitget_price(symbol: str) -> "Optional[float]":
 
 
 def _fetch_binance_spot_price(symbol: str) -> "Optional[float]":
-    """Fetch last price from Binance spot public API. symbol = e.g. 'BTCUSDT'."""
+    """Fetch last price from OKX spot public API (was Binance — geo-blocked on US Cloud).
+    symbol: Binance-format string e.g. 'BTCUSDT' — converted to OKX format 'BTC-USDT'.
+    """
+    sym = symbol.upper().replace("/", "")
+    # Convert BTCUSDT → BTC-USDT for OKX
+    if sym.endswith("USDT"):
+        okx_sym = sym[:-4] + "-USDT"
+    elif sym.endswith("BTC"):
+        okx_sym = sym[:-3] + "-BTC"
+    elif sym.endswith("ETH"):
+        okx_sym = sym[:-3] + "-ETH"
+    else:
+        okx_sym = sym  # best-effort
     try:
         resp = _SESSION.get(
-            f"https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": symbol.upper().replace("/", "")},
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": okx_sym},
             timeout=6,
         )
         if resp.status_code == 200:
-            price = float(resp.json().get("price", 0) or 0)
-            return price if price > 0 else None
+            data_list = resp.json().get("data", [])
+            if data_list:
+                price = float(data_list[0].get("last", 0) or 0)
+                return price if price > 0 else None
     except Exception as e:
-        logging.debug("[Binance spot] price fetch failed for %s: %s", symbol, e)
+        logging.debug("[OKX spot] price fetch failed for %s: %s", symbol, e)
     return None
 
 
@@ -5282,7 +5388,7 @@ def fetch_exchange_price_comparison(base_pair: str = "BTC/USDT") -> dict:
             "bitget":   f_bitget.result(),
         }
     except Exception as e:
-        logging.warning("[ExchCompare] parallel fetch failed for %s: %s", base_pair, e)
+        logging.debug("[ExchCompare] parallel fetch failed for %s: %s", base_pair, e)
         result = {**_neutral, "error": str(e)[:80], "_ts": now}
         with _EXCH_COMPARE_LOCK:
             _EXCH_COMPARE_CACHE[cache_key] = result
@@ -5403,17 +5509,21 @@ def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
                 # in BRL, ARS) a live Binance USDT{currency} fetch is attempted first.
                 mxn_rate = 17.0  # hardcoded fallback for MXN
                 if currency != "MXN":
+                    # Attempt OKX FX rate for non-MXN currencies (Binance removed — geo-blocked)
                     try:
-                        fx_sym = f"USDT{currency}"
+                        fx_sym = f"{currency}-USDT"
                         r2 = _SESSION.get(
-                            "https://api.binance.com/api/v3/ticker/price",
-                            params={"symbol": fx_sym},
+                            "https://www.okx.com/api/v5/market/ticker",
+                            params={"instId": fx_sym},
                             timeout=4,
                         )
                         if r2.status_code == 200:
-                            _fx_price = float(r2.json().get("price", 0) or 0)
-                            if _fx_price > 0:
-                                mxn_rate = _fx_price
+                            _data_list = r2.json().get("data", [])
+                            if _data_list:
+                                _fx_price = float(_data_list[0].get("last", 0) or 0)
+                                if _fx_price > 0:
+                                    # OKX returns CURRENCY/USDT, invert to get USDT/CURRENCY
+                                    mxn_rate = 1.0 / _fx_price if _fx_price else mxn_rate
                     except Exception:
                         pass
                 price_usd = round(last_local / mxn_rate, 2) if mxn_rate > 0 else None
@@ -5462,17 +5572,9 @@ def fetch_coindcx_price(pair: str = "BTCINR") -> "Optional[float]":
                     last_local = float(ticker.get("last_price", 0) or 0)
                     if last_local > 0:
                         # Fetch INR/USD rate
+                        # Binance does not offer INR pairs and is geo-blocked on US Cloud.
+                        # Use hardcoded fallback; update periodically if needed.
                         inr_rate = 83.0
-                        try:
-                            r2 = _SESSION.get(
-                                "https://api.binance.com/api/v3/ticker/price",
-                                params={"symbol": "USDTINR"},
-                                timeout=4,
-                            )
-                            if r2.status_code == 200:
-                                inr_rate = float(r2.json().get("price", 83.0) or 83.0)
-                        except Exception:
-                            pass
                         price_usd = round(last_local / inr_rate, 2) if inr_rate > 0 else None
                         if price_usd and price_usd > 0:
                             with _COINDCX_PRICE_LOCK:
@@ -5512,19 +5614,23 @@ def fetch_regional_price_comparison(base: str = "BTC") -> dict:
             return r
 
     sym = f"{base.upper()}USDT"
+    okx_sym = f"{base.upper()}-USDT"
     errors: list = []
 
+    # "binance_usd" key retained for API compatibility; fetched from OKX (Binance geo-blocked)
     binance_usd = None
     try:
         _resp = _SESSION.get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": sym},
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": okx_sym},
             timeout=6,
         )
         if _resp.status_code == 200:
-            binance_usd = float(_resp.json().get("price", 0) or 0) or None
+            _data_list = _resp.json().get("data", [])
+            if _data_list:
+                binance_usd = float(_data_list[0].get("last", 0) or 0) or None
     except Exception as e:
-        errors.append(f"binance:{e}")
+        errors.append(f"okx:{e}")
 
     mexc_usd = None
     try:
@@ -5666,10 +5772,10 @@ def fetch_dex_vs_cex_spread(symbol: str = "BTC") -> dict:
             return _cached_out
 
     dydx_market = f"{sym_upper}-USD"
-    binance_sym = f"{sym_upper}USDT"
+    okx_sym = f"{sym_upper}-USDT"
 
     dydx_price = None
-    binance_price = None
+    binance_price = None  # key retained for API compatibility; sourced from OKX
 
     try:
         dydx_price = fetch_dydx_price(dydx_market)
@@ -5677,15 +5783,18 @@ def fetch_dex_vs_cex_spread(symbol: str = "BTC") -> dict:
         logging.debug("[DEX vs CEX] dYdX fetch failed: %s", e)
 
     try:
+        # Binance is geo-blocked on US Streamlit Cloud — use OKX spot price instead
         _resp = _SESSION.get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": binance_sym},
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": okx_sym},
             timeout=6,
         )
         if _resp.status_code == 200:
-            binance_price = float(_resp.json().get("price", 0) or 0) or None
+            _data_list = _resp.json().get("data", [])
+            if _data_list:
+                binance_price = float(_data_list[0].get("last", 0) or 0) or None
     except Exception as e:
-        logging.debug("[DEX vs CEX] Binance fetch failed: %s", e)
+        logging.debug("[DEX vs CEX] OKX fetch failed: %s", e)
 
     spread_pct = 0.0
     basis = 0.0
@@ -5864,12 +5973,12 @@ def validate_api_keys() -> dict:
     """
     results: dict = {}
 
-    # Binance public API (no key needed)
+    # OKX public API (replaces Binance — geo-blocked from US Streamlit Cloud)
     try:
-        r = _SESSION.get("https://api.binance.com/api/v3/ping", timeout=5)
-        results["binance"] = "ok" if r.status_code == 200 else f"HTTP {r.status_code}"
+        r = _SESSION.get("https://www.okx.com/api/v5/public/time", timeout=5)
+        results["okx"] = "ok" if r.status_code == 200 else f"HTTP {r.status_code}"
     except Exception:
-        results["binance"] = "error"
+        results["okx"] = "error"
 
     # CoinGecko
     try:

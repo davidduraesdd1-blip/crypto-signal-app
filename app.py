@@ -443,7 +443,7 @@ def _setup_calibration_job():
                     result.get("direction"), result.get("new_threshold", 0), result.get("samples", 0),
                 )
         except Exception as e:
-            logging.warning("[Calibration] Failed: %s", e)
+            logging.info("[Calibration] Failed: %s", e)
 
     sched = _scheduler
     if sched and not sched.get_job(_CALIBRATION_JOB_ID):

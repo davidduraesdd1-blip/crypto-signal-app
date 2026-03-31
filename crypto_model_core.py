@@ -423,7 +423,7 @@ def get_exchange_instance(name='kraken'):
             return ex
         except Exception as e:
             _exchange_failures.add(name)  # cache failure — suppress future spam
-            logging.warning(f"Exchange {name} failed: {str(e)[:60]}")
+            logging.debug(f"Exchange {name} failed: {str(e)[:60]}")
             return None
 
 def robust_fetch_ticker(ex, pair):
@@ -494,7 +494,7 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
                     return df
             except Exception as _ge:
                 logging.debug("Gate.io REST fallback %s %s: %s", pair, timeframe, str(_ge)[:80])
-        logging.warning(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
+        logging.debug(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
         return pd.DataFrame()
 
 
@@ -532,7 +532,7 @@ def fetch_fear_greed():
     try:
         r = _http_session.get("https://api.alternative.me/fng/?limit=1", timeout=10)
         if r.status_code != 200:
-            logging.warning(f"Fear & Greed API returned HTTP {r.status_code}")
+            logging.debug(f"Fear & Greed API returned HTTP {r.status_code}")
             return 50, "Neutral"
         _fng_list = r.json().get('data', [])
         if not _fng_list:
@@ -540,7 +540,7 @@ def fetch_fear_greed():
         data = _fng_list[0]
         return int(data.get('value', 50)), data.get('value_classification', 'Neutral')
     except Exception as e:
-        logging.warning(f"Fear & Greed fetch failed: {e}")
+        logging.debug(f"Fear & Greed fetch failed: {e}")
         return 50, "Neutral"
 
 # ──────────────────────────────────────────────
@@ -1217,7 +1217,7 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
         consensus = len([v for v in votes if abs(v) > 70]) / len(votes) if votes else 0.0
         return final_vote, reasons, consensus, votes_dict
     except Exception as e:
-        logging.warning(f"Multi-agent vote failed: {e}")
+        logging.info(f"Multi-agent vote failed: {e}")
         return 0.0, [], 0.0, _empty
 
 # ──────────────────────────────────────────────
@@ -2493,7 +2493,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                     z_score, stat_arb_signal = compute_cointegration_zscore(_df_btc, df)
                     score += get_stat_arb_bias(z_score, stat_arb_signal) * w.get('stat_arb', 0.15)
             except Exception as e:
-                logging.warning(f"StatArb failed {pair} {tf}: {e}")
+                logging.debug(f"StatArb failed {pair} {tf}: {e}")
 
         # T1-2: RL Regime Adapter — scale score based on historical per-regime win rate
         rl_mult = get_rl_regime_multiplier(regime)
@@ -2526,7 +2526,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                 supertrend_str, sr_str, regime_str, strategy_bias,
                 agent_score, consensus, stat_arb_signal, agent_votes)
     except Exception as e:
-        logging.warning(f"Signal calc failed {pair} {tf}: {e}")
+        logging.info(f"Signal calc failed {pair} {tf}: {e}")
         return 0, False, "None", "N/A", "N/A", "N/A", "N/A", "Balanced", 0.0, 0.0, "NEUTRAL", {}
 
 def get_signal_direction(confidence):
@@ -4310,7 +4310,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
             _fng_result[0] = val
             _fng_result[1] = cat
         except Exception as _e:
-            logging.warning(f"pre-scan fear_greed fetch failed: {_e}")
+            logging.debug(f"pre-scan fear_greed fetch failed: {_e}")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _pre3_ex:
         _f1 = _pre3_ex.submit(_pre_kelly)
@@ -4320,7 +4320,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
             try:
                 _f.result()
             except Exception as _fe:
-                logging.warning(f"pre-scan parallel task failed: {_fe}")
+                logging.debug(f"pre-scan parallel task failed: {_fe}")
 
     fng_value, fng_category = _fng_result[0], _fng_result[1]
 
@@ -4342,7 +4342,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         try:
             return fn(*args)
         except Exception as e:
-            logging.warning(f"{label} fetch failed: {e}")
+            logging.debug(f"{label} fetch failed: {e}")
             return default
 
     # ── Build scan list — optionally append Tier 2 Binance pairs (#88) ────────
@@ -4419,7 +4419,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         ohlcv_btc = ta_ex.fetch_ohlcv('BTC/USDT', '1d', limit=STAT_ARB_LOOKBACK)
         btc_df_for_scan = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     except Exception as _e:
-        logging.warning(f"StatArb BTC/USDT pre-fetch failed: {_e}")
+        logging.debug(f"StatArb BTC/USDT pre-fetch failed: {_e}")
 
     # A6: OHLCV pre-fetch phase — pure I/O, no analysis yet.
     # Fetches all pair × timeframe combinations in parallel so the per-pair
@@ -4471,7 +4471,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
                 if result:
                     pair_results[pair] = result
             except Exception as e:
-                logging.warning(f"[scan] {pair} failed: {e}")
+                logging.info(f"[scan] {pair} failed: {e}")
 
     # Restore original scan order: Tier 1 first, then Tier 2 appended
     results = [pair_results[p] for p in _scan_pairs if p in pair_results]
@@ -5097,7 +5097,7 @@ def compute_correlation_matrix(pairs=None, lookback_days=30, tf='1d'):
             label = pair.replace('/USDT', '').replace('/USD', '')
             closes[label] = [o[4] for o in ohlcv[-lookback_days:]]
         except Exception as e:
-            logging.warning(f"compute_correlation_matrix: fetch failed for {pair}: {e}")
+            logging.debug(f"compute_correlation_matrix: fetch failed for {pair}: {e}")
 
     if len(closes) < 2:
         return None, f"Not enough pairs returned data (got {len(closes)})"
@@ -5141,7 +5141,7 @@ def run_cointegration_scan(pairs=None, tf='1d', lookback=100):
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             closes[pair] = df['close'].values[-lookback:]
         except Exception as e:
-            logging.warning(f"run_cointegration_scan: fetch failed {pair}: {e}")
+            logging.debug(f"run_cointegration_scan: fetch failed {pair}: {e}")
 
     valid_pairs = list(closes.keys())
     if len(valid_pairs) < 2:
