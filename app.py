@@ -7171,6 +7171,12 @@ def page_agent():
         _lg = "LangGraph state machine" if status.get("langgraph") else "Sequential pipeline (LangGraph not installed)"
         st.metric("Engine", _lg)
 
+    # Show in-progress indicator when a cycle is actively running
+    _cur = status.get("current_pair", "")
+    _elapsed = status.get("cycle_elapsed_s", 0)
+    if is_running and _cur:
+        st.info(f"⏳ Processing {_cur} — cycle running for {_elapsed}s")
+
     # ── Config form ──
     st.markdown("---")
     _ui.section_header("Agent Configuration",

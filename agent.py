@@ -295,8 +295,9 @@ def _node_enrich_signals(state: AgentState) -> AgentState:
         model  = _get_model()
         result = model.scan_single_pair(state["pair"])  # BUG-AGENT01: was model._scan_pair(pair) — missing 10 required args
         state["signal_result"] = result or {}
+        sig = state["signal_result"]
         state["cycle_notes"].append(
-            f"Signal: {result.get('direction','?')} conf={result.get('confidence_avg_pct',0):.1f}%"
+            f"Signal: {sig.get('direction','?')} conf={sig.get('confidence_avg_pct',0):.1f}%"
         )
     except Exception as exc:
         logger.error("[agent] enrich_signals %s: %s", state["pair"], exc)
@@ -828,12 +829,14 @@ class AgentSupervisor:
         self._kill_event    = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._graph         = None    # compiled LangGraph (lazy, reused across cycles)
-        self._restart_count = 0
-        self._last_run_ts   = 0.0
-        self._last_pair     = ""
-        self._last_decision = ""
-        self._cycles_total  = 0
-        self._lock          = threading.Lock()
+        self._restart_count  = 0
+        self._last_run_ts    = 0.0
+        self._last_pair      = ""
+        self._current_pair   = ""   # pair currently being processed (cleared after each cycle)
+        self._cycle_start_ts = 0.0  # when the current cycle started
+        self._last_decision  = ""
+        self._cycles_total   = 0
+        self._lock           = threading.Lock()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -867,11 +870,14 @@ class AgentSupervisor:
     def status(self) -> dict:
         """Return a status dict safe for display in the Streamlit UI."""
         with self._lock:
+            cycle_elapsed = (time.time() - self._cycle_start_ts) if self._cycle_start_ts else 0.0
             return {
                 "running":         self.is_running(),
                 "restart_count":   self._restart_count,
                 "last_run_ts":     self._last_run_ts,
                 "last_pair":       self._last_pair,
+                "current_pair":    self._current_pair,   # pair in-flight right now
+                "cycle_elapsed_s": round(cycle_elapsed),  # seconds since cycle started
                 "last_decision":   self._last_decision,
                 "cycles_total":    self._cycles_total,
                 "kill_requested":  self._kill_event.is_set(),
@@ -925,6 +931,9 @@ class AgentSupervisor:
                 continue
 
             cycle_start     = time.time()
+            with self._lock:
+                self._cycle_start_ts = cycle_start
+                self._current_pair   = ""
             # Fetch portfolio state ONCE per cycle — same authoritative snapshot for all pairs
             portfolio_state = _get_portfolio_state()
 
@@ -939,6 +948,8 @@ class AgentSupervisor:
                 if self._kill_event.is_set():
                     break
                 try:
+                    with self._lock:
+                        self._current_pair = pair
                     # Reflect any positions opened earlier in this cycle
                     if cycle_open_delta:
                         portfolio_state = dict(portfolio_state)
@@ -963,8 +974,9 @@ class AgentSupervisor:
                         cycle_open_delta += 1
 
                     with self._lock:
-                        self._last_run_ts  = time.time()
-                        self._last_pair    = pair
+                        self._last_run_ts   = time.time()
+                        self._last_pair     = pair
+                        self._current_pair  = ""
                         self._last_decision = final.get("claude_decision", "skip")
                         self._cycles_total += 1
 
