@@ -401,21 +401,25 @@ _exchange_cache_lock  = threading.Lock()
 
 def get_exchange_instance(name='kraken'):
     """Return a cached CCXT exchange instance — avoids repeated load_markets() calls.
-    CCXT objects are not picklable so we use a module-level dict instead of st.cache_resource."""
+    CCXT objects are not picklable so we use a module-level dict instead of st.cache_resource.
+    Lock is held through load_markets() to prevent TOCTOU: without this, 68 concurrent scan
+    threads all miss the cache check and hammer the exchange with simultaneous load_markets()."""
     with _exchange_cache_lock:
         ex = _exchange_cache.get(name)
         if ex is not None:
             return ex
-    try:
-        ex_class = getattr(ccxt, name)
-        ex = ex_class({'enableRateLimit': True, 'timeout': 15000})
-        ex.load_markets()
-        with _exchange_cache_lock:
+        # Create and cache while holding the lock — load_markets() is the slow part
+        # but it only runs once per exchange (first caller blocks, others wait and then
+        # return the cached instance on their next lock acquisition).
+        try:
+            ex_class = getattr(ccxt, name)
+            ex = ex_class({'enableRateLimit': True, 'timeout': 15000})
+            ex.load_markets()
             _exchange_cache[name] = ex
-        return ex
-    except Exception as e:
-        logging.warning(f"Exchange {name} failed: {str(e)[:60]}")
-        return None
+            return ex
+        except Exception as e:
+            logging.warning(f"Exchange {name} failed: {str(e)[:60]}")
+            return None
 
 def robust_fetch_ticker(ex, pair):
     try:
@@ -445,27 +449,23 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
         return df
     except Exception as e:
         _e_msg = str(e)
-        # Bybit fallback: primary exchange (Kraken) doesn't list this pair for tier-2 alts.
-        # Uses Bybit V5 REST API (api.bybit.com) — NOT geo-blocked from US Streamlit Cloud servers.
-        # Binance (api.binance.com) returns HTTP 451 from US IPs — do NOT use as fallback.
+        # Bybit fallback via CCXT: Kraken doesn't list tier-2 alts (TRX, XLM, SUI, etc.)
+        # CCXT bybit uses api.bybit.com (NOT geo-blocked from US Streamlit Cloud servers).
+        # CCXT handles rate-limiting, timeframe mapping, and symbol normalization automatically.
+        # Do NOT use raw fetch_bybit_klines here — 68 concurrent startup requests get rate-limited.
+        # Do NOT use Binance — api.binance.com returns HTTP 451 from all US IPs.
         if "does not have market symbol" in _e_msg or "market symbol" in _e_msg.lower():
             try:
-                import data_feeds as _dff
-                _sym = pair.replace('/', '')  # BTC/USDT → BTCUSDT
-                _klines = _dff.fetch_bybit_klines(_sym, timeframe, limit)
-                if _klines:
-                    df = pd.DataFrame(
-                        [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in _klines],
-                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
-                    )
-                    df = df.astype({'open': float, 'high': float, 'low': float,
-                                    'close': float, 'volume': float})
-                    df['timestamp'] = pd.to_datetime(df['timestamp'].astype('int64'), unit='ms')
+                _bybit_ex = get_exchange_instance('bybit')
+                if _bybit_ex:
+                    _ohlcv = _bybit_ex.fetch_ohlcv(pair, timeframe, limit=limit)
+                    df = pd.DataFrame(_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     with _OHLCV_CACHE_LOCK:
                         _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
                     return df
-            except Exception:
-                pass
+            except Exception as _be:
+                logging.debug("Bybit CCXT fallback %s %s: %s", pair, timeframe, str(_be)[:80])
         logging.warning(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
         return pd.DataFrame()
 

@@ -2710,6 +2710,13 @@ def _run_scan_thread():
     _SCAN_STATUS["current"]  = f"Connecting to {model.TA_EXCHANGE.upper()}..."
     _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
     try:
+        # Pre-warm Bybit CCXT instance before the parallel scan begins — tier-2 alts (TRX, XLM,
+        # SUI, TAO, etc.) fall back to Bybit when Kraken lacks the market symbol. Without pre-
+        # warming, 68 concurrent scan threads all race to call load_markets() simultaneously.
+        try:
+            model.get_exchange_instance('bybit')
+        except Exception:
+            pass
         # st.session_state is only available in the Streamlit request context;
         # background threads (APScheduler) have no session — use safe fallback.
         try:
