@@ -2028,7 +2028,7 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
             "cvd_trend":    str — description of CVD direction,
             "confidence":   float 0.0–1.0 — divergence conviction,
             "signal":       "BEARISH_DIVERGENCE" | "BULLISH_DIVERGENCE" | "NO_DIVERGENCE",
-            "source":       "binance_klines",
+            "source":       "bybit_klines",
             "error":        str | None,
         }
     """
