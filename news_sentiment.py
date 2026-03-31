@@ -30,6 +30,10 @@ _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep
 _anthropic_client = None
 _anthropic_lock = threading.Lock()
 
+# Circuit breaker: once we see a 400 credit-exhausted error, skip all future Claude
+# calls in this session. Avoids spamming WARNING logs for every pair every scan.
+_claude_credits_exhausted: bool = False
+
 
 def _get_anthropic_client():
     """Return or create the module-level Anthropic client (thread-safe)."""
@@ -211,11 +215,17 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
     """
     Send headlines to Claude Haiku for fast sentiment classification.
     Returns {'sentiment': str, 'score': float, 'bullish': int, 'bearish': int, 'neutral': int}
-    Falls back to rule-based if API key missing.
+    Falls back to rule-based if API key missing or credits exhausted.
     """
+    global _claude_credits_exhausted
+
     if not headlines:
         return {"sentiment": "NEUTRAL", "score": 0.0, "bullish": 0, "bearish": 0, "neutral": 0,
                 "articles_analyzed": 0, "source": "no_headlines"}
+
+    # Circuit breaker: skip all Claude calls once credits are confirmed exhausted
+    if _claude_credits_exhausted:
+        return _rule_based_classify(headlines, pair)
 
     client = _get_anthropic_client()
     if client is None:
@@ -265,7 +275,14 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
             "source":            "claude_haiku",
         }
     except Exception as e:
-        logger.warning("Claude sentiment classification failed: %s", e)
+        err_str = str(e)
+        if "credit balance is too low" in err_str.lower() or (
+            "400" in err_str and "credit" in err_str.lower()
+        ):
+            _claude_credits_exhausted = True
+            logger.info("Claude API credits exhausted — rule-based sentiment active for this session")
+        else:
+            logger.warning("Claude sentiment classification failed: %s", e)
         return _rule_based_classify(headlines, pair)
 
 

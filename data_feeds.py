@@ -1618,9 +1618,14 @@ def get_defillama_tvl(pair: str) -> dict:
 
     try:
         from urllib.parse import quote as _url_quote
-        resp = _SESSION.get(
+        import requests as _req_direct
+        # Use a direct requests.get() (no retry adapter) with short timeout.
+        # _SESSION retries 3× on timeouts = 40s block per chain with 9 chains.
+        # api.llama.fi/v2/historicalChainTvl is slow from US AWS — fail fast.
+        resp = _req_direct.get(
             f"https://api.llama.fi/v2/historicalChainTvl/{_url_quote(chain_name, safe='')}",
-            timeout=10,
+            timeout=5,
+            headers={"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip, deflate"},
         )
         if resp.status_code != 200:
             result = {**_neutral, 'chain': chain_name, 'error': f'HTTP {resp.status_code}', '_ts': now}
