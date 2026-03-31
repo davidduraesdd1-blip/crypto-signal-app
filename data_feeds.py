@@ -365,6 +365,38 @@ def fetch_binance_klines(symbol: str, interval: str = "1h", limit: int = 100) ->
     return []
 
 
+def fetch_okx_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+    """
+    Fetch OHLCV candlestick data from OKX V5 spot public API.
+    OKX is accessible from US Streamlit Cloud servers (unlike Binance HTTP 451 and Bybit timeouts).
+    symbol: e.g. "BTC-USDT" (use pair.replace('/', '-'))
+    interval: "1h", "4h", "1d", "1w" — mapped to OKX bar values: 1H, 4H, 1D, 1W
+    Returns list of [startTime(int), open, high, low, close, volume] rows (oldest-first).
+    """
+    _interval_map = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                     "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W"}
+    okx_bar = _interval_map.get(interval, "1H")
+    limit = min(limit, 300)  # OKX max is 300 per request
+    try:
+        r = _SESSION.get(
+            "https://www.okx.com/api/v5/market/candles",
+            params={"instId": symbol, "bar": okx_bar, "limit": limit},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if str(data.get("code")) == "0":
+                rows = data.get("data", [])
+                # OKX returns newest-first; reverse to oldest-first for consistency
+                rows = list(reversed(rows))
+                # fields: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+                return [[int(row[0]), row[1], row[2], row[3], row[4], row[5]]
+                        for row in rows if len(row) >= 6]
+    except Exception as e:
+        logging.debug("[OKX klines] %s/%s failed: %s", symbol, interval, e)
+    return []
+
+
 def fetch_bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
     """
     Fetch OHLCV candlestick data from Bybit V5 spot public API.
@@ -457,9 +489,11 @@ def get_onchain_metrics(pair: str) -> dict:
                 max(-400.0, min(400.0, (vol_mcap - 0.05) * 8000)), 1
             )
             sopr       = round(max(0.85, min(1.15, 1.0 + price_24h / 100)), 3)
-            # 200d proxy: fetch 200 daily klines from Binance, compute % change
+            # 200d proxy: fetch 200 daily klines. OKX is primary (accessible from US Streamlit
+            # Cloud); Binance is fallback (geo-blocked US, returns 451, kept for completeness).
             price_200d = 0.0
-            klines_200 = fetch_bybit_klines(binance_sym, interval="1d", limit=201)
+            okx_sym = pair.replace("/", "-")  # BTC/USDT → BTC-USDT
+            klines_200 = fetch_okx_klines(okx_sym, interval="1d", limit=201)
             if not klines_200 or len(klines_200) < 2:
                 klines_200 = fetch_binance_klines(binance_sym, interval="1d", limit=201)
             if len(klines_200) >= 2:
@@ -2046,8 +2080,9 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
 
     try:
         binance_sym = f"{symbol.upper()}USDT"
-        # Try Bybit first (not geo-blocked from US Streamlit servers); fallback to Binance
-        klines = fetch_bybit_klines(binance_sym, interval="1h", limit=24)
+        okx_sym_cvd = f"{symbol.upper()}-USDT"
+        # OKX is primary (accessible from US Streamlit Cloud); Binance fallback (geo-blocked US)
+        klines = fetch_okx_klines(okx_sym_cvd, interval="1h", limit=24)
         if not klines or len(klines) < 12:
             klines = fetch_binance_klines(binance_sym, interval="1h", limit=24)
         if not klines or len(klines) < 12:
