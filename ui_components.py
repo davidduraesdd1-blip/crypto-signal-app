@@ -603,6 +603,39 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 /* Beginner mode body tag injected by inject_beginner_mode_js() */
 
+/* ═══════════════════════════════════════════════
+   MOBILE — 768px breakpoint + 44px tap targets
+═══════════════════════════════════════════════ */
+@media (max-width: 768px) {
+    .stApp { font-size: var(--fs-sm) !important; }
+    .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+    /* 44px minimum tap targets */
+    div[data-testid="stButton"] > button { min-height: 44px !important; }
+    [data-testid="stRadio"] label { min-height: 44px !important; padding: 10px 0 !important; }
+    [data-testid="stCheckbox"] label { min-height: 44px !important; padding: 10px 0 !important; }
+    [data-testid="stToggle"] label { min-height: 44px !important; }
+    [data-baseweb="select"] { min-height: 44px !important; }
+    /* Stack columns */
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+    [data-testid="stColumn"] { min-width: 100% !important; }
+}
+
+/* ═══════════════════════════════════════════════
+   LIGHT MODE — WCAG AA contrast
+   Activated via st.session_state["_sg_theme"] = "light"
+═══════════════════════════════════════════════ */
+body.light-mode, body.light-mode .stApp {
+    background: #f1f5f9 !important;
+    color: #1e293b !important;
+}
+body.light-mode [data-testid="stSidebar"] { background: #e8edf5 !important; color: #1e293b !important; }
+body.light-mode .metric-card, body.light-mode [class*="card"] {
+    background: rgba(255,255,255,0.95) !important;
+    border-color: rgba(0,0,0,0.08) !important;
+    color: #1e293b !important;
+}
+body.light-mode p, body.light-mode span, body.light-mode div { color: #1e293b; }
+
 </style>
 """
 
@@ -2434,6 +2467,183 @@ def render_confidence_bar(confidence: float, signal: str = "") -> str:
 # Green if last > first, red if declining.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─── Phase 3 — New helpers ────────────────────────────────────────────────────
+
+# ── Welcome Banner (Phase 3, item 19) ─────────────────────────────────────────
+
+def render_welcome_banner() -> None:
+    """Show a one-time welcome message for Beginner users.
+
+    Appears once per session, dismissible. No-op for Intermediate/Advanced.
+    """
+    if st.session_state.get("user_level", "beginner") != "beginner":
+        return
+    if st.session_state.get("_sg_welcome_dismissed"):
+        return
+    _c1, _c2 = st.columns([11, 1])
+    with _c1:
+        st.info(
+            "👋 **Welcome to CryptoSignal!**  \n"
+            "This app scans crypto markets and delivers clear, actionable trade signals. "
+            "Every metric is explained in plain English — no experience needed.  \n"
+            "**Quick start:** The **Dashboard** shows today's top signals ranked by confidence. "
+            "Set your coin in the sidebar, pick a timeframe, and scan.  \n"
+            "💡 *Raise your experience level in the sidebar to see more detail.*"
+        )
+    with _c2:
+        if st.button("✕", key="_sg_dismiss_welcome", help="Dismiss welcome message"):
+            st.session_state["_sg_welcome_dismissed"] = True
+            st.rerun()
+
+
+# ── Signal Badge — Shape Encoding (Phase 3, item 22) ──────────────────────────
+
+def signal_badge_html(direction: str, label: str = "") -> str:
+    """Return HTML for a shape+color signal badge (color-blind safe).
+
+    ▲ BUY (teal) / ▼ SELL (red) / ■ NEUTRAL (gray)
+    Shape + color always combined — never color alone.
+    """
+    _dir = direction.upper().strip()
+    if _dir in {"BUY", "BULLISH", "BULL", "LONG", "STRONG_BUY"}:
+        _shape, _bg, _txt, _border = "▲", "rgba(0,212,170,0.12)", "#00d4aa", "rgba(0,212,170,0.35)"
+        _default = "BUY"
+    elif _dir in {"SELL", "BEARISH", "BEAR", "SHORT", "STRONG_SELL"}:
+        _shape, _bg, _txt, _border = "▼", "rgba(246,70,93,0.12)", "#f6465d", "rgba(246,70,93,0.35)"
+        _default = "SELL"
+    else:
+        _shape, _bg, _txt, _border = "■", "rgba(100,116,139,0.12)", "#64748b", "rgba(100,116,139,0.3)"
+        _default = "NEUTRAL"
+    _display = label if label else _default
+    return (
+        f"<span style='display:inline-flex;align-items:center;gap:4px;"
+        f"background:{_bg};border:1px solid {_border};border-radius:6px;"
+        f"padding:2px 8px;font-size:0.72rem;font-weight:700;color:{_txt};'>"
+        f"{_shape} {_display}</span>"
+    )
+
+
+# ── "What does this mean?" Panel (Phase 3, item 21) ───────────────────────────
+
+def render_what_this_means(message: str, title: str = "What does this mean for me?") -> None:
+    """Render a plain-English explanation panel. Only shown at Beginner level."""
+    if st.session_state.get("user_level", "beginner") != "beginner":
+        return
+    st.info(f"💡 **{title}**  \n{message}")
+
+
+# ── Fear & Greed Trend (Phase 3, item 26) ─────────────────────────────────────
+
+def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
+    """Render Fear & Greed current + 7-day avg + 30-day avg.
+
+    Uses data_feeds.get_fear_greed_index() for the current value and 7-day avg.
+    Fetches 30 days directly from alternative.me (cached via @st.cache_data).
+    """
+    _cur, _avg7, _avg30 = 50, 50.0, 50.0
+    try:
+        from data_feeds import get_fear_greed_index as _fg_fetch
+        _fg = _fg_fetch(days=7)
+        _cur  = _fg.get("value", 50)
+        _hist = _fg.get("history_7d", [])
+        _vals7 = [int(h["value"]) for h in _hist if "value" in h]
+        _avg7  = sum(_vals7) / max(1, len(_vals7)) if _vals7 else float(_cur)
+    except Exception:
+        pass
+
+    # 30-day average: fetch directly from alternative.me (separate cached call)
+    try:
+        import requests as _req
+        _r30 = _req.get(
+            "https://api.alternative.me/fng/?limit=30",
+            timeout=6,
+            headers={"Accept": "application/json"},
+        )
+        if _r30.status_code == 200:
+            _d30 = _r30.json().get("data", [])
+            _v30 = [int(d["value"]) for d in _d30 if "value" in d]
+            if _v30:
+                _avg30 = sum(_v30) / len(_v30)
+            else:
+                _avg30 = _avg7
+        else:
+            _avg30 = _avg7
+    except Exception:
+        _avg30 = _avg7
+
+    def _fg_label(v: float) -> tuple[str, str]:
+        if v <= 25:  return "Extreme Fear",  "#ef4444"
+        if v <= 45:  return "Fear",           "#f97316"
+        if v <= 55:  return "Neutral",        "#64748b"
+        if v <= 75:  return "Greed",          "#f59e0b"
+        return "Extreme Greed", "#22c55e"
+
+    _cl, _cc = _fg_label(_cur)
+    _7l, _7c = _fg_label(_avg7)
+    _30l, _30c = _fg_label(_avg30)
+
+    _c1, _c2, _c3 = st.columns(3)
+    for _col, _val, _lbl, _chex, _period in [
+        (_c1, float(_cur), _cl,  _cc,  "Now"),
+        (_c2, _avg7,       _7l,  _7c,  "7-Day Avg"),
+        (_c3, _avg30,      _30l, _30c, "30-Day Avg"),
+    ]:
+        with _col:
+            st.markdown(
+                f"<div style='text-align:center;padding:12px;"
+                f"background:var(--bg-1);border-radius:8px;border:1px solid var(--border);'>"
+                f"<div style='font-size:0.62rem;color:var(--text-3);text-transform:uppercase;"
+                f"letter-spacing:0.8px;margin-bottom:4px'>{_period}</div>"
+                f"<div style='font-size:1.9rem;font-weight:800;color:{_chex};"
+                f"font-family:var(--font-mono)'>{_val:.0f}</div>"
+                f"<div style='font-size:0.70rem;color:{_chex};margin-top:2px'>{_lbl}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    if user_level == "beginner":
+        st.caption(
+            f"💡 Fear & Greed measures crowd emotion — 0 = extreme panic (often a buy signal), "
+            f"100 = extreme euphoria (often a sell signal). Current: **{_cur}** ({_cl})."
+        )
+
+
+# ── Light/Dark mode toggle helper (Phase 3, item 18) ──────────────────────────
+
+def render_theme_toggle_sg() -> None:
+    """Render a sun/moon theme toggle for SuperGrok sidebar.
+
+    Stores theme in st.session_state["_sg_theme"]. Uses JS to toggle
+    body.light-mode class for the light mode CSS override.
+    """
+    _is_light = st.session_state.get("_sg_theme") == "light"
+    if st.sidebar.button(
+        "☀" if _is_light else "🌙",
+        key="_sg_theme_toggle",
+        help="Switch to light mode" if not _is_light else "Switch to dark mode",
+    ):
+        st.session_state["_sg_theme"] = "dark" if _is_light else "light"
+        # Reset CSS injection flag so updated theme is re-injected
+        st.session_state["_css_injected"] = False
+        st.rerun()
+
+    # Inject light-mode class toggle JS
+    _mode = "add" if not _is_light else "remove"
+    st.markdown(
+        f"<script>document.body.classList.{_mode}('light-mode')</script>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── Coin Universe (Phase 3, item 28) ──────────────────────────────────────────
+
+_SG_MUST_HAVE: list[str] = ["XRP", "XLM", "XDC", "CC", "HBAR", "SHX", "ZBCN"]
+_SG_STABLECOINS: frozenset[str] = frozenset({
+    "usdt","usdc","dai","busd","tusd","fdusd","usdd","frax","lusd",
+    "usdp","gusd","crvusd","pyusd","eurc",
+})
+
+
 def render_sparkline(prices: list, width: int = 120, height: int = 40):
     """
     #60 — Render a minimal Plotly sparkline figure.
@@ -2472,3 +2682,4 @@ def render_sparkline(prices: list, width: int = 120, height: int = 40):
         showlegend=False,
     )
     return fig
+

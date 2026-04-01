@@ -680,6 +680,34 @@ if _tier2_val:
 # ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
 st.sidebar.markdown("")
 _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+
+# ── Theme toggle (item 18 — light/dark mode) ──────────────────────────────────
+_ui.render_theme_toggle_sg()
+
+# ── Refresh All Data (item 27) ────────────────────────────────────────────────
+st.sidebar.markdown(
+    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
+    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
+    'Data</span>',
+    unsafe_allow_html=True,
+)
+if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload fresh data from all sources", use_container_width=True):
+    try:
+        st.cache_data.clear()
+    except Exception:
+        for _fn in [
+            _cached_signals_df, _cached_paper_trades_df, _cached_feedback_df,
+            _cached_backtest_df, _cached_scan_results, _cached_execution_log_df,
+            _cached_agent_log_df, _cached_api_health, _cached_arb_opportunities_df,
+            _cached_resolved_feedback_df, _cached_alerts_config, _cached_news_sentiment,
+            _cached_whale_activity,
+        ]:
+            try:
+                _fn.clear()
+            except Exception:
+                pass
+    st.rerun()
+
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
@@ -1232,6 +1260,9 @@ def _scan_progress():
 
 
 def page_dashboard():
+    # ── Welcome banner (item 19 — beginner only, once per session) ────────────
+    _ui.render_welcome_banner()
+
     st.markdown(
         '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
         'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
@@ -1296,6 +1327,9 @@ def page_dashboard():
     with col_ts:
         if st.session_state.get("scan_timestamp"):
             st.caption(f"Last scan: {st.session_state['scan_timestamp']}")
+
+    # ── Fear & Greed trend — Now / 7-day avg / 30-day avg (item 26) ──────────
+    _ui.render_fear_greed_trend_sg(user_level=st.session_state.get("user_level", "beginner"))
 
     # Progress bar while scanning — check in-memory state first (PERF-30), fall back to SQLite
     with _scan_lock:
@@ -1565,6 +1599,87 @@ def page_dashboard():
 """, unsafe_allow_html=True)
     except Exception:
         pass
+
+    st.markdown("---")
+
+    # ── Wyckoff Phase Summary (item 23) ─────────────────────────────────────────
+    _wyck_results = [(r.get("pair",""), r.get("wyckoff_phase","Unknown"), r.get("wyckoff_conf",0),
+                      r.get("wyckoff_desc",""), r.get("wyckoff_plain",""),
+                      r.get("wyckoff_spring",False), r.get("wyckoff_upthrust",False))
+                     for r in results if r.get("wyckoff_phase","Unknown") != "Unknown"]
+    if _wyck_results:
+        _user_level_wyck = st.session_state.get("user_level", "beginner")
+        _ui.section_header("Wyckoff Phase Analysis",
+                           "Richard Wyckoff's 4-phase market cycle: Accumulation → Markup → Distribution → Markdown. "
+                           "Identifies where institutional money is flowing.",
+                           icon="🔄")
+        _WYCK_COLOR = {
+            "Accumulation": "#00d4aa", "Markup": "#22c55e",
+            "Distribution": "#f59e0b", "Markdown": "#ef4444",
+        }
+        _WYCK_BG = {
+            "Accumulation": "rgba(0,212,170,0.08)", "Markup": "rgba(34,197,94,0.08)",
+            "Distribution": "rgba(245,158,11,0.08)", "Markdown": "rgba(239,68,68,0.08)",
+        }
+        _WYCK_ICON = {
+            "Accumulation": "🏦", "Markup": "📈",
+            "Distribution": "🏧", "Markdown": "📉",
+        }
+        if _user_level_wyck == "beginner":
+            # Show the top 3 cards with plain English
+            _wc = st.columns(min(3, len(_wyck_results)))
+            for _ci, (_wp, _wph, _wco, _wd, _wpl, _wsp, _wup) in enumerate(_wyck_results[:3]):
+                with _wc[_ci]:
+                    _wcc = _WYCK_COLOR.get(_wph, "#64748b")
+                    _wcb = _WYCK_BG.get(_wph, "rgba(100,116,139,0.08)")
+                    _wico = _WYCK_ICON.get(_wph, "⬜")
+                    _extra = " 🔔 SPRING" if _wsp else (" 🔔 UPTHRUST" if _wup else "")
+                    st.markdown(
+                        f"<div style='background:{_wcb};border:1px solid {_wcc}33;"
+                        f"border-top:3px solid {_wcc};border-radius:10px;padding:14px'>"
+                        f"<div style='font-size:10px;color:#6b7280;text-transform:uppercase;"
+                        f"letter-spacing:0.8px'>{_wp.replace('/USDT','')}</div>"
+                        f"<div style='font-size:16px;font-weight:700;color:{_wcc};margin-top:2px'>"
+                        f"{_wico} {_wph}{_extra}</div>"
+                        f"<div style='font-size:11px;color:#9ca3af;margin-top:6px'>{_wpl}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+        else:
+            # Table view for intermediate/advanced
+            _phase_counts: dict = {}
+            for _, _wph, _, _, _, _wsp, _wup in _wyck_results:
+                _phase_counts[_wph] = _phase_counts.get(_wph, 0) + 1
+            _pc = st.columns(4)
+            for _pi, _ph in enumerate(["Accumulation", "Markup", "Distribution", "Markdown"]):
+                with _pc[_pi]:
+                    _cnt = _phase_counts.get(_ph, 0)
+                    _wcc = _WYCK_COLOR.get(_ph, "#64748b")
+                    _wico = _WYCK_ICON.get(_ph, "⬜")
+                    st.markdown(
+                        f"<div style='text-align:center;background:{_WYCK_BG.get(_ph,'rgba(100,116,139,0.08)')};"
+                        f"border:1px solid {_wcc}33;border-radius:8px;padding:12px'>"
+                        f"<div style='font-size:12px;color:#6b7280'>{_wico} {_ph}</div>"
+                        f"<div style='font-size:28px;font-weight:700;color:{_wcc}'>{_cnt}</div>"
+                        f"<div style='font-size:10px;color:#4b5563'>pairs</div></div>",
+                        unsafe_allow_html=True,
+                    )
+            if _user_level_wyck == "advanced":
+                # Detailed table
+                _spring_pairs   = [_wp for _wp, _, _, _, _, _wsp, _ in _wyck_results if _wsp]
+                _upthrust_pairs = [_wp for _wp, _, _, _, _, _, _wup in _wyck_results if _wup]
+                if _spring_pairs:
+                    st.markdown(
+                        f"<div style='margin-top:8px;font-size:12px;color:#00d4aa'>"
+                        f"🔔 Springs: {', '.join(p.replace('/USDT','') for p in _spring_pairs)}</div>",
+                        unsafe_allow_html=True,
+                    )
+                if _upthrust_pairs:
+                    st.markdown(
+                        f"<div style='font-size:12px;color:#f59e0b'>"
+                        f"🔔 Upthrusts: {', '.join(p.replace('/USDT','') for p in _upthrust_pairs)}</div>",
+                        unsafe_allow_html=True,
+                    )
 
     st.markdown("---")
 
