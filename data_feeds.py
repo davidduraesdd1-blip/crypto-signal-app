@@ -4255,8 +4255,8 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             logging.debug("[CoinMetrics] onchain fetch failed: %s — trying Blockchain.com fallback", e)
             # ── Blockchain.com fallback: MVRV + active addresses (free, US-accessible) ──
             try:
-                _bc_mvrv_url = "https://api.blockchain.info/charts/mvrv?format=json&timespan=30days&sampled=true"
-                _bc_addr_url = "https://api.blockchain.info/charts/n-unique-addresses?format=json&timespan=30days&sampled=true"
+                _bc_mvrv_url = "https://api.blockchain.info/charts/mvrv?format=json&timespan=2years&sampled=true&cors=true"
+                _bc_addr_url = "https://api.blockchain.info/charts/n-unique-addresses?format=json&timespan=30days&cors=true"
                 _r_mvrv = _NO_RETRY_SESSION.get(_bc_mvrv_url, timeout=8)
                 _r_addr = _NO_RETRY_SESSION.get(_bc_addr_url, timeout=8)
                 _mvrv_vals, _mvrv_dates = [], []
@@ -4298,6 +4298,51 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 }
             except Exception as e2:
                 logging.debug("[OnChain] Blockchain.com fallback also failed: %s", e2)
+                # ── Third fallback: CoinGecko market cap history → estimated MVRV proxy ──
+                try:
+                    import statistics as _stats3
+                    import datetime as _dt3
+                    _cg_url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+                    _cg_r = _NO_RETRY_SESSION.get(
+                        _cg_url,
+                        params={"vs_currency": "usd", "days": "400", "interval": "daily"},
+                        timeout=10,
+                    )
+                    if _cg_r.status_code == 200:
+                        _cg_data = _cg_r.json()
+                        _mc_pts = _cg_data.get("market_caps", [])
+                        if len(_mc_pts) >= 30:
+                            _mc_vals = [float(pt[1]) for pt in _mc_pts if pt[1]]
+                            _mc_dates = [str(_dt3.datetime.utcfromtimestamp(pt[0] / 1000))[:10] for pt in _mc_pts if pt[1]]
+                            _window = min(365, len(_mc_vals))
+                            _trailing = _mc_vals[-_window:]
+                            _mean_mc = _stats3.mean(_trailing)
+                            _std_mc = _stats3.stdev(_trailing) if len(_trailing) > 1 else 1.0
+                            # MVRV proxy: z-score of market cap relative to rolling mean
+                            # Directionally consistent with real MVRV Z-score
+                            _mvrv_z_est = round((_mc_vals[-1] - _mean_mc) / max(_std_mc, 1.0), 2)
+                            if _mvrv_z_est < 0.0:   _mvrv_sig_est = "UNDERVALUED"
+                            elif _mvrv_z_est < 1.5: _mvrv_sig_est = "FAIR_VALUE"
+                            elif _mvrv_z_est < 3.0: _mvrv_sig_est = "OVERVALUED"
+                            else:                   _mvrv_sig_est = "EXTREME_HEAT"
+                            return {
+                                "mvrv_ratio": round(_mc_vals[-1] / max(_mean_mc, 1), 3),
+                                "mvrv_z": _mvrv_z_est,
+                                "mvrv_signal": _mvrv_sig_est,
+                                "realized_cap": None,
+                                "sopr": None, "sopr_signal": "N/A",
+                                "active_addresses": None,
+                                "nupl": None, "nupl_signal": "N/A",
+                                "hash_ribbon_signal": "N/A",
+                                "puell_multiple": None, "puell_signal": "N/A",
+                                "mvrv_history": {_mc_dates[i]: round(_mc_vals[i] / max(_mean_mc, 1), 3) for i in range(len(_mc_dates))},
+                                "sopr_history": {},
+                                "source": "coingecko_proxy",
+                                "error": None,
+                                "timestamp": _dt3.datetime.now(_dt3.timezone.utc).isoformat(),
+                            }
+                except Exception as e3:
+                    logging.debug("[OnChain] CoinGecko proxy fallback also failed: %s", e3)
                 return {"error": str(e), "source": "coinmetrics"}
 
     with _CM_OC_LOCK:

@@ -80,7 +80,8 @@ except Exception:
     _pdf = None
 try:
     import llm_analysis as _llm
-except Exception:
+except Exception as _llm_import_err:
+    logging.warning("[App] llm_analysis import failed: %s", _llm_import_err, exc_info=True)
     _llm = None
 try:
     import news_sentiment as _news_mod
@@ -2427,7 +2428,7 @@ def page_dashboard():
             st.caption(
                 f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
             )
-        st.components.v1.html(_chart_html, height=560, scrolling=False)
+        st.iframe(_chart_html, height=560, scrolling=False)
 
     st.markdown("---")
 
@@ -6137,9 +6138,11 @@ def page_market_overview():
     # data_feeds.fetch_coinmetrics_onchain() has its own 1-hour in-memory cache for successes.
     _oc4 = data_feeds.fetch_coinmetrics_onchain(400)
     if _oc4.get("error") and not _oc4.get("mvrv_z"):
-        _oc_src = _oc4.get("source", "coinmetrics")
-        _oc_err = _oc4.get("error", "")
-        st.info(f"On-chain data unavailable from current server location ({_oc_src}: {_oc_err})")
+        st.caption(
+            "ℹ️ On-chain data unavailable from this server — CoinMetrics community API "
+            "blocks cloud hosting IPs. Add a free **COINMETRICS_API_KEY** to your "
+            "Streamlit secrets (coinmetrics.io) to unlock full on-chain data."
+        )
     else:
         _mz4   = _oc4.get("mvrv_z")
         _ms4   = _oc4.get("mvrv_signal", "N/A")

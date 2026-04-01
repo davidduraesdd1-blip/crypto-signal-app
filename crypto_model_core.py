@@ -4497,8 +4497,10 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
 
     # Restore original scan order: Tier 1 first, then Tier 2 appended
     results = [pair_results[p] for p in _scan_pairs if p in pair_results]
-    # Tag Tier 2 results so UI can display them in a separate section
-    _tier2_set = set(_tier2_ccxt)
+    # Tag Tier 2 results so UI can display them in a separate section.
+    # Use config.TIER2_PAIRS directly — _tier2_ccxt is empty when all Tier 2
+    # pairs are already present in PAIRS (the base 29-pair scan list).
+    _tier2_set = set(_config.TIER2_PAIRS)
     for r in results:
         if r.get("pair") in _tier2_set:
             r["tier"] = 2
