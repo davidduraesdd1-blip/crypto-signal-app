@@ -594,17 +594,30 @@ def fetch_onchain_metrics(pair='BTC/USDT'):
 
 @functools.lru_cache(maxsize=256)
 def get_onchain_bias(sopr: float, mvrv_z: float, net_flow: float,
-                     whale_activity: bool, adx: float) -> float:
+                     whale_activity: bool, adx: float,
+                     hash_ribbon_signal: str = "N/A",
+                     puell_multiple: float = 1.0) -> float:
     # PERF: lru_cache — pure function, same inputs always yield same output
     bias = 0.0
     if sopr > 1.05: bias += 10
     if sopr < 0.95: bias -= 12
-    if mvrv_z > 3.5: bias -= 15
-    if mvrv_z < -0.5: bias += 18
+    # MVRV Z-Score: rolling 365d z-score of MVRV ratio. Below 0 = market cap < trailing
+    # mean = historically undervalued. Above 3 = cycle top heat.
+    if mvrv_z > 3.0: bias -= 15
+    if mvrv_z < 0.0: bias += 18
     if net_flow > 150: bias -= 12
     if net_flow < -150: bias += 15
     if whale_activity: bias += 20
     if mvrv_z > 7 or net_flow > 500: bias -= 25
+    # Hash Ribbons (87.5% accuracy): RECOVERY = miner capitulation ending → bullish
+    if hash_ribbon_signal == "RECOVERY":    bias += 15
+    elif hash_ribbon_signal == "CAPITULATION": bias -= 10
+    # Puell Multiple: miner revenue vs 365d MA — near-perfect cycle top/bottom signal
+    if puell_multiple > 0:
+        if puell_multiple < 0.5:  bias += 20   # miners deeply underpaid = historical bottom
+        elif puell_multiple < 1.0: bias += 8
+        elif puell_multiple > 3.0: bias -= 20  # miners massively overpaid = historical top
+        elif puell_multiple > 2.0: bias -= 8
     return round(bias, 1)
 
 # ──────────────────────────────────────────────
@@ -1171,6 +1184,8 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
             float(onchain_data.get('net_flow', 0.0)),
             bool(onchain_data.get('whale_activity', False)),
             float(adx),
+            str(onchain_data.get('hash_ribbon_signal', 'N/A')),
+            float(onchain_data.get('puell_multiple') or 1.0),
         )
 
         # F4: Get 30-day rolling accuracy weights (cached once per scan — PERF-06)
@@ -2361,6 +2376,8 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             float(onchain_data.get('net_flow', 0.0)),
             bool(onchain_data.get('whale_activity', False)),
             float(adx),
+            str(onchain_data.get('hash_ribbon_signal', 'N/A')),
+            float(onchain_data.get('puell_multiple') or 1.0),
         )
         score += onchain_bias * w.get('onchain', 0.12)
 

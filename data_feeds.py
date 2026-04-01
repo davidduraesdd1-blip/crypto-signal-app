@@ -586,7 +586,23 @@ def get_onchain_metrics(pair: str) -> dict:
                     first_close, last_close = 0.0, 0.0
                 if first_close > 0:
                     price_200d = round((last_close - first_close) / first_close * 100, 2)
-            mvrv_z     = round(max(-3.0, min(7.0, price_200d / 57.0)), 2)
+            # MVRV Z-Score: for BTC use real CoinMetrics data (cached 1h); for alts
+            # use a price_200d proxy since realized cap isn't available per-pair.
+            mvrv_z = round(max(-3.0, min(7.0, price_200d / 57.0)), 2)
+            hash_ribbon_signal = "N/A"
+            puell_multiple     = 1.0
+            puell_signal       = "N/A"
+            if pair.startswith("BTC/"):
+                try:
+                    _cm = fetch_coinmetrics_onchain(400)
+                    if _cm and not _cm.get("error"):
+                        if _cm.get("mvrv_z") is not None:
+                            mvrv_z = _cm["mvrv_z"]
+                        hash_ribbon_signal = _cm.get("hash_ribbon_signal", "N/A")
+                        puell_multiple     = _cm.get("puell_multiple") or 1.0
+                        puell_signal       = _cm.get("puell_signal", "N/A")
+                except Exception:
+                    pass
             whale_activity = vol_mcap > 0.10
 
             result = {
@@ -595,6 +611,9 @@ def get_onchain_metrics(pair: str) -> dict:
                 'vol_mcap_ratio': round(vol_mcap, 4),
                 'price_24h_pct': round(price_24h, 2),
                 'price_200d_pct': price_200d,
+                'hash_ribbon_signal': hash_ribbon_signal,
+                'puell_multiple': puell_multiple,
+                'puell_signal': puell_signal,
                 '_ts': now,
             }
             with _ONCHAIN_CACHE_LOCK:
@@ -639,6 +658,21 @@ def get_onchain_metrics(pair: str) -> dict:
         mvrv_z = round(max(-3.0, min(7.0, price_200d / 57.0)), 2)
         vol_mcap = volume / mcap if mcap > 0 else 0.0
         net_flow = 0.0 if volume == 0 else round(max(-400.0, min(400.0, (vol_mcap - 0.05) * 8000)), 1)
+        # MVRV Z-Score: inject real CoinMetrics data for BTC pairs
+        hash_ribbon_signal = "N/A"
+        puell_multiple     = 1.0
+        puell_signal       = "N/A"
+        if pair.startswith("BTC/"):
+            try:
+                _cm = fetch_coinmetrics_onchain(400)
+                if _cm and not _cm.get("error"):
+                    if _cm.get("mvrv_z") is not None:
+                        mvrv_z = _cm["mvrv_z"]
+                    hash_ribbon_signal = _cm.get("hash_ribbon_signal", "N/A")
+                    puell_multiple     = _cm.get("puell_multiple") or 1.0
+                    puell_signal       = _cm.get("puell_signal", "N/A")
+            except Exception:
+                pass
         whale_activity = vol_mcap > 0.10
 
         result = {
@@ -647,6 +681,9 @@ def get_onchain_metrics(pair: str) -> dict:
             'vol_mcap_ratio': round(vol_mcap, 4),
             'price_24h_pct': round(price_24h, 2),
             'price_200d_pct': round(price_200d, 2),
+            'hash_ribbon_signal': hash_ribbon_signal,
+            'puell_multiple': puell_multiple,
+            'puell_signal': puell_signal,
             '_ts': now,
         }
         with _ONCHAIN_CACHE_LOCK:
@@ -4060,7 +4097,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             url    = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
             params = {
                 "assets":     "btc",
-                "metrics":    "CapMrktCurUSD,CapRealUSD,SoprNtv,AdrActCnt",
+                "metrics":    "CapMrktCurUSD,CapRealUSD,SoprNtv,AdrActCnt,HashRate,RevUSD",
                 "start_time": start,
                 "frequency":  "1d",
                 "page_size":  days + 10,
@@ -4080,6 +4117,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             mvrv_vals, mvrv_dates = [], []
             sopr_vals, sopr_dates = [], []
             real_caps, active_addrs = [], []
+            hash_rates, rev_usd_vals = [], []
 
             for row in rows:
                 t  = row.get("time", "")[:10]
@@ -4087,6 +4125,8 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 rc = row.get("CapRealUSD")
                 sp = row.get("SoprNtv")
                 aa = row.get("AdrActCnt")
+                hr = row.get("HashRate")
+                rv = row.get("RevUSD")
                 if mc and rc:
                     try:
                         mvrv_vals.append(float(mc) / float(rc))
@@ -4105,6 +4145,16 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                         active_addrs.append(int(float(aa)))
                     except ValueError:
                         pass
+                if hr:
+                    try:
+                        hash_rates.append(float(hr))
+                    except ValueError:
+                        pass
+                if rv:
+                    try:
+                        rev_usd_vals.append(float(rv))
+                    except ValueError:
+                        pass
 
             if not mvrv_vals:
                 return {"error": "no MVRV data", "source": "coinmetrics"}
@@ -4116,7 +4166,10 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             cur_mvrv = mvrv_vals[-1]
             mvrv_z   = round((cur_mvrv - mean_mv) / max(std_mv, 1e-6), 2)
 
-            if mvrv_z < -0.5:  mvrv_signal = "UNDERVALUED"
+            # MVRV Z-Score thresholds calibrated to historically-validated cycle levels:
+            # MVRV ratio below 365d mean (z < 0) = market below fair value = UNDERVALUED.
+            # At cycle tops MVRV ratios 3-4× above 365d mean → z ≈ 3+ = EXTREME_HEAT.
+            if mvrv_z < 0.0:   mvrv_signal = "UNDERVALUED"
             elif mvrv_z < 1.5: mvrv_signal = "FAIR_VALUE"
             elif mvrv_z < 3.0: mvrv_signal = "OVERVALUED"
             else:               mvrv_signal = "EXTREME_HEAT"
@@ -4141,21 +4194,49 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 elif nupl < 0.75:    nupl_signal = "BELIEF_THRILL"
                 else:                nupl_signal = "EUPHORIA"
 
+            # ── Hash Ribbons: 30d MA vs 60d MA of BTC hash rate ─────────────────
+            # Recovery (30d crosses above 60d) → miner capitulation ending → bullish.
+            # Historical accuracy: 87.5% for cycle bottom identification (14/16 signals).
+            hash_ribbon_signal = "N/A"
+            if len(hash_rates) >= 60:
+                hr_ma30 = sum(hash_rates[-30:]) / 30
+                hr_ma60 = sum(hash_rates[-60:]) / 60
+                hash_ribbon_signal = "RECOVERY" if hr_ma30 > hr_ma60 else "CAPITULATION"
+
+            # ── Puell Multiple: daily miner revenue / 365d MA ───────────────────
+            # < 0.5: miners deeply underpaid = historical cycle bottom (CAPITULATION)
+            # > 3.0: miners massively overpaid = historical cycle top (EXTREME_HEAT)
+            puell_multiple = None
+            puell_signal   = "N/A"
+            if len(rev_usd_vals) >= 30:
+                _rev_window = min(365, len(rev_usd_vals))
+                _rev_ma365  = sum(rev_usd_vals[-_rev_window:]) / _rev_window
+                if _rev_ma365 > 0:
+                    puell_multiple = round(rev_usd_vals[-1] / _rev_ma365, 3)
+                    if puell_multiple < 0.5:    puell_signal = "CAPITULATION"
+                    elif puell_multiple < 1.0:  puell_signal = "UNDERVALUED"
+                    elif puell_multiple < 2.0:  puell_signal = "FAIR_VALUE"
+                    elif puell_multiple < 3.0:  puell_signal = "OVERVALUED"
+                    else:                       puell_signal = "EXTREME_HEAT"
+
             return {
-                "mvrv_ratio":       round(cur_mvrv, 3),
-                "mvrv_z":           mvrv_z,
-                "mvrv_signal":      mvrv_signal,
-                "realized_cap":     real_caps[-1] if real_caps else None,
-                "sopr":             round(sopr, 4) if sopr else None,
-                "sopr_signal":      sopr_signal,
-                "active_addresses": active_addrs[-1] if active_addrs else None,
-                "nupl":             nupl,
-                "nupl_signal":      nupl_signal,
-                "mvrv_history":     {mvrv_dates[i]: round(mvrv_vals[i], 3) for i in range(len(mvrv_dates))},
-                "sopr_history":     {sopr_dates[i]: round(sopr_vals[i], 4) for i in range(len(sopr_dates))},
-                "source":           "coinmetrics_community",
-                "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
-                "error":            None,
+                "mvrv_ratio":          round(cur_mvrv, 3),
+                "mvrv_z":              mvrv_z,
+                "mvrv_signal":         mvrv_signal,
+                "realized_cap":        real_caps[-1] if real_caps else None,
+                "sopr":                round(sopr, 4) if sopr else None,
+                "sopr_signal":         sopr_signal,
+                "active_addresses":    active_addrs[-1] if active_addrs else None,
+                "nupl":                nupl,
+                "nupl_signal":         nupl_signal,
+                "hash_ribbon_signal":  hash_ribbon_signal,
+                "puell_multiple":      puell_multiple,
+                "puell_signal":        puell_signal,
+                "mvrv_history":        {mvrv_dates[i]: round(mvrv_vals[i], 3) for i in range(len(mvrv_dates))},
+                "sopr_history":        {sopr_dates[i]: round(sopr_vals[i], 4) for i in range(len(sopr_dates))},
+                "source":              "coinmetrics_community",
+                "timestamp":           _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                "error":               None,
             }
         except Exception as e:
             logging.debug("[CoinMetrics] onchain fetch failed: %s — trying Blockchain.com fallback", e)
@@ -4187,7 +4268,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 _mean_mv  = _stats.mean(_trail)
                 _std_mv   = _stats.stdev(_trail) if len(_trail) > 1 else 1.0
                 _mvrv_z   = round((_cur_mvrv - _mean_mv) / max(_std_mv, 1e-6), 2)
-                if _mvrv_z < -0.5:  _mvrv_sig = "UNDERVALUED"
+                if _mvrv_z < 0.0:   _mvrv_sig = "UNDERVALUED"
                 elif _mvrv_z < 1.5: _mvrv_sig = "FAIR_VALUE"
                 elif _mvrv_z < 3.0: _mvrv_sig = "OVERVALUED"
                 else:               _mvrv_sig = "EXTREME_HEAT"
@@ -4196,6 +4277,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                     "mvrv_signal": _mvrv_sig, "realized_cap": None,
                     "sopr": None, "sopr_signal": "N/A",
                     "active_addresses": _active_addrs, "nupl": None, "nupl_signal": "N/A",
+                    "hash_ribbon_signal": "N/A", "puell_multiple": None, "puell_signal": "N/A",
                     "mvrv_history": {_mvrv_dates[i]: round(_mvrv_vals[i], 3) for i in range(len(_mvrv_dates))},
                     "sopr_history": {},
                     "source": "blockchain_com", "error": None,

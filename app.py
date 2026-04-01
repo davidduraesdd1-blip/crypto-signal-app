@@ -6151,6 +6151,14 @@ def page_market_overview():
 
         _mc4 = {"UNDERVALUED": "#00d4aa", "FAIR_VALUE": "#10b981", "OVERVALUED": "#f59e0b", "EXTREME_HEAT": "#ef4444"}.get(_ms4, "#6b7280")
         _sc4 = {"CAPITULATION": "#00d4aa", "MILD_LOSS": "#10b981", "NORMAL": "#6b7280", "PROFIT_TAKING": "#f59e0b"}.get(_ss4, "#6b7280")
+        _hr4  = _oc4.get("hash_ribbon_signal", "N/A")
+        _pm4  = _oc4.get("puell_multiple")
+        _ps4  = _oc4.get("puell_signal", "N/A")
+        _nu4  = _oc4.get("nupl")
+        _ns4  = _oc4.get("nupl_signal", "N/A")
+        _hrc4 = {"RECOVERY": "#00d4aa", "CAPITULATION": "#ef4444"}.get(_hr4, "#6b7280")
+        _pmc4 = {"CAPITULATION": "#00d4aa", "UNDERVALUED": "#10b981", "FAIR_VALUE": "#6b7280", "OVERVALUED": "#f59e0b", "EXTREME_HEAT": "#ef4444"}.get(_ps4, "#6b7280")
+        _nuc4 = {"CAPITULATION": "#00d4aa", "HOPE_FEAR": "#10b981", "OPTIMISM": "#6b7280", "BELIEF_THRILL": "#f59e0b", "EUPHORIA": "#ef4444"}.get(_ns4, "#6b7280")
 
         _col1, _col2, _col3, _col4 = st.columns(4)
         with _col1:
@@ -6193,6 +6201,37 @@ def page_market_overview():
 </div>
 """, unsafe_allow_html=True)
 
+        # ── Row 2: Hash Ribbons · Puell Multiple · NUPL ──────────────────────────
+        _col5, _col6, _col7 = st.columns(3)
+        with _col5:
+            _hr_label = "30d MA > 60d MA — miners recovering" if _hr4 == "RECOVERY" else ("30d MA < 60d MA — miners under stress" if _hr4 == "CAPITULATION" else "Awaiting hash rate data")
+            st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_hrc4};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Hash Ribbons</div>
+  <div style="font-size:22px;font-weight:700;color:{_hrc4}">{_hr4.replace("_", " ")}</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:6px">{_hr_label}</div>
+  <div style="font-size:10px;color:#4b5563;margin-top:4px">87.5% accuracy for cycle bottoms</div>
+</div>
+""", unsafe_allow_html=True)
+        with _col6:
+            st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_pmc4};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Puell Multiple</div>
+  <div style="font-size:32px;font-weight:700;color:{_pmc4}">{f"{_pm4:.3f}" if _pm4 is not None else "—"}</div>
+  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_ps4.replace("_", " ")}</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:4px">Daily revenue / 365d MA · &lt;0.5 bottom · &gt;3 top</div>
+</div>
+""", unsafe_allow_html=True)
+        with _col7:
+            st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_nuc4};border-radius:10px;padding:16px">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">NUPL</div>
+  <div style="font-size:32px;font-weight:700;color:{_nuc4}">{f"{_nu4:+.3f}" if _nu4 is not None else "—"}</div>
+  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_ns4.replace("_", " ")}</div>
+  <div style="font-size:11px;color:#6b7280;margin-top:4px">Net unrealised profit/loss · &lt;0 capitulation</div>
+</div>
+""", unsafe_allow_html=True)
+
         # MVRV Z-Score + SOPR dual-panel chart
         _mh4 = _oc4.get("mvrv_history", {})
         _sh4 = _oc4.get("sopr_history", {})
@@ -6206,7 +6245,7 @@ def page_market_overview():
                 _mhz = (_mhs - _mhs.rolling(365, min_periods=30).mean()) / _mhs.rolling(365, min_periods=30).std().clip(lower=1e-6)
                 _fig4.add_trace(go.Scatter(x=_mhz.index, y=_mhz.values, mode="lines", name="MVRV Z",
                                            line=dict(color="#6366f1", width=2)), row=1, col=1)
-                for _th, _tl, _tc in [(3.0, "Extreme >3", "#ef4444"), (1.5, "Overvalued >1.5", "#f59e0b"), (-0.5, "Undervalued", "#00d4aa")]:
+                for _th, _tl, _tc in [(3.0, "Extreme >3", "#ef4444"), (1.5, "Overvalued >1.5", "#f59e0b"), (0.0, "Undervalued <0", "#00d4aa")]:
                     _fig4.add_hline(y=_th, line_dash="dash", line_color=_tc, opacity=0.4,
                                     annotation_text=_tl, annotation_font_size=9, row=1, col=1)
             if _sh4:
