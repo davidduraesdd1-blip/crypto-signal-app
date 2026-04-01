@@ -31,6 +31,11 @@ import database as _db
 import alerts as _alerts
 import execution as _exec
 
+try:
+    from config import CLAUDE_MODEL as _CLAUDE_MODEL
+except ImportError:
+    _CLAUDE_MODEL = "claude-sonnet-4-6"
+
 logger = logging.getLogger(__name__)
 
 
@@ -585,7 +590,7 @@ You MUST call exactly one tool."""
         except TypeError:
             client = _anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model      = "claude-sonnet-4-6",
+            model      = _CLAUDE_MODEL,
             max_tokens = 512,
             tools      = _CLAUDE_TOOLS,
             messages   = [{"role": "user", "content": prompt}],

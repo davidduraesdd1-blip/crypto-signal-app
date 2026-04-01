@@ -192,7 +192,6 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
         err_str = str(e)
         # Detect credit exhaustion (HTTP 400 with "credit balance" in body)
         if "credit" in err_str.lower() and ("400" in err_str or "balance" in err_str.lower()):
-            global _llm_credits_exhausted
             with _llm_credits_lock:
                 _llm_credits_exhausted = True
             logging.info("[LLM] Claude credit balance exhausted — disabling LLM explanation calls")

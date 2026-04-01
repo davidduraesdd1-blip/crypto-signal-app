@@ -13,6 +13,11 @@ from __future__ import annotations
 import logging
 import os
 import threading
+
+try:
+    from config import CLAUDE_HAIKU_MODEL as _CLAUDE_HAIKU_MODEL
+except ImportError:
+    _CLAUDE_HAIKU_MODEL = "claude-haiku-4-5"
 import time
 import xml.etree.ElementTree as ET
 from typing import Optional
@@ -242,7 +247,7 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
             '"key_theme": "<one short phrase summarizing the dominant story>"}'
         )
         msg = client.messages.create(
-            model="claude-haiku-4-5",
+            model=_CLAUDE_HAIKU_MODEL,
             max_tokens=150,
             messages=[{"role": "user", "content": prompt}],
         )
