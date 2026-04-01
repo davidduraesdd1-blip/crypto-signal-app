@@ -166,3 +166,11 @@ except ImportError:
 def feature_enabled(name: str) -> bool:
     """Return True if the named feature is available (key present or built-in free)."""
     return FEATURES.get(name, False)
+
+
+# ─── Branding ─────────────────────────────────────────────────────────────────
+# Set env vars to activate: SUPERGROK_BRAND_NAME="My App"  SUPERGROK_BRAND_LOGO_PATH="logo.png"
+# When unset (default), the app shows a clean placeholder header.
+# 2-line rebrand when ready — no restructuring required.
+BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "")
+BRAND_LOGO_PATH: str = os.environ.get("SUPERGROK_BRAND_LOGO_PATH", "")

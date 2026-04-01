@@ -912,74 +912,90 @@ def live_dot_html() -> str:
 # ── Sidebar branding header ───────────────────────────────────────────────────
 
 def sidebar_header(version: str, exchange: str, n_pairs: int):
-    """Render a premium gradient branding header in the sidebar."""
-    st.sidebar.markdown(
-        f"""
-        <div style="
-            text-align: center;
-            padding: 22px 10px 16px 10px;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
-            margin-bottom: 10px;
-            position: relative">
-            <!-- glow blob behind logo -->
+    """Render a premium gradient branding header in the sidebar.
+
+    Uses BRAND_NAME / BRAND_LOGO_PATH from config when set.
+    When unset, shows the clean default 'CryptoSignal' placeholder.
+    """
+    try:
+        from config import BRAND_NAME, BRAND_LOGO_PATH
+        from pathlib import Path as _Path
+    except ImportError:
+        BRAND_NAME, BRAND_LOGO_PATH = "", ""
+        _Path = None
+
+    # If a logo image is set and exists, render it instead of the text wordmark
+    if BRAND_LOGO_PATH and _Path and _Path(BRAND_LOGO_PATH).exists():
+        st.sidebar.image(BRAND_LOGO_PATH, width=120)
+    else:
+        _wordmark = BRAND_NAME if BRAND_NAME else "⬡ CryptoSignal"
+        st.sidebar.markdown(
+            f"""
             <div style="
-                position: absolute;
-                top: 10px; left: 50%;
-                transform: translateX(-50%);
-                width: 120px; height: 60px;
-                background: radial-gradient(ellipse, rgba(0,212,170,0.18) 0%, transparent 70%);
-                pointer-events: none"></div>
-            <!-- wordmark -->
-            <div style="
-                font-size: 21px;
-                font-weight: 800;
-                background: linear-gradient(135deg, #00d4aa 0%, #5b8df5 100%);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                background-clip: text;
-                letter-spacing: -0.5px;
-                line-height: 1.1;
+                text-align: center;
+                padding: 22px 10px 16px 10px;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+                margin-bottom: 10px;
                 position: relative">
-                ⬡ CryptoSignal
-            </div>
-            <!-- version + model tag -->
-            <div style="
-                font-size: 9px;
-                color: rgba(168,180,200,0.35);
-                letter-spacing: 1.3px;
-                text-transform: uppercase;
-                margin-top: 5px">
-                v{version} &nbsp;·&nbsp; AI Ensemble
-            </div>
-            <!-- exchange + pairs chips -->
-            <div style="display:flex;justify-content:center;gap:8px;margin-top:12px">
+                <!-- glow blob behind logo -->
                 <div style="
-                    background: linear-gradient(rgba(0,212,170,0.12),rgba(0,212,170,0.12)) padding-box,
-                                linear-gradient(135deg,rgba(0,212,170,0.5),rgba(99,102,241,0.3)) border-box;
-                    border: 1px solid transparent;
-                    border-radius: 999px;
-                    padding: 3px 12px;
-                    font-size: 11px;
-                    color: #00d4aa;
-                    font-weight: 700;
-                    letter-spacing: 0.3px">
-                    {exchange.upper()}
-                </div>
+                    position: absolute;
+                    top: 10px; left: 50%;
+                    transform: translateX(-50%);
+                    width: 120px; height: 60px;
+                    background: radial-gradient(ellipse, rgba(0,212,170,0.18) 0%, transparent 70%);
+                    pointer-events: none"></div>
+                <!-- wordmark -->
                 <div style="
-                    background: rgba(255,255,255,0.04);
-                    border: 1px solid rgba(255,255,255,0.1);
-                    border-radius: 999px;
-                    padding: 3px 12px;
-                    font-size: 11px;
-                    color: rgba(168,180,200,0.55);
-                    font-weight: 500">
-                    {n_pairs} pairs
+                    font-size: 21px;
+                    font-weight: 800;
+                    background: linear-gradient(135deg, #00d4aa 0%, #5b8df5 100%);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    background-clip: text;
+                    letter-spacing: -0.5px;
+                    line-height: 1.1;
+                    position: relative">
+                    {_wordmark}
+                </div>
+                <!-- version + model tag -->
+                <div style="
+                    font-size: 9px;
+                    color: rgba(168,180,200,0.35);
+                    letter-spacing: 1.3px;
+                    text-transform: uppercase;
+                    margin-top: 5px">
+                    v{version} &nbsp;·&nbsp; AI Ensemble
+                </div>
+                <!-- exchange + pairs chips -->
+                <div style="display:flex;justify-content:center;gap:8px;margin-top:12px">
+                    <div style="
+                        background: linear-gradient(rgba(0,212,170,0.12),rgba(0,212,170,0.12)) padding-box,
+                                    linear-gradient(135deg,rgba(0,212,170,0.5),rgba(99,102,241,0.3)) border-box;
+                        border: 1px solid transparent;
+                        border-radius: 999px;
+                        padding: 3px 12px;
+                        font-size: 11px;
+                        color: #00d4aa;
+                        font-weight: 700;
+                        letter-spacing: 0.3px">
+                        {exchange.upper()}
+                    </div>
+                    <div style="
+                        background: rgba(255,255,255,0.04);
+                        border: 1px solid rgba(255,255,255,0.1);
+                        border-radius: 999px;
+                        padding: 3px 12px;
+                        font-size: 11px;
+                        color: rgba(168,180,200,0.55);
+                        font-weight: 500">
+                        {n_pairs} pairs
+                    </div>
                 </div>
             </div>
-        </div>
-        """.strip(),
-        unsafe_allow_html=True,
-    )
+            """.strip(),
+            unsafe_allow_html=True,
+        )
 
 
 # ── Plain English helpers for non-traders ─────────────────────────────────────
@@ -1486,12 +1502,22 @@ _GLOSSARY_MD = """
 """
 
 
-def glossary_popover() -> None:
-    """Render a sidebar-friendly 'Crypto Glossary' popover button."""
-    with st.popover("📖 Crypto Glossary — 28 terms explained"):
-        st.markdown("### Crypto & Trading Terms — Plain English")
-        st.markdown(_GLOSSARY_MD)
-        st.caption("Tip: hover over any metric card in the app for a tooltip explanation.")
+def glossary_popover(user_level: str = "beginner") -> None:
+    """Render a sidebar-friendly 'Crypto Glossary' popover button.
+
+    Explanation depth scales with user_level: beginner / intermediate / advanced.
+    """
+    try:
+        from glossary import glossary_popover as _gp
+        _gp(user_level)
+    except ImportError:
+        # Fallback: legacy flat glossary (single depth)
+        label_depth = {"beginner": "Plain English", "intermediate": "Key Metrics", "advanced": "Technical Detail"}
+        depth_name = label_depth.get(user_level, "Plain English")
+        with st.popover(f"📖 Crypto Glossary ({depth_name})"):
+            st.markdown("### Crypto & Trading Terms")
+            st.markdown(_GLOSSARY_MD)
+            st.caption("Tip: hover over any metric card in the app for a tooltip explanation.")
 
 
 # ─── Top Movers Card ────────────────────────────────────────────────────────────

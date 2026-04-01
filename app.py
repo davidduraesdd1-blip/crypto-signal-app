@@ -610,22 +610,38 @@ try:
 except Exception:
     pass
 
-# ── Simple / Advanced mode toggle ────────────────────────────────────────────
-_bm_col1, _bm_col2 = st.sidebar.columns([3, 2])
-with _bm_col1:
-    st.sidebar.markdown(
-        '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-        'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-        'View Mode</span>',
-        unsafe_allow_html=True,
-    )
-_bm_val = st.sidebar.toggle(
-    "Simple View",
-    value=st.session_state.get("beginner_mode", True),
-    key="beginner_mode_toggle",
-    help="Simple View hides technical jargon and advanced indicators — ideal for beginners. "
-         "Turn off for full technical detail.",
+# ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
+# Beginner = default; persists across all pages via session_state.
+# beginner_mode kept for backward compat with inject_beginner_mode_js().
+st.sidebar.markdown(
+    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
+    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
+    'Experience Level</span>',
+    unsafe_allow_html=True,
 )
+_LEVEL_OPTIONS = ["beginner", "intermediate", "advanced"]
+_LEVEL_LABELS  = {
+    "beginner":     "🟢 Beginner",
+    "intermediate": "🟡 Intermediate",
+    "advanced":     "🔴 Advanced",
+}
+_cur_sg_level = st.session_state.get("user_level", "beginner")
+_sg_level_val = st.sidebar.radio(
+    "User Level",
+    options=_LEVEL_OPTIONS,
+    format_func=lambda lv: _LEVEL_LABELS[lv],
+    index=_LEVEL_OPTIONS.index(_cur_sg_level),
+    key="sg_user_level_radio",
+    label_visibility="collapsed",
+    help=(
+        "Beginner: plain-English view, tooltips always visible, simplified signals. "
+        "Intermediate: key numbers + condensed explanations. "
+        "Advanced: full technical detail, all raw numbers."
+    ),
+)
+st.session_state["user_level"]    = _sg_level_val
+# Backward compat: beginner_mode = True when NOT Advanced (drives inject_beginner_mode_js)
+_bm_val = (_sg_level_val != "advanced")
 st.session_state["beginner_mode"] = _bm_val
 _ui.inject_beginner_mode_js(_bm_val)
 
@@ -663,7 +679,7 @@ if _tier2_val:
 
 # ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
 st.sidebar.markdown("")
-_ui.glossary_popover()
+_ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
