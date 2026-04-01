@@ -531,6 +531,7 @@ def _fallback_onchain() -> dict:
         'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0,
         'whale_activity': False, 'source': 'fallback',
         'vol_mcap_ratio': 0.0, 'price_24h_pct': 0.0, 'price_200d_pct': 0.0,
+        'hash_ribbon_signal': 'N/A', 'puell_multiple': 1.0, 'puell_signal': 'N/A',
     }
 
 
