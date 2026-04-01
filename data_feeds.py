@@ -159,6 +159,12 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "api.etherscan.io",                         # Etherscan token list fallback
     "api.coinpaprika.com",                      # CoinPaprika — global market fallback
     "api.blockchain.info",                      # Blockchain.com — on-chain MVRV + active addresses fallback
+    "api.gateio.ws",                            # Gate.io REST API (OHLCV / spot fallback)
+    "gateio.ws",                                # Gate.io domain root
+    "public-api.solscan.io",                    # Solscan whale tracker
+    "data.ripple.com",                          # XRPL Data API (whale tracker)
+    "api.bscscan.com",                          # BscScan (BNB whale tracker)
+    "blockchain.info",                          # blockchain.info unconfirmed tx (BTC whale tracker)
 })
 
 
@@ -3232,9 +3238,15 @@ def get_taker_buy_sell_ratio(pair: str) -> dict:
     # OKX provides taker volume via /api/v5/rubik/stat/taker-volume
     okx_sym = pair.replace("/", "").upper()
     if okx_sym.endswith("USDT"):
-        okx_ccy = okx_sym[:-4]  # BTC
+        okx_ccy = okx_sym[:-4]   # e.g. BTCUSDT → BTC
+    elif okx_sym.endswith("BTC"):
+        okx_ccy = okx_sym[:-3]   # e.g. ETHBTC → ETH
+    elif okx_sym.endswith("ETH"):
+        okx_ccy = okx_sym[:-3]   # e.g. LTCETH → LTC
+    elif okx_sym.endswith("USD"):
+        okx_ccy = okx_sym[:-3]   # e.g. BTCUSD → BTC
     else:
-        okx_ccy = okx_sym.rstrip("USDTBTCETH")
+        okx_ccy = okx_sym        # unknown quote — pass symbol as-is, OKX will reject gracefully
     try:
         resp = _SESSION.get(
             "https://www.okx.com/api/v5/rubik/stat/taker-volume",
