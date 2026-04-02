@@ -2648,6 +2648,792 @@ _SG_STABLECOINS: frozenset[str] = frozenset({
 })
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# S-UPGRADES: S1–S10  (Sprint — SuperGrok)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_market_regime_banner(results: list, fng_value: int = 50,
+                                 macro_regime: str = "MACRO_NEUTRAL",
+                                 altcoin_season: str = "MIXED") -> None:
+    """S10 — Market Regime Dashboard banner.
+
+    Shows the overall market regime (BULL / BEAR / SIDEWAYS) computed from:
+    - Majority BTC/ETH signal direction across all scan results
+    - Fear & Greed value
+    - Macro regime flag
+    Displayed at the top of the Dashboard section so users instantly know
+    the big-picture direction before looking at individual signals.
+    """
+    if not results:
+        return
+    import streamlit as _st
+
+    # Determine overall bias from scan results
+    _buy_count  = sum(1 for r in results if "BUY"  in r.get("direction", ""))
+    _sell_count = sum(1 for r in results if "SELL" in r.get("direction", ""))
+    _total      = len(results)
+    _buy_pct    = _buy_count  / _total * 100 if _total else 50
+    _sell_pct   = _sell_count / _total * 100 if _total else 50
+
+    # Regime label
+    if _buy_pct >= 60 and fng_value >= 45:
+        _regime   = "BULL MARKET"
+        _icon     = "📈"
+        _color    = "#22c55e"
+        _bg       = "rgba(34,197,94,0.08)"
+        _border   = "rgba(34,197,94,0.3)"
+        _desc     = f"{_buy_pct:.0f}% of signals bullish · F&G {fng_value} · {altcoin_season}"
+    elif _sell_pct >= 60 or fng_value <= 25:
+        _regime   = "BEAR MARKET"
+        _icon     = "📉"
+        _color    = "#ef4444"
+        _bg       = "rgba(239,68,68,0.08)"
+        _border   = "rgba(239,68,68,0.3)"
+        _desc     = f"{_sell_pct:.0f}% of signals bearish · F&G {fng_value} · {macro_regime.replace('_',' ')}"
+    else:
+        _regime   = "SIDEWAYS / MIXED"
+        _icon     = "➡️"
+        _color    = "#f59e0b"
+        _bg       = "rgba(245,158,11,0.08)"
+        _border   = "rgba(245,158,11,0.3)"
+        _desc     = f"{_buy_pct:.0f}% bullish · {_sell_pct:.0f}% bearish · F&G {fng_value}"
+
+    _macro_badge = ""
+    if macro_regime and macro_regime != "MACRO_NEUTRAL":
+        _mc = macro_regime.replace("_", " ")
+        _macro_badge = (
+            f"<span style='background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);"
+            f"border-radius:12px;padding:1px 8px;font-size:11px;color:#818cf8;margin-left:8px'>"
+            f"Macro: {_mc}</span>"
+        )
+
+    _st.markdown(
+        f"<div style='background:{_bg};border:1px solid {_border};border-left:4px solid {_color};"
+        f"border-radius:10px;padding:12px 18px;margin-bottom:16px;display:flex;align-items:center;"
+        f"justify-content:space-between;flex-wrap:wrap;gap:8px'>"
+        f"<div>"
+        f"<span style='font-size:18px;font-weight:800;color:{_color}'>{_icon} {_regime}</span>"
+        f"{_macro_badge}"
+        f"</div>"
+        f"<div style='color:#9ca3af;font-size:12px'>{_desc}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_ttm_squeeze_panel(sparkline_data: dict, results: list,
+                              user_level: str = "beginner") -> None:
+    """S1 — TTM Squeeze Momentum panel.
+
+    Identifies pairs with compressed Bollinger Bands (squeeze state) — a classic
+    signal that a large breakout move is imminent. Uses sparkline closes to compute
+    BB width ratio. Narrow BB width (<2% of price) = squeeze active.
+
+    Args:
+        sparkline_data: {pair: [close prices]} dict from the scan overview fetch
+        results: list of scan result dicts (for direction context)
+        user_level: 'beginner' | 'intermediate' | 'advanced'
+    """
+    import streamlit as _st
+    import numpy as _np
+
+    def _compute_squeeze(closes: list) -> dict:
+        """Compute TTM Squeeze proxy from close prices."""
+        if len(closes) < 10:
+            return {"state": "NO_DATA", "bb_width_pct": None, "momentum": 0}
+        arr = _np.array(closes, dtype=float)
+        _mean  = float(_np.mean(arr[-20:])) if len(arr) >= 20 else float(_np.mean(arr))
+        _std   = float(_np.std(arr[-20:]))  if len(arr) >= 20 else float(_np.std(arr))
+        _bb_w  = (_std * 2) / _mean * 100 if _mean > 0 else 0  # BB width as % of price
+        _mom   = float(arr[-1] - arr[-5]) / arr[-5] * 100 if len(arr) >= 5 and arr[-5] > 0 else 0
+        if _bb_w < 3.0:
+            _state = "SQUEEZE"
+        elif _bb_w < 6.0:
+            _state = "COMPRESSION"
+        else:
+            _state = "EXPANDED"
+        return {"state": _state, "bb_width_pct": round(_bb_w, 2), "momentum": round(_mom, 2)}
+
+    squeeze_pairs = []
+    for r in results:
+        p      = r["pair"]
+        closes = sparkline_data.get(p, [])
+        sq     = _compute_squeeze(closes)
+        dir_   = r.get("direction", "N/A")
+        if sq["state"] in ("SQUEEZE", "COMPRESSION"):
+            squeeze_pairs.append({"pair": p, "direction": dir_, **sq})
+
+    if user_level == "beginner" and not squeeze_pairs:
+        return  # hide empty section from beginners
+
+    section_header(
+        "TTM Squeeze Momentum",
+        "Pairs with compressed volatility — breakout imminent when BB width narrows to extreme lows",
+        icon="🗜️",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "When a coin's price range gets very narrow (like a coiled spring), "
+            "it often means a big move is coming. Green spring = possible big BUY coming. "
+            "Red spring = possible big DROP coming. The direction shows what our model thinks.",
+            title="What does squeeze mean?",
+        )
+
+    if not squeeze_pairs:
+        _st.success("▲ No squeeze states detected — all pairs show normal volatility.")
+        return
+
+    _cols = _st.columns(min(len(squeeze_pairs), 4))
+    for _ci, _sp in enumerate(squeeze_pairs[:8]):
+        _col    = "#f59e0b" if _sp["state"] == "COMPRESSION" else "#ef4444"
+        _dir_cl = "#22c55e" if "BUY" in _sp["direction"] else "#ef4444" if "SELL" in _sp["direction"] else "#9ca3af"
+        with _cols[_ci % 4]:
+            _st.markdown(
+                f"<div style='background:rgba(0,0,0,0.25);border:1px solid {_col}44;"
+                f"border-top:2px solid {_col};border-radius:8px;padding:10px 12px;margin-bottom:8px'>"
+                f"<div style='font-size:12px;color:#9ca3af'>{_sp['pair'].replace('/USDT','')}</div>"
+                f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_sp['state']}</div>"
+                f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_sp['direction']}</div>"
+                f"<div style='font-size:10px;color:#4b5563;margin-top:2px'>"
+                f"BB width: {_sp['bb_width_pct']:.2f}% · Mom: {_sp['momentum']:+.1f}%</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    _st.caption(
+        f"{len(squeeze_pairs)} pair(s) in squeeze/compression. "
+        "BB width <3% = SQUEEZE (breakout imminent). 3–6% = COMPRESSION. "
+        "Momentum = 5-bar price change %."
+    )
+
+
+def render_hurst_exponent_panel(sparkline_data: dict, results: list,
+                                 user_level: str = "beginner") -> None:
+    """S2 — Hurst Exponent Regime Filter.
+
+    H > 0.6  = trending market (momentum strategies work)
+    H ≈ 0.5  = random walk (signals unreliable)
+    H < 0.4  = mean-reverting (fade extremes)
+
+    Computed via R/S analysis on sparkline close prices.
+    """
+    import streamlit as _st
+    import numpy as _np
+
+    def _hurst(closes: list) -> float:
+        """Estimate Hurst exponent via rescaled range (R/S) analysis."""
+        if len(closes) < 20:
+            return 0.5
+        arr = _np.log(_np.array(closes, dtype=float) + 1e-9)
+        n   = len(arr)
+        # R/S across lags 4, 8, 16
+        rs_pairs = []
+        for lag in [4, 8, 16]:
+            if n < lag * 2:
+                continue
+            splits = [arr[i:i+lag] for i in range(0, n - lag, lag)]
+            if not splits:
+                continue
+            rs_vals = []
+            for seg in splits:
+                m = float(_np.mean(seg))
+                dev = seg - m
+                cum = _np.cumsum(dev)
+                r   = float(cum.max() - cum.min())
+                s   = float(_np.std(seg, ddof=1)) or 1e-9
+                rs_vals.append(r / s)
+            rs_pairs.append((float(_np.log(lag)), float(_np.log(_np.mean(rs_vals) + 1e-9))))
+        if len(rs_pairs) < 2:
+            return 0.5
+        x = _np.array([p[0] for p in rs_pairs])
+        y = _np.array([p[1] for p in rs_pairs])
+        h = float(_np.polyfit(x, y, 1)[0])
+        return max(0.0, min(1.0, h))
+
+    section_header(
+        "Hurst Exponent Regime Filter",
+        "H>0.6 = trending (follow signals) · H≈0.5 = random · H<0.4 = mean-reverting (fade signals)",
+        icon="〽️",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "The Hurst number tells you whether a coin is in a 'trend mode' or 'bounce mode'. "
+            "Above 0.6 means the trend is real — follow our signals. "
+            "Below 0.4 means prices tend to reverse — be cautious about following breakouts.",
+            title="What is the Hurst number?",
+        )
+
+    _hurst_rows = []
+    for r in results[:12]:
+        p      = r["pair"]
+        closes = sparkline_data.get(p, [])
+        h      = _hurst(closes)
+        _label = "TRENDING" if h > 0.6 else "RANDOM" if h > 0.4 else "MEAN-REVERTING"
+        _color = "#22c55e" if h > 0.6 else "#9ca3af" if h > 0.4 else "#f59e0b"
+        _strat = "▲ Follow signals" if h > 0.6 else "■ Reduce position size" if h > 0.4 else "▼ Fade extremes"
+        _hurst_rows.append({
+            "Pair":    p.replace("/USDT", ""),
+            "H":       f"{h:.3f}",
+            "Regime":  _label,
+            "Signal":  r.get("direction", "—"),
+            "Strategy": _strat,
+        })
+
+    if _hurst_rows:
+        import pandas as _pd
+        _st.dataframe(_pd.DataFrame(_hurst_rows), width="stretch", hide_index=True)
+        _st.caption("Computed via R/S analysis on 24h sparkline closes. H=0.5 = random walk baseline.")
+
+
+def render_rsi_macd_divergence_panel(results: list, user_level: str = "beginner") -> None:
+    """S3 — RSI+MACD Divergence Auto-Detector.
+
+    Scans tf_data for existing macd_div signals from the model engine.
+    Displays pairs with bullish/bearish divergences as trade alerts.
+    """
+    import streamlit as _st
+
+    section_header(
+        "RSI/MACD Divergence Alerts",
+        "Pairs where price direction conflicts with momentum — classic reversal signal",
+        icon="⚡",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "A divergence happens when a coin's price goes up but its momentum is going down "
+            "(or vice versa). This often means the move is running out of steam and a reversal is near. "
+            "Bullish divergence = price making lower lows but momentum making higher lows → possible bounce.",
+            title="What is a divergence?",
+        )
+
+    _div_alerts = []
+    for r in results:
+        _tfs = r.get("timeframes") or {}
+        for tf, td in _tfs.items():
+            _macd_div = str(td.get("macd_div") or "").lower()
+            if "bullish" in _macd_div or "bearish" in _macd_div:
+                _is_bull = "bullish" in _macd_div
+                _div_alerts.append({
+                    "pair":    r["pair"],
+                    "tf":      tf,
+                    "type":    "BULLISH" if _is_bull else "BEARISH",
+                    "macd_div": td.get("macd_div", ""),
+                    "rsi":     td.get("rsi", "—"),
+                    "direction": r.get("direction", "—"),
+                })
+
+    if not _div_alerts:
+        _st.info("No RSI/MACD divergences detected in current scan data. Run a scan first.")
+        return
+
+    for _da in _div_alerts[:10]:
+        _is_bull = _da["type"] == "BULLISH"
+        _col     = "#22c55e" if _is_bull else "#ef4444"
+        _icon    = "▲" if _is_bull else "▼"
+        _st.markdown(
+            f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_col};"
+            f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
+            f"<b style='color:{_col}'>{_icon} {_da['type']} DIVERGENCE</b> · "
+            f"<b>{_da['pair'].replace('/USDT','')}</b> · {_da['tf']} · "
+            f"RSI: <b>{_da['rsi']}</b> · "
+            f"Model signal: <span style='color:#9ca3af'>{_da['direction']}</span><br>"
+            f"<span style='font-size:11px;color:#4b5563'>{_da['macd_div']}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    _st.caption(f"{len(_div_alerts)} divergence(s) detected across all pairs and timeframes.")
+
+
+def render_funding_rate_arb_panel(results: list, user_level: str = "beginner") -> None:
+    """S4 — Funding Rate Arb Signal.
+
+    Identifies pairs with extreme funding rates where a funding arbitrage
+    opportunity exists (extreme positive = shorts paid, extreme negative = longs paid).
+    """
+    import streamlit as _st
+
+    section_header(
+        "Funding Rate Arb Signals",
+        "Extreme funding rates create risk-free-ish arb: spot vs perp hedge to collect funding",
+        icon="💰",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "Funding rate is a fee that traders pay each other in perpetual futures markets. "
+            "When it's very high (>0.1%), longs are paying shorts a lot — you can earn that fee "
+            "by buying spot AND shorting the same amount in futures. "
+            "This is called 'cash-and-carry arbitrage' — it's not risk-free but has low directional risk.",
+            title="What is funding rate arbitrage?",
+        )
+
+    _fr_alerts = []
+    for r in results:
+        _tfs   = r.get("timeframes") or {}
+        _fund  = str(_tfs.get("1h", {}).get("funding") or "").strip()
+        if not _fund or _fund in ("N/A", "—", ""):
+            continue
+        try:
+            # Parse funding string: usually "0.0100% 8h (LONG PAYS)" or similar
+            import re as _re2
+            _m = _re2.search(r"([+-]?\d+\.?\d*)", _fund)
+            if not _m:
+                continue
+            _fr_pct = float(_m.group(1))
+        except Exception:
+            continue
+
+        if abs(_fr_pct) >= 0.05:  # 0.05% threshold for notable funding
+            _arb_type  = "LONGS PAY" if _fr_pct > 0 else "SHORTS PAY"
+            _arb_col   = "#f59e0b" if _fr_pct > 0 else "#22c55e"
+            _arb_action = ("Buy spot + Short perp to collect funding" if _fr_pct > 0.1
+                           else "Short spot + Long perp to collect funding" if _fr_pct < -0.05
+                           else "Watch — elevated but not extreme")
+            _fr_alerts.append({
+                "pair":       r["pair"],
+                "fr_pct":     _fr_pct,
+                "fr_raw":     _fund,
+                "arb_type":   _arb_type,
+                "arb_color":  _arb_col,
+                "arb_action": _arb_action,
+                "confidence": r.get("confidence_avg_pct", 0),
+            })
+
+    _fr_alerts.sort(key=lambda x: abs(x["fr_pct"]), reverse=True)
+
+    if not _fr_alerts:
+        _st.info("No extreme funding rates detected — market is balanced. Run a scan to populate.")
+        return
+
+    for _fa in _fr_alerts[:8]:
+        _badge_col = "#ef4444" if _fa["fr_pct"] > 0.15 else "#f59e0b" if _fa["fr_pct"] > 0.05 else "#22c55e"
+        _st.markdown(
+            f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_fa['arb_color']};"
+            f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
+            f"<b>{_fa['pair'].replace('/USDT','')}</b> · "
+            f"<span style='color:{_badge_col}'><b>{_fa['fr_pct']:+.4f}%</b></span> · "
+            f"<span style='color:{_fa['arb_color']}'>{_fa['arb_type']}</span><br>"
+            f"<span style='font-size:11px;color:#9ca3af'>"
+            f"Arb: {_fa['arb_action']}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    _st.caption(
+        "Funding >0.1%: longs pay shorts — buy spot + short perp to collect. "
+        "Funding <-0.05%: shorts pay longs — reverse arb. Not risk-free. "
+        "Basis risk and liquidation risk apply."
+    )
+
+
+def render_social_momentum_panel(results: list, user_level: str = "beginner") -> None:
+    """S6 — Social Momentum Proxy.
+
+    Uses CoinGecko trending flag + sentiment data from scan results to build
+    a social momentum proxy score per pair. Trending + bullish signal = strong
+    momentum. Trending + sell signal = potential pump-and-dump warning.
+    """
+    import streamlit as _st
+
+    section_header(
+        "Social Momentum",
+        "Trending coins + sentiment signals — social momentum proxy",
+        icon="🔥",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "When lots of people are talking about a coin, it often moves more than usual. "
+            "This panel shows which coins are trending on social media + exchanges. "
+            "Trending + BUY signal = strong momentum. Trending + SELL signal = caution — could be FOMO.",
+            title="What is social momentum?",
+        )
+
+    _social_rows = []
+    for r in results:
+        _is_trending = r.get("trending", False)
+        _dir         = r.get("direction", "N/A")
+        _conf        = r.get("confidence_avg_pct", 50)
+        _fng         = r.get("fng_value", 50)
+        # Social score: 0-100
+        _s_score  = 50
+        if _is_trending:  _s_score += 30
+        if "BUY"  in _dir: _s_score += min(20, (_conf - 50) / 2) if _conf > 50 else 0
+        if "SELL" in _dir: _s_score -= min(20, (50 - _conf) / 2) if _conf < 50 else 0
+        _s_score = max(0, min(100, round(_s_score)))
+
+        _momentum = ("🔥 HOT"     if _is_trending and "BUY" in _dir
+                     else "⚠️ FOMO" if _is_trending and "SELL" in _dir
+                     else "🔥 Trending" if _is_trending
+                     else "📊 Normal")
+        _social_rows.append({
+            "Pair":          r["pair"].replace("/USDT", ""),
+            "Social Score":  _s_score,
+            "Trending":      "🔥 Yes" if _is_trending else "—",
+            "Signal":        _dir,
+            "Momentum":      _momentum,
+        })
+
+    _social_rows.sort(key=lambda x: x["Social Score"], reverse=True)
+
+    import pandas as _pd
+    if _social_rows:
+        _st.dataframe(_pd.DataFrame(_social_rows[:12]), width="stretch", hide_index=True)
+        _hot = [r for r in _social_rows if "HOT" in r["Momentum"]]
+        _fomo = [r for r in _social_rows if "FOMO" in r["Momentum"]]
+        if _hot:
+            _st.success(f"▲ Hot momentum: {', '.join(r['Pair'] for r in _hot[:3])}")
+        if _fomo:
+            _st.warning(f"⚠️ FOMO risk (trending but sell signal): {', '.join(r['Pair'] for r in _fomo[:3])}")
+    _st.caption(
+        "Social score: 50 base + 30 for CoinGecko trending + ±20 for signal direction. "
+        "Source: CoinGecko trending API + scan signals."
+    )
+
+
+def render_github_dev_activity_panel(user_level: str = "beginner") -> None:
+    """S7 — GitHub Dev Activity Signal.
+
+    Fetches commit activity (last 4 weeks) for major crypto protocol repos.
+    Active development is a positive long-term signal (protocol is maintained).
+    """
+    import streamlit as _st
+
+    section_header(
+        "GitHub Dev Activity",
+        "Commit activity in crypto protocol repos — active development = healthy project",
+        icon="⚙️",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "The best crypto projects are actively developed — bugs fixed, features added. "
+            "This panel shows how many code changes were made in the last 4 weeks. "
+            "More commits = more active team. A dead project often means the team has given up.",
+            title="Why does GitHub activity matter?",
+        )
+
+    try:
+        import data_feeds as _df_sg
+        with _st.spinner("Fetching GitHub activity…"):
+            _gh = _df_sg.fetch_github_dev_activity()
+    except Exception as _ghe:
+        _st.warning(f"GitHub data unavailable: {_ghe}")
+        return
+
+    _items = [(k, v) for k, v in _gh.items() if k not in ("timestamp", "error") and isinstance(v, dict)]
+    _items.sort(key=lambda x: x[1].get("commits_4w", 0), reverse=True)
+
+    if not _items:
+        _st.info("GitHub data unavailable — check connectivity. Unauthenticated limit: 60 req/hr.")
+        return
+
+    _gh_rows = []
+    for _sym, _d in _items:
+        _sig = _d.get("signal", "—")
+        _sig_col = {
+            "VERY_ACTIVE": "#22c55e", "ACTIVE": "#84cc16",
+            "MODERATE": "#f59e0b",   "LOW": "#f97316", "STALLED": "#ef4444",
+        }.get(_sig, "#9ca3af")
+        _gh_rows.append({
+            "Symbol":       _sym,
+            "Repo":         _d.get("repo", "—"),
+            "Commits 4w":   _d.get("commits_4w", 0),
+            "Open Issues":  _d.get("open_issues", "—"),
+            "Stars":        f"{_d.get('stars', 0):,}",
+            "Activity":     _sig,
+        })
+
+    import pandas as _pd
+    _st.dataframe(_pd.DataFrame(_gh_rows), width="stretch", hide_index=True)
+    _stalled = [r["Symbol"] for r in _gh_rows if r["Activity"] == "STALLED"]
+    if _stalled:
+        _st.warning(f"⚠️ Low/stalled dev activity: {', '.join(_stalled)}")
+    _ts = _gh.get("timestamp", "")
+    _st.caption(f"Source: GitHub public API · unauthenticated (60 req/hr limit) · {_ts}")
+
+
+def render_trader_investor_split(results: list, user_level: str = "beginner") -> None:
+    """S8 — Trader vs Investor Grade split.
+
+    Splits signals into:
+    - Trader view (1h/4h timeframes) — short-term entry timing
+    - Investor view (1d/1w timeframes) — macro trend direction
+    Shows agreement/disagreement between the two horizons.
+    """
+    import streamlit as _st
+
+    section_header(
+        "Trader vs Investor Signals",
+        "Short-term (1h/4h) vs long-term (1d/1w) signal alignment",
+        icon="⏳",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "Traders look at short time periods (hours). Investors look at long time periods (days/weeks). "
+            "When both say BUY, that's a strong signal. When they disagree, wait — the market is confused. "
+            "Green = both agree. Orange = only one agrees. Red = they disagree.",
+            title="Trader vs Investor — what does it mean?",
+        )
+
+    _split_rows = []
+    for r in results:
+        _tfs = r.get("timeframes") or {}
+        # Trader TFs: 1h, 4h
+        _trader_dirs = [
+            _tfs.get("1h", {}).get("direction", ""),
+            _tfs.get("4h", {}).get("direction", ""),
+        ]
+        _investor_dirs = [
+            _tfs.get("1d", {}).get("direction", ""),
+            _tfs.get("1w", {}).get("direction", ""),
+        ]
+        _trader_dirs   = [d for d in _trader_dirs   if d and d not in ("N/A", "NO DATA", "LOW VOL")]
+        _investor_dirs = [d for d in _investor_dirs if d and d not in ("N/A", "NO DATA", "LOW VOL")]
+
+        if not _trader_dirs and not _investor_dirs:
+            continue
+
+        def _majority(dirs):
+            if not dirs:
+                return "—"
+            _buys  = sum(1 for d in dirs if "BUY" in d)
+            _sells = sum(1 for d in dirs if "SELL" in d)
+            if _buys > _sells:   return "▲ BUY"
+            if _sells > _buys:   return "▼ SELL"
+            return "■ MIXED"
+
+        _t_dir = _majority(_trader_dirs)
+        _i_dir = _majority(_investor_dirs)
+
+        _agree = (("BUY" in _t_dir and "BUY" in _i_dir) or
+                  ("SELL" in _t_dir and "SELL" in _i_dir))
+        _agree_col = "#22c55e" if _agree else "#f59e0b" if _t_dir != _i_dir else "#ef4444"
+        _grade = "ALIGNED" if _agree else "MIXED"
+
+        _split_rows.append({
+            "Pair":           r["pair"].replace("/USDT", ""),
+            "Trader (1h/4h)": _t_dir,
+            "Investor (1d/1w)": _i_dir,
+            "Alignment":      f"{'✅' if _agree else '⚠️'} {_grade}",
+            "Confidence":     f"{r.get('confidence_avg_pct', 0):.0f}%",
+        })
+
+    if _split_rows:
+        import pandas as _pd
+        _st.dataframe(_pd.DataFrame(_split_rows), width="stretch", hide_index=True)
+        _aligned = sum(1 for r in _split_rows if "ALIGNED" in r["Alignment"])
+        _st.caption(
+            f"{_aligned}/{len(_split_rows)} pairs aligned across both horizons. "
+            "Strong signals occur when Trader AND Investor timeframes agree."
+        )
+    else:
+        _st.info("Run a multi-timeframe scan to see trader vs investor split.")
+
+
+def render_threshold_alerts_panel(results: list, user_level: str = "beginner") -> None:
+    """S9 — In-App Threshold Alerts.
+
+    User-configurable thresholds shown in the UI.
+    Flags pairs that have crossed configured RSI / confidence thresholds.
+    """
+    import streamlit as _st
+
+    section_header(
+        "Custom Threshold Alerts",
+        "Configure RSI and signal strength thresholds — get notified when coins cross your criteria",
+        icon="🔔",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "Set your own rules for when you want to be alerted. "
+            "For example: 'Alert me when a coin has RSI below 30 AND the model says BUY'. "
+            "These are personal filters you control.",
+            title="What are threshold alerts?",
+        )
+
+    with _st.expander("Configure alert thresholds", expanded=False):
+        _thr_col1, _thr_col2 = _st.columns(2)
+        with _thr_col1:
+            _rsi_ob  = _st.slider("RSI Overbought", 60, 90, 70, key="thr_rsi_ob",
+                                   help="Alert when RSI is above this — overbought warning")
+            _rsi_os  = _st.slider("RSI Oversold",   10, 50, 30, key="thr_rsi_os",
+                                   help="Alert when RSI is below this — oversold opportunity")
+        with _thr_col2:
+            _conf_hi = _st.slider("Min Confidence for BUY alert", 50, 95, 70, key="thr_conf_hi")
+            _conf_lo = _st.slider("Max Confidence for SELL alert", 5, 50, 30, key="thr_conf_lo")
+
+    # Evaluate alerts against current scan results
+    _thr_alerts = []
+    for r in results:
+        _tfs   = r.get("timeframes") or {}
+        _rsi   = None
+        for _tf in ("1h", "4h", "1d"):
+            _r_raw = _tfs.get(_tf, {}).get("rsi")
+            if _r_raw not in (None, "N/A", "—"):
+                try:
+                    _rsi = float(_r_raw)
+                    break
+                except Exception:
+                    pass
+
+        _conf = r.get("confidence_avg_pct", 50)
+        _dir  = r.get("direction", "")
+
+        _thr_fired = []
+        if _rsi is not None and _rsi >= _st.session_state.get("thr_rsi_ob", 70):
+            _thr_fired.append(f"RSI {_rsi:.0f} ≥ OB threshold {_st.session_state.get('thr_rsi_ob', 70)}")
+        if _rsi is not None and _rsi <= _st.session_state.get("thr_rsi_os", 30):
+            _thr_fired.append(f"RSI {_rsi:.0f} ≤ OS threshold {_st.session_state.get('thr_rsi_os', 30)}")
+        if "BUY" in _dir and _conf >= _st.session_state.get("thr_conf_hi", 70):
+            _thr_fired.append(f"BUY confidence {_conf:.0f}% ≥ {_st.session_state.get('thr_conf_hi', 70)}%")
+        if "SELL" in _dir and _conf <= _st.session_state.get("thr_conf_lo", 30):
+            _thr_fired.append(f"SELL confidence {_conf:.0f}% ≤ {_st.session_state.get('thr_conf_lo', 30)}%")
+
+        if _thr_fired:
+            _thr_alerts.append({
+                "pair":   r["pair"],
+                "dir":    _dir,
+                "conf":   _conf,
+                "fired":  _thr_fired,
+            })
+
+    if _thr_alerts:
+        for _ta in _thr_alerts[:10]:
+            _dir_col = "#22c55e" if "BUY" in _ta["dir"] else "#ef4444" if "SELL" in _ta["dir"] else "#9ca3af"
+            _st.markdown(
+                f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_dir_col};"
+                f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
+                f"<b style='color:{_dir_col}'>🔔 {_ta['pair'].replace('/USDT','')}</b> · "
+                f"<span style='color:#9ca3af'>{_ta['dir']} · {_ta['conf']:.0f}% confidence</span><br>"
+                f"<span style='font-size:11px;color:#64748b'>"
+                f"{'  ·  '.join(_ta['fired'])}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        _st.success("▲ No pairs matching your current thresholds. Adjust sliders above to customize.")
+
+
+def render_liquidation_overlay_panel(results: list, user_level: str = "beginner") -> None:
+    """S5 — Liquidation Level Overlay.
+
+    Shows estimated liquidation levels for top pairs.
+    Uses existing liquidation cascade data from data_feeds if available,
+    or estimates from stop_loss / entry risk data in scan results.
+    """
+    import streamlit as _st
+    import plotly.graph_objects as _go
+
+    section_header(
+        "Liquidation Level Map",
+        "Estimated liquidation clusters — where forced selling/buying may occur",
+        icon="⚠️",
+    )
+
+    if user_level == "beginner":
+        render_what_this_means_sg(
+            "In futures markets, when traders are losing too much, their positions get automatically closed. "
+            "These are 'liquidation events.' When many liquidations happen at the same price, "
+            "it creates a large price move. This map shows estimated price zones where that might happen.",
+            title="What are liquidation levels?",
+        )
+
+    # Build liquidation level estimates from existing scan result data
+    _liq_items = []
+    for r in results[:8]:
+        _price = r.get("price_usd")
+        _stop  = r.get("stop_loss")
+        _tp1   = r.get("tp1")
+        if not (_price and _price > 0):
+            continue
+
+        # Estimate long liquidation zone: price × (1 - 1/leverage_est)
+        # Use ATR/stop distance as leverage proxy
+        _lev_est = 10  # default 10x leverage assumption
+        if _stop and _stop > 0:
+            _dist_pct = abs(_price - _stop) / _price * 100
+            if _dist_pct > 0:
+                _lev_est = max(3, min(20, round(100 / _dist_pct)))
+
+        _long_liq  = round(_price * (1 - 1 / _lev_est), 4) if _lev_est > 1 else _stop
+        _short_liq = round(_price * (1 + 1 / _lev_est), 4) if _lev_est > 1 else _tp1
+
+        _liq_items.append({
+            "pair":       r["pair"],
+            "price":      _price,
+            "long_liq":   _long_liq,
+            "short_liq":  _short_liq,
+            "lev_est":    _lev_est,
+            "direction":  r.get("direction", "—"),
+        })
+
+    if not _liq_items:
+        _st.info("Run a scan to see liquidation level estimates.")
+        return
+
+    # Bar chart — price vs liq zones
+    _fig_liq = _go.Figure()
+    for _li in _liq_items[:6]:
+        _pname = _li["pair"].replace("/USDT", "")
+        _fig_liq.add_trace(_go.Bar(
+            name=_pname, x=[_pname],
+            y=[_li["price"]],
+            marker_color="#3b82f6",
+            showlegend=False,
+        ))
+        if _li["long_liq"]:
+            _fig_liq.add_scatter(
+                x=[_pname], y=[_li["long_liq"]],
+                mode="markers", marker=dict(symbol="triangle-down", size=12, color="#ef4444"),
+                name=f"Long Liq {_pname}", showlegend=False,
+                hovertemplate=f"Long liq: ${_li['long_liq']:,.4f}<extra>{_pname}</extra>",
+            )
+        if _li["short_liq"]:
+            _fig_liq.add_scatter(
+                x=[_pname], y=[_li["short_liq"]],
+                mode="markers", marker=dict(symbol="triangle-up", size=12, color="#22c55e"),
+                name=f"Short Liq {_pname}", showlegend=False,
+                hovertemplate=f"Short liq: ${_li['short_liq']:,.4f}<extra>{_pname}</extra>",
+            )
+
+    _fig_liq.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+        font_color="#94a3b8",
+        yaxis=dict(title="Price ($)", gridcolor="rgba(148,163,184,0.1)"),
+        xaxis=dict(gridcolor="rgba(0,0,0,0)"),
+        height=280, margin=dict(l=40, r=20, t=10, b=20),
+        barmode="group",
+    )
+    _st.plotly_chart(_fig_liq, use_container_width=True, config={"displayModeBar": False})
+
+    import pandas as _pd
+    _liq_rows = [{
+        "Pair":          _li["pair"].replace("/USDT", ""),
+        "Current Price": f"${_li['price']:,.4f}",
+        "Long Liq Est.": f"${_li['long_liq']:,.4f}" if _li["long_liq"] else "—",
+        "Short Liq Est.":f"${_li['short_liq']:,.4f}" if _li["short_liq"] else "—",
+        "Lev Est.":      f"{_li['lev_est']}×",
+        "Signal":        _li["direction"],
+    } for _li in _liq_items]
+    _st.dataframe(_pd.DataFrame(_liq_rows), width="stretch", hide_index=True)
+    _st.caption(
+        "▼ = long liquidation level (price falls → longs forced out). "
+        "▲ = short liquidation level (price rises → shorts forced out). "
+        "Leverage estimated from stop distance. Not actual Coinglass data — estimated proxy."
+    )
+
+
+def render_what_this_means_sg(message: str, title: str = "What does this mean for me?") -> None:
+    """Beginner 'What does this mean?' info box for SuperGrok sections.
+    Only renders at beginner level — callers should gate on user_level."""
+    import streamlit as _st
+    _st.info(f"ℹ️ **{title}** — {message}")
+
+
 def render_sparkline(prices: list, width: int = 120, height: int = 40):
     """
     #60 — Render a minimal Plotly sparkline figure.

@@ -1838,6 +1838,72 @@ def page_dashboard():
             st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
     st.markdown("---")
 
+    # ── S1-S10 Advanced Analytics Panels ─────────────────────────────────────
+    _s_macro_regime = results[0].get("macro_regime", "MACRO_NEUTRAL") if results else "MACRO_NEUTRAL"
+    _s_altcoin      = results[0].get("altcoin_season", "MIXED") if results else "MIXED"
+
+    # S10 — Market Regime Banner (BULL / BEAR / SIDEWAYS from buy/sell majority + F&G)
+    try:
+        _ui.render_market_regime_banner(results, _fng_val, _s_macro_regime, _s_altcoin)
+    except Exception:
+        pass
+
+    # S1 — TTM Squeeze Momentum Panel
+    try:
+        _ui.render_ttm_squeeze_panel(_spk_results, results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S2 — Hurst Exponent Panel
+    try:
+        _ui.render_hurst_exponent_panel(_spk_results, results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S3 — RSI / MACD Divergence Panel
+    try:
+        _ui.render_rsi_macd_divergence_panel(results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S4 — Funding Rate Arbitrage Panel
+    try:
+        _ui.render_funding_rate_arb_panel(results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S5 — Liquidation Overlay Panel
+    try:
+        _ui.render_liquidation_overlay_panel(results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S6 — Social Momentum Panel
+    try:
+        _ui.render_social_momentum_panel(results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S7 — GitHub Developer Activity Panel
+    try:
+        _ui.render_github_dev_activity_panel(_sg_level_val)
+    except Exception:
+        pass
+
+    # S8 — Trader vs Investor Split Panel
+    try:
+        _ui.render_trader_investor_split(results, _sg_level_val)
+    except Exception:
+        pass
+
+    # S9 — Threshold Alerts Panel
+    try:
+        _ui.render_threshold_alerts_panel(results, _sg_level_val)
+    except Exception:
+        pass
+
+    st.markdown("---")
+
     # ── Tier 2 Pairs Results (#88) — collapsible section ──────────────────────
     if tier2_results:
         with st.expander(

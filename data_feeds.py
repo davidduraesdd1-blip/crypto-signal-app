@@ -6609,3 +6609,111 @@ def clear_all_module_caches() -> None:
             _fc.update({"ts": 0.0, "data": None})
         except Exception:
             pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GITHUB DEV ACTIVITY SIGNAL  (S7 — Sprint upgrade)
+# Fetches recent commit activity for major crypto project repos via public API.
+# No auth token required — uses unauthenticated endpoints (60 req/hr limit).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GITHUB_CACHE: dict = {}
+_GITHUB_CACHE_LOCK = threading.Lock()
+_GITHUB_TTL = 3600 * 6  # 6 hours — GitHub activity changes slowly
+
+_CRYPTO_GITHUB_REPOS = {
+    "BTC":  "bitcoin/bitcoin",
+    "ETH":  "ethereum/go-ethereum",
+    "SOL":  "solana-labs/solana",
+    "XRP":  "XRPLF/rippled",
+    "ADA":  "IntersectMBO/cardano-node",
+    "DOT":  "paritytech/polkadot-sdk",
+    "LINK": "smartcontractkit/chainlink",
+    "AVAX": "ava-labs/avalanchego",
+    "MATIC":"maticnetwork/bor",
+    "NEAR": "near/nearcore",
+    "HBAR": "hashgraph/hedera-services",
+    "XLM":  "stellar/stellar-core",
+}
+
+
+def fetch_github_dev_activity(symbols: list = None, max_repos: int = 8) -> dict:
+    """
+    Fetch commit activity (last 4 weeks) and open PR/issue counts for crypto repos.
+
+    Uses GitHub public API — no token needed for read-only repo info.
+    Rate limited to 60 req/hr unauthenticated; caches 6 hours to stay within limits.
+
+    Returns:
+        {
+            "BTC": {"commits_4w": int, "open_prs": int, "stars": int, "signal": str},
+            ...
+            "timestamp": str,
+            "error": None | str,
+        }
+    """
+    cache_key = "github_dev_activity"
+    now = time.time()
+    with _GITHUB_CACHE_LOCK:
+        cached = _GITHUB_CACHE.get(cache_key)
+        if cached and now - cached.get("_ts", 0) < _GITHUB_TTL:
+            return {k: v for k, v in cached.items() if k != "_ts"}
+
+    syms = (symbols or list(_CRYPTO_GITHUB_REPOS.keys()))[:max_repos]
+    result: dict = {"timestamp": "", "error": None}
+
+    def _fetch_repo(sym: str) -> tuple:
+        repo = _CRYPTO_GITHUB_REPOS.get(sym)
+        if not repo:
+            return sym, None
+        try:
+            base = f"https://api.github.com/repos/{repo}"
+            # Repo metadata (stars, forks, open issues)
+            resp = _SESSION.get(base, timeout=8,
+                                headers={"Accept": "application/vnd.github.v3+json"})
+            if resp.status_code != 200:
+                return sym, None
+            meta = resp.json()
+            stars    = int(meta.get("stargazers_count") or 0)
+            open_iss = int(meta.get("open_issues_count") or 0)
+            # Commit activity — last 4 weeks from /stats/participation (contributors)
+            stats_resp = _SESSION.get(f"{base}/stats/participation", timeout=10,
+                                      headers={"Accept": "application/vnd.github.v3+json"})
+            commits_4w = 0
+            if stats_resp.status_code == 200:
+                weekly_data = stats_resp.json().get("all", [])
+                # Last 4 entries = last 4 weeks
+                commits_4w = sum(weekly_data[-4:]) if len(weekly_data) >= 4 else sum(weekly_data)
+
+            # Signal classification
+            if commits_4w >= 100:   signal = "VERY_ACTIVE"
+            elif commits_4w >= 40:  signal = "ACTIVE"
+            elif commits_4w >= 10:  signal = "MODERATE"
+            elif commits_4w >= 1:   signal = "LOW"
+            else:                   signal = "STALLED"
+
+            return sym, {
+                "commits_4w": commits_4w,
+                "open_issues": open_iss,
+                "stars": stars,
+                "repo": repo,
+                "signal": signal,
+            }
+        except Exception as e:
+            logging.debug("[GitHub] %s fetch error: %s", sym, e)
+            return sym, None
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(4, len(syms))) as ex:
+            for sym, entry in ex.map(_fetch_repo, syms):
+                if entry:
+                    result[sym] = entry
+    except Exception as e:
+        result["error"] = str(e)
+
+    result["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    with _GITHUB_CACHE_LOCK:
+        _GITHUB_CACHE[cache_key] = {**result, "_ts": now}
+
+    return result
