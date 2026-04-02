@@ -706,6 +706,11 @@ if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload 
                 _fn.clear()
             except Exception:
                 pass
+    # Also clear module-level cache dicts in data_feeds — not covered by st.cache_data.clear()
+    try:
+        data_feeds.clear_all_module_caches()
+    except Exception:
+        pass
     st.rerun()
 
 st.sidebar.markdown("---")

@@ -2534,11 +2534,28 @@ def render_what_this_means(message: str, title: str = "What does this mean for m
 
 # ── Fear & Greed Trend (Phase 3, item 26) ─────────────────────────────────────
 
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
+def _fetch_fng_30d_avg() -> float:
+    """Fetch 30-day average Fear & Greed from alternative.me. Cached 60 min."""
+    import requests as _req
+    _r = _req.get(
+        "https://api.alternative.me/fng/?limit=30",
+        timeout=6,
+        headers={"Accept": "application/json"},
+    )
+    if _r.status_code == 200:
+        _data = _r.json().get("data", [])
+        _vals = [int(d["value"]) for d in _data if "value" in d]
+        if _vals:
+            return sum(_vals) / len(_vals)
+    return 50.0
+
+
 def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
     """Render Fear & Greed current + 7-day avg + 30-day avg.
 
     Uses data_feeds.get_fear_greed_index() for the current value and 7-day avg.
-    Fetches 30 days directly from alternative.me (cached via @st.cache_data).
+    Fetches 30 days directly from alternative.me via _fetch_fng_30d_avg() (cached 60 min).
     """
     _cur, _avg7, _avg30 = 50, 50.0, 50.0
     try:
@@ -2551,23 +2568,9 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
     except Exception:
         pass
 
-    # 30-day average: fetch directly from alternative.me (separate cached call)
+    # 30-day average: cached API call (1-hour TTL) — was uncached, hitting API on every rerun
     try:
-        import requests as _req
-        _r30 = _req.get(
-            "https://api.alternative.me/fng/?limit=30",
-            timeout=6,
-            headers={"Accept": "application/json"},
-        )
-        if _r30.status_code == 200:
-            _d30 = _r30.json().get("data", [])
-            _v30 = [int(d["value"]) for d in _d30 if "value" in d]
-            if _v30:
-                _avg30 = sum(_v30) / len(_v30)
-            else:
-                _avg30 = _avg7
-        else:
-            _avg30 = _avg7
+        _avg30 = _fetch_fng_30d_avg()
     except Exception:
         _avg30 = _avg7
 
@@ -2628,7 +2631,8 @@ def render_theme_toggle_sg() -> None:
         st.rerun()
 
     # Inject light-mode class toggle JS
-    _mode = "add" if not _is_light else "remove"
+    # BUG FIX: was inverted — "add" when not light → always applied light-mode class in dark mode
+    _mode = "add" if _is_light else "remove"
     st.markdown(
         f"<script>document.body.classList.{_mode}('light-mode')</script>",
         unsafe_allow_html=True,

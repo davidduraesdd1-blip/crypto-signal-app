@@ -6556,3 +6556,56 @@ def fetch_zerion_portfolio(address: str) -> dict:
     with _WALLET_CACHE_LOCK:
         _WALLET_CACHE[f"zerion:{_addr_key}"] = result
     return {k: v for k, v in result.items() if k != "_ts"}
+
+
+# ── Cache clear helper — called by Refresh All Data button ───────────────────
+def clear_all_module_caches() -> None:
+    """Clear every module-level in-memory cache dict in data_feeds.py.
+
+    st.cache_data.clear() only clears @st.cache_data decorated functions.
+    All module-level dicts (_ONCHAIN_CACHE, _FNG_CACHE, etc.) require manual
+    clearing. Call this from the sidebar Refresh All button so a forced refresh
+    actually fetches fresh data from all sources.
+    """
+    _caches_and_locks = [
+        (_BINANCE_FUNDING_CACHE, _FUNDING_CACHE_LOCK),
+        (_ONCHAIN_CACHE,         _ONCHAIN_CACHE_LOCK),
+        (_OI_CACHE,              _OI_CACHE_LOCK),
+        (_IV_CACHE,              _IV_CACHE_LOCK),
+        (_OB_CACHE,              _OB_CACHE_LOCK),
+        (_LC_CACHE,              _LC_CACHE_LOCK),
+        (_TVL_CACHE,             _TVL_CACHE_LOCK),
+        (_MACRO_CACHE_SG,        _MACRO_CACHE_LOCK_SG),
+        (_NEWS_CACHE,            _NEWS_CACHE_LOCK),
+        (_HTX_PRICE_CACHE,       _HTX_CACHE_LOCK),
+        (_BITSTAMP_PRICE_CACHE,  _BITSTAMP_CACHE_LOCK),
+        (_BITGET_PRICE_CACHE,    _BITGET_CACHE_LOCK),
+        (_WALLET_CACHE,          _WALLET_CACHE_LOCK),
+    ]
+    for _cache, _lock in _caches_and_locks:
+        try:
+            with _lock:
+                _cache.clear()
+        except Exception:
+            pass
+    # Lock-free caches
+    for _cache in [
+        _MULTI_FR_CACHE, _CG_LIQ_CACHE, _CQ_CACHE, _GN_CACHE,
+        _UNLOCK_CACHE, _TRENDING_CACHE, _GLOBAL_CACHE, _CVD_CACHE,
+        _CVD_DIV_CACHE, _FNG_CACHE, _CASCADE_CACHE, _MOVERS_CACHE,
+        _GECKO_CACHE, _LLAMA_CACHE, _CM_CACHE, _LS_RATIO_CACHE,
+        _TAKER_RATIO_CACHE, _KIMCHI_CACHE, _HL_CACHE, _CM_OC_CACHE,
+        _PI_CACHE, _SPARKLINE_CACHE, _REGIONAL_CACHE, _DEX_PRICE_CACHE,
+        _EXCH_COMPARE_CACHE, _REGIONAL_COMP_CACHE, _DEX_CEX_CACHE,
+        _CCXT_OHLCV_CACHE, _CCXT_TICKER_CACHE,
+    ]:
+        try:
+            _cache.clear()
+        except Exception:
+            pass
+    # Fixed-struct caches (reset to empty sentinel)
+    for _fc in [_DERIBIT_OI_CACHE, _REGPREM_CACHE, _FX_CACHE, _CMC_CACHE, _PCR_CACHE]:
+        try:
+            _fc.update({"ts": 0.0, "data": None})
+        except Exception:
+            pass
