@@ -2694,6 +2694,12 @@ def page_dashboard():
             _ag_st = _agent.supervisor.status() if _agent is not None else {}
         except Exception:
             _ag_st = {}
+        # ── agent status metrics ──────────────────────────────────────────────
+        import crypto_model_core as _cmc_ag
+        _ag_n_pairs   = len(_cmc_ag.PAIRS)
+        _ag_cur_pair  = _ag_st.get("current_pair", "") or ""   # pair in-flight right now
+        _ag_last_pair = _ag_st.get("last_pair", "")  or ""     # last completed pair
+
         _ag_c1, _ag_c2, _ag_c3, _ag_c4 = st.columns(4)
         _ag_c1.metric(
             "Status",
@@ -2701,17 +2707,37 @@ def page_dashboard():
             delta="LangGraph" if _ag_st.get("langgraph") else "Fallback pipeline",
             delta_color="normal",
         )
-        _ag_c2.metric("Total Cycles", _ag_st.get("cycles_total", 0))
-        _ag_c3.metric("Last Decision", _ag_st.get("last_decision") or "—")
-        _ag_c4.metric("Restarts", _ag_st.get("restart_count", 0))
+        _ag_c2.metric(
+            "Pairs in Scope",
+            _ag_n_pairs,
+            delta="all pairs every cycle",
+            delta_color="normal",
+            help=f"Agent scans all {_ag_n_pairs} pairs in model.PAIRS every cycle — not just BTC. "
+                 f"Pairs: {', '.join(_cmc_ag.PAIRS)}",
+        )
+        _ag_c3.metric(
+            "Now Analyzing",
+            _ag_cur_pair.replace("/USDT", "") if _ag_cur_pair else "—",
+            delta="in-flight" if _ag_cur_pair else "between cycles",
+            delta_color="normal",
+            help="The pair the agent is currently running signal analysis on. Updates live.",
+        )
+        _ag_c4.metric(
+            "Total Pair Scans",
+            _ag_st.get("cycles_total", 0),
+            delta=f"restarts: {_ag_st.get('restart_count', 0)}",
+            delta_color="normal",
+            help="Total number of individual pair evaluations since the agent started.",
+        )
         if (_ag_st.get("last_run_ts") or 0) > 0:
             _last_ago = int(time.time() - _ag_st["last_run_ts"])
+            _last_decision = _ag_st.get("last_decision") or "—"
             st.caption(
-                f"Last pair: **{_ag_st.get('last_pair', '')}** "
-                f"| {_last_ago}s ago "
-                f"| Dry-run: {'ON' if _agent_cfg.get('agent_dry_run', True) else 'OFF'}"
+                f"Last completed: **{_ag_last_pair}** → {_last_decision} | {_last_ago}s ago "
+                f"| Dry-run: {'ON' if _agent_cfg.get('agent_dry_run', True) else 'OFF'} "
+                f"| Scanning all {_ag_n_pairs} pairs each cycle"
             )
-        with st.expander("Recent Agent Decisions", expanded=False):
+        with st.expander(f"Recent Agent Decisions (all {_ag_n_pairs} pairs)", expanded=False):
             try:
                 _ag_log_df = _cached_agent_log_df(limit=50)
                 if _ag_log_df.empty:
@@ -2721,7 +2747,15 @@ def page_dashboard():
                                               "confidence", "claude_decision",
                                               "action_taken", "claude_rationale"]
                                   if c in _ag_log_df.columns]
-                    st.dataframe(_ag_log_df[_show_cols], width="stretch", hide_index=True)
+                    # Sort by logged_at desc so newest pair decisions are at top
+                    _disp_df = _ag_log_df[_show_cols]
+                    if "logged_at" in _disp_df.columns:
+                        _disp_df = _disp_df.sort_values("logged_at", ascending=False)
+                    st.dataframe(_disp_df, width="stretch", hide_index=True)
+                    # Show unique pairs covered this session
+                    if "pair" in _ag_log_df.columns:
+                        _seen_pairs = sorted(_ag_log_df["pair"].dropna().unique().tolist())
+                        st.caption(f"Pairs with decisions logged: {', '.join(_seen_pairs)}")
             except Exception as _ae:
                 st.caption(f"Agent log unavailable: {_ae}")
     else:
