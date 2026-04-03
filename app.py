@@ -2932,11 +2932,294 @@ def page_dashboard():
                 unsafe_allow_html=True,
             )
 
-        st.caption("Source: CoinGecko · cached 5 min")
+
+    with st.expander("📊 Market Analysis Tools — Correlation · Volatility · Pair Trades", expanded=False):
+        st.caption(
+            "Correlation: which assets move together (diversification guide). "
+            "Vol Rankings: 7-day realized volatility. "
+            "Pair Trading: cointegrated pairs with z-score signals."
+        )
+
+        # ── Correlation Matrix ──
+        _ui.section_header("Asset Correlation Matrix",
+                           "Pairwise Pearson correlation of daily returns — Red = strong positive · Blue = negative",
+                           icon="🔥")
+
+        col_lk, col_tf, col_run = st.columns([2, 2, 2])
+        with col_lk:
+            lookback = st.slider("Lookback (days)", min_value=7, max_value=90,
+                                 value=30, step=7, key="corr_lookback")
+        with col_tf:
+            corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
+        with col_run:
+            st.write("")
+            run_corr = st.button("Compute Correlation", type="primary", width="stretch", key="run_corr")
+
+        if run_corr:
+            with st.spinner("Fetching OHLCV data...", show_time=True):
+                corr_matrix, err = model.compute_correlation_matrix(
+                    pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
+                )
+            if err:
+                st.error(f"Correlation error: {err}")
+                st.session_state["corr_matrix_data"] = None
+                st.session_state["corr_error"] = err
+            else:
+                # PERF: store DataFrame directly — was .to_dict() + pd.DataFrame() round-trip on every render
+                st.session_state["corr_matrix_data"] = corr_matrix
+                st.session_state["corr_error"] = None
+
+        cached = st.session_state.get("corr_matrix_data")
+        if cached is not None:
+            corr_df = cached
+            pairs_list = list(corr_df.columns)
+
+            fig_corr = go.Figure(data=go.Heatmap(
+                z=corr_df.values,
+                x=corr_df.columns.tolist(),
+                y=corr_df.index.tolist(),
+                colorscale="RdBu_r",
+                zmin=-1, zmax=1,
+                text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
+                texttemplate="%{text}",
+                hoverongaps=False,
+            ))
+            fig_corr.update_layout(
+                height=450,
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_corr, width="stretch",
+                            config={"displayModeBar": False, "staticPlot": True})
+
+            # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
+            st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
+            _corr_arr = corr_df.values
+            _rows_idx, _cols_idx = np.where(
+                (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
+            )
+            high_corr_rows = []
+            try:
+                high_corr_rows = [
+                    {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
+                    for i, j in zip(_rows_idx, _cols_idx)
+                ]
+            except Exception:
+                pass
+            if high_corr_rows:
+                st.dataframe(pd.DataFrame(high_corr_rows), width="stretch", hide_index=True)
+            else:
+                st.info("No pairs exceed the 0.75 correlation threshold for this period.")
+        elif st.session_state.get("corr_error"):
+            st.error(f"Correlation error: {st.session_state['corr_error']}")
+
+
         st.markdown("---")
-        st.caption("For full market analysis tools (Correlation Matrix, Pair Trades, "
-                   "Volatility Rankings, MTF Heatmap, Funding Rates) — previously "
-                   "available under Market Overview — use the buttons below from the scan results area above.")
+
+        # ── Realized Volatility Rankings (Phase 11) ───────────────────────────────
+        _ui.section_header(
+            "Realized Volatility Rankings",
+            "7-day annualized realized volatility across all pairs — rank from calmest to most explosive",
+            icon="📉",
+        )
+        st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
+
+        if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
+            import statistics as _stat
+            with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
+                _vol_rows = []
+                _first_err = None
+                _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
+                if _exchange:
+                    for _vp in model.PAIRS:
+                        try:
+                            _df_ohlcv = model.robust_fetch_ohlcv(_exchange, _vp, "1d", limit=9)
+                            if len(_df_ohlcv) >= 3:
+                                _cls = [v for v in _df_ohlcv["close"].tolist() if v and v > 0]
+                                _rets = [
+                                    (_cls[i] - _cls[i - 1]) / _cls[i - 1]
+                                    for i in range(1, len(_cls))
+                                    if _cls[i - 1] > 0
+                                ]
+                                if len(_rets) >= 2:
+                                    _daily_vol = _stat.stdev(_rets)
+                                    _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
+                                    _sector    = model.SECTOR_MAP.get(_vp, "other")
+                                    _vol_rows.append({
+                                        "Asset":    _vp.replace("/USDT", ""),
+                                        "Sector":   _sector.replace("_", " ").title(),
+                                        "Ann. Vol%": _ann_vol,
+                                        "7d Close": round(_cls[-1], 4),
+                                    })
+                        except Exception as _e:
+                            if _first_err is None:
+                                _first_err = str(_e)[:100]
+                else:
+                    _first_err = "Exchange unavailable"
+                st.session_state["vol_rank_data"] = _vol_rows
+                st.session_state["vol_rank_err"]  = _first_err
+
+        _vol_data = st.session_state.get("vol_rank_data")
+        if _vol_data:
+            _vol_df = pd.DataFrame(_vol_data).sort_values("Ann. Vol%", ascending=False).reset_index(drop=True)
+
+            # Rank chips — color by volatility tier
+            _chips_vol = ""
+            _vmax = _vol_df["Ann. Vol%"].max() if not _vol_df.empty else 1
+            for _, _vr in _vol_df.iterrows():
+                _v = _vr["Ann. Vol%"]
+                _pct = _v / max(_vmax, 1)
+                _vc = "#f6465d" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
+                _chips_vol += (
+                    f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
+                    f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
+                    f'border:1px solid {_vc}50;margin:2px;min-width:52px">'
+                    f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_vr["Asset"]}</span>'
+                    f'<span style="font-size:10px;color:{_vc};font-weight:600">{_v:.0f}%</span>'
+                    f'</span>'
+                )
+            st.markdown(
+                f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_vol}</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("🔴 High vol (>70th pct) · 🟡 Medium · 🟢 Low — annualized, based on 7-day daily returns")
+
+            with st.expander("Full volatility table"):
+                st.dataframe(
+                    _vol_df,
+                    width="stretch", hide_index=True,
+                    column_config={
+                        "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
+                        "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
+                    },
+                )
+        elif _vol_data is not None and len(_vol_data) == 0:
+            _vol_err = st.session_state.get("vol_rank_err")
+            st.warning(f"No volatility data returned — {_vol_err}" if _vol_err else "No volatility data returned — check exchange connectivity.")
+
+
+        st.markdown("---")
+
+        # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
+        _ui.section_header(
+            "Pair Trade Scanner",
+            "Finds cryptocurrency pairs that move together — then signals when one is unusually cheap or expensive vs the other",
+            icon="⚖️",
+        )
+        st.caption(
+            "A pair trade buys the underpriced coin and sells the overpriced one, profiting when prices converge. "
+            "Only pairs with a statistically significant relationship (p < 0.05) are shown."
+        )
+
+        _coint_col1, _coint_col2, _coint_col3 = st.columns([2, 2, 2])
+        with _coint_col1:
+            _coint_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="coint_tf")
+        with _coint_col2:
+            _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
+        with _coint_col3:
+            st.write("")
+            _run_coint = st.button("Scan for Pair Trades", type="primary", width="stretch", key="run_coint")
+
+        if _run_coint:
+            with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
+                _coint_results, _coint_err = model.run_cointegration_scan(
+                    pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
+                )
+            if _coint_err:
+                st.error(f"Scan error: {_coint_err}")
+                st.session_state["coint_results"] = None
+            else:
+                st.session_state["coint_results"] = _coint_results
+                st.session_state["coint_err"] = None
+
+        _coint_data = st.session_state.get("coint_results")
+        if _coint_data is not None:
+            if not _coint_data:
+                st.info("No cointegrated pairs found — try a longer lookback or different timeframe.")
+            else:
+                # Signal color map
+                _COINT_COLORS = {
+                    "LONG_SPREAD":  "#00d4aa",
+                    "SHORT_SPREAD": "#f6465d",
+                    "EXIT_SPREAD":  "#f59e0b",
+                    "NEUTRAL":      "#64748b",
+                }
+
+                # Summary banner
+                _actionable = [r for r in _coint_data if r["signal"] not in ("NEUTRAL", "EXIT_SPREAD")]
+                if _actionable:
+                    st.success(
+                        f"⚖️ **{len(_actionable)} actionable pair trade{'s' if len(_actionable) != 1 else ''}** found "
+                        f"out of {len(_coint_data)} cointegrated pairs."
+                    )
+
+                # Render cards for top pairs
+                for _cr in _coint_data[:12]:
+                    _sig_color = _COINT_COLORS.get(_cr["signal"], "#64748b")
+                    _z         = _cr["zscore"]
+                    _z_bar_pct = min(abs(_z) / 3.0 * 100, 100)
+
+                    # Plain English signal label
+                    _sig_labels = {
+                        "LONG_SPREAD":  "BUY SPREAD",
+                        "SHORT_SPREAD": "SELL SPREAD",
+                        "EXIT_SPREAD":  "CLOSE POSITION",
+                        "NEUTRAL":      "NEUTRAL",
+                    }
+                    _sig_label = _sig_labels.get(_cr["signal"], _cr["signal"])
+
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background:linear-gradient(rgba(14,18,30,0.8),rgba(14,18,30,0.8)) padding-box,
+                                       linear-gradient(135deg,{_sig_color}30,rgba(99,102,241,0.15)) border-box;
+                            border:1px solid transparent;border-radius:12px;
+                            padding:14px 18px;margin-bottom:8px;
+                            backdrop-filter:blur(12px)">
+                            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                                <div>
+                                    <span style="font-size:15px;font-weight:800;color:#e8ecf4;
+                                                 font-family:'JetBrains Mono',monospace">
+                                        {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
+                                    </span>
+                                    <span style="font-size:11px;color:rgba(168,180,200,0.5);margin-left:10px">
+                                        hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
+                                    </span>
+                                </div>
+                                <span style="background:{_sig_color};color:#06101c;padding:4px 13px;
+                                             border-radius:999px;font-size:11px;font-weight:800;
+                                             letter-spacing:0.5px">{_sig_label}</span>
+                            </div>
+                            <div style="margin:10px 0 6px">
+                                <div style="display:flex;justify-content:space-between;
+                                            font-size:11px;color:rgba(168,180,200,0.5);margin-bottom:4px">
+                                    <span>Z-Score: <strong style="color:{_sig_color}">{_z:+.2f}</strong></span>
+                                    <span>±2σ threshold</span>
+                                </div>
+                                <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
+                                    <div style="
+                                        position:absolute;
+                                        {'left:50%;' if _z >= 0 else f'right:{50}%;'}
+                                        width:{_z_bar_pct/2:.1f}%;
+                                        height:6px;border-radius:4px;
+                                        background:{_sig_color};
+                                        transition:width 0.4s ease"></div>
+                                    <div style="position:absolute;left:50%;top:-2px;
+                                                width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
+                                </div>
+                            </div>
+                            <div style="font-size:12px;color:#c4cedd;line-height:1.5;
+                                        border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
+                                {_cr['signal_plain']}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                if len(_coint_data) > 12:
+                    st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
 
     # ── Auto-refresh trigger (fragment-based, non-blocking) ──
     # Uses a 1s fragment for the countdown so the main page only reruns at the real interval,
@@ -3158,845 +3441,855 @@ def page_config():
 
     overrides = {}
 
-    # ── Trading Pairs ──
-    _ui.section_header("Trading Pairs", "Select which crypto pairs to include in each scan", icon="🪙")
-    _common_pairs = [
-        'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT',
-        'ADA/USDT', 'AVAX/USDT', 'MATIC/USDT', 'LINK/USDT', 'LTC/USDT',
-        'DOT/USDT', 'UNI/USDT', 'ATOM/USDT', 'FIL/USDT', 'NEAR/USDT',
-    ]
-    # Include any currently active pairs not in the preset list so they appear in the options
-    _extra_active = [p for p in model.PAIRS if p not in _common_pairs]
-    _pair_options = _common_pairs + _extra_active + [
-        p for p in st.session_state.get("_custom_pairs_added", [])
-        if p not in _common_pairs and p not in _extra_active
-    ]
-    _default_pairs = [p for p in model.PAIRS if p in _pair_options]
-    selected_pairs = st.multiselect(
-        "Select pairs to scan", options=_pair_options,
-        default=_default_pairs, key="cfg_pairs"
-    )
-    # Custom pair entry — add any SYMBOL/USDT not in the predefined list
-    _cp1, _cp2 = st.columns([3, 1])
-    with _cp1:
-        _custom_pair_input = st.text_input(
-            "Add custom pair (e.g. PEPE/USDT)", value="",
-            placeholder="TOKEN/USDT", key="cfg_custom_pair_input",
-            help="Type any SYMBOL/QUOTE pair and click Add. It will be added to the list above.",
+    with st.expander("📊 Trading Parameters", expanded=True):
+        # ── Trading Pairs ──
+        _ui.section_header("Trading Pairs", "Select which crypto pairs to include in each scan", icon="🪙")
+        _common_pairs = [
+            'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT',
+            'ADA/USDT', 'AVAX/USDT', 'MATIC/USDT', 'LINK/USDT', 'LTC/USDT',
+            'DOT/USDT', 'UNI/USDT', 'ATOM/USDT', 'FIL/USDT', 'NEAR/USDT',
+        ]
+        # Include any currently active pairs not in the preset list so they appear in the options
+        _extra_active = [p for p in model.PAIRS if p not in _common_pairs]
+        _pair_options = _common_pairs + _extra_active + [
+            p for p in st.session_state.get("_custom_pairs_added", [])
+            if p not in _common_pairs and p not in _extra_active
+        ]
+        _default_pairs = [p for p in model.PAIRS if p in _pair_options]
+        selected_pairs = st.multiselect(
+            "Select pairs to scan", options=_pair_options,
+            default=_default_pairs, key="cfg_pairs"
         )
-    with _cp2:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button("Add Pair", key="cfg_add_custom_pair", width="stretch"):
-            # #13: sanitize user-supplied pair string before using in API / DB calls
-            _cp_val = _sanitize_input(_custom_pair_input, max_len=20).upper().replace(" ", "")
-            if "/" not in _cp_val:
-                _cp_val = _cp_val + "/USDT"
-            if _cp_val and _cp_val not in _pair_options:
-                _added = list(st.session_state.get("_custom_pairs_added", []))
-                _added.append(_cp_val)
-                st.session_state["_custom_pairs_added"] = _added
-                st.rerun()
-            elif _cp_val in _pair_options:
-                st.info(f"{_cp_val} is already in the list.")
-    # #13: validate selected_pairs against known TIER1 + TIER2 + model.PAIRS allowlist
-    import config as _cfg_val
-    _known_pairs = set(model.PAIRS) | set(_cfg_val.TIER1_PAIRS) | set(_cfg_val.TIER2_PAIRS) | set(_pair_options)
-    overrides["PAIRS"] = [p for p in selected_pairs if p in _known_pairs]
-
-    # ── Timeframes ──
-    _ui.section_header("Timeframes", "Timeframes used for multi-timeframe signal analysis", icon="⏱️")
-    tf_options = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M']
-    selected_tfs = st.multiselect(
-        "Select timeframes", options=tf_options,
-        default=model.TIMEFRAMES, key="cfg_tfs"
-    )
-    overrides["TIMEFRAMES"] = selected_tfs
-
-    # ── TA Exchange ──
-    _ui.section_header("Data Source Exchange", "OHLCV data provider for technical analysis", icon="🔗")
-    exchange_options = ['kraken', 'binance', 'coinbase', 'kucoin', 'okx', 'gemini', 'bitstamp']
-    ta_ex = st.selectbox("TA Exchange (OHLCV source)", exchange_options,
-                         index=exchange_options.index(model.TA_EXCHANGE) if model.TA_EXCHANGE in exchange_options else 0)
-    overrides["TA_EXCHANGE"] = ta_ex
-
-    # ── Risk Parameters ──
-    _ui.section_header("Risk Parameters", "Position sizing, Kelly Criterion inputs, and exposure limits", icon="⚖️")
-    r1, r2, r3 = st.columns(3)
-    with r1:
-        portfolio = st.number_input("Portfolio Size (USD)", min_value=100.0, max_value=10_000_000.0,
-                                    value=float(model.PORTFOLIO_SIZE_USD), step=500.0,
-                                    help=_ui.HELP_PORTFOLIO_SIZE)
-        overrides["PORTFOLIO_SIZE_USD"] = portfolio
-    with r2:
-        risk_pct = st.number_input("Risk Per Trade (%)", min_value=0.1, max_value=10.0,
-                                   value=float(model.RISK_PER_TRADE_PCT), step=0.1,
-                                   help=_ui.HELP_RISK_PER_TRADE)
-        overrides["RISK_PER_TRADE_PCT"] = risk_pct
-    with r3:
-        max_exp = st.number_input("Max Total Exposure (%)", min_value=10.0, max_value=100.0,
-                                  value=float(model.MAX_TOTAL_EXPOSURE_PCT), step=5.0,
-                                  help=_ui.HELP_MAX_EXPOSURE)
-        overrides["MAX_TOTAL_EXPOSURE_PCT"] = max_exp
-
-    r4, r5 = st.columns(2)
-    with r4:
-        max_pos_cap = st.number_input("Max Position Cap (%)", min_value=5.0, max_value=100.0,
-                                      value=float(model.MAX_POSITION_PCT_CAP), step=5.0,
-                                      help=_ui.HELP_MAX_POS_CAP)
-        overrides["MAX_POSITION_PCT_CAP"] = max_pos_cap
-    with r5:
-        max_per_pair = st.number_input("Max Open Per Pair", min_value=1, max_value=5,
-                                       value=int(model.MAX_OPEN_PER_PAIR),
-                                       help=_ui.HELP_MAX_PER_PAIR)
-        overrides["MAX_OPEN_PER_PAIR"] = max_per_pair
-
-    # ── Signal Thresholds ──
-    _ui.section_header("Signal Thresholds", "Confidence and alignment thresholds for HIGH-CONF flag and alerts", icon="🎯")
-    t1, t2 = st.columns(2)
-    with t1:
-        hc_thresh = st.slider("High-Confidence Threshold (%)", 50, 90,
-                              int(model.HIGH_CONF_THRESHOLD), step=1,
-                              help=_ui.HELP_HIGH_CONF_THRESH)
-        overrides["HIGH_CONF_THRESHOLD"] = _clamp(float(hc_thresh), 50.0, 90.0)
-    with t2:
-        mtf_thresh = st.slider("MTF Alignment Threshold (%)", 10, 80,
-                               int(model.HIGH_MTF_THRESHOLD), step=5,
-                               help=_ui.HELP_MTF_THRESH)
-        overrides["HIGH_MTF_THRESHOLD"] = float(mtf_thresh)
-
-    # ── Indicator Weights ──
-    _ui.section_header("Indicator Weights", "How much each component contributes to the confidence score (0–1 scale, or 0–30 for bonus components)", icon="🧮")
-    w_cols = st.columns(3)
-    new_weights = {}
-    weight_defs = [
-        ("core", "Core (RSI/MACD/BB)", 0.0, 1.0, 0.01),
-        ("momentum", "Momentum", 0.0, 1.0, 0.01),
-        ("stoch", "Stochastic", 0.0, 1.0, 0.01),
-        ("adx", "ADX", 0.0, 1.0, 0.01),
-        ("vwap_ich", "VWAP/Ichimoku", 0.0, 1.0, 0.01),
-        ("fib", "Fibonacci", 0.0, 1.0, 0.01),
-        ("div", "MACD Divergence", 0.0, 1.0, 0.01),
-        ("supertrend", "SuperTrend", 0.0, 30.0, 0.5),
-        ("sr_breakout", "S/R Breakout", 0.0, 30.0, 0.5),
-        ("regime", "Regime", 0.0, 30.0, 0.5),
-        ("bonus", "Bonus", 0.0, 5.0, 0.1),
-        ("fng", "Fear & Greed", 0.0, 1.0, 0.01),
-        ("onchain", "On-Chain", 0.0, 1.0, 0.01),
-        ("agents", "Multi-Agent", 0.0, 1.0, 0.01),
-        ("stat_arb", "Stat Arb", 0.0, 1.0, 0.01),
-    ]
-    for idx, (key, label, mn, mx, step) in enumerate(weight_defs):
-        with w_cols[idx % 3]:
-            cur = float(model.weights.get(key, model.DEFAULT_WEIGHTS.get(key, 0)))
-            new_weights[key] = st.slider(label, mn, mx, cur, step=step, key=f"w_{key}")
-    overrides["_weights"] = new_weights
-
-    # ── Correlation Filter ──
-    _ui.section_header("Correlation Filter", "Reduces position size for assets highly correlated with BTC", icon="🔗")
-    cr1, cr2 = st.columns(2)
-    with cr1:
-        corr_thresh = st.slider("BTC Correlation Threshold", 0.0, 1.0,
-                                float(model.CORR_THRESHOLD), step=0.05,
-                                help=_ui.HELP_CORR_THRESH)
-        overrides["CORR_THRESHOLD"] = corr_thresh
-    with cr2:
-        corr_lb = st.number_input("Correlation Lookback (days)", 5, 90,
-                                  int(model.CORR_LOOKBACK_DAYS),
-                                  help=_ui.HELP_CORR_LB)
-        overrides["CORR_LOOKBACK_DAYS"] = corr_lb
-
-    # ── Backtest Settings ──
-    _ui.section_header("Backtest Settings", "Fee model, slippage, holding period, and stop mode for historical simulation", icon="🔬")
-    b1, _ = st.columns(2)
-    with b1:
-        hold_days = st.number_input("Backtest Hold Days", 1, 60,
-                                    int(model.BACKTEST_HOLD_DAYS),
-                                    help=_ui.HELP_HOLD_DAYS)
-        overrides["BACKTEST_HOLD_DAYS"] = hold_days
-
-    st.caption("OKX defaults: Taker 0.05%, Maker 0.02%, Slippage 0.05% per side.")
-    b_fee1, b_fee2, b_fee3 = st.columns(3)
-    with b_fee1:
-        taker_fee = st.number_input("Taker Fee (fraction)", 0.0, 0.005,
-                                    float(model.TAKER_FEE_PCT), step=0.0001, format="%.4f",
-                                    help="Market order / stop fill fee. OKX default: 0.0005")
-        overrides["TAKER_FEE_PCT"] = taker_fee
-    with b_fee2:
-        maker_fee = st.number_input("Maker Fee (fraction)", 0.0, 0.005,
-                                    float(model.MAKER_FEE_PCT), step=0.0001, format="%.4f",
-                                    help="Limit order / target fill fee. OKX default: 0.0002")
-        overrides["MAKER_FEE_PCT"] = maker_fee
-    with b_fee3:
-        slippage = st.number_input("Slippage (fraction)", 0.0, 0.01,
-                                   float(model.SLIPPAGE_PCT), step=0.0001, format="%.4f",
-                                   help="Market impact per side. Conservative default: 0.0005")
-        overrides["SLIPPAGE_PCT"] = slippage
-
-    b3, b4 = st.columns(2)
-    with b3:
-        trailing_on = st.checkbox("Enable Trailing Stops in Backtest",
-                                  value=bool(model.TRAILING_STOP_ENABLED),
-                                  help="Stop loss advances with price to lock in profits. "
-                                       "More realistic than fixed stops.")
-        overrides["TRAILING_STOP_ENABLED"] = trailing_on
-    with b4:
-        dd_threshold = st.number_input(
-            "Drawdown Circuit Breaker (%)", 5.0, 50.0,
-            float(model.DRAWDOWN_CIRCUIT_BREAKER_PCT), step=1.0,
-            help="If paper trade portfolio drawdown exceeds this %, "
-                 "all new scan signals are downgraded to NEUTRAL (no entries)."
-        )
-        overrides["DRAWDOWN_CIRCUIT_BREAKER_PCT"] = dd_threshold
-
-    st.markdown("---")
-
-    # ── Indicator Weights — Bayesian Calibration (#49) ──
-    st.markdown("---")
-    _ui.section_header(
-        "Indicator Weights (Bayesian Calibration)",
-        "Beta-distribution Bayesian update of indicator weights based on resolved trade outcomes",
-        icon="⚖️",
-    )
-    try:
-        _bay_detail = _db.get_bayesian_weights_detail()
-        _bay_c1, _bay_c2 = st.columns([2, 3])
-        with _bay_c1:
-            if st.button("Recalibrate Bayesian Weights", type="secondary",
-                         width="stretch", key="btn_bayesian_recal"):
-                with st.spinner("Running Bayesian weight recalibration...", show_time=True):
-                    _new_bw = _db.bayesian_recalibrate_weights(prior_strength=10.0)
-                    st.session_state["bayesian_new_weights"] = _new_bw
-                    st.success(f"Weights recalibrated. Reload app to apply.")
-                    _bay_detail = _db.get_bayesian_weights_detail()
-        with _bay_c2:
-            _cur_bw = st.session_state.get("bayesian_new_weights", {})
-            if not _bay_detail and not _cur_bw:
-                st.caption("No Bayesian weights saved yet. Click **Recalibrate** to compute from feedback log.")
-            else:
-                _display_bw = _bay_detail if _bay_detail else [
-                    {"indicator": k, "weight": v, "wins": "—", "losses": "—"}
-                    for k, v in (_cur_bw or {}).items()
-                ]
-                if _display_bw:
-                    _bw_df_raw = pd.DataFrame(_display_bw)
-                    _bw_df = _bw_df_raw[[c for c in ["indicator", "weight", "wins", "losses"] if c in _bw_df_raw.columns]]
-                    _bw_df = _bw_df.rename(columns={"indicator": "Indicator", "weight": "Weight", "wins": "Wins", "losses": "Losses"})
-                    if "Weight" in _bw_df.columns:
-                        _bw_df["Weight %"] = (_bw_df["Weight"].astype(float) * 100).round(1).astype(str) + "%"
-                    st.dataframe(_bw_df, width="stretch", hide_index=True)
-                    # Horizontal bar chart of weights
-                    if _display_bw and "weight" in _display_bw[0]:
-                        _bw_fig = go.Figure(go.Bar(
-                            x=[round(float(r.get("weight", 0)) * 100, 1) for r in _display_bw],
-                            y=[r.get("indicator", "") for r in _display_bw],
-                            orientation="h",
-                            marker_color="#00d4aa",
-                        ))
-                        _bw_fig.update_layout(
-                            height=220, margin=dict(l=0, r=0, t=10, b=0),
-                            xaxis_title="Weight (%)",
-                        )
-                        st.plotly_chart(_bw_fig, width="stretch")
-    except Exception as _bay_err:
-        st.caption(f"Bayesian weights card error: {_bay_err}")
-
-    # ── ML Weight Optimizer ──
-    _ui.section_header("ML Weight Optimizer", "Bayesian optimization finds indicator weights that maximize directional accuracy on historical data", icon="🤖")
-    st.caption(
-        "Bayesian optimization over 300 bars of historical OHLCV. "
-        "Finds weights that maximize directional accuracy (signal vs next-5-bar price move). "
-        "Optimizes: core, momentum, stoch, adx, vwap_ich, supertrend, regime, bonus. "
-        "Other weights remain unchanged. Saves result to dynamic_weights.json."
-    )
-    opt_c1, opt_c2, opt_c3 = st.columns(3)
-    with opt_c1:
-        opt_trials = st.number_input("Trials", min_value=10, max_value=500,
-                                     value=50, step=10, key="opt_trials")
-    with opt_c2:
-        opt_pair = st.selectbox("Training pair", model.PAIRS,
-                                index=0, key="opt_pair")
-    with opt_c3:
-        opt_tf = st.selectbox("Timeframe", model.TIMEFRAMES,
-                              index=0, key="opt_tf")
-
-    if st.button("Run Optuna Optimization", type="primary", width="stretch"):
-        with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}...", show_time=True):
-            result = model.run_optuna_weight_optimization(
-                n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
+        # Custom pair entry — add any SYMBOL/USDT not in the predefined list
+        _cp1, _cp2 = st.columns([3, 1])
+        with _cp1:
+            _custom_pair_input = st.text_input(
+                "Add custom pair (e.g. PEPE/USDT)", value="",
+                placeholder="TOKEN/USDT", key="cfg_custom_pair_input",
+                help="Type any SYMBOL/QUOTE pair and click Add. It will be added to the list above.",
             )
-        if 'error' in result:
-            st.error(f"Optimization failed: {result['error']}")
-        else:
-            st.success(
-                f"Optimization complete — Best Sharpe score: **{result['best_score']}** "
-                f"over {result['train_bars']} training bars ({opt_trials} trials)"
+        with _cp2:
+            st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+            if st.button("Add Pair", key="cfg_add_custom_pair", width="stretch"):
+                # #13: sanitize user-supplied pair string before using in API / DB calls
+                _cp_val = _sanitize_input(_custom_pair_input, max_len=20).upper().replace(" ", "")
+                if "/" not in _cp_val:
+                    _cp_val = _cp_val + "/USDT"
+                if _cp_val and _cp_val not in _pair_options:
+                    _added = list(st.session_state.get("_custom_pairs_added", []))
+                    _added.append(_cp_val)
+                    st.session_state["_custom_pairs_added"] = _added
+                    st.rerun()
+                elif _cp_val in _pair_options:
+                    st.info(f"{_cp_val} is already in the list.")
+        # #13: validate selected_pairs against known TIER1 + TIER2 + model.PAIRS allowlist
+        import config as _cfg_val
+        _known_pairs = set(model.PAIRS) | set(_cfg_val.TIER1_PAIRS) | set(_cfg_val.TIER2_PAIRS) | set(_pair_options)
+        overrides["PAIRS"] = [p for p in selected_pairs if p in _known_pairs]
+
+        # ── Timeframes ──
+        _ui.section_header("Timeframes", "Timeframes used for multi-timeframe signal analysis", icon="⏱️")
+        tf_options = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M']
+        selected_tfs = st.multiselect(
+            "Select timeframes", options=tf_options,
+            default=model.TIMEFRAMES, key="cfg_tfs"
+        )
+        overrides["TIMEFRAMES"] = selected_tfs
+
+        # ── TA Exchange ──
+        _ui.section_header("Data Source Exchange", "OHLCV data provider for technical analysis", icon="🔗")
+        exchange_options = ['kraken', 'binance', 'coinbase', 'kucoin', 'okx', 'gemini', 'bitstamp']
+        ta_ex = st.selectbox("TA Exchange (OHLCV source)", exchange_options,
+                             index=exchange_options.index(model.TA_EXCHANGE) if model.TA_EXCHANGE in exchange_options else 0)
+        overrides["TA_EXCHANGE"] = ta_ex
+
+
+    with st.expander("⚡ Signal & Risk", expanded=False):
+        # ── Risk Parameters ──
+        _ui.section_header("Risk Parameters", "Position sizing, Kelly Criterion inputs, and exposure limits", icon="⚖️")
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            portfolio = st.number_input("Portfolio Size (USD)", min_value=100.0, max_value=10_000_000.0,
+                                        value=float(model.PORTFOLIO_SIZE_USD), step=500.0,
+                                        help=_ui.HELP_PORTFOLIO_SIZE)
+            overrides["PORTFOLIO_SIZE_USD"] = portfolio
+        with r2:
+            risk_pct = st.number_input("Risk Per Trade (%)", min_value=0.1, max_value=10.0,
+                                       value=float(model.RISK_PER_TRADE_PCT), step=0.1,
+                                       help=_ui.HELP_RISK_PER_TRADE)
+            overrides["RISK_PER_TRADE_PCT"] = risk_pct
+        with r3:
+            max_exp = st.number_input("Max Total Exposure (%)", min_value=10.0, max_value=100.0,
+                                      value=float(model.MAX_TOTAL_EXPOSURE_PCT), step=5.0,
+                                      help=_ui.HELP_MAX_EXPOSURE)
+            overrides["MAX_TOTAL_EXPOSURE_PCT"] = max_exp
+
+        r4, r5 = st.columns(2)
+        with r4:
+            max_pos_cap = st.number_input("Max Position Cap (%)", min_value=5.0, max_value=100.0,
+                                          value=float(model.MAX_POSITION_PCT_CAP), step=5.0,
+                                          help=_ui.HELP_MAX_POS_CAP)
+            overrides["MAX_POSITION_PCT_CAP"] = max_pos_cap
+        with r5:
+            max_per_pair = st.number_input("Max Open Per Pair", min_value=1, max_value=5,
+                                           value=int(model.MAX_OPEN_PER_PAIR),
+                                           help=_ui.HELP_MAX_PER_PAIR)
+            overrides["MAX_OPEN_PER_PAIR"] = max_per_pair
+
+        # ── Signal Thresholds ──
+        _ui.section_header("Signal Thresholds", "Confidence and alignment thresholds for HIGH-CONF flag and alerts", icon="🎯")
+        t1, t2 = st.columns(2)
+        with t1:
+            hc_thresh = st.slider("High-Confidence Threshold (%)", 50, 90,
+                                  int(model.HIGH_CONF_THRESHOLD), step=1,
+                                  help=_ui.HELP_HIGH_CONF_THRESH)
+            overrides["HIGH_CONF_THRESHOLD"] = _clamp(float(hc_thresh), 50.0, 90.0)
+        with t2:
+            mtf_thresh = st.slider("MTF Alignment Threshold (%)", 10, 80,
+                                   int(model.HIGH_MTF_THRESHOLD), step=5,
+                                   help=_ui.HELP_MTF_THRESH)
+            overrides["HIGH_MTF_THRESHOLD"] = float(mtf_thresh)
+
+        # ── Indicator Weights ──
+        _ui.section_header("Indicator Weights", "How much each component contributes to the confidence score (0–1 scale, or 0–30 for bonus components)", icon="🧮")
+        w_cols = st.columns(3)
+        new_weights = {}
+        weight_defs = [
+            ("core", "Core (RSI/MACD/BB)", 0.0, 1.0, 0.01),
+            ("momentum", "Momentum", 0.0, 1.0, 0.01),
+            ("stoch", "Stochastic", 0.0, 1.0, 0.01),
+            ("adx", "ADX", 0.0, 1.0, 0.01),
+            ("vwap_ich", "VWAP/Ichimoku", 0.0, 1.0, 0.01),
+            ("fib", "Fibonacci", 0.0, 1.0, 0.01),
+            ("div", "MACD Divergence", 0.0, 1.0, 0.01),
+            ("supertrend", "SuperTrend", 0.0, 30.0, 0.5),
+            ("sr_breakout", "S/R Breakout", 0.0, 30.0, 0.5),
+            ("regime", "Regime", 0.0, 30.0, 0.5),
+            ("bonus", "Bonus", 0.0, 5.0, 0.1),
+            ("fng", "Fear & Greed", 0.0, 1.0, 0.01),
+            ("onchain", "On-Chain", 0.0, 1.0, 0.01),
+            ("agents", "Multi-Agent", 0.0, 1.0, 0.01),
+            ("stat_arb", "Stat Arb", 0.0, 1.0, 0.01),
+        ]
+        for idx, (key, label, mn, mx, step) in enumerate(weight_defs):
+            with w_cols[idx % 3]:
+                cur = float(model.weights.get(key, model.DEFAULT_WEIGHTS.get(key, 0)))
+                new_weights[key] = st.slider(label, mn, mx, cur, step=step, key=f"w_{key}")
+        overrides["_weights"] = new_weights
+
+        # ── Correlation Filter ──
+        _ui.section_header("Correlation Filter", "Reduces position size for assets highly correlated with BTC", icon="🔗")
+        cr1, cr2 = st.columns(2)
+        with cr1:
+            corr_thresh = st.slider("BTC Correlation Threshold", 0.0, 1.0,
+                                    float(model.CORR_THRESHOLD), step=0.05,
+                                    help=_ui.HELP_CORR_THRESH)
+            overrides["CORR_THRESHOLD"] = corr_thresh
+        with cr2:
+            corr_lb = st.number_input("Correlation Lookback (days)", 5, 90,
+                                      int(model.CORR_LOOKBACK_DAYS),
+                                      help=_ui.HELP_CORR_LB)
+            overrides["CORR_LOOKBACK_DAYS"] = corr_lb
+
+        # ── Backtest Settings ──
+        _ui.section_header("Backtest Settings", "Fee model, slippage, holding period, and stop mode for historical simulation", icon="🔬")
+        b1, _ = st.columns(2)
+        with b1:
+            hold_days = st.number_input("Backtest Hold Days", 1, 60,
+                                        int(model.BACKTEST_HOLD_DAYS),
+                                        help=_ui.HELP_HOLD_DAYS)
+            overrides["BACKTEST_HOLD_DAYS"] = hold_days
+
+        st.caption("OKX defaults: Taker 0.05%, Maker 0.02%, Slippage 0.05% per side.")
+        b_fee1, b_fee2, b_fee3 = st.columns(3)
+        with b_fee1:
+            taker_fee = st.number_input("Taker Fee (fraction)", 0.0, 0.005,
+                                        float(model.TAKER_FEE_PCT), step=0.0001, format="%.4f",
+                                        help="Market order / stop fill fee. OKX default: 0.0005")
+            overrides["TAKER_FEE_PCT"] = taker_fee
+        with b_fee2:
+            maker_fee = st.number_input("Maker Fee (fraction)", 0.0, 0.005,
+                                        float(model.MAKER_FEE_PCT), step=0.0001, format="%.4f",
+                                        help="Limit order / target fill fee. OKX default: 0.0002")
+            overrides["MAKER_FEE_PCT"] = maker_fee
+        with b_fee3:
+            slippage = st.number_input("Slippage (fraction)", 0.0, 0.01,
+                                       float(model.SLIPPAGE_PCT), step=0.0001, format="%.4f",
+                                       help="Market impact per side. Conservative default: 0.0005")
+            overrides["SLIPPAGE_PCT"] = slippage
+
+        b3, b4 = st.columns(2)
+        with b3:
+            trailing_on = st.checkbox("Enable Trailing Stops in Backtest",
+                                      value=bool(model.TRAILING_STOP_ENABLED),
+                                      help="Stop loss advances with price to lock in profits. "
+                                           "More realistic than fixed stops.")
+            overrides["TRAILING_STOP_ENABLED"] = trailing_on
+        with b4:
+            dd_threshold = st.number_input(
+                "Drawdown Circuit Breaker (%)", 5.0, 50.0,
+                float(model.DRAWDOWN_CIRCUIT_BREAKER_PCT), step=1.0,
+                help="If paper trade portfolio drawdown exceeds this %, "
+                     "all new scan signals are downgraded to NEUTRAL (no entries)."
             )
-            st.json(result['best_weights'])
-            st.info("Weights saved to dynamic_weights.json and applied immediately. "
-                    "Reload this page to see updated sliders.")
+            overrides["DRAWDOWN_CIRCUIT_BREAKER_PCT"] = dd_threshold
 
-    # ── LightGBM Feedback Retrain ──
-    st.markdown("---")
-    _ui.section_header("LightGBM Feedback Retrain",
-                       "Retrain the LightGBM agent using real resolved trade outcomes (was_correct) instead of in-sample price prediction",
-                       icon="🧠")
-    st.caption(
-        "Requires ≥50 resolved feedback rows (signals with actual outcome written back). "
-        "Run the Feedback Loop first to resolve pending outcomes. "
-        "The retrained model is cached for 24h and used automatically in the next scan."
-    )
-    lgbm_info = model.get_lgbm_feedback_cache_info() if hasattr(model, 'get_lgbm_feedback_cache_info') else {}
-    if lgbm_info.get("trained_at"):
-        st.info(f"Current model: trained {lgbm_info['trained_at']} on {lgbm_info['n_samples']} samples")
+        st.markdown("---")
 
-    if st.button("Retrain LightGBM from Feedback", type="secondary", width="stretch", key="btn_lgbm_retrain"):
-        with st.spinner("Retraining LightGBM on resolved trade outcomes...", show_time=True):
-            lgbm_r = model.retrain_lgbm_from_feedback()
-        if lgbm_r.get("success"):
-            st.success(lgbm_r["message"])
-        else:
-            st.warning(f"Retrain skipped: {lgbm_r.get('message', 'Unknown error')}")
-
-    # ── Paid API Keys ──
-    st.markdown("---")
-    _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
-    st.caption(
-        "Add keys here to activate premium data feeds. "
-        "Keys are stored in alerts_config.json (local only, never sent anywhere). "
-        "Leave blank to use free-tier fallbacks."
-    )
-    _api_cfg = _cached_alerts_config()
-    ak1, ak2 = st.columns(2)
-    with ak1:
-        lc_key = st.text_input(
-            "LunarCrush Key", value=_api_cfg.get("lunarcrush_key", ""),
-            type="password", placeholder="Social sentiment: galaxy score, alt rank",
-            key="lc_key"
+        # ── Indicator Weights — Bayesian Calibration (#49) ──
+        st.markdown("---")
+        _ui.section_header(
+            "Indicator Weights (Bayesian Calibration)",
+            "Beta-distribution Bayesian update of indicator weights based on resolved trade outcomes",
+            icon="⚖️",
         )
-        cq_key = st.text_input(
-            "CryptoQuant Key", value=_api_cfg.get("cryptoquant_key", ""),
-            type="password", placeholder="BTC/ETH exchange flow (inflow/outflow)",
-            key="cq_key"
-        )
-        cp_key = st.text_input(
-            "CryptoPanic Key", value=_api_cfg.get("cryptopanic_key", ""),
-            type="password", placeholder="Free news sentiment — sign up at cryptopanic.com",
-            key="cp_key"
-        )
-    with ak2:
-        cgl_key = st.text_input(
-            "Coinglass Key", value=_api_cfg.get("coinglass_key", ""),
-            type="password", placeholder="Liquidation data (longs vs shorts)",
-            key="cgl_key"
-        )
-        gn_key = st.text_input(
-            "Glassnode Key", value=_api_cfg.get("glassnode_key", ""),
-            type="password", placeholder="Real SOPR, MVRV-Z, active addresses",
-            key="gn_key"
-        )
-    if st.button("Save API Keys", width="stretch"):
-        _api_cfg.update({
-            "lunarcrush_key":   lc_key.strip(),
-            "coinglass_key":    cgl_key.strip(),
-            "cryptoquant_key":  cq_key.strip(),
-            "glassnode_key":    gn_key.strip(),
-            "cryptopanic_key":  cp_key.strip(),
-        })
-        _save_alerts_config_and_clear(_api_cfg)
-        st.success("API keys saved.")
-    st.caption(
-        "Token unlock data (Tokenomist.ai) requires no key — automatically checked. "
-        "CryptoPanic: free token (cryptopanic.com). "
-        "LunarCrush free tier: 10 req/min. Coinglass/CryptoQuant/Glassnode require paid plans."
-    )
-
-    # ── Auto-Scan Scheduler ────────────────────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header(
-        "Auto-Scan Scheduler",
-        "Automatic background scanning on a configurable interval with optional UTC quiet hours",
-        icon="⏰",
-    )
-    _sched_cfg = _cached_alerts_config()
-    with st.form("autoscan_form"):
-        _sc1, _sc2 = st.columns(2)
-        with _sc1:
-            _sched_on = st.toggle(
-                "Enable Auto-Scan",
-                value=_sched_cfg.get("autoscan_enabled", False),
-            )
-            _sched_interval_opts = {
-                "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
-                "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
-            }
-            _sched_interval_label = st.selectbox(
-                "Scan Interval",
-                options=list(_sched_interval_opts.keys()),
-                index=list(_sched_interval_opts.values()).index(
-                    min(_sched_interval_opts.values(),
-                        key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 60)))
-                ),
-                disabled=not _sched_on,
-            )
-        with _sc2:
-            _quiet_on = st.toggle(
-                "Quiet Hours (UTC)",
-                value=_sched_cfg.get("autoscan_quiet_hours_enabled", False),
-                disabled=not _sched_on,
-                help="Scheduled scans are skipped during this UTC time window.",
-            )
-            _sqc1, _sqc2 = st.columns(2)
-            with _sqc1:
-                _quiet_start = st.text_input(
-                    "Start HH:MM",
-                    value=_sched_cfg.get("autoscan_quiet_start", "22:00"),
-                    disabled=not (_sched_on and _quiet_on),
-                )
-            with _sqc2:
-                _quiet_end = st.text_input(
-                    "End HH:MM",
-                    value=_sched_cfg.get("autoscan_quiet_end", "06:00"),
-                    disabled=not (_sched_on and _quiet_on),
-                )
-        if st.form_submit_button("💾 Save Scheduler Config", type="primary"):
-            _sched_cfg.update({
-                "autoscan_enabled":            _sched_on,
-                "autoscan_interval_minutes":   _sched_interval_opts[_sched_interval_label],
-                "autoscan_quiet_hours_enabled": _quiet_on,
-                "autoscan_quiet_start":        _quiet_start.strip(),
-                "autoscan_quiet_end":          _quiet_end.strip(),
-            })
-            _save_alerts_config_and_clear(_sched_cfg)
-            st.success("Scheduler config saved. Toggle will apply on next Streamlit rerun.")
-
-    _next_t = _get_next_autoscan_time()
-    if _next_t:
         try:
-            if _next_t.tzinfo is None:
-                _next_t = _next_t.replace(tzinfo=timezone.utc)
-            _delta = _next_t - datetime.now(timezone.utc)
-        except Exception:
-            _delta = timedelta(0)
-        _total_secs_cfg = max(0.0, _delta.total_seconds())  # APP-04: clamp before modulo to avoid -1%60=59
-        _m = int(_total_secs_cfg // 60)
-        _s = int(_total_secs_cfg % 60)
-        st.info(f"Scheduler active — next auto-scan fires in **{_m}m {_s}s**")
-    else:
-        st.caption("Scheduler inactive — enable via the sidebar ⏰ Auto-Scan toggle.")
+            _bay_detail = _db.get_bayesian_weights_detail()
+            _bay_c1, _bay_c2 = st.columns([2, 3])
+            with _bay_c1:
+                if st.button("Recalibrate Bayesian Weights", type="secondary",
+                             width="stretch", key="btn_bayesian_recal"):
+                    with st.spinner("Running Bayesian weight recalibration...", show_time=True):
+                        _new_bw = _db.bayesian_recalibrate_weights(prior_strength=10.0)
+                        st.session_state["bayesian_new_weights"] = _new_bw
+                        st.success(f"Weights recalibrated. Reload app to apply.")
+                        _bay_detail = _db.get_bayesian_weights_detail()
+            with _bay_c2:
+                _cur_bw = st.session_state.get("bayesian_new_weights", {})
+                if not _bay_detail and not _cur_bw:
+                    st.caption("No Bayesian weights saved yet. Click **Recalibrate** to compute from feedback log.")
+                else:
+                    _display_bw = _bay_detail if _bay_detail else [
+                        {"indicator": k, "weight": v, "wins": "—", "losses": "—"}
+                        for k, v in (_cur_bw or {}).items()
+                    ]
+                    if _display_bw:
+                        _bw_df_raw = pd.DataFrame(_display_bw)
+                        _bw_df = _bw_df_raw[[c for c in ["indicator", "weight", "wins", "losses"] if c in _bw_df_raw.columns]]
+                        _bw_df = _bw_df.rename(columns={"indicator": "Indicator", "weight": "Weight", "wins": "Wins", "losses": "Losses"})
+                        if "Weight" in _bw_df.columns:
+                            _bw_df["Weight %"] = (_bw_df["Weight"].astype(float) * 100).round(1).astype(str) + "%"
+                        st.dataframe(_bw_df, width="stretch", hide_index=True)
+                        # Horizontal bar chart of weights
+                        if _display_bw and "weight" in _display_bw[0]:
+                            _bw_fig = go.Figure(go.Bar(
+                                x=[round(float(r.get("weight", 0)) * 100, 1) for r in _display_bw],
+                                y=[r.get("indicator", "") for r in _display_bw],
+                                orientation="h",
+                                marker_color="#00d4aa",
+                            ))
+                            _bw_fig.update_layout(
+                                height=220, margin=dict(l=0, r=0, t=10, b=0),
+                                xaxis_title="Weight (%)",
+                            )
+                            st.plotly_chart(_bw_fig, width="stretch")
+        except Exception as _bay_err:
+            st.caption(f"Bayesian weights card error: {_bay_err}")
 
-    st.markdown("---")
-    save_col, reset_col = st.columns(2)
-    with save_col:
-        if st.button("💾 Save Config", type="primary", width="stretch"):
-            _save_config(overrides)
-    with reset_col:
-        if st.button("↺ Reset to Defaults", width="stretch"):
-            _reset_config()
-
-    # ── SQLite Database Stats ──────────────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header("Database Health", "SQLite WAL-mode database — row counts and disk usage", icon="🗄️")
-    try:
-        stats = _cached_db_stats()
-        dc1, dc2, dc3, dc4, dc5 = st.columns(5)
-        dc1.metric("Feedback Log",    f"{stats.get('feedback_log', 0):,} rows")
-        dc2.metric("Signal History",  f"{stats.get('daily_signals', 0):,} rows")
-        dc3.metric("Backtest Trades", f"{stats.get('backtest_trades', 0):,} rows")
-        dc4.metric("Paper Trades",    f"{stats.get('paper_trades', 0):,} rows")
-        dc5.metric("DB Size",         f"{stats.get('db_size_kb', 0):,} KB")
-        with st.expander("All table counts"):
-            st.json({k: v for k, v in stats.items() if k != 'db_size_kb'})
-    except Exception as e:
-        st.warning(f"DB stats unavailable: {e}")
-
-    # ── FastAPI REST Server ────────────────────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header("REST API Server", "FastAPI + Uvicorn — 14 endpoints for external integrations, TradingView webhooks", icon="🚀")
-    st.caption(
-        "Run `python -m uvicorn api:app --host 0.0.0.0 --port 8000` alongside the Streamlit app. "
-        "Interactive docs at **http://localhost:8000/docs**."
-    )
-
-    _api_cfg = _cached_alerts_config()
-    with st.form("api_server_form"):
-        api_key_val = st.text_input(
-            "API Key",
-            value=_api_cfg.get("api_key", ""),
-            type="password",
-            help="Clients must pass this as the `X-API-Key` header. Leave blank to disable auth (local dev only).",
+        # ── ML Weight Optimizer ──
+        _ui.section_header("ML Weight Optimizer", "Bayesian optimization finds indicator weights that maximize directional accuracy on historical data", icon="🤖")
+        st.caption(
+            "Bayesian optimization over 300 bars of historical OHLCV. "
+            "Finds weights that maximize directional accuracy (signal vs next-5-bar price move). "
+            "Optimizes: core, momentum, stoch, adx, vwap_ich, supertrend, regime, bonus. "
+            "Other weights remain unchanged. Saves result to dynamic_weights.json."
         )
-        ac1, ac2 = st.columns(2)
-        api_host_val = ac1.text_input(
-            "Host",
-            value=_api_cfg.get("api_host", "0.0.0.0"),
-            help="0.0.0.0 = all interfaces. Use 127.0.0.1 for local-only.",
+        opt_c1, opt_c2, opt_c3 = st.columns(3)
+        with opt_c1:
+            opt_trials = st.number_input("Trials", min_value=10, max_value=500,
+                                         value=50, step=10, key="opt_trials")
+        with opt_c2:
+            opt_pair = st.selectbox("Training pair", model.PAIRS,
+                                    index=0, key="opt_pair")
+        with opt_c3:
+            opt_tf = st.selectbox("Timeframe", model.TIMEFRAMES,
+                                  index=0, key="opt_tf")
+
+        if st.button("Run Optuna Optimization", type="primary", width="stretch"):
+            with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}...", show_time=True):
+                result = model.run_optuna_weight_optimization(
+                    n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
+                )
+            if 'error' in result:
+                st.error(f"Optimization failed: {result['error']}")
+            else:
+                st.success(
+                    f"Optimization complete — Best Sharpe score: **{result['best_score']}** "
+                    f"over {result['train_bars']} training bars ({opt_trials} trials)"
+                )
+                st.json(result['best_weights'])
+                st.info("Weights saved to dynamic_weights.json and applied immediately. "
+                        "Reload this page to see updated sliders.")
+
+        # ── LightGBM Feedback Retrain ──
+        st.markdown("---")
+        _ui.section_header("LightGBM Feedback Retrain",
+                           "Retrain the LightGBM agent using real resolved trade outcomes (was_correct) instead of in-sample price prediction",
+                           icon="🧠")
+        st.caption(
+            "Requires ≥50 resolved feedback rows (signals with actual outcome written back). "
+            "Run the Feedback Loop first to resolve pending outcomes. "
+            "The retrained model is cached for 24h and used automatically in the next scan."
         )
-        api_port_val = ac2.number_input(
-            "Port",
-            min_value=1024,
-            max_value=65535,
-            value=int(_api_cfg.get("api_port", 8000)),
-            step=1,
+        lgbm_info = model.get_lgbm_feedback_cache_info() if hasattr(model, 'get_lgbm_feedback_cache_info') else {}
+        if lgbm_info.get("trained_at"):
+            st.info(f"Current model: trained {lgbm_info['trained_at']} on {lgbm_info['n_samples']} samples")
+
+        if st.button("Retrain LightGBM from Feedback", type="secondary", width="stretch", key="btn_lgbm_retrain"):
+            with st.spinner("Retraining LightGBM on resolved trade outcomes...", show_time=True):
+                lgbm_r = model.retrain_lgbm_from_feedback()
+            if lgbm_r.get("success"):
+                st.success(lgbm_r["message"])
+            else:
+                st.warning(f"Retrain skipped: {lgbm_r.get('message', 'Unknown error')}")
+
+
+    with st.expander("🔔 Notifications", expanded=False):
+        # ── Paid API Keys ──
+        st.markdown("---")
+        _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
+        st.caption(
+            "Add keys here to activate premium data feeds. "
+            "Keys are stored in alerts_config.json (local only, never sent anywhere). "
+            "Leave blank to use free-tier fallbacks."
         )
-        if st.form_submit_button("💾 Save API Config", type="primary"):
+        _api_cfg = _cached_alerts_config()
+        ak1, ak2 = st.columns(2)
+        with ak1:
+            lc_key = st.text_input(
+                "LunarCrush Key", value=_api_cfg.get("lunarcrush_key", ""),
+                type="password", placeholder="Social sentiment: galaxy score, alt rank",
+                key="lc_key"
+            )
+            cq_key = st.text_input(
+                "CryptoQuant Key", value=_api_cfg.get("cryptoquant_key", ""),
+                type="password", placeholder="BTC/ETH exchange flow (inflow/outflow)",
+                key="cq_key"
+            )
+            cp_key = st.text_input(
+                "CryptoPanic Key", value=_api_cfg.get("cryptopanic_key", ""),
+                type="password", placeholder="Free news sentiment — sign up at cryptopanic.com",
+                key="cp_key"
+            )
+        with ak2:
+            cgl_key = st.text_input(
+                "Coinglass Key", value=_api_cfg.get("coinglass_key", ""),
+                type="password", placeholder="Liquidation data (longs vs shorts)",
+                key="cgl_key"
+            )
+            gn_key = st.text_input(
+                "Glassnode Key", value=_api_cfg.get("glassnode_key", ""),
+                type="password", placeholder="Real SOPR, MVRV-Z, active addresses",
+                key="gn_key"
+            )
+        if st.button("Save API Keys", width="stretch"):
             _api_cfg.update({
-                "api_key": api_key_val.strip(),
-                "api_host": api_host_val.strip(),
-                "api_port": int(api_port_val),
+                "lunarcrush_key":   lc_key.strip(),
+                "coinglass_key":    cgl_key.strip(),
+                "cryptoquant_key":  cq_key.strip(),
+                "glassnode_key":    gn_key.strip(),
+                "cryptopanic_key":  cp_key.strip(),
             })
             _save_alerts_config_and_clear(_api_cfg)
-            st.success("API config saved.")
-
-    _host = _api_cfg.get("api_host", "0.0.0.0")
-    _port = int(_api_cfg.get("api_port", 8000))
-    _display_host = "localhost" if _host == "0.0.0.0" else _host
-    with st.expander("Start command + endpoint reference"):
-        config_dir = os.path.dirname(os.path.abspath(model._CONFIG_FILE)) or "."
-        st.code(
-            f"cd \"{config_dir}\"\n"
-            f"python -m uvicorn api:app --host {_host} --port {_port} --reload",
-            language="bash",
-        )
-        st.markdown(f"""
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/health` | No | DB stats + scan status |
-| GET | `/signals` | Yes | Latest scan results (filterable) |
-| GET | `/signals/{{pair}}` | Yes | Single-pair signal |
-| GET | `/signals/history` | Yes | Historical signal log |
-| GET | `/positions` | Yes | Open paper trade positions |
-| GET | `/paper-trades` | Yes | Closed paper trade history |
-| GET | `/backtest` | Yes | Latest backtest metrics |
-| GET | `/backtest/trades` | Yes | Trade log (paginated) |
-| GET | `/backtest/runs` | Yes | All backtest run summaries |
-| GET | `/weights` | Yes | Current indicator weights |
-| GET | `/scan/status` | No | Scan progress |
-| POST | `/scan/trigger` | Yes | Start a background scan |
-| POST | `/webhook/tradingview` | Yes | TradingView strategy webhook |
-| GET | `/alerts/log` | Yes | Alert dispatch audit log |
-
-Swagger UI: **http://{_display_host}:{_port}/docs**
-""")
-
-
-    # ── Live Execution Settings ────────────────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
-    st.caption(
-        "Connect OKX API keys to enable order execution directly from the dashboard. "
-        "Paper mode is always on by default — real orders only fire when "
-        "**LIVE TRADING MODE** is explicitly enabled below."
-    )
-    _exec_ui_cfg = _cached_alerts_config()
-    with st.form("exec_config_form"):
-        _live_on = st.toggle(
-            "🔴 LIVE TRADING MODE",
-            value=bool(_exec_ui_cfg.get("live_trading_enabled", False)),
-            help="OFF = paper simulation only. ON = real orders sent to OKX with real funds.",
-        )
-        if _live_on:
-            st.error("LIVE MODE ENABLED — orders placed here use real funds.")
-        _auto_on = st.toggle(
-            "Auto-Execute on Scan (HIGH_CONF signals only)",
-            value=bool(_exec_ui_cfg.get("auto_execute_enabled", False)),
-            help="After each scan, automatically place orders for HIGH_CONF signals "
-                 "above the threshold. Respects paper/live mode toggle above.",
-        )
-        _auto_conf = st.slider(
-            "Auto-Execute Confidence Threshold (%)",
-            min_value=70, max_value=95,
-            value=int(_exec_ui_cfg.get("auto_execute_min_confidence", 80)),
-            step=5,
-            disabled=not _auto_on,
-        )
-        st.markdown("**OKX API Keys**")
+            st.success("API keys saved.")
         st.caption(
-            "Create a key at okx.com → API Management. "
-            "Grant: Read + Trade + Futures. Never grant Withdrawal permission."
+            "Token unlock data (Tokenomist.ai) requires no key — automatically checked. "
+            "CryptoPanic: free token (cryptopanic.com). "
+            "LunarCrush free tier: 10 req/min. Coinglass/CryptoQuant/Glassnode require paid plans."
+        )
+
+        # ── Auto-Scan Scheduler ────────────────────────────────────────────────────
+        st.markdown("---")
+        _ui.section_header(
+            "Auto-Scan Scheduler",
+            "Automatic background scanning on a configurable interval with optional UTC quiet hours",
+            icon="⏰",
+        )
+        _sched_cfg = _cached_alerts_config()
+        with st.form("autoscan_form"):
+            _sc1, _sc2 = st.columns(2)
+            with _sc1:
+                _sched_on = st.toggle(
+                    "Enable Auto-Scan",
+                    value=_sched_cfg.get("autoscan_enabled", False),
+                )
+                _sched_interval_opts = {
+                    "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
+                    "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
+                }
+                _sched_interval_label = st.selectbox(
+                    "Scan Interval",
+                    options=list(_sched_interval_opts.keys()),
+                    index=list(_sched_interval_opts.values()).index(
+                        min(_sched_interval_opts.values(),
+                            key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 60)))
+                    ),
+                    disabled=not _sched_on,
+                )
+            with _sc2:
+                _quiet_on = st.toggle(
+                    "Quiet Hours (UTC)",
+                    value=_sched_cfg.get("autoscan_quiet_hours_enabled", False),
+                    disabled=not _sched_on,
+                    help="Scheduled scans are skipped during this UTC time window.",
+                )
+                _sqc1, _sqc2 = st.columns(2)
+                with _sqc1:
+                    _quiet_start = st.text_input(
+                        "Start HH:MM",
+                        value=_sched_cfg.get("autoscan_quiet_start", "22:00"),
+                        disabled=not (_sched_on and _quiet_on),
+                    )
+                with _sqc2:
+                    _quiet_end = st.text_input(
+                        "End HH:MM",
+                        value=_sched_cfg.get("autoscan_quiet_end", "06:00"),
+                        disabled=not (_sched_on and _quiet_on),
+                    )
+            if st.form_submit_button("💾 Save Scheduler Config", type="primary"):
+                _sched_cfg.update({
+                    "autoscan_enabled":            _sched_on,
+                    "autoscan_interval_minutes":   _sched_interval_opts[_sched_interval_label],
+                    "autoscan_quiet_hours_enabled": _quiet_on,
+                    "autoscan_quiet_start":        _quiet_start.strip(),
+                    "autoscan_quiet_end":          _quiet_end.strip(),
+                })
+                _save_alerts_config_and_clear(_sched_cfg)
+                st.success("Scheduler config saved. Toggle will apply on next Streamlit rerun.")
+
+        _next_t = _get_next_autoscan_time()
+        if _next_t:
+            try:
+                if _next_t.tzinfo is None:
+                    _next_t = _next_t.replace(tzinfo=timezone.utc)
+                _delta = _next_t - datetime.now(timezone.utc)
+            except Exception:
+                _delta = timedelta(0)
+            _total_secs_cfg = max(0.0, _delta.total_seconds())  # APP-04: clamp before modulo to avoid -1%60=59
+            _m = int(_total_secs_cfg // 60)
+            _s = int(_total_secs_cfg % 60)
+            st.info(f"Scheduler active — next auto-scan fires in **{_m}m {_s}s**")
+        else:
+            st.caption("Scheduler inactive — enable via the sidebar ⏰ Auto-Scan toggle.")
+
+        st.markdown("---")
+        save_col, reset_col = st.columns(2)
+        with save_col:
+            if st.button("💾 Save Config", type="primary", width="stretch"):
+                _save_config(overrides)
+        with reset_col:
+            if st.button("↺ Reset to Defaults", width="stretch"):
+                _reset_config()
+
+
+    with st.expander("🛠️ Developer Tools", expanded=False):
+        # ── SQLite Database Stats ──────────────────────────────────────────────
+        st.markdown("---")
+        _ui.section_header("Database Health", "SQLite WAL-mode database — row counts and disk usage", icon="🗄️")
+        try:
+            stats = _cached_db_stats()
+            dc1, dc2, dc3, dc4, dc5 = st.columns(5)
+            dc1.metric("Feedback Log",    f"{stats.get('feedback_log', 0):,} rows")
+            dc2.metric("Signal History",  f"{stats.get('daily_signals', 0):,} rows")
+            dc3.metric("Backtest Trades", f"{stats.get('backtest_trades', 0):,} rows")
+            dc4.metric("Paper Trades",    f"{stats.get('paper_trades', 0):,} rows")
+            dc5.metric("DB Size",         f"{stats.get('db_size_kb', 0):,} KB")
+            with st.expander("All table counts"):
+                st.json({k: v for k, v in stats.items() if k != 'db_size_kb'})
+        except Exception as e:
+            st.warning(f"DB stats unavailable: {e}")
+
+        # ── FastAPI REST Server ────────────────────────────────────────────────────
+        st.markdown("---")
+        _ui.section_header("REST API Server", "FastAPI + Uvicorn — 14 endpoints for external integrations, TradingView webhooks", icon="🚀")
+        st.caption(
+            "Run `python -m uvicorn api:app --host 0.0.0.0 --port 8000` alongside the Streamlit app. "
+            "Interactive docs at **http://localhost:8000/docs**."
+        )
+
+        _api_cfg = _cached_alerts_config()
+        with st.form("api_server_form"):
+            api_key_val = st.text_input(
+                "API Key",
+                value=_api_cfg.get("api_key", ""),
+                type="password",
+                help="Clients must pass this as the `X-API-Key` header. Leave blank to disable auth (local dev only).",
+            )
+            ac1, ac2 = st.columns(2)
+            api_host_val = ac1.text_input(
+                "Host",
+                value=_api_cfg.get("api_host", "0.0.0.0"),
+                help="0.0.0.0 = all interfaces. Use 127.0.0.1 for local-only.",
+            )
+            api_port_val = ac2.number_input(
+                "Port",
+                min_value=1024,
+                max_value=65535,
+                value=int(_api_cfg.get("api_port", 8000)),
+                step=1,
+            )
+            if st.form_submit_button("💾 Save API Config", type="primary"):
+                _api_cfg.update({
+                    "api_key": api_key_val.strip(),
+                    "api_host": api_host_val.strip(),
+                    "api_port": int(api_port_val),
+                })
+                _save_alerts_config_and_clear(_api_cfg)
+                st.success("API config saved.")
+
+        _host = _api_cfg.get("api_host", "0.0.0.0")
+        _port = int(_api_cfg.get("api_port", 8000))
+        _display_host = "localhost" if _host == "0.0.0.0" else _host
+        with st.expander("Start command + endpoint reference"):
+            config_dir = os.path.dirname(os.path.abspath(model._CONFIG_FILE)) or "."
+            st.code(
+                f"cd \"{config_dir}\"\n"
+                f"python -m uvicorn api:app --host {_host} --port {_port} --reload",
+                language="bash",
+            )
+            st.markdown(f"""
+    | Method | Endpoint | Auth | Description |
+    |--------|----------|------|-------------|
+    | GET | `/health` | No | DB stats + scan status |
+    | GET | `/signals` | Yes | Latest scan results (filterable) |
+    | GET | `/signals/{{pair}}` | Yes | Single-pair signal |
+    | GET | `/signals/history` | Yes | Historical signal log |
+    | GET | `/positions` | Yes | Open paper trade positions |
+    | GET | `/paper-trades` | Yes | Closed paper trade history |
+    | GET | `/backtest` | Yes | Latest backtest metrics |
+    | GET | `/backtest/trades` | Yes | Trade log (paginated) |
+    | GET | `/backtest/runs` | Yes | All backtest run summaries |
+    | GET | `/weights` | Yes | Current indicator weights |
+    | GET | `/scan/status` | No | Scan progress |
+    | POST | `/scan/trigger` | Yes | Start a background scan |
+    | POST | `/webhook/tradingview` | Yes | TradingView strategy webhook |
+    | GET | `/alerts/log` | Yes | Alert dispatch audit log |
+
+    Swagger UI: **http://{_display_host}:{_port}/docs**
+    """)
+
+
+
+    with st.expander("⚙️ Live Execution", expanded=False):
+        # ── Live Execution Settings ────────────────────────────────────────────────
+        st.markdown("---")
+        _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
+        st.caption(
+            "Connect OKX API keys to enable order execution directly from the dashboard. "
+            "Paper mode is always on by default — real orders only fire when "
+            "**LIVE TRADING MODE** is explicitly enabled below."
+        )
+        _exec_ui_cfg = _cached_alerts_config()
+        with st.form("exec_config_form"):
+            _live_on = st.toggle(
+                "🔴 LIVE TRADING MODE",
+                value=bool(_exec_ui_cfg.get("live_trading_enabled", False)),
+                help="OFF = paper simulation only. ON = real orders sent to OKX with real funds.",
+            )
+            if _live_on:
+                st.error("LIVE MODE ENABLED — orders placed here use real funds.")
+            _auto_on = st.toggle(
+                "Auto-Execute on Scan (HIGH_CONF signals only)",
+                value=bool(_exec_ui_cfg.get("auto_execute_enabled", False)),
+                help="After each scan, automatically place orders for HIGH_CONF signals "
+                     "above the threshold. Respects paper/live mode toggle above.",
+            )
+            _auto_conf = st.slider(
+                "Auto-Execute Confidence Threshold (%)",
+                min_value=70, max_value=95,
+                value=int(_exec_ui_cfg.get("auto_execute_min_confidence", 80)),
+                step=5,
+                disabled=not _auto_on,
+            )
+            st.markdown("**OKX API Keys**")
+            st.caption(
+                "Create a key at okx.com → API Management. "
+                "Grant: Read + Trade + Futures. Never grant Withdrawal permission."
+            )
+            st.warning(
+                "Security note: API keys are stored in alerts_config.json in plain text. "
+                "Do not commit this file to version control. "
+                "Add alerts_config.json to your .gitignore."
+            )
+            _ek1, _ek2, _ek3 = st.columns(3)
+            _okx_key  = _ek1.text_input("API Key",     value=_exec_ui_cfg.get("okx_api_key", ""),
+                                        type="password", placeholder="OKX API Key")
+            _okx_sec  = _ek2.text_input("Secret",      value=_exec_ui_cfg.get("okx_secret", ""),
+                                        type="password", placeholder="OKX Secret")
+            _okx_pass = _ek3.text_input("Passphrase",  value=_exec_ui_cfg.get("okx_passphrase", ""),
+                                        type="password", placeholder="API Passphrase")
+            _ord_type = st.selectbox(
+                "Default Order Type", ["market", "limit"],
+                index=0 if _exec_ui_cfg.get("default_order_type", "market") == "market" else 1,
+            )
+            if st.form_submit_button("💾 Save Execution Config", type="primary"):
+                _exec_ui_cfg.update({
+                    "live_trading_enabled":        _live_on,
+                    "auto_execute_enabled":        _auto_on,
+                    "auto_execute_min_confidence": _auto_conf,
+                    "okx_api_key":                 _okx_key.strip(),
+                    "okx_secret":                  _okx_sec.strip(),
+                    "okx_passphrase":              _okx_pass.strip(),
+                    "default_order_type":          _ord_type,
+                })
+                _save_alerts_config_and_clear(_exec_ui_cfg)
+                st.success("Execution config saved.")
+
+        if st.button("🔌 Test OKX Connection", width="content"):
+            _es = _exec.get_status()
+            if not _es.get("keys_configured", False):
+                st.warning("No API keys saved — enter and save keys first.")
+            else:
+                with st.spinner("Connecting to OKX...", show_time=True):
+                    _conn = _exec.test_connection()
+                if _conn["ok"]:
+                    st.success(f"Connected! USDT Balance: ${_conn['balance_usdt']:,.2f}")
+                else:
+                    st.error(f"Connection failed: {_conn['error']}")
+
+        # ── Autonomous Agent Settings ──────────────────────────────────────────────
+        st.markdown("---")
+        _ui.section_header(
+            "Autonomous AI Agent",
+            "24/7 LangGraph + Claude reasoning loop — approve/reject trades without human interaction",
+            icon="🤖",
+        )
+        st.caption(
+            "The agent runs independently in a background thread, scanning all pairs every "
+            "**interval_seconds** and asking Claude to approve or reject each signal. "
+            "Hard Python risk gates fire before AND after Claude — Claude never calls place_order directly. "
+            "**Dry-run mode** (recommended) logs all decisions without placing orders."
         )
         st.warning(
-            "Security note: API keys are stored in alerts_config.json in plain text. "
-            "Do not commit this file to version control. "
-            "Add alerts_config.json to your .gitignore."
-        )
-        _ek1, _ek2, _ek3 = st.columns(3)
-        _okx_key  = _ek1.text_input("API Key",     value=_exec_ui_cfg.get("okx_api_key", ""),
-                                    type="password", placeholder="OKX API Key")
-        _okx_sec  = _ek2.text_input("Secret",      value=_exec_ui_cfg.get("okx_secret", ""),
-                                    type="password", placeholder="OKX Secret")
-        _okx_pass = _ek3.text_input("Passphrase",  value=_exec_ui_cfg.get("okx_passphrase", ""),
-                                    type="password", placeholder="API Passphrase")
-        _ord_type = st.selectbox(
-            "Default Order Type", ["market", "limit"],
-            index=0 if _exec_ui_cfg.get("default_order_type", "market") == "market" else 1,
-        )
-        if st.form_submit_button("💾 Save Execution Config", type="primary"):
-            _exec_ui_cfg.update({
-                "live_trading_enabled":        _live_on,
-                "auto_execute_enabled":        _auto_on,
-                "auto_execute_min_confidence": _auto_conf,
-                "okx_api_key":                 _okx_key.strip(),
-                "okx_secret":                  _okx_sec.strip(),
-                "okx_passphrase":              _okx_pass.strip(),
-                "default_order_type":          _ord_type,
-            })
-            _save_alerts_config_and_clear(_exec_ui_cfg)
-            st.success("Execution config saved.")
-
-    if st.button("🔌 Test OKX Connection", width="content"):
-        _es = _exec.get_status()
-        if not _es.get("keys_configured", False):
-            st.warning("No API keys saved — enter and save keys first.")
-        else:
-            with st.spinner("Connecting to OKX...", show_time=True):
-                _conn = _exec.test_connection()
-            if _conn["ok"]:
-                st.success(f"Connected! USDT Balance: ${_conn['balance_usdt']:,.2f}")
-            else:
-                st.error(f"Connection failed: {_conn['error']}")
-
-    # ── Autonomous Agent Settings ──────────────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header(
-        "Autonomous AI Agent",
-        "24/7 LangGraph + Claude reasoning loop — approve/reject trades without human interaction",
-        icon="🤖",
-    )
-    st.caption(
-        "The agent runs independently in a background thread, scanning all pairs every "
-        "**interval_seconds** and asking Claude to approve or reject each signal. "
-        "Hard Python risk gates fire before AND after Claude — Claude never calls place_order directly. "
-        "**Dry-run mode** (recommended) logs all decisions without placing orders."
-    )
-    st.warning(
-        "⚠ Enabling live trading via the agent means real orders will be placed 24/7 "
-        "without your review. Start with Dry-run=ON and monitor the Agent Decisions log "
-        "in the Dashboard for at least a few days before disabling dry-run."
-    )
-
-    _ag_ui_cfg = _cached_alerts_config()
-    with st.form("agent_config_form"):
-        _ag_enabled = st.toggle(
-            "🤖 Enable Autonomous Agent",
-            value=bool(_ag_ui_cfg.get("agent_enabled", False)),
-            help="Start the 24/7 agent loop. Pairs are cycled every interval_seconds.",
-        )
-        _ag_dry = st.toggle(
-            "Dry-run (log only — no orders placed)",
-            value=bool(_ag_ui_cfg.get("agent_dry_run", True)),
-            help="When ON, agent logs approve/reject decisions but never calls place_order.",
-        )
-        if _ag_enabled and not _ag_dry:
-            st.error("DRY-RUN IS OFF — approved signals will place real/paper orders.")
-
-        _ag_col1, _ag_col2 = st.columns(2)
-        _ag_interval = _ag_col1.number_input(
-            "Interval (seconds per cycle)",
-            min_value=30, max_value=3600,
-            value=int(_ag_ui_cfg.get("agent_interval_seconds", 60)),
-            step=30,
-            help="Time between complete pair-scan cycles. Min 30s to respect API rate limits.",
-        )
-        _ag_min_conf = _ag_col2.slider(
-            "Min Confidence to Consider (%)",
-            min_value=60, max_value=95,
-            value=int(_ag_ui_cfg.get("agent_min_confidence", 80)),
-            step=5,
-            help="Signals below this threshold are skipped before calling Claude.",
-        )
-        _ag_col3, _ag_col4 = st.columns(2)
-        _ag_max_pos = _ag_col3.number_input(
-            "Max Concurrent Positions",
-            min_value=1, max_value=10,
-            value=int(_ag_ui_cfg.get("agent_max_concurrent_positions", 3)),
-            step=1,
-        )
-        _ag_loss_limit = _ag_col4.number_input(
-            "Daily Loss Limit (%)",
-            min_value=1.0, max_value=20.0,
-            value=float(_ag_ui_cfg.get("agent_daily_loss_limit_pct", 5.0)),
-            step=0.5,
-            help="Agent stops trading for the day when cumulative PnL hits this loss.",
-        )
-        _ag_portfolio = st.number_input(
-            "Portfolio Size (USD)",
-            min_value=100.0,
-            value=float(_ag_ui_cfg.get("agent_portfolio_size_usd", 10_000.0)),
-            step=500.0,
-            help="Used to calculate position sizes when balance cannot be fetched from OKX.",
-        )
-        if st.form_submit_button("💾 Save Agent Config", type="primary"):
-            _ag_ui_cfg.update({
-                "agent_enabled":                  _ag_enabled,
-                "agent_dry_run":                  _ag_dry,
-                "agent_interval_seconds":         int(_ag_interval),
-                "agent_min_confidence":           float(_ag_min_conf),
-                "agent_max_concurrent_positions": int(_ag_max_pos),
-                "agent_daily_loss_limit_pct":     float(_ag_loss_limit),
-                "agent_portfolio_size_usd":       float(_ag_portfolio),
-            })
-            _save_alerts_config_and_clear(_ag_ui_cfg)
-            if _agent is not None:
-                if _ag_enabled and not _agent.supervisor.is_running():
-                    _agent.supervisor.start()
-                elif not _ag_enabled and _agent.supervisor.is_running():
-                    _agent.supervisor.stop()
-            st.success("Agent config saved. Refresh Dashboard to see status panel.")
-
-    # Agent runtime controls
-    if _agent is None:
-        st.error("agent.py failed to import — check logs.")
-    else:
-        _ag_c1, _ag_c2 = st.columns(2)
-        with _ag_c1:
-            if st.button("▶ Start Agent Now", width="stretch",
-                         disabled=_agent.supervisor.is_running()):
-                _agent.supervisor.start()
-                st.success("Agent started.")
-                st.rerun()
-        with _ag_c2:
-            if st.button("⏹ Stop Agent", width="stretch",
-                         disabled=not _agent.supervisor.is_running()):
-                _agent.supervisor.stop()
-                st.warning("Agent stop requested.")
-                st.rerun()
-
-        # Live status summary
-        try:  # APP-10: status() may raise or return partial dict during agent init
-            _ag_live = _agent.supervisor.status() or {}
-        except Exception:
-            _ag_live = {}
-        st.markdown(
-            f"**Agent status:** {'🟢 Running' if _ag_live.get('running') else '🔴 Stopped'} "
-            f"| Cycles: {_ag_live.get('cycles_total', 0)} "
-            f"| Last decision: {_ag_live.get('last_decision') or '—'} "
-            f"| Restarts: {_ag_live.get('restart_count', 0)} "
-            f"| Engine: {'LangGraph' if _ag_live.get('langgraph') else 'Fallback pipeline'}"
+            "⚠ Enabling live trading via the agent means real orders will be placed 24/7 "
+            "without your review. Start with Dry-run=ON and monitor the Agent Decisions log "
+            "in the Dashboard for at least a few days before disabling dry-run."
         )
 
-
-    # ── Watchlist Alerts ───────────────────────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header(
-        "Watchlist Alerts",
-        "Get notified when a specific coin hits a signal you care about — fires on every scan",
-        icon="🔔",
-    )
-    st.caption(
-        "Each rule fires via Telegram, Discord, and/or Email (whichever channels you have enabled above). "
-        "Use 'ALL' in the coin field to watch every coin in the scan list."
-    )
-
-    _wl_cfg = _cached_alerts_config()
-    _watchlist = _wl_cfg.get("watchlist", [])
-
-    # Add new rule form
-    with st.expander("➕ Add New Watchlist Rule", expanded=False):
-        with st.form("wl_add_form", clear_on_submit=True):
-            _wl_c1, _wl_c2, _wl_c3 = st.columns([2, 2, 1])
-            with _wl_c1:
-                _wl_name = st.text_input("Rule Name", placeholder="e.g. BTC Strong Buy Alert")
-                _wl_pair_opts = ["ALL"] + model.PAIRS
-                _wl_pair = st.selectbox("Coin", _wl_pair_opts, index=0)
-            with _wl_c2:
-                _wl_cond = st.selectbox(
-                    "Signal Condition",
-                    ["ANY", "BUY", "STRONG BUY", "SELL", "STRONG SELL"],
-                    index=0,
-                    help="Alert fires when this coin's signal matches this direction",
-                )
-                _wl_min_conf = st.slider("Min Confidence %", min_value=40, max_value=95, value=70, step=5)
-            with _wl_c3:
-                st.write("")
-                st.write("")
-                _wl_enabled = st.checkbox("Enabled", value=True)
-            _wl_submitted = st.form_submit_button("Add Rule", type="primary", width="stretch")
-            if _wl_submitted:
-                if not _wl_name.strip():
-                    st.warning("Please enter a rule name.")
-                else:
-                    _watchlist.append({
-                        "name":           _wl_name.strip(),
-                        "pair":           _wl_pair,
-                        "condition":      _wl_cond,
-                        "min_confidence": _wl_min_conf,
-                        "enabled":        _wl_enabled,
-                    })
-                    _wl_cfg["watchlist"] = _watchlist
-                    _save_alerts_config_and_clear(_wl_cfg)
-                    st.success(f"Rule '{_wl_name.strip()}' added.")
-                    st.rerun()
-
-    # Display + manage existing rules
-    if not _watchlist:
-        st.info("No watchlist rules yet — add your first rule above.")
-    else:
-        for _wl_idx, _wl_rule in enumerate(_watchlist):
-            _wl_pill_color = (
-                "#00d4aa" if "BUY" in _wl_rule.get("condition", "") else
-                "#f6465d" if "SELL" in _wl_rule.get("condition", "") else
-                "#6366f1"
+        _ag_ui_cfg = _cached_alerts_config()
+        with st.form("agent_config_form"):
+            _ag_enabled = st.toggle(
+                "🤖 Enable Autonomous Agent",
+                value=bool(_ag_ui_cfg.get("agent_enabled", False)),
+                help="Start the 24/7 agent loop. Pairs are cycled every interval_seconds.",
             )
-            _wl_status = "🟢 ON" if _wl_rule.get("enabled", True) else "⚫ OFF"
-            _wl_rc1, _wl_rc2, _wl_rc3 = st.columns([5, 1, 1])
-            with _wl_rc1:
-                st.markdown(
-                    f"""<div style="background:rgba(14,18,30,0.7);border:1px solid rgba(255,255,255,0.07);
-                    border-radius:10px;padding:10px 14px;margin-bottom:4px">
-                    <span style="font-weight:700;color:#e8ecf4">{_wl_rule.get('name','—')}</span>
-                    <span style="background:{_wl_pill_color}22;color:{_wl_pill_color};
-                          border:1px solid {_wl_pill_color}55;border-radius:999px;
-                          font-size:10px;font-weight:700;padding:1px 9px;margin:0 6px">
-                          {_wl_rule.get('condition','ANY')}</span>
-                    <span style="color:rgba(168,180,200,0.55);font-size:12px">
-                        {_wl_rule.get('pair','ALL')} · ≥{_wl_rule.get('min_confidence',70):.0f}% conf · {_wl_status}
-                    </span></div>""",
-                    unsafe_allow_html=True,
+            _ag_dry = st.toggle(
+                "Dry-run (log only — no orders placed)",
+                value=bool(_ag_ui_cfg.get("agent_dry_run", True)),
+                help="When ON, agent logs approve/reject decisions but never calls place_order.",
+            )
+            if _ag_enabled and not _ag_dry:
+                st.error("DRY-RUN IS OFF — approved signals will place real/paper orders.")
+
+            _ag_col1, _ag_col2 = st.columns(2)
+            _ag_interval = _ag_col1.number_input(
+                "Interval (seconds per cycle)",
+                min_value=30, max_value=3600,
+                value=int(_ag_ui_cfg.get("agent_interval_seconds", 60)),
+                step=30,
+                help="Time between complete pair-scan cycles. Min 30s to respect API rate limits.",
+            )
+            _ag_min_conf = _ag_col2.slider(
+                "Min Confidence to Consider (%)",
+                min_value=60, max_value=95,
+                value=int(_ag_ui_cfg.get("agent_min_confidence", 80)),
+                step=5,
+                help="Signals below this threshold are skipped before calling Claude.",
+            )
+            _ag_col3, _ag_col4 = st.columns(2)
+            _ag_max_pos = _ag_col3.number_input(
+                "Max Concurrent Positions",
+                min_value=1, max_value=10,
+                value=int(_ag_ui_cfg.get("agent_max_concurrent_positions", 3)),
+                step=1,
+            )
+            _ag_loss_limit = _ag_col4.number_input(
+                "Daily Loss Limit (%)",
+                min_value=1.0, max_value=20.0,
+                value=float(_ag_ui_cfg.get("agent_daily_loss_limit_pct", 5.0)),
+                step=0.5,
+                help="Agent stops trading for the day when cumulative PnL hits this loss.",
+            )
+            _ag_portfolio = st.number_input(
+                "Portfolio Size (USD)",
+                min_value=100.0,
+                value=float(_ag_ui_cfg.get("agent_portfolio_size_usd", 10_000.0)),
+                step=500.0,
+                help="Used to calculate position sizes when balance cannot be fetched from OKX.",
+            )
+            if st.form_submit_button("💾 Save Agent Config", type="primary"):
+                _ag_ui_cfg.update({
+                    "agent_enabled":                  _ag_enabled,
+                    "agent_dry_run":                  _ag_dry,
+                    "agent_interval_seconds":         int(_ag_interval),
+                    "agent_min_confidence":           float(_ag_min_conf),
+                    "agent_max_concurrent_positions": int(_ag_max_pos),
+                    "agent_daily_loss_limit_pct":     float(_ag_loss_limit),
+                    "agent_portfolio_size_usd":       float(_ag_portfolio),
+                })
+                _save_alerts_config_and_clear(_ag_ui_cfg)
+                if _agent is not None:
+                    if _ag_enabled and not _agent.supervisor.is_running():
+                        _agent.supervisor.start()
+                    elif not _ag_enabled and _agent.supervisor.is_running():
+                        _agent.supervisor.stop()
+                st.success("Agent config saved. Refresh Dashboard to see status panel.")
+
+        # Agent runtime controls
+        if _agent is None:
+            st.error("agent.py failed to import — check logs.")
+        else:
+            _ag_c1, _ag_c2 = st.columns(2)
+            with _ag_c1:
+                if st.button("▶ Start Agent Now", width="stretch",
+                             disabled=_agent.supervisor.is_running()):
+                    _agent.supervisor.start()
+                    st.success("Agent started.")
+                    st.rerun()
+            with _ag_c2:
+                if st.button("⏹ Stop Agent", width="stretch",
+                             disabled=not _agent.supervisor.is_running()):
+                    _agent.supervisor.stop()
+                    st.warning("Agent stop requested.")
+                    st.rerun()
+
+            # Live status summary
+            try:  # APP-10: status() may raise or return partial dict during agent init
+                _ag_live = _agent.supervisor.status() or {}
+            except Exception:
+                _ag_live = {}
+            st.markdown(
+                f"**Agent status:** {'🟢 Running' if _ag_live.get('running') else '🔴 Stopped'} "
+                f"| Cycles: {_ag_live.get('cycles_total', 0)} "
+                f"| Last decision: {_ag_live.get('last_decision') or '—'} "
+                f"| Restarts: {_ag_live.get('restart_count', 0)} "
+                f"| Engine: {'LangGraph' if _ag_live.get('langgraph') else 'Fallback pipeline'}"
+            )
+
+
+        # ── Watchlist Alerts ───────────────────────────────────────────────────────
+        st.markdown("---")
+        _ui.section_header(
+            "Watchlist Alerts",
+            "Get notified when a specific coin hits a signal you care about — fires on every scan",
+            icon="🔔",
+        )
+        st.caption(
+            "Each rule fires via Telegram, Discord, and/or Email (whichever channels you have enabled above). "
+            "Use 'ALL' in the coin field to watch every coin in the scan list."
+        )
+
+        _wl_cfg = _cached_alerts_config()
+        _watchlist = _wl_cfg.get("watchlist", [])
+
+        # Add new rule form
+        with st.expander("➕ Add New Watchlist Rule", expanded=False):
+            with st.form("wl_add_form", clear_on_submit=True):
+                _wl_c1, _wl_c2, _wl_c3 = st.columns([2, 2, 1])
+                with _wl_c1:
+                    _wl_name = st.text_input("Rule Name", placeholder="e.g. BTC Strong Buy Alert")
+                    _wl_pair_opts = ["ALL"] + model.PAIRS
+                    _wl_pair = st.selectbox("Coin", _wl_pair_opts, index=0)
+                with _wl_c2:
+                    _wl_cond = st.selectbox(
+                        "Signal Condition",
+                        ["ANY", "BUY", "STRONG BUY", "SELL", "STRONG SELL"],
+                        index=0,
+                        help="Alert fires when this coin's signal matches this direction",
+                    )
+                    _wl_min_conf = st.slider("Min Confidence %", min_value=40, max_value=95, value=70, step=5)
+                with _wl_c3:
+                    st.write("")
+                    st.write("")
+                    _wl_enabled = st.checkbox("Enabled", value=True)
+                _wl_submitted = st.form_submit_button("Add Rule", type="primary", width="stretch")
+                if _wl_submitted:
+                    if not _wl_name.strip():
+                        st.warning("Please enter a rule name.")
+                    else:
+                        _watchlist.append({
+                            "name":           _wl_name.strip(),
+                            "pair":           _wl_pair,
+                            "condition":      _wl_cond,
+                            "min_confidence": _wl_min_conf,
+                            "enabled":        _wl_enabled,
+                        })
+                        _wl_cfg["watchlist"] = _watchlist
+                        _save_alerts_config_and_clear(_wl_cfg)
+                        st.success(f"Rule '{_wl_name.strip()}' added.")
+                        st.rerun()
+
+        # Display + manage existing rules
+        if not _watchlist:
+            st.info("No watchlist rules yet — add your first rule above.")
+        else:
+            for _wl_idx, _wl_rule in enumerate(_watchlist):
+                _wl_pill_color = (
+                    "#00d4aa" if "BUY" in _wl_rule.get("condition", "") else
+                    "#f6465d" if "SELL" in _wl_rule.get("condition", "") else
+                    "#6366f1"
                 )
-            with _wl_rc2:
-                _toggle_label = "Disable" if _wl_rule.get("enabled", True) else "Enable"
-                if st.button(_toggle_label, key=f"wl_toggle_{_wl_idx}", width="stretch"):
-                    _watchlist[_wl_idx]["enabled"] = not _wl_rule.get("enabled", True)
-                    _wl_cfg["watchlist"] = _watchlist
-                    _save_alerts_config_and_clear(_wl_cfg)
-                    st.rerun()
-            with _wl_rc3:
-                if st.button("Delete", key=f"wl_del_{_wl_idx}", width="stretch"):
-                    _watchlist.pop(_wl_idx)
-                    _wl_cfg["watchlist"] = _watchlist
-                    _save_alerts_config_and_clear(_wl_cfg)
-                    st.rerun()
+                _wl_status = "🟢 ON" if _wl_rule.get("enabled", True) else "⚫ OFF"
+                _wl_rc1, _wl_rc2, _wl_rc3 = st.columns([5, 1, 1])
+                with _wl_rc1:
+                    st.markdown(
+                        f"""<div style="background:rgba(14,18,30,0.7);border:1px solid rgba(255,255,255,0.07);
+                        border-radius:10px;padding:10px 14px;margin-bottom:4px">
+                        <span style="font-weight:700;color:#e8ecf4">{_wl_rule.get('name','—')}</span>
+                        <span style="background:{_wl_pill_color}22;color:{_wl_pill_color};
+                              border:1px solid {_wl_pill_color}55;border-radius:999px;
+                              font-size:10px;font-weight:700;padding:1px 9px;margin:0 6px">
+                              {_wl_rule.get('condition','ANY')}</span>
+                        <span style="color:rgba(168,180,200,0.55);font-size:12px">
+                            {_wl_rule.get('pair','ALL')} · ≥{_wl_rule.get('min_confidence',70):.0f}% conf · {_wl_status}
+                        </span></div>""",
+                        unsafe_allow_html=True,
+                    )
+                with _wl_rc2:
+                    _toggle_label = "Disable" if _wl_rule.get("enabled", True) else "Enable"
+                    if st.button(_toggle_label, key=f"wl_toggle_{_wl_idx}", width="stretch"):
+                        _watchlist[_wl_idx]["enabled"] = not _wl_rule.get("enabled", True)
+                        _wl_cfg["watchlist"] = _watchlist
+                        _save_alerts_config_and_clear(_wl_cfg)
+                        st.rerun()
+                with _wl_rc3:
+                    if st.button("Delete", key=f"wl_del_{_wl_idx}", width="stretch"):
+                        _watchlist.pop(_wl_idx)
+                        _wl_cfg["watchlist"] = _watchlist
+                        _save_alerts_config_and_clear(_wl_cfg)
+                        st.rerun()
 
 
-def _save_config(overrides):
-    weights_override = overrides.pop("_weights", {})
-    try:
-        with open(model._CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(overrides, f, indent=4)
-        # Save weights separately
-        if weights_override:
-            model.weights.update(weights_override)
-            model.save_weights()
-        model.load_config_overrides()
-        # INT-07: restart WebSocket feed with updated PAIRS list (idempotent)
-        _ws.start(model.PAIRS)
-        st.success("Config saved. Changes applied to next scan.")
-    except Exception as e:
-        st.error(f"Save failed: {e}")
+    def _save_config(overrides):
+        weights_override = overrides.pop("_weights", {})
+        try:
+            with open(model._CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(overrides, f, indent=4)
+            # Save weights separately
+            if weights_override:
+                model.weights.update(weights_override)
+                model.save_weights()
+            model.load_config_overrides()
+            # INT-07: restart WebSocket feed with updated PAIRS list (idempotent)
+            _ws.start(model.PAIRS)
+            st.success("Config saved. Changes applied to next scan.")
+        except Exception as e:
+            st.error(f"Save failed: {e}")
 
 
-def _reset_config():
-    try:
-        if os.path.exists(model._CONFIG_FILE):
-            os.remove(model._CONFIG_FILE)
-        if os.path.exists(model.DYNAMIC_WEIGHTS_FILE):
-            os.remove(model.DYNAMIC_WEIGHTS_FILE)
-        # Clear weights from DB and re-seed with defaults via public API (BUG-15)
-        _db.clear_weights(seed_weights=model.DEFAULT_WEIGHTS)
-        model.weights = model.DEFAULT_WEIGHTS.copy()
-        st.success("Config reset to defaults.")
-    except Exception as e:
-        st.error(f"Reset failed: {e}")
+    def _reset_config():
+        try:
+            if os.path.exists(model._CONFIG_FILE):
+                os.remove(model._CONFIG_FILE)
+            if os.path.exists(model.DYNAMIC_WEIGHTS_FILE):
+                os.remove(model.DYNAMIC_WEIGHTS_FILE)
+            # Clear weights from DB and re-seed with defaults via public API (BUG-15)
+            _db.clear_weights(seed_weights=model.DEFAULT_WEIGHTS)
+            model.weights = model.DEFAULT_WEIGHTS.copy()
+            st.success("Config reset to defaults.")
+        except Exception as e:
+            st.error(f"Reset failed: {e}")
+
 
 # ── Backtest progress fragment — module level to keep session-state key stable ──
 @st.fragment(run_every=1)
@@ -5500,1793 +5793,6 @@ def page_trade_log():
                     key="dl_slippage",
                 )
 
-# ──────────────────────────────────────────────
-# PAGE: MARKET OVERVIEW
-# ──────────────────────────────────────────────
-def page_market_overview():
-    import data_feeds as _df
-
-    st.markdown(
-        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">Market Overview</h1>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Global Market Stats ─────────────────────────────────────────────────
-    _ui.section_header("Global Market", "Live macro snapshot — BTC dominance, total cap, trending coins", icon="🌐")
-
-    gm  = _cached_global_market()
-    trending = _cached_trending_coins()
-
-    # Format helpers
-    def _fmt_cap(v):
-        if v >= 1e12: return f"${v/1e12:.2f}T"
-        if v >= 1e9:  return f"${v/1e9:.1f}B"
-        return f"${v/1e6:.0f}M"
-
-    total_mcap  = gm.get("total_market_cap_usd", 0)
-    btc_dom     = gm.get("btc_dominance", 0.0)
-    eth_dom     = gm.get("eth_dominance", 0.0)
-    mcap_chg    = gm.get("market_cap_change_24h", 0.0)
-    vol_24h     = gm.get("total_volume_24h_usd", 0)
-    alt_label   = gm.get("altcoin_season_label", "N/A")
-    src         = gm.get("source", "fallback")
-
-    alt_colors  = {"ALTSEASON": "#00d4aa", "BTC_DOMINANT": "#6366f1", "MIXED": "#f0a500", "N/A": "#888"}
-    alt_color   = alt_colors.get(alt_label, "#888")
-    chg_color   = "#00c076" if mcap_chg >= 0 else "#f6465d"
-    chg_arrow   = "▲" if mcap_chg >= 0 else "▼"
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Total Market Cap", _fmt_cap(total_mcap),
-                  delta=f"{chg_arrow} {abs(mcap_chg):.2f}% 24h",
-                  delta_color="normal")
-    with c2:
-        st.metric("BTC Dominance", f"{btc_dom:.1f}%")
-    with c3:
-        st.metric("ETH Dominance", f"{eth_dom:.1f}%")
-    with c4:
-        st.metric("24h Volume", _fmt_cap(vol_24h))
-    with c5:
-        st.metric("Market Regime", alt_label.replace("_", " "))
-
-    # Trending coins chip row
-    if trending:
-        chips_html = " ".join(
-            f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
-            f'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
-            f'color:#00d4aa;font-size:12px;font-weight:600;margin:2px">{sym}</span>'
-            for sym in trending[:10]
-        )
-        st.markdown(
-            f'<div style="margin:4px 0 12px">'
-            f'<span style="color:rgba(255,255,255,0.45);font-size:11px;'
-            f'text-transform:uppercase;letter-spacing:0.8px;margin-right:10px">🔥 Trending</span>'
-            + chips_html + '</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.caption(f"Trending data unavailable  |  Source: {src}")
-
-    _ui.gradient_divider()
-
-    # ── Correlation Matrix ──
-    _ui.section_header("Asset Correlation Matrix",
-                       "Pairwise Pearson correlation of daily returns — Red = strong positive · Blue = negative",
-                       icon="🔥")
-
-    col_lk, col_tf, col_run = st.columns([2, 2, 2])
-    with col_lk:
-        lookback = st.slider("Lookback (days)", min_value=7, max_value=90,
-                             value=30, step=7, key="corr_lookback")
-    with col_tf:
-        corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
-    with col_run:
-        st.write("")
-        run_corr = st.button("Compute Correlation", type="primary", width="stretch", key="run_corr")
-
-    if run_corr:
-        with st.spinner("Fetching OHLCV data...", show_time=True):
-            corr_matrix, err = model.compute_correlation_matrix(
-                pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
-            )
-        if err:
-            st.error(f"Correlation error: {err}")
-            st.session_state["corr_matrix_data"] = None
-            st.session_state["corr_error"] = err
-        else:
-            # PERF: store DataFrame directly — was .to_dict() + pd.DataFrame() round-trip on every render
-            st.session_state["corr_matrix_data"] = corr_matrix
-            st.session_state["corr_error"] = None
-
-    cached = st.session_state.get("corr_matrix_data")
-    if cached is not None:
-        corr_df = cached
-        pairs_list = list(corr_df.columns)
-
-        fig_corr = go.Figure(data=go.Heatmap(
-            z=corr_df.values,
-            x=corr_df.columns.tolist(),
-            y=corr_df.index.tolist(),
-            colorscale="RdBu_r",
-            zmin=-1, zmax=1,
-            text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
-            texttemplate="%{text}",
-            hoverongaps=False,
-        ))
-        fig_corr.update_layout(
-            height=450,
-            margin=dict(l=0, r=0, t=10, b=0),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(fig_corr, width="stretch",
-                        config={"displayModeBar": False, "staticPlot": True})
-
-        # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
-        st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
-        _corr_arr = corr_df.values
-        _rows_idx, _cols_idx = np.where(
-            (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
-        )
-        high_corr_rows = []
-        try:
-            high_corr_rows = [
-                {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
-                for i, j in zip(_rows_idx, _cols_idx)
-            ]
-        except Exception:
-            pass
-        if high_corr_rows:
-            st.dataframe(pd.DataFrame(high_corr_rows), width="stretch", hide_index=True)
-        else:
-            st.info("No pairs exceed the 0.75 correlation threshold for this period.")
-    elif st.session_state.get("corr_error"):
-        st.error(f"Correlation error: {st.session_state['corr_error']}")
-
-    st.markdown("---")
-
-    # ── Return Distribution ──
-    _ui.section_header("30-Day Return Summary",
-                       "Estimated price return per pair — 7-day and 30-day based on exchange daily close",
-                       icon="📊")
-    if st.button("Load Returns", key="load_returns"):
-        with st.spinner("Fetching prices...", show_time=True):
-            returns_data = []
-            exchange = model.get_exchange_instance(model.TA_EXCHANGE)
-            if exchange:
-                for pair in model.PAIRS:
-                    try:
-                        ohlcv = exchange.fetch_ohlcv(pair, "1d", limit=32)
-                        if len(ohlcv) >= 2:
-                            closes = [o[4] for o in ohlcv]
-                            ret_30d = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] else 0
-                            ret_7d = (closes[-1] - closes[-8]) / closes[-8] * 100 if len(closes) >= 8 and closes[-8] else 0
-                            returns_data.append({
-                                "Asset": pair.replace("/USDT", ""),
-                                "Current Price": round(closes[-1], 4),
-                                "7d Return %": round(ret_7d, 2),
-                                "30d Return %": round(ret_30d, 2),
-                            })
-                    except Exception:
-                        pass
-        if returns_data:
-            ret_df = pd.DataFrame(returns_data)
-            st.dataframe(
-                ret_df,
-                width="stretch", hide_index=True,
-                column_config={
-                    "7d Return %":  st.column_config.NumberColumn(format="%.2f%%"),
-                    "30d Return %": st.column_config.NumberColumn(format="%.2f%%"),
-                    "Current Price": st.column_config.NumberColumn(format="$%.4f"),
-                },
-            )
-
-            fig_bar = px.bar(
-                ret_df, x="Asset", y="30d Return %",
-                color="30d Return %",
-                color_continuous_scale=["#ff4b4b", "#333333", "#00d4aa"],
-                color_continuous_midpoint=0,
-                title="30-Day Returns by Asset",
-            )
-            fig_bar.update_layout(
-                height=300, margin=dict(l=0, r=0, t=40, b=0),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig_bar, width="stretch",
-                            config={"displayModeBar": False, "staticPlot": True})
-        else:
-            st.warning("Could not fetch return data.")
-
-    st.markdown("---")
-
-    # ── Realized Volatility Rankings (Phase 11) ───────────────────────────────
-    _ui.section_header(
-        "Realized Volatility Rankings",
-        "7-day annualized realized volatility across all pairs — rank from calmest to most explosive",
-        icon="📉",
-    )
-    st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
-
-    if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
-        import statistics as _stat
-        with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
-            _vol_rows = []
-            _first_err = None
-            _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
-            if _exchange:
-                for _vp in model.PAIRS:
-                    try:
-                        _df_ohlcv = model.robust_fetch_ohlcv(_exchange, _vp, "1d", limit=9)
-                        if len(_df_ohlcv) >= 3:
-                            _cls = [v for v in _df_ohlcv["close"].tolist() if v and v > 0]
-                            _rets = [
-                                (_cls[i] - _cls[i - 1]) / _cls[i - 1]
-                                for i in range(1, len(_cls))
-                                if _cls[i - 1] > 0
-                            ]
-                            if len(_rets) >= 2:
-                                _daily_vol = _stat.stdev(_rets)
-                                _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
-                                _sector    = model.SECTOR_MAP.get(_vp, "other")
-                                _vol_rows.append({
-                                    "Asset":    _vp.replace("/USDT", ""),
-                                    "Sector":   _sector.replace("_", " ").title(),
-                                    "Ann. Vol%": _ann_vol,
-                                    "7d Close": round(_cls[-1], 4),
-                                })
-                    except Exception as _e:
-                        if _first_err is None:
-                            _first_err = str(_e)[:100]
-            else:
-                _first_err = "Exchange unavailable"
-            st.session_state["vol_rank_data"] = _vol_rows
-            st.session_state["vol_rank_err"]  = _first_err
-
-    _vol_data = st.session_state.get("vol_rank_data")
-    if _vol_data:
-        _vol_df = pd.DataFrame(_vol_data).sort_values("Ann. Vol%", ascending=False).reset_index(drop=True)
-
-        # Rank chips — color by volatility tier
-        _chips_vol = ""
-        _vmax = _vol_df["Ann. Vol%"].max() if not _vol_df.empty else 1
-        for _, _vr in _vol_df.iterrows():
-            _v = _vr["Ann. Vol%"]
-            _pct = _v / max(_vmax, 1)
-            _vc = "#f6465d" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
-            _chips_vol += (
-                f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
-                f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
-                f'border:1px solid {_vc}50;margin:2px;min-width:52px">'
-                f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_vr["Asset"]}</span>'
-                f'<span style="font-size:10px;color:{_vc};font-weight:600">{_v:.0f}%</span>'
-                f'</span>'
-            )
-        st.markdown(
-            f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_vol}</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption("🔴 High vol (>70th pct) · 🟡 Medium · 🟢 Low — annualized, based on 7-day daily returns")
-
-        with st.expander("Full volatility table"):
-            st.dataframe(
-                _vol_df,
-                width="stretch", hide_index=True,
-                column_config={
-                    "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
-                    "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
-                },
-            )
-    elif _vol_data is not None and len(_vol_data) == 0:
-        _vol_err = st.session_state.get("vol_rank_err")
-        st.warning(f"No volatility data returned — {_vol_err}" if _vol_err else "No volatility data returned — check exchange connectivity.")
-
-    st.markdown("---")
-
-    # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
-    _ui.section_header(
-        "Pair Trade Scanner",
-        "Finds cryptocurrency pairs that move together — then signals when one is unusually cheap or expensive vs the other",
-        icon="⚖️",
-    )
-    st.caption(
-        "A pair trade buys the underpriced coin and sells the overpriced one, profiting when prices converge. "
-        "Only pairs with a statistically significant relationship (p < 0.05) are shown."
-    )
-
-    _coint_col1, _coint_col2, _coint_col3 = st.columns([2, 2, 2])
-    with _coint_col1:
-        _coint_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="coint_tf")
-    with _coint_col2:
-        _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
-    with _coint_col3:
-        st.write("")
-        _run_coint = st.button("Scan for Pair Trades", type="primary", width="stretch", key="run_coint")
-
-    if _run_coint:
-        with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
-            _coint_results, _coint_err = model.run_cointegration_scan(
-                pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
-            )
-        if _coint_err:
-            st.error(f"Scan error: {_coint_err}")
-            st.session_state["coint_results"] = None
-        else:
-            st.session_state["coint_results"] = _coint_results
-            st.session_state["coint_err"] = None
-
-    _coint_data = st.session_state.get("coint_results")
-    if _coint_data is not None:
-        if not _coint_data:
-            st.info("No cointegrated pairs found — try a longer lookback or different timeframe.")
-        else:
-            # Signal color map
-            _COINT_COLORS = {
-                "LONG_SPREAD":  "#00d4aa",
-                "SHORT_SPREAD": "#f6465d",
-                "EXIT_SPREAD":  "#f59e0b",
-                "NEUTRAL":      "#64748b",
-            }
-
-            # Summary banner
-            _actionable = [r for r in _coint_data if r["signal"] not in ("NEUTRAL", "EXIT_SPREAD")]
-            if _actionable:
-                st.success(
-                    f"⚖️ **{len(_actionable)} actionable pair trade{'s' if len(_actionable) != 1 else ''}** found "
-                    f"out of {len(_coint_data)} cointegrated pairs."
-                )
-
-            # Render cards for top pairs
-            for _cr in _coint_data[:12]:
-                _sig_color = _COINT_COLORS.get(_cr["signal"], "#64748b")
-                _z         = _cr["zscore"]
-                _z_bar_pct = min(abs(_z) / 3.0 * 100, 100)
-
-                # Plain English signal label
-                _sig_labels = {
-                    "LONG_SPREAD":  "BUY SPREAD",
-                    "SHORT_SPREAD": "SELL SPREAD",
-                    "EXIT_SPREAD":  "CLOSE POSITION",
-                    "NEUTRAL":      "NEUTRAL",
-                }
-                _sig_label = _sig_labels.get(_cr["signal"], _cr["signal"])
-
-                st.markdown(
-                    f"""
-                    <div style="
-                        background:linear-gradient(rgba(14,18,30,0.8),rgba(14,18,30,0.8)) padding-box,
-                                   linear-gradient(135deg,{_sig_color}30,rgba(99,102,241,0.15)) border-box;
-                        border:1px solid transparent;border-radius:12px;
-                        padding:14px 18px;margin-bottom:8px;
-                        backdrop-filter:blur(12px)">
-                        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-                            <div>
-                                <span style="font-size:15px;font-weight:800;color:#e8ecf4;
-                                             font-family:'JetBrains Mono',monospace">
-                                    {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
-                                </span>
-                                <span style="font-size:11px;color:rgba(168,180,200,0.5);margin-left:10px">
-                                    hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
-                                </span>
-                            </div>
-                            <span style="background:{_sig_color};color:#06101c;padding:4px 13px;
-                                         border-radius:999px;font-size:11px;font-weight:800;
-                                         letter-spacing:0.5px">{_sig_label}</span>
-                        </div>
-                        <div style="margin:10px 0 6px">
-                            <div style="display:flex;justify-content:space-between;
-                                        font-size:11px;color:rgba(168,180,200,0.5);margin-bottom:4px">
-                                <span>Z-Score: <strong style="color:{_sig_color}">{_z:+.2f}</strong></span>
-                                <span>±2σ threshold</span>
-                            </div>
-                            <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
-                                <div style="
-                                    position:absolute;
-                                    {'left:50%;' if _z >= 0 else f'right:{50}%;'}
-                                    width:{_z_bar_pct/2:.1f}%;
-                                    height:6px;border-radius:4px;
-                                    background:{_sig_color};
-                                    transition:width 0.4s ease"></div>
-                                <div style="position:absolute;left:50%;top:-2px;
-                                            width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
-                            </div>
-                        </div>
-                        <div style="font-size:12px;color:#c4cedd;line-height:1.5;
-                                    border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
-                            {_cr['signal_plain']}
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            if len(_coint_data) > 12:
-                st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
-
-    st.markdown("---")
-
-    # ── MTF Signal Heatmap ──────────────────────────────────────────────────
-    _ui.section_header("Multi-Timeframe Signal Heatmap",
-                       f"Green = bullish · Red = bearish · White = neutral · Numbers = confidence % — {_ui.HELP_MTF_HEATMAP}",
-                       icon="🗺️")
-
-    scan_results = _cached_scan_results()
-    if not scan_results:
-        st.info("No scan data found — run a scan on the Dashboard first.")
-    else:
-        _TF_ORDER = ["1h", "4h", "1d", "1w"]
-        pairs = [r["pair"] for r in scan_results]
-
-        matrix, hover_text, cell_text = [], [], []
-        for r in scan_results:
-            row_vals, row_hover, row_lbl = [], [], []
-            tf_data = r.get("timeframes", {})
-            for tf in _TF_ORDER:
-                td        = tf_data.get(tf, {})
-                direction = td.get("direction", "NO DATA")
-                conf      = td.get("confidence", 0)
-                if direction in ("NO DATA", "LOW VOL", "N/A"):
-                    signed = 0
-                    row_hover.append(f"{tf}: {direction}")
-                    row_lbl.append("")
-                elif "BUY" in direction:
-                    signed = conf
-                    row_hover.append(f"{tf}: {direction} ({conf:.0f}%)")
-                    row_lbl.append(f"{conf:.0f}")
-                elif "SELL" in direction:
-                    signed = -conf
-                    row_hover.append(f"{tf}: {direction} ({conf:.0f}%)")
-                    row_lbl.append(f"−{conf:.0f}")
-                else:
-                    signed = 0
-                    row_hover.append(f"{tf}: NEUTRAL ({conf:.0f}%)")
-                    row_lbl.append("~")
-                row_vals.append(signed)
-            matrix.append(row_vals)
-            hover_text.append(row_hover)
-            cell_text.append(row_lbl)
-
-        pair_labels = [p.replace("/USDT", "") for p in pairs]
-
-        fig_heat = go.Figure(data=go.Heatmap(
-            z=matrix,
-            x=_TF_ORDER,
-            y=pair_labels,
-            colorscale=[
-                [0.00, "#ff4b4b"],
-                [0.35, "#442222"],
-                [0.50, "#1a1d23"],
-                [0.65, "#224433"],
-                [1.00, "#00d4aa"],
-            ],
-            zmin=-100, zmax=100,
-            text=cell_text,
-            hovertext=hover_text,
-            hovertemplate="%{y} · %{hovertext}<extra></extra>",
-            texttemplate="%{text}",
-            textfont=dict(size=11, color="rgba(255,255,255,0.9)"),
-        ))
-        fig_heat.update_layout(
-            height=max(260, len(pairs) * 44),
-            margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(side="top", tickfont=dict(size=12, color="#e0e0e0")),
-            yaxis=dict(tickfont=dict(size=11, color="#e0e0e0"), autorange="reversed"),
-            font=dict(color="#e0e0e0"),
-        )
-        st.plotly_chart(fig_heat, width="stretch",
-                        config={"displayModeBar": False, "staticPlot": True})
-
-        # Composite score table
-        comp_rows = []
-        for r in scan_results:
-            tf_data = r.get("timeframes", {})
-            signed_scores = []
-            for tf in _TF_ORDER:
-                td        = tf_data.get(tf, {})
-                direction = td.get("direction", "NO DATA")
-                conf      = td.get("confidence", 0)
-                if direction in ("NO DATA", "LOW VOL", "N/A"):
-                    continue
-                elif "BUY" in direction:
-                    signed_scores.append(conf)
-                elif "SELL" in direction:
-                    signed_scores.append(-conf)
-                else:
-                    signed_scores.append(0)
-            composite = round(sum(signed_scores) / len(signed_scores), 1) if signed_scores else 0
-            comp_rows.append({
-                "Pair":            r["pair"],
-                "Overall":         r.get("direction", "N/A"),
-                "Avg Conf%":       f"{r.get('confidence_avg_pct', 0):.0f}%",
-                "MTF Align%":      f"{r.get('mtf_alignment', 0):.0f}%",
-                "Composite Score": composite,
-                "Strategy":        r.get("strategy_bias", "N/A"),
-            })
-
-        comp_df = (
-            pd.DataFrame(comp_rows)
-            .sort_values("Composite Score", ascending=False)
-            .reset_index(drop=True)
-        )
-
-        def _color_composite(val):
-            if not isinstance(val, (int, float)):
-                return ""
-            if val > 20:  return "color: #00d4aa; font-weight: bold"
-            if val > 0:   return "color: #7ecb9a"
-            if val < -20: return "color: #ff4b4b; font-weight: bold"
-            if val < 0:   return "color: #ff9999"
-            return ""
-
-        def _color_dir(val):
-            v = str(val)
-            if "STRONG BUY"  in v: return "color: #00d4aa; font-weight: bold"
-            if "BUY"         in v: return "color: #7ecb9a"
-            if "STRONG SELL" in v: return "color: #ff4b4b; font-weight: bold"
-            if "SELL"        in v: return "color: #ff9999"
-            return "color: #888888"
-
-        st.dataframe(
-            comp_df.style
-                .map(_color_composite, subset=["Composite Score"])
-                .map(_color_dir,       subset=["Overall"]),
-            width="stretch", hide_index=True,
-        )
-
-    st.markdown("---")
-
-    # ── Fear & Greed 30-Day History ─────────────────────────────────────────
-    _ui.section_header("Fear & Greed Index — 30-Day History",
-                       _ui.HELP_FNG, icon="😱")
-    st.caption("Source: alternative.me  |  0 = Extreme Fear  ·  100 = Extreme Greed")
-
-    if st.button("Load F&G History", key="load_fng_history"):
-        try:
-            resp = _http.get("https://api.alternative.me/fng/?limit=30", timeout=8)
-            resp.raise_for_status()
-            fng_raw = resp.json().get("data", [])
-            # APP-02: use .get() to avoid KeyError on missing F&G fields
-            fng_rows = [
-                {
-                    "date":  pd.to_datetime(int(d.get("timestamp", 0)), unit="s"),
-                    "value": int(d.get("value", 50)),
-                    "label": d.get("value_classification", "Neutral"),
-                }
-                for d in fng_raw
-                if d.get("timestamp") and d.get("value")
-            ]
-            st.session_state["fng_history_df"] = (
-                pd.DataFrame(fng_rows).sort_values("date").reset_index(drop=True)
-            )
-        except Exception as exc:
-            st.error(f"Could not fetch F&G data: {exc}")
-
-    fng_df = st.session_state.get("fng_history_df")
-    if fng_df is not None and not fng_df.empty:
-        latest  = fng_df.iloc[-1]
-        fng_val = int(latest["value"])
-        fng_emoji = (
-            "😱" if fng_val <= 24 else
-            "😨" if fng_val <= 49 else
-            "😏" if fng_val <= 74 else
-            "🤑"
-        )
-        col_metric, col_chart = st.columns([1, 4])
-
-        with col_metric:
-            delta_7d = (
-                int(fng_val) - int(fng_df.iloc[-8]["value"])
-                if len(fng_df) >= 8 else None
-            )
-            st.metric(
-                f"{fng_emoji} Today",
-                str(fng_val),
-                delta=f"{delta_7d:+d} vs 7d ago" if delta_7d is not None else None,
-            )
-            st.caption(latest["label"])
-
-        with col_chart:
-            dot_colors = [
-                "#00d4aa" if v <= 24 else
-                "#7ecb9a" if v <= 49 else
-                "#ffa500" if v <= 74 else
-                "#ff4b4b"
-                for v in fng_df["value"]
-            ]
-            fig_fng = go.Figure()
-            for y0, y1, bg_col, zone_label in [
-                (0,  25,  "rgba(0,212,170,0.08)",  "Extreme Fear"),
-                (25, 50,  "rgba(0,212,170,0.04)",  "Fear"),
-                (50, 75,  "rgba(255,165,0,0.04)",   "Greed"),
-                (75, 100, "rgba(255,75,75,0.08)",   "Extreme Greed"),
-            ]:
-                fig_fng.add_hrect(
-                    y0=y0, y1=y1, fillcolor=bg_col, line_width=0,
-                    annotation_text=zone_label, annotation_position="right",
-                    annotation_font_size=9, annotation_font_color="#666",
-                )
-            fig_fng.add_trace(go.Scatter(
-                x=fng_df["date"], y=fng_df["value"],
-                mode="lines+markers",
-                line=dict(color="#00d4aa", width=2),
-                marker=dict(size=7, color=dot_colors),
-                hovertemplate="%{x|%b %d}: %{y} (%{text})<extra></extra>",
-                text=fng_df["label"],
-                name="F&G",
-            ))
-            fig_fng.update_layout(
-                height=240,
-                yaxis=dict(range=[0, 100], title="", gridcolor="#1a1d23",
-                           tickfont=dict(size=9)),
-                xaxis=dict(gridcolor="#1a1d23", tickfont=dict(size=9)),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=20, r=100, t=10, b=20),
-                font=dict(color="#e0e0e0"),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_fng, width="stretch",
-                            config={"displayModeBar": False, "staticPlot": True})
-
-        with st.expander("📋 Raw F&G Data"):
-            st.dataframe(
-                fng_df[["date", "value", "label"]]
-                    .rename(columns={"date": "Date", "value": "Value", "label": "Zone"})
-                    .sort_values("Date", ascending=False)
-                    .reset_index(drop=True),
-                width="stretch", hide_index=True,
-            )
-
-    st.markdown("---")
-
-    # ── Funding Rate Monitor ─────────────────────────────────────────────────
-    _ui.section_header(
-        "Funding Rate Monitor",
-        "Compare perpetual funding rates across OKX · Binance · Bybit · KuCoin — "
-        "positive = longs paying shorts (bearish); negative = bullish",
-        icon="📡",
-    )
-
-    fr_col1, fr_col2 = st.columns([4, 1])
-    with fr_col1:
-        fr_pairs_sel = st.multiselect(
-            "Pairs to monitor",
-            model.PAIRS,
-            default=model.PAIRS[:8],
-            key="fr_pairs_select",
-        )
-    with fr_col2:
-        st.write("")
-        st.write("")
-        run_fr = st.button(
-            "🔍 Load Rates", type="primary",
-            width="stretch", key="run_fr_btn",
-        )
-
-    if run_fr and fr_pairs_sel:
-        with st.spinner("Fetching rates from 4 exchanges…", show_time=True):
-            fr_rows: list[dict] = []
-            for pair in fr_pairs_sel:
-                multi = _df.get_multi_exchange_funding_rates(pair)
-                row: dict = {"Pair": pair}
-                for exch in ("okx", "binance", "bybit", "kucoin"):
-                    rd   = multi.get(exch, {})
-                    rate = rd.get("funding_rate_pct", 0.0)
-                    row[exch.upper()] = None if rd.get("error") else rate
-                # best carry = exchange with largest |rate|
-                valid = {
-                    exch: multi[exch]["funding_rate_pct"]
-                    for exch in multi
-                    if not multi[exch].get("error")
-                    and multi[exch].get("source")
-                    and multi[exch].get("funding_rate_pct") is not None  # APP-27: None → abs(None) TypeError
-                }
-                if valid:
-                    best_exch = max(valid, key=lambda e: abs(valid[e]))
-                    best_rate = valid[best_exch]
-                    row["Best Rate"] = f"{best_rate:+.4f}% ({best_exch.upper()})"
-                    row["Ann. Yield%"] = round(abs(best_rate) * 1095, 1)
-                else:
-                    row["Best Rate"] = "N/A"
-                    row["Ann. Yield%"] = 0.0
-                fr_rows.append(row)
-
-            carry_opps = _df.get_carry_trade_opportunities(fr_pairs_sel, threshold_pct=0.01)
-            st.session_state["fr_table"]   = fr_rows
-            st.session_state["carry_opps"] = carry_opps
-
-    fr_table = st.session_state.get("fr_table")
-    if fr_table:
-        fr_df = pd.DataFrame(fr_table)
-
-        def _color_fr(val):
-            if not isinstance(val, (int, float)):
-                return "color: #555555"
-            if val >  0.05: return "color: #ff4b4b; font-weight: bold"
-            if val >  0.01: return "color: #ffa500"
-            if val < -0.05: return "color: #00d4aa; font-weight: bold"
-            if val < -0.01: return "color: #7ecb9a"
-            return "color: #888888"
-
-        def _color_ann(val):
-            if not isinstance(val, (int, float)):
-                return ""
-            if val >= 30: return "color: #00d4aa; font-weight: bold"
-            if val >= 10: return "color: #7ecb9a"
-            return ""
-
-        exch_cols = [c for c in ["OKX", "BINANCE", "BYBIT", "KUCOIN"] if c in fr_df.columns]
-        ann_cols  = ["Ann. Yield%"] if "Ann. Yield%" in fr_df.columns else []
-
-        st.dataframe(
-            fr_df.style
-                .map(_color_fr,  subset=exch_cols)
-                .map(_color_ann, subset=ann_cols),
-            width="stretch",
-            hide_index=True,
-        )
-        st.caption(
-            "Rates are % per 8-hour interval. "
-            "Ann. Yield% = |rate| × 1 095 (assumes 3 payments/day). "
-            "N/A = geo-blocked or pair not listed on that exchange."
-        )
-
-        # ── Carry Trade Opportunities ──────────────────────────────────────
-        carry_opps = st.session_state.get("carry_opps", [])
-        if carry_opps:
-            st.markdown("#### 🏦 Carry Trade Opportunities (|rate| > 0.01%)")
-            st.caption(
-                "Market-neutral strategy: hold opposite positions on perp + spot "
-                "to collect funding payments without directional exposure."
-            )
-            carry_df = pd.DataFrame(carry_opps).rename(columns={
-                "pair":             "Pair",
-                "exchange":         "Exchange",
-                "funding_rate_pct": "Rate %",
-                "direction":        "Direction",
-                "strategy":         "Strategy",
-                "annualized_yield": "Ann. Yield %",
-            })
-
-            def _color_carry_yield(val):
-                if not isinstance(val, (int, float)):
-                    return ""
-                if val >= 50: return "color: #00d4aa; font-weight: bold"
-                if val >= 20: return "color: #7ecb9a"
-                if val >= 10: return "color: #ffa500"
-                return ""
-
-            def _color_rate(val):
-                if not isinstance(val, (int, float)):
-                    return ""
-                if val >  0.05: return "color: #ff4b4b; font-weight: bold"
-                if val >  0.01: return "color: #ffa500"
-                if val < -0.05: return "color: #00d4aa; font-weight: bold"
-                if val < -0.01: return "color: #7ecb9a"
-                return ""
-
-            st.dataframe(
-                carry_df[["Pair", "Exchange", "Rate %", "Strategy", "Ann. Yield %"]].style
-                    .map(_color_rate,        subset=["Rate %"])
-                    .map(_color_carry_yield, subset=["Ann. Yield %"]),
-                width="stretch",
-                hide_index=True,
-            )
-        else:
-            st.info("No carry trade opportunities above 0.01% threshold for the selected pairs.")
-
-    st.markdown("---")
-
-    # ── Signal Accuracy by Pair (Backtest Data) ─────────────────────────────
-    _ui.section_header("Signal Accuracy by Pair",
-                       "Win rate from the most recent backtest — a trade wins when pnl_pct > 0",
-                       icon="🎯")
-
-    bt_df = _cached_backtest_df()
-    if bt_df.empty or "pair" not in bt_df.columns:
-        st.info("Run a backtest on the Backtest Viewer page to see accuracy stats here.")
-    else:
-        bt_df["win"] = bt_df["pnl_pct"].fillna(0) > 0
-        total_by_pair = bt_df.groupby("pair")["win"].count().rename("Total")
-        wins_by_pair  = bt_df.groupby("pair")["win"].sum().rename("Wins")
-        avg_pnl       = bt_df.groupby("pair")["pnl_pct"].mean().round(2).rename("Avg PnL %")
-        acc_df = (
-            pd.concat([total_by_pair, wins_by_pair, avg_pnl], axis=1)
-            .reset_index()
-            .rename(columns={"pair": "Pair"})
-        )
-        acc_df["Win Rate %"] = (acc_df["Wins"] / acc_df["Total"] * 100).round(1)
-        acc_df = acc_df.sort_values("Win Rate %", ascending=False).reset_index(drop=True)
-
-        col_bar, col_tbl = st.columns([3, 2])
-        with col_bar:
-            fig_acc = px.bar(
-                acc_df, x="Pair", y="Win Rate %",
-                color="Win Rate %",
-                color_continuous_scale=["#ff4b4b", "#333333", "#00d4aa"],
-                color_continuous_midpoint=50,
-                range_y=[0, 100],
-                text_auto=".1f",
-            )
-            fig_acc.add_hline(
-                y=50, line_dash="dash", line_color="#888888",
-                annotation_text="50%", annotation_font_color="#888",
-            )
-            fig_acc.update_layout(
-                height=300, margin=dict(l=0, r=0, t=10, b=0),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#e0e0e0"), showlegend=False,
-                coloraxis_showscale=False,
-            )
-            st.plotly_chart(fig_acc, width="stretch",
-                            config={"displayModeBar": False, "staticPlot": True})
-
-        with col_tbl:
-            def _color_wr(val):
-                if not isinstance(val, (int, float)): return ""
-                if val >= 60: return "color: #00d4aa; font-weight: bold"
-                if val >= 50: return "color: #7ecb9a"
-                if val <  40: return "color: #ff4b4b; font-weight: bold"
-                if val <  50: return "color: #ff9999"
-                return ""
-
-            def _color_pnl(val):
-                if not isinstance(val, (int, float)): return ""
-                return "color: #00d4aa" if val > 0 else "color: #ff4b4b" if val < 0 else ""
-
-            st.dataframe(
-                acc_df[["Pair", "Total", "Wins", "Win Rate %", "Avg PnL %"]].style
-                    .map(_color_wr,  subset=["Win Rate %"])
-                    .map(_color_pnl, subset=["Avg PnL %"]),
-                width="stretch", hide_index=True,
-            )
-
-
-
-    # ── Macro Intelligence Section ───────────────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header("Macro Intelligence",
-                       "FRED + yfinance macro snapshot · BTC rolling correlations",
-                       icon="🌍")
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def _cached_macro_snapshot():
-        fred_d = data_feeds.fetch_fred_macro()
-        yf_d   = data_feeds.fetch_yfinance_macro()
-        return fred_d, yf_d
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def _cached_macro_ts(days: int):
-        return data_feeds.fetch_macro_timeseries(days)
-
-    _fred, _yf = _cached_macro_snapshot()
-
-    # Snapshot metrics row
-    _ma1, _ma2, _ma3, _ma4, _ma5, _ma6, _ma7 = st.columns(7)
-    _ma1.metric("10Y Yield", f"{_fred.get('ten_yr_yield', 4.35):.2f}%")
-    _ma2.metric("M2 ($B)",   f"${_fred.get('m2_supply_bn', 21500):,.0f}B")
-    _ma3.metric("ISM Mfg",   f"{_fred.get('ism_manufacturing', 52.0):.1f}")
-    _ma4.metric("DXY",       f"{_yf.get('dxy', 104.0):.1f}")
-    _ma5.metric("VIX",       f"{_yf.get('vix', 18.0):.1f}")
-    _ma6.metric("Gold",      f"${_yf.get('gold_spot', 2900.0):,.0f}")
-    _ma7.metric("SPX",       f"{_yf.get('spx', 5800.0):,.0f}")
-
-    st.caption(f"FRED: {_fred.get('source','?')} · yfinance: {_yf.get('source','?')} · Cached 30 min")
-
-    # Rolling correlation chart
-    _corr_window = st.select_slider(
-        "Correlation window (days)", options=[14, 30, 60, 90],
-        value=30, key="sg_macro_corr_days",
-    )
-    _ts = _cached_macro_ts(_corr_window + 20)
-
-    if _ts and "BTC" in _ts:
-        _frames = {}
-        for _key in ["BTC", "VIX", "Gold", "SPX", "DXY", "Oil"]:
-            _s = _ts.get(_key)
-            if _s and isinstance(_s, dict):
-                _frames[_key] = pd.Series(_s).rename(_key)
-        if len(_frames) >= 2:
-            _df_ts  = pd.DataFrame(_frames).sort_index()
-            _df_ts.index = pd.to_datetime(_df_ts.index)
-            _df_ret = _df_ts.pct_change(fill_method=None).dropna()
-            _factors = [c for c in _df_ret.columns if c != "BTC"]
-            _corr_res = {}
-            for _fac in _factors:
-                if _fac in _df_ret.columns and "BTC" in _df_ret.columns:
-                    _rc = _df_ret["BTC"].rolling(_corr_window).corr(_df_ret[_fac]).dropna()
-                    if not _rc.empty:
-                        _corr_res[_fac] = _rc
-            if _corr_res:
-                _fig_c = go.Figure()
-                _clrs = {"VIX": "#ef4444", "Gold": "#f59e0b", "SPX": "#10b981",
-                         "DXY": "#6366f1", "Oil": "#f97316"}
-                for _fac, _ser in _corr_res.items():
-                    _fig_c.add_trace(go.Scatter(
-                        x=_ser.index, y=_ser.values, mode="lines", name=_fac,
-                        line=dict(color=_clrs.get(_fac, "#888"), width=2),
-                    ))
-                _fig_c.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.25)")
-                _fig_c.update_layout(
-                    height=280, title=f"BTC {_corr_window}-day Rolling Correlation",
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#e2e8f0", size=12),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=0, r=0, t=40, b=0),
-                    yaxis=dict(range=[-1, 1], gridcolor="rgba(255,255,255,0.07)"),
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
-                )
-                st.plotly_chart(_fig_c, width="stretch")
-            else:
-                st.info("Not enough data for rolling correlations — try a smaller window.")
-        else:
-            st.info("Macro timeseries loading... (yfinance required)")
-    else:
-        st.info("Install yfinance for macro correlations: `pip install yfinance`")
-
-    # ── On-Chain Intelligence (Group 4) ──────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header("On-Chain Intelligence",
-                       "CoinMetrics Community API · free, no key · MVRV Z-Score · SOPR · Active Addresses",
-                       icon="⛓️")
-
-    # No @st.cache_data here — it would lock in a 403 failure for 1 hour preventing retries.
-    # data_feeds.fetch_coinmetrics_onchain() has its own 1-hour in-memory cache for successes.
-    _oc4 = data_feeds.fetch_coinmetrics_onchain(400)
-    if _oc4.get("error") and not _oc4.get("mvrv_z"):
-        st.caption(
-            "ℹ️ On-chain data unavailable from this server — CoinMetrics community API "
-            "blocks cloud hosting IPs. Add a free **COINMETRICS_API_KEY** to your "
-            "Streamlit secrets (coinmetrics.io) to unlock full on-chain data."
-        )
-    else:
-        _mz4   = _oc4.get("mvrv_z")
-        _ms4   = _oc4.get("mvrv_signal", "N/A")
-        _sp4   = _oc4.get("sopr")
-        _ss4   = _oc4.get("sopr_signal", "N/A")
-        _mv4   = _oc4.get("mvrv_ratio")
-        _rc4   = _oc4.get("realized_cap")
-        _aa4   = _oc4.get("active_addresses")
-
-        _mc4 = {"UNDERVALUED": "#00d4aa", "FAIR_VALUE": "#10b981", "OVERVALUED": "#f59e0b", "EXTREME_HEAT": "#ef4444"}.get(_ms4, "#6b7280")
-        _sc4 = {"CAPITULATION": "#00d4aa", "MILD_LOSS": "#10b981", "NORMAL": "#6b7280", "PROFIT_TAKING": "#f59e0b"}.get(_ss4, "#6b7280")
-        _hr4  = _oc4.get("hash_ribbon_signal", "N/A")
-        _pm4  = _oc4.get("puell_multiple")
-        _ps4  = _oc4.get("puell_signal", "N/A")
-        _nu4  = _oc4.get("nupl")
-        _ns4  = _oc4.get("nupl_signal", "N/A")
-        _hrc4 = {"RECOVERY": "#00d4aa", "CAPITULATION": "#ef4444"}.get(_hr4, "#6b7280")
-        _pmc4 = {"CAPITULATION": "#00d4aa", "UNDERVALUED": "#10b981", "FAIR_VALUE": "#6b7280", "OVERVALUED": "#f59e0b", "EXTREME_HEAT": "#ef4444"}.get(_ps4, "#6b7280")
-        _nuc4 = {"CAPITULATION": "#00d4aa", "HOPE_FEAR": "#10b981", "OPTIMISM": "#6b7280", "BELIEF_THRILL": "#f59e0b", "EUPHORIA": "#ef4444"}.get(_ns4, "#6b7280")
-
-        _col1, _col2, _col3, _col4 = st.columns(4)
-        with _col1:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_mc4};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">MVRV Z-Score</div>
-  <div style="font-size:32px;font-weight:700;color:{_mc4}">{f"{_mz4:+.2f}" if _mz4 is not None else "—"}</div>
-  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_ms4.replace("_", " ")}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:6px">MVRV ratio: {f"{_mv4:.3f}" if _mv4 else "—"}</div>
-</div>
-""", unsafe_allow_html=True)
-        with _col2:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_sc4};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">SOPR</div>
-  <div style="font-size:32px;font-weight:700;color:{_sc4}">{f"{_sp4:.4f}" if _sp4 is not None else "—"}</div>
-  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_ss4.replace("_", " ")}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:6px">&gt;1 profit-taking · &lt;1 capitulation</div>
-</div>
-""", unsafe_allow_html=True)
-        with _col3:
-            def _fmtb4(v):
-                if v is None: return "—"
-                if v >= 1e12: return f"${v/1e12:.2f}T"
-                if v >= 1e9:  return f"${v/1e9:.1f}B"
-                return f"${v/1e6:.0f}M"
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid #6366f1;border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Realized Cap</div>
-  <div style="font-size:24px;font-weight:700;color:#6366f1">{_fmtb4(_rc4)}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">Sum of all BTC at last-moved price</div>
-</div>
-""", unsafe_allow_html=True)
-        with _col4:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid #8b5cf6;border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Active Addresses</div>
-  <div style="font-size:24px;font-weight:700;color:#8b5cf6">{f"{_aa4:,}" if _aa4 else "—"}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">Unique BTC addresses active today</div>
-</div>
-""", unsafe_allow_html=True)
-
-        # ── Row 2: Hash Ribbons · Puell Multiple · NUPL ──────────────────────────
-        _col5, _col6, _col7 = st.columns(3)
-        with _col5:
-            _hr_label = "30d MA > 60d MA — miners recovering" if _hr4 == "RECOVERY" else ("30d MA < 60d MA — miners under stress" if _hr4 == "CAPITULATION" else "Awaiting hash rate data")
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_hrc4};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Hash Ribbons</div>
-  <div style="font-size:22px;font-weight:700;color:{_hrc4}">{_hr4.replace("_", " ")}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:6px">{_hr_label}</div>
-  <div style="font-size:10px;color:#4b5563;margin-top:4px">87.5% accuracy for cycle bottoms</div>
-</div>
-""", unsafe_allow_html=True)
-        with _col6:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_pmc4};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Puell Multiple</div>
-  <div style="font-size:32px;font-weight:700;color:{_pmc4}">{f"{_pm4:.3f}" if _pm4 is not None else "—"}</div>
-  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_ps4.replace("_", " ")}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:4px">Daily revenue / 365d MA · &lt;0.5 bottom · &gt;3 top</div>
-</div>
-""", unsafe_allow_html=True)
-        with _col7:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_nuc4};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">NUPL</div>
-  <div style="font-size:32px;font-weight:700;color:{_nuc4}">{f"{_nu4:+.3f}" if _nu4 is not None else "—"}</div>
-  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_ns4.replace("_", " ")}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:4px">Net unrealised profit/loss · &lt;0 capitulation</div>
-</div>
-""", unsafe_allow_html=True)
-
-        # MVRV Z-Score + SOPR dual-panel chart
-        _mh4 = _oc4.get("mvrv_history", {})
-        _sh4 = _oc4.get("sopr_history", {})
-        if _mh4 or _sh4:
-            from plotly.subplots import make_subplots
-            _fig4 = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                  subplot_titles=("MVRV Z-Score (365-day rolling)", "SOPR"),
-                                  vertical_spacing=0.12)
-            if _mh4:
-                _mhs = pd.Series(_mh4).sort_index()
-                _mhz = (_mhs - _mhs.rolling(365, min_periods=30).mean()) / _mhs.rolling(365, min_periods=30).std().clip(lower=1e-6)
-                _fig4.add_trace(go.Scatter(x=_mhz.index, y=_mhz.values, mode="lines", name="MVRV Z",
-                                           line=dict(color="#6366f1", width=2)), row=1, col=1)
-                for _th, _tl, _tc in [(3.0, "Extreme >3", "#ef4444"), (1.5, "Overvalued >1.5", "#f59e0b"), (0.0, "Undervalued <0", "#00d4aa")]:
-                    _fig4.add_hline(y=_th, line_dash="dash", line_color=_tc, opacity=0.4,
-                                    annotation_text=_tl, annotation_font_size=9, row=1, col=1)
-            if _sh4:
-                _shs = pd.Series(_sh4).sort_index()
-                _fig4.add_trace(go.Scatter(x=_shs.index, y=_shs.values, mode="lines", name="SOPR",
-                                           line=dict(color="#10b981", width=2)), row=2, col=1)
-                _fig4.add_hline(y=1.0, line_dash="dash", line_color="rgba(255,255,255,0.3)",
-                                annotation_text="Breakeven", annotation_font_size=9, row=2, col=1)
-            _fig4.update_layout(height=480, paper_bgcolor="rgba(0,0,0,0)",
-                                plot_bgcolor="rgba(0,0,0,0)",
-                                font=dict(color="#e2e8f0", size=11),
-                                margin=dict(l=0, r=0, t=40, b=0), showlegend=False)
-            _fig4.update_yaxes(gridcolor="rgba(255,255,255,0.07)")
-            _fig4.update_xaxes(gridcolor="rgba(255,255,255,0.07)")
-            st.plotly_chart(_fig4, width="stretch")
-
-        _ts4 = _oc4.get("timestamp", "")[:19]
-        st.caption(f"Source: CoinMetrics Community · {_ts4} UTC · Cached 1h")
-
-    # ── Options Flow (Group 5) ────────────────────────────────────────────────
-    _ui.section_header("Options Flow",
-                       "Deribit public API · OI by Strike · Put/Call Ratio · Max Pain · IV Term Structure")
-
-    @st.cache_data(ttl=900, show_spinner=False)
-    def _cached_deribit_options_chain(currency: str):
-        return data_feeds.fetch_deribit_options_chain(currency=currency)
-
-    _oc5sg = _cached_deribit_options_chain("BTC")
-
-    if _oc5sg.get("error") and not _oc5sg.get("oi_by_strike"):
-        st.warning(f"Options data unavailable: {_oc5sg.get('error')}")
-    else:
-        _pc5   = _oc5sg.get("put_call_ratio")
-        _mp5   = _oc5sg.get("max_pain")
-        _tput5 = _oc5sg.get("total_put_oi", 0)
-        _tcal5 = _oc5sg.get("total_call_oi", 0)
-        _osig5 = _oc5sg.get("signal", "N/A")
-        _spot5 = _oc5sg.get("spot_price")
-
-        _sc5 = {
-            "EXTREME_PUTS": "#ef4444", "BEARISH": "#f59e0b",
-            "NEUTRAL": "#6b7280", "BULLISH": "#10b981", "EXTREME_CALLS": "#00d4aa",
-        }.get(_osig5, "#6b7280")
-
-        _o5a, _o5b, _o5c, _o5d = st.columns(4)
-        with _o5a:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_sc5};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Put/Call Ratio</div>
-  <div style="font-size:32px;font-weight:700;color:{_sc5}">{f"{_pc5:.3f}" if _pc5 is not None else "—"}</div>
-  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_osig5.replace("_", " ")}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:6px">&gt;1.1 bearish · &lt;0.9 bullish</div>
-</div>
-""", unsafe_allow_html=True)
-        with _o5b:
-            _mp5_dist = f"{abs(_mp5 - _spot5) / _spot5 * 100:.1f}% {'below' if _mp5 < _spot5 else 'above'} spot" if _mp5 and _spot5 else ""
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid #6366f1;border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Max Pain</div>
-  <div style="font-size:26px;font-weight:700;color:#6366f1">{f"${_mp5:,.0f}" if _mp5 else "—"}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">{_mp5_dist}</div>
-</div>
-""", unsafe_allow_html=True)
-        with _o5c:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid #ef4444;border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Total Put OI</div>
-  <div style="font-size:28px;font-weight:700;color:#ef4444">{f"{_tput5:,.0f}" if _tput5 else "—"}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">contracts</div>
-</div>
-""", unsafe_allow_html=True)
-        with _o5d:
-            st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid #10b981;border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Total Call OI</div>
-  <div style="font-size:28px;font-weight:700;color:#10b981">{f"{_tcal5:,.0f}" if _tcal5 else "—"}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">contracts</div>
-</div>
-""", unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        _oi5sg = _oc5sg.get("oi_by_strike", [])
-        _ts5sg = [t for t in _oc5sg.get("term_structure", []) if t.get("atm_iv") is not None and t.get("dte", 0) <= 365]
-        _colA5, _colB5 = st.columns([3, 2])
-
-        with _colA5:
-            if _oi5sg:
-                _figA5 = go.Figure()
-                _strk5 = [int(r["strike"]) for r in _oi5sg]
-                _figA5.add_trace(go.Bar(name="Puts", x=_strk5,
-                    y=[r["put_oi"] for r in _oi5sg], marker_color="rgba(239,68,68,0.8)"))
-                _figA5.add_trace(go.Bar(name="Calls", x=_strk5,
-                    y=[r["call_oi"] for r in _oi5sg], marker_color="rgba(16,185,129,0.8)"))
-                if _mp5:
-                    _figA5.add_vline(x=int(_mp5), line_dash="dash", line_color="#6366f1",
-                                     opacity=0.8, annotation_text=f"Max Pain ${_mp5:,.0f}",
-                                     annotation_font_size=10)
-                if _spot5:
-                    _figA5.add_vline(x=int(_spot5), line_dash="dot", line_color="#f59e0b",
-                                     opacity=0.6, annotation_text="Spot", annotation_font_size=10)
-                _figA5.update_layout(
-                    title="OI by Strike (Top 20)", barmode="stack",
-                    height=360, paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#e2e8f0", size=11),
-                    margin=dict(l=0, r=0, t=40, b=60),
-                    legend=dict(orientation="h", y=1.08),
-                    xaxis=dict(tickangle=-45, gridcolor="rgba(255,255,255,0.05)"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.07)", title="OI (contracts)"),
-                )
-                st.plotly_chart(_figA5, width="stretch")
-
-        with _colB5:
-            if _ts5sg:
-                _figB5 = go.Figure()
-                _figB5.add_trace(go.Scatter(
-                    x=[t["dte"] for t in _ts5sg], y=[t["atm_iv"] for t in _ts5sg],
-                    mode="lines+markers", name="ATM IV",
-                    line=dict(color="#6366f1", width=2), marker=dict(size=7),
-                    text=[t["expiry"] for t in _ts5sg],
-                    hovertemplate="%{text}<br>DTE: %{x}<br>IV: %{y:.1f}%<extra></extra>",
-                ))
-                _figB5.update_layout(
-                    title="IV Term Structure (ATM)",
-                    height=360, paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#e2e8f0", size=11),
-                    margin=dict(l=0, r=0, t=40, b=0),
-                    xaxis=dict(title="Days to Expiry", gridcolor="rgba(255,255,255,0.05)"),
-                    yaxis=dict(title="IV (%)", gridcolor="rgba(255,255,255,0.07)"),
-                )
-                st.plotly_chart(_figB5, width="stretch")
-
-        _ts5_ts = _oc5sg.get("timestamp", "")[:19]
-        st.caption(f"Source: Deribit · {_ts5_ts} UTC · Cached 15 min")
-
-    # ── Kimchi Premium (Group 6) ──────────────────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Kimchi Premium",
-        "BTC price premium on Korean exchange Upbit vs global Binance price (USD-adjusted via live FX). "
-        "Persistent premium signals strong Korean retail demand — often precedes broader alt rallies.",
-        icon="🌶️",
-    )
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _cached_kimchi():
-        return data_feeds.get_kimchi_premium()
-
-    _kp = _cached_kimchi()
-    if _kp.get("error") and not _kp.get("premium_pct"):
-        st.warning(f"Kimchi premium unavailable: {_kp.get('error')}")
-    else:
-        _kp_pct  = _kp.get("premium_pct", 0.0) or 0.0
-        _kp_sig  = _kp.get("signal", "NEUTRAL")
-        _kp_upbt = _kp.get("upbit_btc_krw")
-        _kp_bin  = _kp.get("binance_btc_usd")
-        _kp_fx   = _kp.get("usd_krw")
-        _kp_c    = "#ef4444" if _kp_pct > 3 else ("#f59e0b" if _kp_pct > 1 else "#10b981" if _kp_pct < -1 else "#6b7280")
-        _kp_cols = st.columns(5)
-        _kp_cols[0].metric("Premium", f"{_kp_pct:+.2f}%",
-                           help="Positive = Upbit BTC more expensive than Binance — Korean demand premium")
-        _kp_cols[1].metric("Signal", _kp_sig)
-        _kp_cols[2].metric("Upbit BTC", f"₩{_kp_upbt:,.0f}" if _kp_upbt else "N/A")
-        _kp_cols[3].metric("Binance BTC", f"${_kp_bin:,.0f}" if _kp_bin else "N/A")
-        _kp_cols[4].metric("USD/KRW", f"{_kp_fx:,.1f}" if _kp_fx else "N/A")
-
-        _kp_bar_color = _kp_c
-        st.markdown(
-            f"<div style='background:rgba(255,255,255,0.03);border:1px solid {_kp_bar_color};"
-            f"border-radius:8px;padding:10px 16px;margin-top:8px;font-size:13px;'>"
-            f"<span style='color:{_kp_bar_color};font-weight:600'>{_kp_sig}</span> · "
-            f"{'+' if _kp_pct >= 0 else ''}{_kp_pct:.2f}% premium — "
-            f"{'Korean demand elevated: alt rally setup' if _kp_pct > 3 else 'Moderate premium: watch for expansion' if _kp_pct > 1 else 'No premium: neutral Korean flow' if abs(_kp_pct) <= 1 else 'Negative premium: global demand exceeds Korea'}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        _kp_ts = _kp.get("cached_at", "")
-        if _kp_ts:
-            st.caption(f"Source: Upbit + Binance + ExchangeRate API · {str(_kp_ts)[:19]} · Cached 5 min")
-
-    # ── Sector Rotation Dashboard (Phase 9) ───────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Sector Rotation",
-        "24h performance by sector across all 29 tracked pairs — identify which sectors are leading vs lagging",
-        icon="🔄",
-    )
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _cached_sector_movers():
-        return data_feeds.get_top_movers(top_n=50)
-
-    _sm = _cached_sector_movers()
-    _all_coins = _sm.get("gainers", []) + _sm.get("losers", [])
-
-    # Build symbol → 24h change map from CoinGecko movers data
-    _sym_change: dict = {}
-    for _c in _all_coins:
-        _sym = (_c.get("symbol") or "").upper()
-        _pct = _c.get("price_change_24h_pct", 0.0)
-        if _sym and _sym not in _sym_change:
-            _sym_change[_sym] = _pct
-
-    # Aggregate by sector using SECTOR_MAP
-    _sector_data: dict = {}   # sector → list of (pair, 24h_pct)
-    for _pair in model.PAIRS:
-        _base_sym = _pair.split("/")[0]
-        _sector   = model.SECTOR_MAP.get(_pair, "other")
-        _chg      = _sym_change.get(_base_sym, None)
-        if _chg is not None:
-            _sector_data.setdefault(_sector, []).append((_pair, _chg))
-
-    if _sector_data:
-        # Compute sector averages and sort by performance
-        _sector_avg = {
-            s: sum(c for _, c in pairs) / len(pairs)
-            for s, pairs in _sector_data.items()
-        }
-        _sorted_sectors = sorted(_sector_avg.items(), key=lambda x: x[1], reverse=True)
-
-        # Sector bar chart
-        _sec_names = [s.replace("_", " ").title() for s, _ in _sorted_sectors]
-        _sec_vals  = [round(v, 2) for _, v in _sorted_sectors]
-        _sec_colors = ["#00d4aa" if v >= 0 else "#f6465d" for v in _sec_vals]
-
-        _fig_sect = go.Figure(go.Bar(
-            x=_sec_names,
-            y=_sec_vals,
-            marker_color=_sec_colors,
-            text=[f"{v:+.2f}%" for v in _sec_vals],
-            textposition="outside",
-        ))
-        _fig_sect.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#e2e8f0", size=11),
-            xaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#9ca3af"),
-            yaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#9ca3af",
-                       ticksuffix="%", zeroline=True, zerolinecolor="rgba(255,255,255,0.15)"),
-            margin=dict(l=40, r=20, t=10, b=40),
-            height=260,
-            showlegend=False,
-        )
-        st.plotly_chart(_fig_sect, width="stretch")
-
-        # Per-sector breakdown table
-        _rows_sect = []
-        for _s, _avg in _sorted_sectors:
-            _pairs_in = _sector_data.get(_s, [])
-            _best  = max(_pairs_in, key=lambda x: x[1]) if _pairs_in else ("—", 0)
-            _worst = min(_pairs_in, key=lambda x: x[1]) if _pairs_in else ("—", 0)
-            _rows_sect.append({
-                "Sector":         _s.replace("_", " ").title(),
-                "Avg 24h %":      f"{_avg:+.2f}%",
-                "# Pairs":        len(_pairs_in),
-                "Best Performer": f"{_best[0]} ({_best[1]:+.1f}%)",
-                "Worst":          f"{_worst[0]} ({_worst[1]:+.1f}%)",
-                "Trend":          "↑ Leading" if _avg >= 2 else ("↓ Lagging" if _avg <= -2 else "→ Neutral"),
-            })
-        st.dataframe(pd.DataFrame(_rows_sect), width="stretch", hide_index=True)
-        _sm_src = _sm.get("source", "N/A")
-        st.caption(f"Source: {_sm_src} · Cached 5 min · Average 24h % change per sector across all tracked pairs")
-    else:
-        st.info("Sector rotation data loading… Run a market overview scan or wait for CoinGecko data.")
-
-    # ── Funding Rate Monitor (Phase 9) ────────────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Funding Rate Monitor",
-        "Live perpetual funding rates across all 29 pairs — extreme rates signal overheated longs/shorts",
-        icon="💸",
-    )
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _cached_funding_batch():
-        return data_feeds.get_funding_rates_batch(model.PAIRS)
-
-    _fr_col1, _fr_col2 = st.columns([3, 1])
-    with _fr_col2:
-        _fr_load = st.button("Refresh Funding Rates", key="load_fr_monitor", width="stretch")
-
-    if _fr_load:
-        _cached_funding_batch.clear()
-
-    _fr_data = _cached_funding_batch()
-
-    if _fr_data:
-        _fr_rows = []
-        for _pair in model.PAIRS:
-            _fd = _fr_data.get(_pair, {})
-            _rate_pct = _fd.get("funding_rate_pct", 0.0) or 0.0
-            _signal   = _fd.get("signal", "N/A")
-            _src      = _fd.get("source", "—") or "—"
-            _fr_rows.append({
-                "Pair":        _pair.replace("/USDT", ""),
-                "Rate %":      round(_rate_pct, 4),
-                "8h Annualised": round(_rate_pct * 3 * 365, 1),
-                "Signal":      _signal,
-                "Exchange":    _src.title(),
-            })
-
-        _fr_df = pd.DataFrame(_fr_rows).sort_values("Rate %", ascending=False)
-
-        # Highlight extremes
-        _extreme_pos = _fr_df[_fr_df["Rate %"] > 0.03]
-        _extreme_neg = _fr_df[_fr_df["Rate %"] < -0.03]
-        if not _extreme_pos.empty:
-            st.warning(
-                f"⚠️ **Extreme positive funding** (longs overheating): "
-                + ", ".join(f"**{r}** ({v:+.4f}%)" for r, v in zip(_extreme_pos["Pair"], _extreme_pos["Rate %"]))
-            )
-        if not _extreme_neg.empty:
-            st.info(
-                f"📉 **Extreme negative funding** (shorts dominant): "
-                + ", ".join(f"**{r}** ({v:+.4f}%)" for r, v in zip(_extreme_neg["Pair"], _extreme_neg["Rate %"]))
-            )
-
-        _SIGNAL_COLORS = {"BEARISH": "#f6465d", "BULLISH": "#00d4aa", "NEUTRAL": "#64748b", "N/A": "#64748b"}
-
-        # Render heatmap chips
-        _chips_fr = ""
-        for _, _row in _fr_df.iterrows():
-            _col = _SIGNAL_COLORS.get(_row["Signal"], "#64748b")
-            _opacity = min(0.9, 0.3 + abs(_row["Rate %"]) / 0.05)
-            _chips_fr += (
-                f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
-                f'padding:6px 10px;border-radius:8px;background:rgba({int(_col[1:3],16)},'
-                f'{int(_col[3:5],16)},{int(_col[5:7],16)},{_opacity:.2f});'
-                f'border:1px solid {_col}40;margin:3px;min-width:60px">'
-                f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_row["Pair"]}</span>'
-                f'<span style="font-size:10px;color:{_col};font-weight:600">{_row["Rate %"]:+.4f}%</span>'
-                f'</span>'
-            )
-        st.markdown(
-            f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_fr}</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Table
-        with st.expander("Full funding rate table"):
-            st.dataframe(
-                _fr_df,
-                width="stretch", hide_index=True,
-                column_config={
-                    "Rate %":          st.column_config.NumberColumn(format="%.4f%%"),
-                    "8h Annualised":   st.column_config.NumberColumn(format="%.1f%%"),
-                },
-            )
-        st.caption("Positive = longs pay shorts (bearish signal) · Negative = shorts pay longs (bullish signal) · Refreshed every 5 min")
-    else:
-        st.info("Funding rate data unavailable — OKX/Binance may be geo-blocked. Try a VPN.")
-
-    # ── Options Market Intelligence (Phase 9) ────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Options Market Intelligence",
-        "BTC & ETH Deribit put/call IV skew — market's implied directional bias (30-min cache)",
-        icon="📐",
-    )
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def _cached_skew(currency: str):
-        return data_feeds.get_deribit_options_skew(currency)
-
-    _opt_c1, _opt_c2 = st.columns(2)
-
-    for _cur, _col in [("BTC", _opt_c1), ("ETH", _opt_c2)]:
-        _sk = _cached_skew(_cur)
-        _sig = _sk.get("signal", "N/A")
-        _skew_val = _sk.get("skew")
-        _put_iv   = _sk.get("put_iv")
-        _call_iv  = _sk.get("call_iv")
-        # Coerce to float to prevent format string crash on non-numeric API responses
-        try:
-            _skew_val = float(_skew_val) if _skew_val is not None else None
-            _put_iv   = float(_put_iv)   if _put_iv   is not None else None
-            _call_iv  = float(_call_iv)  if _call_iv  is not None else None
-        except (TypeError, ValueError):
-            _skew_val = _put_iv = _call_iv = None
-        _expiry   = _sk.get("expiry", "—")
-        _sk_src   = _sk.get("source", "deribit")
-        _sk_err   = _sk.get("error")
-
-        _SIG_COL = {
-            "BEARISH": "#f6465d", "MILD_BEARISH": "#f59e0b",
-            "NEUTRAL": "#64748b",
-            "MILD_BULLISH": "#00d4aa", "BULLISH": "#00c076", "N/A": "#64748b",
-        }
-        _sk_color = _SIG_COL.get(_sig, "#64748b")
-
-        with _col:
-            st.markdown(
-                f'<div style="background:rgba(255,255,255,0.04);border:1px solid {_sk_color}40;'
-                f'border-radius:12px;padding:16px;margin-bottom:8px">'
-                f'<div style="font-size:16px;font-weight:800;color:#e2e8f0;margin-bottom:8px">{_cur} Options Skew</div>'
-                + (
-                    f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center">'
-                    f'<div><div style="font-size:11px;color:#9ca3af">Put IV</div>'
-                    f'<div style="font-size:18px;font-weight:700;color:#f6465d">{_put_iv:.1f}%</div></div>'
-                    f'<div><div style="font-size:11px;color:#9ca3af">Skew</div>'
-                    f'<div style="font-size:18px;font-weight:700;color:{_sk_color}">{_skew_val:+.1f}</div></div>'
-                    f'<div><div style="font-size:11px;color:#9ca3af">Call IV</div>'
-                    f'<div style="font-size:18px;font-weight:700;color:#00d4aa">{_call_iv:.1f}%</div></div>'
-                    f'</div>'
-                    f'<div style="margin-top:10px;padding:6px 12px;border-radius:6px;'
-                    f'background:{_sk_color}20;text-align:center">'
-                    f'<span style="font-size:13px;font-weight:700;color:{_sk_color}">{_sig.replace("_"," ")}</span>'
-                    f'<span style="font-size:11px;color:#9ca3af;margin-left:8px">Expiry: {_expiry}</span>'
-                    f'</div>'
-                    if _skew_val is not None and _put_iv is not None and _call_iv is not None
-                    else f'<div style="color:#9ca3af;font-size:12px">{_sk_err or "Data unavailable"}</div>'
-                )
-                + '</div>',
-                unsafe_allow_html=True,
-            )
-    st.caption(
-        "Skew = Put IV − Call IV · Positive skew = market paying premium for downside protection (bearish) · "
-        "Negative skew = calls bid up (bullish) · Source: Deribit public API · 30-min cache"
-    )
-
-    # ── Macro Conditions (Phase 9) ────────────────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Macro Conditions",
-        "DXY + 10Y Treasury yield — macro tailwind/headwind signal for crypto",
-        icon="🏛️",
-    )
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def _cached_macro_conditions():
-        return data_feeds.get_macro_signal_adjustment()
-
-    try:
-        _mac = _cached_macro_conditions()
-    except Exception:
-        _mac = {"regime": "N/A", "adjustment": 0.0, "dxy": 0.0, "ten_yr": 0.0,
-                "dxy_signal": "neutral", "yr_signal": "neutral"}
-    _mac_regime  = _mac.get("regime", "N/A")
-    _mac_adj     = _mac.get("adjustment", 0.0)
-    _mac_dxy     = _mac.get("dxy", 0.0)
-    _mac_10yr    = _mac.get("ten_yr", 0.0)
-    _mac_dxy_sig = _mac.get("dxy_signal", "neutral")
-    _mac_yr_sig  = _mac.get("yr_signal",  "neutral")
-
-    _MAC_COLORS = {
-        "MACRO_TAILWIND": "#00d4aa", "MILD_TAILWIND": "#00c076",
-        "MACRO_NEUTRAL":  "#64748b",
-        "MILD_HEADWIND":  "#f59e0b", "MACRO_HEADWIND": "#f6465d",
-    }
-    _mac_color = _MAC_COLORS.get(_mac_regime, "#64748b")
-    _SIG_ICONS = {"tailwind": "✅", "neutral": "➖", "headwind": "⛔"}
-
-    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
-    _mc1.metric("DXY (Dollar Index)",   f"{_mac_dxy:.2f}",  help="< 100 = crypto tailwind · > 105 = headwind")
-    _mc2.metric("10Y Treasury Yield",   f"{_mac_10yr:.2f}%", help="< 4.0% = tailwind · > 4.5% = headwind")
-    _mc3.metric(
-        "DXY Signal",
-        f"{_SIG_ICONS.get(_mac_dxy_sig,'➖')} {_mac_dxy_sig.title()}",
-    )
-    _mc4.metric(
-        "Yield Signal",
-        f"{_SIG_ICONS.get(_mac_yr_sig,'➖')} {_mac_yr_sig.title()}",
-    )
-
-    st.markdown(
-        f'<div style="background:rgba(255,255,255,0.04);border:1px solid {_mac_color}60;'
-        f'border-radius:10px;padding:12px 16px;margin-top:8px;display:flex;'
-        f'align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'
-        f'<div>'
-        f'<span style="font-size:15px;font-weight:800;color:{_mac_color}">'
-        f'{_mac_regime.replace("_"," ")}</span>'
-        f'<span style="font-size:12px;color:#9ca3af;margin-left:12px">'
-        f'Signal adjustment: {_mac_adj:+.1f} pts to confidence scores</span>'
-        f'</div>'
-        f'<span style="font-size:11px;color:#9ca3af">Source: FRED + yfinance · 1h cache</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Regional Exchange Premium Monitor (#89) ───────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Regional Exchange Premium",
-        "MEXC (Asia) · Bitso (LatAm/MXN) · CoinDCX (India/INR) — vs Binance global benchmark",
-        icon="🌍",
-    )
-
-    @st.cache_data(ttl=120, show_spinner=False)
-    def _cached_regional(pair: str):
-        return _df.fetch_regional_exchange_prices(pair)
-
-    _reg_pair = st.selectbox(
-        "Base pair", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"],
-        key="reg_pair_sel",
-    )
-    _reg = _cached_regional(_reg_pair)
-    _bp  = _reg.get("binance_price")
-
-    if _bp and _bp > 0:
-        _rc1, _rc2, _rc3, _rc4 = st.columns(4)
-        _rc1.metric("Binance (Global)", f"${_bp:,.4f}" if _bp < 1 else f"${_bp:,.2f}")
-
-        _mexc_p = _reg.get("mexc_price")
-        _mexc_prem = _reg.get("mexc_premium_pct")
-        if _mexc_p:
-            _mprem_str = f"{_mexc_prem:+.4f}%" if _mexc_prem is not None else "—"
-            _rc2.metric("MEXC (Asia)", f"${_mexc_p:,.2f}", delta=_mprem_str)
-
-        _bitso_eq = _reg.get("bitso_usd_equiv")
-        _bitso_mxn = _reg.get("bitso_mxn")
-        if _bitso_eq:
-            _bitso_prem = round((_bitso_eq - _bp) / _bp * 100, 3) if _bp > 0 else 0.0
-            _rc3.metric(
-                f"Bitso (MXN→USD)",
-                f"${_bitso_eq:,.2f}",
-                delta=f"{_bitso_prem:+.3f}%",
-                help=f"MXN price: {_bitso_mxn:,.0f}" if _bitso_mxn else None,
-            )
-
-        _dcx_eq = _reg.get("coindcx_usd_equiv")
-        _dcx_inr = _reg.get("coindcx_inr")
-        if _dcx_eq:
-            _dcx_prem = round((_dcx_eq - _bp) / _bp * 100, 3) if _bp > 0 else 0.0
-            _rc4.metric(
-                "CoinDCX (INR→USD)",
-                f"${_dcx_eq:,.2f}",
-                delta=f"{_dcx_prem:+.3f}%",
-                help=f"INR price: ₹{_dcx_inr:,.0f}" if _dcx_inr else None,
-            )
-
-        # Premium summary badge
-        _premiums = [p for p in [_mexc_prem, (_bitso_eq - _bp) / _bp * 100 if _bitso_eq else None,
-                                  (_dcx_eq - _bp) / _bp * 100 if _dcx_eq else None] if p is not None]
-        if _premiums:
-            _avg_prem = sum(_premiums) / len(_premiums)
-            _prem_color = "#f59e0b" if abs(_avg_prem) > 0.3 else "#00d4aa"
-            st.markdown(
-                f'<div style="font-size:12px;color:{_prem_color};margin-top:4px">'
-                f'Avg regional premium vs Binance: <b>{_avg_prem:+.4f}%</b> · '
-                f'{"Elevated premium — regional demand signal" if _avg_prem > 0.3 else "Discount — regional selling pressure" if _avg_prem < -0.3 else "In parity — no regional arbitrage signal"}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-    else:
-        st.caption("Regional price data loading… check connectivity.")
-    st.caption("Source: MEXC public API · Bitso ticker API · CoinDCX exchange API · 2-min cache")
-
-    # ── Exchange Price Comparison — HTX / Bitstamp / Bitget (#41 Batch 3) ──────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "Exchange Price Comparison",
-        "Binance · HTX · Bitstamp · Bitget — real-time price spread across major CeFi exchanges",
-        icon="💱",
-    )
-    with st.expander("Show CeFi Price Comparison", expanded=False):
-        try:
-            @st.cache_data(ttl=300, show_spinner=False)
-            def _cached_exch_compare(pair: str):
-                return data_feeds.fetch_exchange_price_comparison(pair)
-
-            _ec_pair = st.selectbox(
-                "Pair", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"],
-                key="exch_compare_pair_sel",
-            )
-            _ec = _cached_exch_compare(_ec_pair)
-
-            _ec_prices = {
-                "Binance":  _ec.get("binance"),
-                "HTX":      _ec.get("htx"),
-                "Bitstamp": _ec.get("bitstamp"),
-                "Bitget":   _ec.get("bitget"),
-            }
-            _ec_valid = {k: v for k, v in _ec_prices.items() if v is not None and v > 0}
-
-            if _ec_valid:
-                _ec_cols = st.columns(len(_ec_prices))
-                for _i, (_ex_name, _ex_price) in enumerate(_ec_prices.items()):
-                    if _ex_price is not None and _ex_price > 0:
-                        _ec_cols[_i].metric(_ex_name, f"${_ex_price:,.2f}")
-                    else:
-                        _ec_cols[_i].metric(_ex_name, "N/A")
-
-                _spread = _ec.get("spread_pct", 0.0)
-                _cheapest = _ec.get("cheapest", "N/A")
-                _most_exp = _ec.get("most_expensive", "N/A")
-                _spread_color = "#f59e0b" if _spread > 0.1 else "#00d4aa"
-                st.markdown(
-                    f"<div style='font-size:12px;color:{_spread_color};margin-top:4px'>"
-                    f"Spread: <b>{_spread:.4f}%</b> · "
-                    f"Cheapest: <b>{_cheapest.upper()}</b> · "
-                    f"Most expensive: <b>{_most_exp.upper()}</b>"
-                    f"{'  — Elevated spread: arbitrage opportunity' if _spread > 0.1 else '  — Prices in parity'}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.caption("Exchange price data loading… check connectivity.")
-            if _ec.get("error"):
-                st.caption(f"Note: {_ec['error']}")
-            st.caption("Source: Binance spot · HTX (Huobi) · Bitstamp · Bitget · 5-min cache")
-
-            # ── Regional Price Comparison (#89 Batch 4) ───────────────────────
-            st.markdown("---")
-            st.markdown(
-                '<span style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.7)">'
-                'Regional Exchange Comparison — MEXC (Asia) · Bitso (LatAm) · CoinDCX (India)'
-                '</span>',
-                unsafe_allow_html=True,
-            )
-            try:
-                @st.cache_data(ttl=300, show_spinner=False)
-                def _cached_regional_compare(base: str):
-                    return data_feeds.fetch_regional_price_comparison(base)
-
-                _reg_base = _ec_pair.split("/")[0]  # e.g. "BTC" from "BTC/USDT"
-                _rpc = _cached_regional_compare(_reg_base)
-                _rpc_cols = st.columns(4)
-                _rpc_labels = [
-                    ("Binance", _rpc.get("binance_usd")),
-                    ("MEXC", _rpc.get("mexc_usd")),
-                    ("Bitso (MXN)", _rpc.get("bitso_usd")),
-                    ("CoinDCX (INR)", _rpc.get("coindcx_usd")),
-                ]
-                _rpc_binance = _rpc.get("binance_usd") or 0
-                for _rpc_i, (_rpc_name, _rpc_price) in enumerate(_rpc_labels):
-                    if _rpc_price and _rpc_price > 0:
-                        _rpc_delta = None
-                        if _rpc_i > 0 and _rpc_binance > 0:
-                            _rpc_spread = round((_rpc_price - _rpc_binance) / _rpc_binance * 100, 4)
-                            _rpc_delta = f"{_rpc_spread:+.4f}%"
-                        _rpc_cols[_rpc_i].metric(_rpc_name, f"${_rpc_price:,.2f}", delta=_rpc_delta)
-                    else:
-                        _rpc_cols[_rpc_i].metric(_rpc_name, "N/A")
-                _max_sp = _rpc.get("max_spread_pct", 0.0)
-                if _max_sp > 0:
-                    _rpc_color = "#f59e0b" if _max_sp > 0.2 else "#00d4aa"
-                    st.markdown(
-                        f"<div style='font-size:12px;color:{_rpc_color};margin-top:4px'>"
-                        f"Max regional spread: <b>{_max_sp:.4f}%</b>"
-                        f"{'  — Potential arbitrage window' if _max_sp > 0.2 else '  — Prices in parity'}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                st.caption("Source: MEXC · Bitso · CoinDCX · Binance · 5-min cache")
-            except Exception as _rpc_err:
-                st.caption(f"Regional comparison error: {_rpc_err}")
-
-        except Exception as _ec_err:
-            st.caption(f"Exchange price comparison error: {_ec_err}")
-
-    # ── DEX Price Intelligence (#91) ──────────────────────────────────────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "DEX Price Intelligence",
-        "Jupiter (Solana) · dYdX v4 (Cosmos) · Raydium AMM — on-chain vs CEX price comparison",
-        icon="⚡",
-    )
-
-    @st.cache_data(ttl=60, show_spinner=False)
-    def _cached_dex_prices():
-        return _df.fetch_dex_prices(["JUP", "WIF", "PYTH", "SOL", "RAY", "BTC", "ETH"])
-
-    _dex_data = _cached_dex_prices()
-
-    if _dex_data:
-        # Build comparison table: DEX price vs Binance spot
-        _dex_rows = []
-        for _sym, _info in _dex_data.items():
-            _dex_price = _info.get("price", 0)
-            _dex_source = _info.get("dex", "—")
-            # Compare vs Binance spot
-            _cex_sym = f"{_sym}/USDT"
-            _cex_price = None
-            _results_now = st.session_state.get("scan_results") or []
-            for _r in _results_now:
-                if _r.get("pair") == _cex_sym:
-                    _cex_price = _r.get("price_usd")
-                    break
-            if _dex_price > 0:
-                _spread_pct = round((_dex_price - _cex_price) / _cex_price * 100, 3) if _cex_price and _cex_price > 0 else None
-                _dex_rows.append({
-                    "Token":      _sym,
-                    "DEX Price":  f"${_dex_price:,.4f}" if _dex_price < 10 else f"${_dex_price:,.2f}",
-                    "Source":     _dex_source,
-                    "CEX Spread": f"{_spread_pct:+.3f}%" if _spread_pct is not None else "—",
-                })
-        if _dex_rows:
-            st.dataframe(pd.DataFrame(_dex_rows), width="stretch", hide_index=True)
-            st.caption(
-                "DEX prices: Jupiter Aggregator (Solana) · dYdX v4 oracle (Cosmos) · Raydium AMM · 1-min cache. "
-                "CEX Spread vs last scan price (run a scan to populate)."
-            )
-    else:
-        st.info("DEX price feeds loading… Jupiter / dYdX / Raydium endpoints.")
-
-    # ── DEX vs CEX Spread (#91 Batch 4) — dYdX oracle vs Binance spot ─────────
-    _ui.gradient_divider()
-    _ui.section_header(
-        "DEX vs CEX Spread",
-        "dYdX v4 oracle price vs Binance spot — basis and spread for BTC/ETH",
-        icon="🔀",
-    )
-    try:
-        @st.cache_data(ttl=300, show_spinner=False)
-        def _cached_dex_cex_spread(sym: str):
-            return data_feeds.fetch_dex_vs_cex_spread(sym)
-
-        _dcc_cols = st.columns(2)
-        for _dcc_i, _dcc_sym in enumerate(["BTC", "ETH"]):
-            _dcc = _cached_dex_cex_spread(_dcc_sym)
-            _dcc_binance = _dcc.get("binance_spot")
-            _dcc_dydx    = _dcc.get("dydx_oracle")
-            _dcc_spread  = _dcc.get("spread_pct", 0.0)
-            _dcc_basis   = _dcc.get("basis", 0.0)
-            with _dcc_cols[_dcc_i]:
-                st.markdown(
-                    f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);'
-                    f'border-radius:8px;padding:12px 16px">'
-                    f'<div style="font-size:13px;font-weight:700;color:#e8ecf1;margin-bottom:8px">'
-                    f'{_dcc_sym} — dYdX vs Binance</div>',
-                    unsafe_allow_html=True,
-                )
-                _mc = st.columns(2)
-                _mc[0].metric("Binance Spot",  f"${_dcc_binance:,.2f}" if _dcc_binance else "N/A")
-                _mc[1].metric("dYdX Oracle",   f"${_dcc_dydx:,.2f}"   if _dcc_dydx    else "N/A")
-                if _dcc_spread is not None and (_dcc_binance or _dcc_dydx):
-                    _sp_color = "#f59e0b" if abs(_dcc_spread) > 0.05 else "#00d4aa"
-                    _basis_str = f"${_dcc_basis:+,.2f}" if _dcc_basis else "$0.00"
-                    st.markdown(
-                        f"<div style='font-size:12px;color:{_sp_color};margin-top:4px'>"
-                        f"Spread: <b>{_dcc_spread:+.4f}%</b> · Basis: <b>{_basis_str}</b>"
-                        f"{'  — Elevated DEX premium' if _dcc_spread > 0.05 else '  — DEX discount' if _dcc_spread < -0.05 else '  — In parity'}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                st.markdown("</div>", unsafe_allow_html=True)
-        st.caption("Source: dYdX v4 Indexer (Cosmos) · Binance spot API · 5-min cache")
-    except Exception as _dcc_err:
-        st.caption(f"DEX vs CEX spread error: {_dcc_err}")
-
 
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
@@ -7457,6 +5963,151 @@ def page_arbitrage():
             )
         else:
             st.info("No historical records yet — run a scan to populate.")
+
+    with st.expander("📡 Funding Rate Monitor", expanded=False):
+        st.caption(
+            "Compare perpetual funding rates across OKX, Binance, Bybit, KuCoin. "
+            "Positive = longs paying shorts (bearish). Negative = bullish. "
+            "High rates signal carry trade opportunities."
+        )
+        _df = data_feeds
+
+        # ── Funding Rate Monitor ─────────────────────────────────────────────────
+        _ui.section_header(
+            "Funding Rate Monitor",
+            "Compare perpetual funding rates across OKX · Binance · Bybit · KuCoin — "
+            "positive = longs paying shorts (bearish); negative = bullish",
+            icon="📡",
+        )
+
+        fr_col1, fr_col2 = st.columns([4, 1])
+        with fr_col1:
+            fr_pairs_sel = st.multiselect(
+                "Pairs to monitor",
+                model.PAIRS,
+                default=model.PAIRS[:8],
+                key="fr_pairs_select",
+            )
+        with fr_col2:
+            st.write("")
+            st.write("")
+            run_fr = st.button(
+                "🔍 Load Rates", type="primary",
+                width="stretch", key="run_fr_btn",
+            )
+
+        if run_fr and fr_pairs_sel:
+            with st.spinner("Fetching rates from 4 exchanges…", show_time=True):
+                fr_rows: list[dict] = []
+                for pair in fr_pairs_sel:
+                    multi = data_feeds.get_multi_exchange_funding_rates(pair)
+                    row: dict = {"Pair": pair}
+                    for exch in ("okx", "binance", "bybit", "kucoin"):
+                        rd   = multi.get(exch, {})
+                        rate = rd.get("funding_rate_pct", 0.0)
+                        row[exch.upper()] = None if rd.get("error") else rate
+                    # best carry = exchange with largest |rate|
+                    valid = {
+                        exch: multi[exch]["funding_rate_pct"]
+                        for exch in multi
+                        if not multi[exch].get("error")
+                        and multi[exch].get("source")
+                        and multi[exch].get("funding_rate_pct") is not None  # APP-27: None → abs(None) TypeError
+                    }
+                    if valid:
+                        best_exch = max(valid, key=lambda e: abs(valid[e]))
+                        best_rate = valid[best_exch]
+                        row["Best Rate"] = f"{best_rate:+.4f}% ({best_exch.upper()})"
+                        row["Ann. Yield%"] = round(abs(best_rate) * 1095, 1)
+                    else:
+                        row["Best Rate"] = "N/A"
+                        row["Ann. Yield%"] = 0.0
+                    fr_rows.append(row)
+
+                carry_opps = data_feeds.get_carry_trade_opportunities(fr_pairs_sel, threshold_pct=0.01)
+                st.session_state["fr_table"]   = fr_rows
+                st.session_state["carry_opps"] = carry_opps
+
+        fr_table = st.session_state.get("fr_table")
+        if fr_table:
+            fr_df = pd.DataFrame(fr_table)
+
+            def _color_fr(val):
+                if not isinstance(val, (int, float)):
+                    return "color: #555555"
+                if val >  0.05: return "color: #ff4b4b; font-weight: bold"
+                if val >  0.01: return "color: #ffa500"
+                if val < -0.05: return "color: #00d4aa; font-weight: bold"
+                if val < -0.01: return "color: #7ecb9a"
+                return "color: #888888"
+
+            def _color_ann(val):
+                if not isinstance(val, (int, float)):
+                    return ""
+                if val >= 30: return "color: #00d4aa; font-weight: bold"
+                if val >= 10: return "color: #7ecb9a"
+                return ""
+
+            exch_cols = [c for c in ["OKX", "BINANCE", "BYBIT", "KUCOIN"] if c in frdata_feeds.columns]
+            ann_cols  = ["Ann. Yield%"] if "Ann. Yield%" in frdata_feeds.columns else []
+
+            st.dataframe(
+                frdata_feeds.style
+                    .map(_color_fr,  subset=exch_cols)
+                    .map(_color_ann, subset=ann_cols),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "Rates are % per 8-hour interval. "
+                "Ann. Yield% = |rate| × 1 095 (assumes 3 payments/day). "
+                "N/A = geo-blocked or pair not listed on that exchange."
+            )
+
+            # ── Carry Trade Opportunities ──────────────────────────────────────
+            carry_opps = st.session_state.get("carry_opps", [])
+            if carry_opps:
+                st.markdown("#### 🏦 Carry Trade Opportunities (|rate| > 0.01%)")
+                st.caption(
+                    "Market-neutral strategy: hold opposite positions on perp + spot "
+                    "to collect funding payments without directional exposure."
+                )
+                carry_df = pd.DataFrame(carry_opps).rename(columns={
+                    "pair":             "Pair",
+                    "exchange":         "Exchange",
+                    "funding_rate_pct": "Rate %",
+                    "direction":        "Direction",
+                    "strategy":         "Strategy",
+                    "annualized_yield": "Ann. Yield %",
+                })
+
+                def _color_carry_yield(val):
+                    if not isinstance(val, (int, float)):
+                        return ""
+                    if val >= 50: return "color: #00d4aa; font-weight: bold"
+                    if val >= 20: return "color: #7ecb9a"
+                    if val >= 10: return "color: #ffa500"
+                    return ""
+
+                def _color_rate(val):
+                    if not isinstance(val, (int, float)):
+                        return ""
+                    if val >  0.05: return "color: #ff4b4b; font-weight: bold"
+                    if val >  0.01: return "color: #ffa500"
+                    if val < -0.05: return "color: #00d4aa; font-weight: bold"
+                    if val < -0.01: return "color: #7ecb9a"
+                    return ""
+
+                st.dataframe(
+                    carry_df[["Pair", "Exchange", "Rate %", "Strategy", "Ann. Yield %"]].style
+                        .map(_color_rate,        subset=["Rate %"])
+                        .map(_color_carry_yield, subset=["Ann. Yield %"]),
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.info("No carry trade opportunities above 0.01% threshold for the selected pairs.")
+
 
 
 # ──────────────────────────────────────────────
