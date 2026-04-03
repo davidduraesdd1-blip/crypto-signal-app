@@ -1,11 +1,11 @@
 """
-ui/glossary.py — Shared crypto glossary for the Flare DeFi Model.
+glossary.py — Shared crypto glossary for the SuperGrok Crypto Signal Model.
 
 30 terms, 3 explanation depths (one per user level).
 Used via glossary_tooltip() for ⓘ hover text and glossary_popover() for the sidebar panel.
 
 Usage:
-    from ui.glossary import glossary_popover, glossary_tooltip, GLOSSARY
+    from glossary import glossary_popover, glossary_tooltip, GLOSSARY
     glossary_popover()                              # sidebar panel
     tip = glossary_tooltip("APY", user_level)       # ⓘ hover string
 """

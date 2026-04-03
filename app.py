@@ -1147,13 +1147,24 @@ def direction_color(d):
     return "🟡"
 
 def conf_color(c):
+    if c is None: return "red"
+    try:
+        c = float(c)
+    except (TypeError, ValueError):
+        return "red"
     if c >= model.HIGH_CONF_THRESHOLD: return "green"
     if c >= 55: return "orange"
     return "red"
 
 def conf_badge(c):
+    if c is None:
+        return "🔴 N/A"
+    try:
+        c = float(c)
+    except (TypeError, ValueError):
+        return "🔴 N/A"
     col = "🟢" if c >= model.HIGH_CONF_THRESHOLD else "🟡" if c >= 55 else "🔴"
-    return f"{col} {c}%"
+    return f"{col} {c:.0f}%"
 
 # ──────────────────────────────────────────────
 # PAGE 1: DASHBOARD

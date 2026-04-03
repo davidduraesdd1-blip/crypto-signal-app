@@ -165,6 +165,11 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "data.ripple.com",                          # XRPL Data API (whale tracker)
     "api.bscscan.com",                          # BscScan (BNB whale tracker)
     "blockchain.info",                          # blockchain.info unconfirmed tx (BTC whale tracker)
+    # allora.py
+    "api.upshot.xyz",                           # Allora price predictions (Upshot consumer API)
+    "api.allora.network",                       # Allora native inference API (fallback)
+    # GitHub dev activity (S7 panel)
+    "api.github.com",                           # GitHub public REST API (unauthenticated)
 })
 
 
@@ -764,9 +769,17 @@ def get_open_interest_batch(pairs: list) -> dict:
     """Fetch open interest for all pairs in parallel. Returns {pair: oi_dict}."""
     if not pairs:
         return {}
+    _oi_null = {'oi_usd': 0.0, 'signal': 'N/A', 'error': 'batch error'}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_open_interest, pair) for pair in pairs}
-        return {pair: f.result() for pair, f in futures.items()}
+        result = {}
+        for pair, f in futures.items():
+            try:
+                result[pair] = f.result()
+            except Exception as _e:
+                logging.debug("[OI batch] %s failed: %s", pair, _e)
+                result[pair] = dict(_oi_null)
+        return result
 
 
 # ──────────────────────────────────────────────
@@ -843,9 +856,17 @@ def get_options_iv_batch(pairs: list) -> dict:
     """Fetch Deribit DVOL for all pairs in parallel. Returns {pair: iv_dict}. Non-BTC/ETH return N/A."""
     if not pairs:
         return {}
+    _iv_null = {'iv': None, 'signal': 'N/A', 'source': 'error', 'error': 'batch error'}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_options_iv, pair) for pair in pairs}
-        return {pair: f.result() for pair, f in futures.items()}
+    result = {}
+    for pair, f in futures.items():
+        try:
+            result[pair] = f.result()
+        except Exception as _e:
+            logging.debug("[IV batch] %s failed: %s", pair, _e)
+            result[pair] = dict(_iv_null)
+    return result
 
 
 # ──────────────────────────────────────────────
@@ -913,9 +934,18 @@ def get_orderbook_batch(pairs: list) -> dict:
     """Fetch OB depth for all pairs in parallel. Returns {pair: ob_dict}."""
     if not pairs:
         return {}
+    _ob_null = {'imbalance': 0.0, 'signal': 'N/A', 'bid_vol': 0.0, 'ask_vol': 0.0,
+                'error': 'batch error'}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_orderbook_depth, pair) for pair in pairs}
-        return {pair: f.result() for pair, f in futures.items()}
+        result = {}
+        for pair, f in futures.items():
+            try:
+                result[pair] = f.result()
+            except Exception as _e:
+                logging.debug("[OB batch] %s failed: %s", pair, _e)
+                result[pair] = dict(_ob_null)
+        return result
 
 
 # ──────────────────────────────────────────────
@@ -1170,7 +1200,14 @@ def get_multi_exchange_funding_rates(pair: str) -> dict[str, dict]:
             exch_id: ex.submit(_fetch_ccxt_fr, exch_id, pair, now)
             for exch_id in ccxt_exchanges
         }
-        result = {name: f.result() for name, f in {**core_futs, **ccxt_futs}.items()}
+    all_futs = {**core_futs, **ccxt_futs}
+    result = {}
+    for name, f in all_futs.items():
+        try:
+            result[name] = f.result()
+        except Exception as _e:
+            logging.debug("[multi_fr] %s %s failed: %s", name, pair, _e)
+            result[name] = _empty_result(f"{name} error", now)
 
     with _MULTI_FR_LOCK:
         _MULTI_FR_CACHE[pair] = {"data": result, "_ts": now}
@@ -2201,7 +2238,14 @@ def get_cvd_batch(pairs: list) -> dict:
         return {}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_cvd, pair) for pair in pairs}
-    return {pair: f.result() for pair, f in futures.items()}
+    result = {}
+    for pair, f in futures.items():
+        try:
+            result[pair] = f.result()
+        except Exception as _e:
+            logging.debug("[CVD batch] %s failed: %s", pair, _e)
+            result[pair] = dict(_CVD_NEUTRAL)
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2338,7 +2382,7 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
             "cvd_trend":   cvd_trend,
             "confidence":  round(confidence, 3),
             "signal":      signal,
-            "source":      "binance_klines",
+            "source":      "okx_klines",
             "error":       None,
             "_ts":         now,
         }
@@ -2508,9 +2552,18 @@ def get_liquidation_cascade_risk(pair: str) -> dict:
             oi_fut  = ex.submit(get_open_interest, pair)
             ob_fut  = ex.submit(get_orderbook_depth, pair)
 
-        fr_data = fr_fut.result()
-        oi_data = oi_fut.result()
-        ob_data = ob_fut.result()
+        try:
+            fr_data = fr_fut.result()
+        except Exception:
+            fr_data = _empty_result("funding N/A", now)
+        try:
+            oi_data = oi_fut.result()
+        except Exception:
+            oi_data = {'oi_usd': 0.0, 'signal': 'N/A', 'error': 'fetch error'}
+        try:
+            ob_data = ob_fut.result()
+        except Exception:
+            ob_data = {'imbalance': 0.0, 'signal': 'BALANCED', 'bid_vol': 0.0, 'ask_vol': 0.0, 'error': 'fetch error'}
 
         # ── Component 1: Funding rate extremity (0-40 pts) ───────────────────
         fr_pct  = abs(fr_data.get("funding_rate_pct", 0.0))
@@ -2598,9 +2651,19 @@ def get_cascade_risk_batch(pairs: list) -> dict:
     """Fetch liquidation cascade risk for all pairs in parallel."""
     if not pairs:
         return {}
+    _cr_null = {"score": 25, "risk_level": "LOW", "direction": "NEUTRAL",
+                "signal": "SAFE", "components": {}, "funding_pct": 0.0,
+                "source": "fallback", "error": "batch error"}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 4)) as ex:
         futures = {pair: ex.submit(get_liquidation_cascade_risk, pair) for pair in pairs}
-    return {pair: f.result() for pair, f in futures.items()}
+    result = {}
+    for pair, f in futures.items():
+        try:
+            result[pair] = f.result()
+        except Exception as _e:
+            logging.debug("[cascade batch] %s failed: %s", pair, _e)
+            result[pair] = dict(_cr_null)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3202,9 +3265,19 @@ def get_long_short_ratio(pair: str) -> dict:
 
 def get_long_short_ratio_batch(pairs: list) -> dict:
     """Fetch long/short ratio for multiple pairs in parallel. Returns {pair: result}."""
+    if not pairs:
+        return {}
+    _ls_null = {"error": "batch error", "signal": "UNKNOWN"}
     with ThreadPoolExecutor(max_workers=min(len(pairs), 6)) as ex:
-        futures = {ex.submit(get_long_short_ratio, p): p for p in pairs}
-        return {futures[f]: f.result() for f in futures}
+        futures = {p: ex.submit(get_long_short_ratio, p) for p in pairs}
+    result = {}
+    for pair, f in futures.items():
+        try:
+            result[pair] = f.result()
+        except Exception as _e:
+            logging.debug("[LS batch] %s failed: %s", pair, _e)
+            result[pair] = dict(_ls_null)
+    return result
 
 
 # ──────────────────────────────────────────────────────────────
@@ -5080,8 +5153,14 @@ def fetch_regional_premiums() -> dict:
         with ThreadPoolExecutor(max_workers=2) as _ex:
             fx_fut  = _ex.submit(_fetch_fx_rates)
             btc_fut = _ex.submit(_fetch_binance_btc_price)
-            fx_rates   = fx_fut.result()
+        try:
+            fx_rates = fx_fut.result()
+        except Exception:
+            fx_rates = {"MXN": 17.5, "BRL": 5.0, "INR": 84.0, "KRW": 1350.0, "USD": 1.0}
+        try:
             binance_btc = btc_fut.result()
+        except Exception:
+            binance_btc = 0.0
 
         if binance_btc <= 0:
             return {**_neutral, "error": "Binance BTC price unavailable"}

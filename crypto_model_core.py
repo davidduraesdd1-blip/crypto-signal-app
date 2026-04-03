@@ -4082,7 +4082,13 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     # PERF-SCAN: use SCAN_OHLCV_LIMIT (200) — all indicators need < 150 bars; halves fetch payload
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(TIMEFRAMES)) as _tf_ex:
         _tf_futures = {tf: _tf_ex.submit(robust_fetch_ohlcv, ta_ex, pair, tf, SCAN_OHLCV_LIMIT) for tf in TIMEFRAMES}
-    _ohlcv_frames = {tf: fut.result() for tf, fut in _tf_futures.items()}
+    _ohlcv_frames = {}
+    for _tf_key, _tf_fut in _tf_futures.items():
+        try:
+            _ohlcv_frames[_tf_key] = _tf_fut.result()
+        except Exception as _tf_err:
+            logging.debug("[scan_pair] %s %s OHLCV fetch failed: %s", pair, _tf_key, _tf_err)
+            _ohlcv_frames[_tf_key] = pd.DataFrame()
 
     for tf in TIMEFRAMES:
         df = _ohlcv_frames[tf]
