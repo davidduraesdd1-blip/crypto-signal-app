@@ -717,20 +717,19 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["📊 Dashboard", "🌍 Market Overview", "⚙️ Settings",
+    ["📊 Dashboard", "⚙️ Settings",
      "📈 Performance History", "📋 My Trades", "⚡ Arbitrage", "🤖 AI Agent"],
     label_visibility="collapsed",
 )
 
 # Normalise page name — strip emoji prefix for existing if/elif comparisons
 _PAGE_MAP = {
-    "📊 Dashboard":         "Dashboard",
-    "🌍 Market Overview":   "Market Overview",
-    "⚙️ Settings":          "Config Editor",
+    "📊 Dashboard":           "Dashboard",
+    "⚙️ Settings":            "Config Editor",
     "📈 Performance History": "Backtest Viewer",
-    "📋 My Trades":         "Trade Log & History",
-    "⚡ Arbitrage":          "Arbitrage",
-    "🤖 AI Agent":          "Agent",
+    "📋 My Trades":           "Trade Log & History",
+    "⚡ Arbitrage":            "Arbitrage",
+    "🤖 AI Agent":            "Agent",
 }
 page = _PAGE_MAP.get(page, page)
 
@@ -2886,6 +2885,58 @@ def page_dashboard():
         _sells = sum(1 for d, _ in _sig_map.values() if "SELL" in d)
         _holds = len(_sig_map) - _buys - _sells
         st.caption(f"Signal summary: {_buys} BUY · {_sells} SELL · {_holds} HOLD · Score = composite signal strength (higher = stronger)")
+
+    # ── Global Market Context (folded in from Market Overview) ─────────────────
+    with st.expander("🌍 Global Market Context", expanded=False):
+        _gm  = _cached_global_market()
+        _gtr = _cached_trending_coins()
+
+        def _fmt_cap_d(v):
+            if v >= 1e12: return f"${v/1e12:.2f}T"
+            if v >= 1e9:  return f"${v/1e9:.1f}B"
+            return f"${v/1e6:.0f}M"
+
+        _tm   = _gm.get("total_market_cap_usd", 0)
+        _bd   = _gm.get("btc_dominance", 0.0)
+        _ed   = _gm.get("eth_dominance", 0.0)
+        _mchg = _gm.get("market_cap_change_24h", 0.0)
+        _vol  = _gm.get("total_volume_24h_usd", 0)
+        _alt  = _gm.get("altcoin_season_label", "N/A")
+        _gdc  = "#00c076" if _mchg >= 0 else "#f6465d"
+        _ga   = "▲" if _mchg >= 0 else "▼"
+        _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
+        with _gc1:
+            st.metric("Total Market Cap", _fmt_cap_d(_tm),
+                      delta=f"{_ga} {abs(_mchg):.2f}% 24h", delta_color="normal")
+        with _gc2:
+            st.metric("BTC Dominance", f"{_bd:.1f}%")
+        with _gc3:
+            st.metric("ETH Dominance", f"{_ed:.1f}%")
+        with _gc4:
+            st.metric("24h Volume", _fmt_cap_d(_vol))
+        with _gc5:
+            st.metric("Market Regime", _alt.replace("_", " "))
+
+        if _gtr:
+            _chips = " ".join(
+                f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
+                f'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
+                f'color:#00d4aa;font-size:12px;font-weight:600;margin:2px">{s}</span>'
+                for s in _gtr[:10]
+            )
+            st.markdown(
+                f'<div style="margin:4px 0 12px">'
+                f'<span style="color:rgba(255,255,255,0.45);font-size:11px;'
+                f'text-transform:uppercase;letter-spacing:0.8px;margin-right:10px">🔥 Trending</span>'
+                + _chips + '</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.caption("Source: CoinGecko · cached 5 min")
+        st.markdown("---")
+        st.caption("For full market analysis tools (Correlation Matrix, Pair Trades, "
+                   "Volatility Rankings, MTF Heatmap, Funding Rates) — previously "
+                   "available under Market Overview — use the buttons below from the scan results area above.")
 
     # ── Auto-refresh trigger (fragment-based, non-blocking) ──
     # Uses a 1s fragment for the countdown so the main page only reruns at the real interval,
@@ -7433,11 +7484,11 @@ def page_agent():
     col_status, col_start, col_stop, col_spacer = st.columns([2, 1, 1, 3])
     with col_status:
         if is_running:
-            st.success("● RUNNING")
+            st.success("▲ RUNNING")
         elif status.get("kill_requested", False):  # APP-20: .get() avoids KeyError
-            st.warning("◌ STOPPING…")
+            st.warning("■ STOPPING…")
         else:
-            st.error("● STOPPED")
+            st.error("▼ STOPPED")
     with col_start:
         if st.button("▶ Start", width="stretch", type="primary",
                      disabled=is_running, key="agent_start_btn"):
@@ -7570,8 +7621,6 @@ def page_agent():
 # ──────────────────────────────────────────────
 if page == "Dashboard":
     page_dashboard()
-elif page == "Market Overview":
-    page_market_overview()
 elif page == "Config Editor":
     page_config()
 elif page == "Backtest Viewer":
