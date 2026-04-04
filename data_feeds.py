@@ -1928,6 +1928,7 @@ def get_trending_coins() -> list[str]:
         _cg_headers: dict = {"Accept": "application/json"}
         if _cg_key:
             _cg_headers["x-cg-pro-api-key"] = _cg_key
+        _COINGECKO_LIMITER.acquire()
         resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/search/trending",
             timeout=10,
@@ -2010,6 +2011,7 @@ def get_global_market() -> dict:
         _cg_hdrs: dict = {"Accept": "application/json"}
         if _cg_key:
             _cg_hdrs["x-cg-pro-api-key"] = _cg_key
+        _COINGECKO_LIMITER.acquire()
         resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/global",
             timeout=10,
@@ -2702,6 +2704,7 @@ def get_top_movers(top_n: int = 3) -> dict:
             return cached
 
     try:
+        _COINGECKO_LIMITER.acquire()
         resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/coins/markets",
             params={
@@ -4376,6 +4379,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                     import statistics as _stats3
                     import datetime as _dt3
                     _cg_url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+                    _COINGECKO_LIMITER.acquire()
                     _cg_r = _NO_RETRY_SESSION.get(
                         _cg_url,
                         params={"vs_currency": "usd", "days": "400", "interval": "daily"},

@@ -21,6 +21,10 @@ import functools
 from statsmodels.tsa.stattools import coint
 import database as _db
 import config as _config
+try:
+    from data_feeds import _COINGECKO_LIMITER as _cg_limiter
+except ImportError:
+    _cg_limiter = None
 
 import warnings
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -565,6 +569,8 @@ def fetch_coingecko_price(cg_id: str) -> float | None:
         if cached and (now - cached["_ts"]) < _CG_PRICE_TTL:
             return cached["price"]
     try:
+        if _cg_limiter is not None:
+            _cg_limiter.acquire()
         r = _http_session.get(
             "https://api.coingecko.com/api/v3/simple/price",
             params={"ids": cg_id, "vs_currencies": "usd"},
