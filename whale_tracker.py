@@ -20,6 +20,7 @@ import time
 from typing import Optional
 
 import requests
+from data_feeds import _COINGECKO_LIMITER as _cg_limiter
 
 # Module-level session for TCP connection reuse across all whale fetch calls
 _SESSION = requests.Session()
@@ -422,8 +423,9 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
             coin_id_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
                            "XRP": "ripple", "BNB": "binancecoin", "DOGE": "dogecoin"}
             coin_id = coin_id_map.get(pair.split("/")[0], "bitcoin")
+            _cg_limiter.acquire()
             r = _SESSION.get(
-                f"https://api.coingecko.com/api/v3/simple/price",
+                "https://api.coingecko.com/api/v3/simple/price",
                 params={"ids": coin_id, "vs_currencies": "usd"},
                 timeout=_TIMEOUT,
             )

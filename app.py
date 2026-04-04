@@ -691,7 +691,7 @@ st.sidebar.markdown(
     'Data</span>',
     unsafe_allow_html=True,
 )
-if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload fresh data from all sources", use_container_width=True):
+if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload fresh data from all sources", width="stretch"):
     try:
         st.cache_data.clear()
     except Exception:

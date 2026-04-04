@@ -3408,7 +3408,7 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
         height=280, margin=dict(l=40, r=20, t=10, b=20),
         barmode="group",
     )
-    _st.plotly_chart(_fig_liq, use_container_width=True, config={"displayModeBar": False})
+    _st.plotly_chart(_fig_liq, width="stretch", config={"displayModeBar": False})
 
     import pandas as _pd
     _liq_rows = [{
