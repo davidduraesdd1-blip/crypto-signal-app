@@ -159,6 +159,7 @@ def _estimate_eth_whale_activity(price_usd: float) -> list[dict]:
     using the CoinGecko large-transaction volume approximation.
     """
     try:
+        _cg_limiter.acquire()  # rate-limit CoinGecko: 0.4 req/s = 25 req/min free tier
         resp = _SESSION.get(
             "https://api.coingecko.com/api/v3/coins/ethereum",
             params={"localization": "false", "tickers": "false", "community_data": "false"},

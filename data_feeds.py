@@ -170,6 +170,11 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "api.allora.network",                       # Allora native inference API (fallback)
     # GitHub dev activity (S7 panel)
     "api.github.com",                           # GitHub public REST API (unauthenticated)
+    # news_sentiment.py RSS feeds
+    "feeds.feedburner.com",                     # CoinDesk RSS via FeedBurner
+    "cointelegraph.com",                        # Cointelegraph RSS feed
+    # CoinDCX INR exchange
+    "api.coindcx.com",                          # CoinDCX (INR regional premiums)
 })
 
 
@@ -4737,6 +4742,9 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
         if entry and (time.time() - entry["_ts"]) < _REGIONAL_TTL:
             return entry["data"]
 
+    # Fetch live FX rates once — fallback to approximate values only if API fails
+    _live_fx = _fetch_fx_rates()
+
     symbol = pair.replace("/", "")   # "BTCUSDT"
     base   = pair.split("/")[0]      # "BTC"
 
@@ -4783,9 +4791,8 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
         if r.status_code == 200:
             last_mxn = float((r.json().get("payload") or {}).get("last", 0) or 0)
             result["bitso_mxn"] = last_mxn
-            # MXN→USD conversion: Binance has no MXN spot pairs (USDCMXN / USDTMXN
-            # are not listed), so use a hardcoded fallback rate.
-            mxn_rate = 17.5
+            # MXN→USD: use live exchangerate-api rate; fallback to ~17.5 if fetch failed
+            mxn_rate = _live_fx.get("MXN", 17.5)
             result["bitso_usd_equiv"] = round(last_mxn / mxn_rate, 2) if mxn_rate > 0 else None
     except Exception as e:
         result["errors"].append(f"bitso:{e}")
@@ -4806,7 +4813,8 @@ def fetch_regional_exchange_prices(pair: str = "BTC/USDT") -> dict:
                     last_inr = float(t.get("last_price", 0) or 0)
                     if last_inr > 0:
                         result["coindcx_inr"] = last_inr
-                        inr_rate = 83.5  # ₹83–85/USD as of 2025
+                        # INR→USD: use live exchangerate-api rate; fallback to ~84.0 if fetch failed
+                        inr_rate = _live_fx.get("INR", 84.0)
                         result["coindcx_usd_equiv"] = round(last_inr / inr_rate, 2)
                     break
     except Exception as e:
@@ -5826,9 +5834,9 @@ def fetch_mexc_price(symbol: str) -> "Optional[float]":
 def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
     """
     Fetch last price from Bitso public API for a given book (e.g. 'btc_mxn').
-    Converts from MXN to USD using Binance USDTMXN rate (fallback: 17.0).
-    Note: Binance does not list USDCMXN — USDTMXN is also unavailable on Binance
-    spot (MXN pairs not offered), so the hardcoded fallback of 17.0 is always used.
+    Converts from MXN to USD using live exchangerate-api.com FX rate (fallback: 17.0).
+    Note: Binance does not list USDCMXN — uses live FX API via _fetch_fx_rates();
+    hardcoded fallback of 17.0 only applies if that API call itself fails.
     Returns float price in USD or None on error. 5-min cache.
     """
     now = time.time()
@@ -5848,10 +5856,10 @@ def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
             if last_local > 0:
                 # Determine currency from book name (e.g. btc_mxn → MXN)
                 currency = book.split("_")[-1].upper()
-                # Binance has no MXN spot pairs (USDTMXN is not listed) so use
-                # a hardcoded fallback rate.  For other currencies (e.g. future books
-                # in BRL, ARS) a live Binance USDT{currency} fetch is attempted first.
-                mxn_rate = 17.0  # hardcoded fallback for MXN
+                # Use live FX rate from exchangerate-api.com; fallback to approximate
+                # values only if the live fetch failed (e.g. network error on Cloud).
+                _live_fx_bitso = _fetch_fx_rates()
+                mxn_rate = _live_fx_bitso.get(currency, _live_fx_bitso.get("MXN", 17.0))
                 if currency != "MXN":
                     # Attempt OKX FX rate for non-MXN currencies (Binance removed — geo-blocked)
                     try:
@@ -5915,10 +5923,9 @@ def fetch_coindcx_price(pair: str = "BTCINR") -> "Optional[float]":
                 if ticker.get("market") == target_market:
                     last_local = float(ticker.get("last_price", 0) or 0)
                     if last_local > 0:
-                        # Fetch INR/USD rate
-                        # Binance does not offer INR pairs and is geo-blocked on US Cloud.
-                        # Use hardcoded fallback; update periodically if needed.
-                        inr_rate = 83.0
+                        # Fetch live INR/USD rate from exchangerate-api.com;
+                        # fallback to ~84 only if the API call failed.
+                        inr_rate = _fetch_fx_rates().get("INR", 84.0)
                         price_usd = round(last_local / inr_rate, 2) if inr_rate > 0 else None
                         if price_usd and price_usd > 0:
                             with _COINDCX_PRICE_LOCK:
