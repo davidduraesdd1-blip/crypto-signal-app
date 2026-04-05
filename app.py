@@ -1441,7 +1441,7 @@ def page_dashboard():
     else:
         results = st.session_state.get("scan_results", [])
     if not results:
-        if user_level == "Beginner" and not st.session_state.get("scan_run"):
+        if st.session_state.get("user_level", "beginner") == "beginner" and not st.session_state.get("scan_run"):
             st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         else:
             st.info("No scan results yet — click **Run Scan** in the sidebar to begin.")
@@ -6435,7 +6435,7 @@ def page_agent():
                      help="Fraction of signal outcomes resolved as correct over the past 7 days")
         _g3c3.metric("Accuracy Trend", f"{_trend_icon} {_trend.title()}",
                      help="Improving = 7-day win rate at least 5pp above 30-day baseline")
-        if user_level == "Beginner":
+        if st.session_state.get("user_level", "beginner") == "beginner":
             st.caption(
                 f"This shows how well the model's signals have performed recently. "
                 f"The 7-day rate gives the latest picture; the 30-day rate is the longer-run baseline. "

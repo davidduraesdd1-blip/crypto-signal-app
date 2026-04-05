@@ -346,7 +346,7 @@ def compute_spot_spread(pair: str) -> dict:
                 continue
             buy_p  = prices[buy_ex]["ask"]
             sell_p = prices[sell_ex]["bid"]
-            if sell_p <= buy_p:
+            if buy_p <= 0 or sell_p <= buy_p:
                 continue
             gross = (sell_p - buy_p) / buy_p * 100
             fees  = (
