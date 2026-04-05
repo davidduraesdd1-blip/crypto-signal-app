@@ -3689,6 +3689,31 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
     if not ta_ex:
         return {"error": "Exchange unavailable", "trades": pd.DataFrame(), "metrics": {}}
 
+    # ── Pair availability check — fall back to OKX if Kraken doesn't have this pair ──
+    # (Kraken uses XLM/USD not XLM/USDT, and doesn't list SHX, ZBCN, XDC, CC etc.)
+    try:
+        ta_ex.load_markets()
+        if pair not in ta_ex.markets:
+            # Try OKX as the universal fallback for the deep backtest paginated fetch
+            import data_feeds as _dff_db
+            _okx_ex = None
+            try:
+                import ccxt
+                _okx_ex = ccxt.okx({'enableRateLimit': True})
+                _okx_ex.load_markets()
+                _okx_sym = pair  # OKX accepts BTC/USDT format
+                if _okx_sym in _okx_ex.markets:
+                    ta_ex = _okx_ex
+                    logging.info(f"run_deep_backtest: {pair} not on Kraken — switched to OKX")
+            except Exception:
+                pass
+            if pair not in ta_ex.markets:
+                return {"error": f"Pair {pair} not available on Kraken or OKX for deep backtest. "
+                                 "Try BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT or other major pairs.",
+                        "trades": pd.DataFrame(), "metrics": {}}
+    except Exception as _mkt_e:
+        logging.debug("run_deep_backtest market check: %s", _mkt_e)
+
     try:
         # Paginate backwards to collect full history
         # PERF: use list of pages then flatten once — avoids O(N²) from candles+all_candles prepend
@@ -4197,7 +4222,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     # PERF-10: fetch all TF OHLCV frames in parallel instead of sequentially
     # Each fetch is ~300ms; 4 sequential = ~1.2s → parallel = ~300ms per pair
     # PERF-SCAN: use SCAN_OHLCV_LIMIT (200) — all indicators need < 150 bars; halves fetch payload
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(TIMEFRAMES)) as _tf_ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _tf_ex:  # 2 workers per pair — OHLCV is cached; serialise to save CPU
         _tf_futures = {tf: _tf_ex.submit(robust_fetch_ohlcv, ta_ex, pair, tf, SCAN_OHLCV_LIMIT) for tf in TIMEFRAMES}
     _ohlcv_frames = {}
     for _tf_key, _tf_fut in _tf_futures.items():
@@ -4735,7 +4760,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     # inside each scan worker, competing with OHLCV fetching and adding 2-8s of blocking).
     def _tvl_batch():
         result = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_scan_pairs)) as _tvl_ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _tvl_ex:  # capped for Streamlit Cloud CPU
             _tvl_futures = {_tvl_ex.submit(_data_feeds.get_defillama_tvl, p): p for p in _scan_pairs}
             for _f in concurrent.futures.as_completed(_tvl_futures):
                 p = _tvl_futures[_f]
@@ -4761,7 +4786,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     }
 
     _pre_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(_pre_scan_tasks)) as _pre_ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _pre_ex:  # capped — prevents CPU starvation on Streamlit Cloud
         _pre_futures = {_pre_ex.submit(fn): key for key, fn in _pre_scan_tasks.items()}
         for _f in concurrent.futures.as_completed(_pre_futures):
             _pre_results[_pre_futures[_f]] = _f.result()
@@ -4793,7 +4818,9 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     # A6: OHLCV pre-fetch phase — pure I/O, no analysis yet.
     # Fetches all pair × timeframe combinations in parallel so the per-pair
     # analysis phase (HMM, indicators) hits the cache and does no network I/O.
-    max_workers = min(len(_scan_pairs), 6)
+    # Cap at 3 workers — prevents CPU starvation / 503 health-check failures on Streamlit Cloud.
+    # Each worker makes 4-5 HTTP calls (one per timeframe); 3 concurrent = 12-15 requests in flight max.
+    max_workers = min(len(_scan_pairs), 3)
     _ohlcv_tasks = [(p, tf) for p in _scan_pairs for tf in TIMEFRAMES]
 
     def _prefetch_ohlcv(args):
@@ -4954,9 +4981,12 @@ def run_walk_forward(n_splits: int = 4, pair: str = 'BTC/USDT',
         exchange = get_exchange_instance(TA_EXCHANGE)
         if not exchange:
             return {'error': 'Exchange unavailable'}
-        ohlcv = exchange.fetch_ohlcv(pair, tf, limit=800)
-        df_all = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'], unit='ms')
+        df_all = robust_fetch_ohlcv(exchange, pair, tf, limit=800)
+        if df_all.empty:
+            return {'error': f'Data fetch failed: no OHLCV returned for {pair} on any exchange'}
+        if 'timestamp' not in df_all.columns:
+            df_all = df_all.reset_index()
+        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'])
         df_all.set_index('timestamp', inplace=True)
     except Exception as e:
         return {'error': f'Data fetch failed: {e}'}
@@ -5072,11 +5102,14 @@ def compute_ic_score(pair: str = 'BTC/USDT', tf: str = '1h',
         exchange = get_exchange_instance(TA_EXCHANGE)
         if not exchange:
             return {'error': 'Exchange unavailable'}
-        ohlcv = exchange.fetch_ohlcv(pair, tf, limit=lookback + hold_bars + 50)
-        if len(ohlcv) < lookback:
-            return {'error': f'Only {len(ohlcv)} bars available (need {lookback})'}
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df = robust_fetch_ohlcv(exchange, pair, tf, limit=lookback + hold_bars + 50)
+        if df.empty:
+            return {'error': f'Data fetch failed: no OHLCV returned for {pair} on any exchange'}
+        if len(df) < lookback:
+            return {'error': f'Only {len(df)} bars available (need {lookback})'}
+        if 'timestamp' not in df.columns:
+            df = df.reset_index()
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
         df.set_index('timestamp', inplace=True)
     except Exception as e:
         return {'error': f'Data fetch failed: {e}'}
@@ -5136,9 +5169,12 @@ def compute_wfe_score(pair: str = 'BTC/USDT', tf: str = '1h',
         exchange = get_exchange_instance(TA_EXCHANGE)
         if not exchange:
             return {'error': 'Exchange unavailable'}
-        ohlcv = exchange.fetch_ohlcv(pair, tf, limit=1000)
-        df_all = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'], unit='ms')
+        df_all = robust_fetch_ohlcv(exchange, pair, tf, limit=1000)
+        if df_all.empty:
+            return {'error': f'Data fetch failed: no OHLCV returned for {pair} on any exchange'}
+        if 'timestamp' not in df_all.columns:
+            df_all = df_all.reset_index()
+        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'])
         df_all.set_index('timestamp', inplace=True)
     except Exception as e:
         return {'error': f'Data fetch failed: {e}'}
@@ -5234,14 +5270,17 @@ def run_optuna_weight_optimization(n_trials: int = 50, pair: str = 'BTC/USDT',
     except ImportError:
         return {'error': 'optuna not installed. Run: pip install optuna'}
 
-    # ── Fetch OHLCV ──
+    # ── Fetch OHLCV — use robust fallback chain (Kraken lacks XLM/USDT, SHX, etc.) ──
     try:
         exchange = get_exchange_instance(TA_EXCHANGE)
         if not exchange:
             return {'error': 'Exchange unavailable'}
-        ohlcv = exchange.fetch_ohlcv(pair, tf, limit=300)
-        df_all = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'], unit='ms')
+        df_all = robust_fetch_ohlcv(exchange, pair, tf, limit=300)
+        if df_all.empty:
+            return {'error': f'Data fetch failed: no OHLCV returned for {pair} on any exchange'}
+        if 'timestamp' not in df_all.columns:
+            df_all = df_all.reset_index()
+        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'])
         df_all.set_index('timestamp', inplace=True)
     except Exception as e:
         return {'error': f'Data fetch failed: {e}'}
