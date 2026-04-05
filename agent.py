@@ -315,6 +315,29 @@ def _get_portfolio_state() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# EMERGENCY STOP — G8
+# Set via agent.set_emergency_stop(True) from Agent Control Panel in app.py.
+# Checked at the top of every pre-risk gate. Cleared only via explicit reset.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EMERGENCY_STOP: bool = False
+_EMERGENCY_STOP_LOCK = threading.Lock()
+
+
+def set_emergency_stop(active: bool) -> None:
+    """Activate or deactivate the emergency stop from the Agent Control Panel."""
+    global _EMERGENCY_STOP
+    with _EMERGENCY_STOP_LOCK:
+        _EMERGENCY_STOP = bool(active)
+    logger.warning("[agent] Emergency stop %s", "ACTIVATED" if active else "CLEARED")
+
+
+def is_emergency_stop() -> bool:
+    with _EMERGENCY_STOP_LOCK:
+        return _EMERGENCY_STOP
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HARD RISK GATES (Python-enforced — never delegated to the LLM)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -323,6 +346,10 @@ def _check_pre_risk(state: AgentState, cfg: dict) -> tuple:
     pf   = state["portfolio_state"]
     sig  = state["signal_result"]
     pair = state["pair"]
+
+    # G8 Check 0: Emergency stop — highest priority, checked first
+    if is_emergency_stop():
+        return False, "EMERGENCY STOP is active — no trades until manually reset from Agent Control Panel"
 
     # G7: Composite signal gate — RISK_OFF blocks all new entries
     try:
@@ -362,6 +389,18 @@ def _check_pre_risk(state: AgentState, cfg: dict) -> tuple:
 
     if not sig.get("entry") or not sig.get("stop_loss"):
         return False, "Missing entry or stop_loss — invalid signal"
+
+    # G8: Price sanity — reject if current price is 0 or missing (stale/bad data)
+    price = sig.get("price_usd", 0) or 0
+    if price <= 0:
+        return False, "Price data is 0 or missing — stale or unavailable data, skipping"
+
+    # G8: Minimum trade size — must be at least $10 to cover exchange fees
+    equity   = pf.get("equity_usd", 0) or 0
+    max_pct  = cfg.get("agent_max_trade_size_pct", 10.0)
+    trade_sz = equity * max_pct / 100.0
+    if trade_sz < 10.0:
+        return False, f"Computed trade size ${trade_sz:.2f} below $10 minimum — increase portfolio size"
 
     return True, "Pre-risk gates passed"
 

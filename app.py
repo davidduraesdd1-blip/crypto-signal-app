@@ -6273,6 +6273,26 @@ def page_agent():
                 _label = key.replace("agent_", "").replace("_", " ").title()
                 st.metric(_label + _badge, info["value"], delta=None)
 
+    # G8: Emergency Stop — highest-priority kill switch
+    st.markdown("---")
+    _ui.section_header("Emergency Controls", "Overrides all other config — instant effect")
+    _emg_col1, _emg_col2 = st.columns(2)
+    with _emg_col1:
+        _is_emg = _agent.is_emergency_stop()
+        _emg_label = "🔴 EMERGENCY STOP ACTIVE — agent will reject all new trades" if _is_emg else "⚪ No emergency stop"
+        st.markdown(f"**Status:** {_emg_label}")
+    with _emg_col2:
+        if not _agent.is_emergency_stop():
+            if st.button("🚨 Activate Emergency Stop", key="btn_emg_activate", type="primary"):
+                _agent.set_emergency_stop(True)
+                st.error("Emergency stop activated — agent will skip all new entries until cleared.")
+                st.rerun()
+        else:
+            if st.button("✅ Clear Emergency Stop", key="btn_emg_clear", type="secondary"):
+                _agent.set_emergency_stop(False)
+                st.success("Emergency stop cleared — agent will resume normal operation.")
+                st.rerun()
+
     # ── Architecture notes ──
     st.markdown("---")
     _ui.section_header("Pipeline Architecture",
