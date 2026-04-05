@@ -715,31 +715,68 @@ if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload 
 
 st.sidebar.markdown("---")
 
+# ── Navigation — level-aware page list (Item 3) ───────────────────────────────
+# Beginner:     3 pages (signals, trades, AI assistant)
+# Intermediate: 5 pages (+ performance + opportunities)
+# Advanced:     all 6 pages
+_NAV_BEGINNER = [
+    "📊 My Signals",
+    "📋 My Trades",
+    "🤖 AI Assistant",
+]
+_NAV_INTERMEDIATE = [
+    "📊 My Signals",
+    "📋 My Trades",
+    "🤖 AI Assistant",
+    "📈 Performance",
+    "⚡ Opportunities",
+]
+_NAV_ADVANCED = [
+    "📊 My Signals",
+    "⚙️ Settings",
+    "📈 Performance",
+    "📋 My Trades",
+    "⚡ Opportunities",
+    "🤖 AI Assistant",
+]
+_nav_by_level = {
+    "beginner":     _NAV_BEGINNER,
+    "intermediate": _NAV_INTERMEDIATE,
+    "advanced":     _NAV_ADVANCED,
+}
+_nav_options = _nav_by_level.get(_sg_level_val, _NAV_BEGINNER)
+
 page = st.sidebar.radio(
     "Navigate",
-    ["📊 Dashboard", "⚙️ Settings",
-     "📈 Performance History", "📋 My Trades", "⚡ Arbitrage", "🤖 AI Agent"],
+    _nav_options,
     label_visibility="collapsed",
 )
 
-# Normalise page name — strip emoji prefix for existing if/elif comparisons
+# Normalise page name — map display labels to internal page keys
 _PAGE_MAP = {
-    "📊 Dashboard":           "Dashboard",
-    "⚙️ Settings":            "Config Editor",
+    "📊 My Signals":    "Dashboard",
+    "📊 Dashboard":     "Dashboard",
+    "⚙️ Settings":      "Config Editor",
+    "📈 Performance":   "Backtest Viewer",
     "📈 Performance History": "Backtest Viewer",
-    "📋 My Trades":           "Trade Log & History",
-    "⚡ Arbitrage":            "Arbitrage",
-    "🤖 AI Agent":            "Agent",
+    "📋 My Trades":     "Trade Log & History",
+    "⚡ Opportunities": "Arbitrage",
+    "⚡ Arbitrage":     "Arbitrage",
+    "🤖 AI Assistant":  "Agent",
+    "🤖 AI Agent":      "Agent",
 }
 page = _PAGE_MAP.get(page, page)
 
 # ──────────────────────────────────────────────
-# SIDEBAR: AUTO-SCAN
+# SIDEBAR: AUTO-SCAN (Item 4 — compact for beginners)
 # ──────────────────────────────────────────────
 st.sidebar.markdown("---")
 # CQ-10: Load alerts config once per sidebar render; reused by all expander sections.
 # Each expander that needs to mutate gets its own .copy() or re-reads when saving.
 _sidebar_alerts_cfg = _cached_alerts_config()
+
+# Item 4: beginners see a simple ON/OFF toggle; intermediate/advanced get full expander.
+_is_beginner_sidebar = (_sg_level_val == "beginner")
 
 with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
     _alert_cfg = _sidebar_alerts_cfg.copy()
@@ -1523,11 +1560,50 @@ def page_dashboard():
             f"{abs(_pi_gap):.1f}%. Historically this precedes cycle tops — use caution with new BUY entries."
         )
 
-    # High-confidence alert banner
+    # High-confidence alert banner (advanced/intermediate — beginners see hero cards instead)
     hc = [r for r in results if r.get("high_conf")]
-    if hc:
+    _user_lv = st.session_state.get("user_level", "beginner")
+    if hc and _user_lv != "beginner":
         pairs_str = ", ".join(r["pair"] for r in hc)
         st.success(f"⚡ Top Picks this scan — the model's highest-confidence opportunities: **{pairs_str}**")
+
+    # ── Item 9: 3-step micro-tutorial (beginner first visit) ─────────────────
+    _ui.render_micro_tutorial()
+
+    # ── Item 17: Data freshness dot ───────────────────────────────────────────
+    _scan_ts_str = st.session_state.get("scan_timestamp")
+    _scan_ts_unix: float | None = None
+    if _scan_ts_str:
+        try:
+            import datetime as _dt
+            _scan_ts_unix = _dt.datetime.fromisoformat(str(_scan_ts_str)).timestamp()
+        except Exception:
+            pass
+    st.markdown(
+        _ui.freshness_dot_html(_scan_ts_unix, max_age_sec=900, label="Scan data"),
+        unsafe_allow_html=True,
+    )
+
+    # ── Items 1 & 2: Today's Top Picks Hero Panel (beginner first, always) ───
+    st.markdown(
+        _ui.top_picks_hero_html(results, ws_prices=_live_prices),
+        unsafe_allow_html=True,
+    )
+
+    # ── Item 11: How This Model Works trust card (collapsible) ───────────────
+    if _user_lv in ("beginner", "intermediate"):
+        with st.expander("🔬 How does this model work?", expanded=False):
+            _bt_df  = _cached_backtest_df()
+            _wr_raw = 0.0
+            if not _bt_df.empty and "result" in _bt_df.columns:
+                _wins = (_bt_df["result"] == "WIN").sum()
+                _wr_raw = _wins / max(len(_bt_df), 1) * 100
+            st.markdown(
+                _ui.how_it_works_html(win_rate=_wr_raw, n_months=3, n_indicators=24),
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
 
     # ── F&G visual gauge + summary metrics ────────────────────────────────────
     _fng_r0     = results[0] if results else {}   # A4: guard (belt-and-suspenders — return above should fire first)
@@ -1917,74 +1993,79 @@ def page_dashboard():
 
     st.markdown("---")
 
-    # ── Signal Heatmap — pairs × timeframes ──
-    _ui.section_header("Signal Heatmap",
-                       "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",
-                       icon="🗺️")
-    _tf_list = model.TIMEFRAMES  # e.g. ["15m","1h","4h","1d","1w"]
-    _hm_pairs = [r["pair"] for r in results]
-    _hm_conf  = []   # 2D list: rows=pairs, cols=TFs
-    _hm_text  = []   # annotation text
-    _hm_dir   = []   # direction per cell (for color mapping)
+    # ── Signal Heatmap — pairs × timeframes (Item 8: card list for beginners) ──
+    if _user_lv in ("beginner", "intermediate"):
+        _ui.section_header(
+            "All Signals — Ranked by Strength",
+            "Coins sorted from strongest to weakest signal. ▲ = potential buy, ▼ = potential sell, ■ = wait/unclear.",
+            icon="🏆",
+        )
+        st.markdown(_ui.signal_rank_list_html(results), unsafe_allow_html=True)
+        st.markdown("---")
+    else:
+        _ui.section_header("Signal Heatmap",
+                           "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",
+                           icon="🗺️")
+        _tf_list  = model.TIMEFRAMES
+        _hm_pairs = [r["pair"] for r in results]
+        _hm_conf  = []
+        _hm_text  = []
+        _hm_dir   = []
+        for r in results:
+            _tfd      = r.get("timeframes", {})
+            _row_conf = []
+            _row_text = []
+            _row_dir  = []
+            for tf in _tf_list:
+                _cell = _tfd.get(tf, {})
+                _c    = float(_cell.get("confidence", 0) or 0)
+                _d    = str(_cell.get("direction", "NO DATA") or "NO DATA")
+                _row_conf.append(_c)
+                _row_text.append(f"{int(_c)}%\n{_d[:3]}")
+                _row_dir.append(_d)
+            _hm_conf.append(_row_conf)
+            _hm_text.append(_row_text)
+            _hm_dir.append(_row_dir)
 
-    for r in results:
-        _tfd = r.get("timeframes", {})
-        _row_conf = []
-        _row_text = []
-        _row_dir  = []
-        for tf in _tf_list:
-            _cell = _tfd.get(tf, {})
-            _c    = float(_cell.get("confidence", 0) or 0)
-            _d    = str(_cell.get("direction", "NO DATA") or "NO DATA")
-            _row_conf.append(_c)
-            _row_text.append(f"{int(_c)}%\n{_d[:3]}")
-            _row_dir.append(_d)
-        _hm_conf.append(_row_conf)
-        _hm_text.append(_row_text)
-        _hm_dir.append(_row_dir)
+        def _dir_to_val(d: str) -> float:
+            d = d.upper()
+            if "STRONG BUY"  in d: return  1.0
+            if "BUY"         in d: return  0.5
+            if "STRONG SELL" in d: return -1.0
+            if "SELL"        in d: return -0.5
+            return 0.0
 
-    # Map direction to numeric color scale: +1=strong buy, +0.5=buy, 0=neutral, -0.5=sell, -1=strong sell
-    def _dir_to_val(d: str) -> float:
-        d = d.upper()
-        if "STRONG BUY"  in d: return  1.0
-        if "BUY"         in d: return  0.5
-        if "STRONG SELL" in d: return -1.0
-        if "SELL"        in d: return -0.5
-        return 0.0
-
-    _hm_color = [[_dir_to_val(d) for d in row] for row in _hm_dir]
-
-    _hm_fig = go.Figure(data=go.Heatmap(
-        z            = _hm_color,
-        x            = _tf_list,
-        y            = _hm_pairs,
-        text         = _hm_text,
-        texttemplate = "%{text}",
-        textfont     = {"size": 9},
-        colorscale   = [
-            [0.0,  "#ff4b4b"],
-            [0.25, "#ffaaaa"],
-            [0.5,  "#888888"],
-            [0.75, "#99e6cc"],
-            [1.0,  "#00d4aa"],
-        ],
-        zmin=-1, zmax=1,
-        showscale=False,
-        hovertemplate="<b>%{y}</b> / %{x}<br>%{text}<extra></extra>",
-    ))
-    _hm_fig.update_layout(
-        height=max(250, 32 * len(_hm_pairs) + 60),
-        margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        font=dict(color="#fafafa", size=9),
-        xaxis=dict(side="top", tickfont=dict(size=9)),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
-    )
-    st.plotly_chart(_hm_fig, width="stretch",
-                    config={"displayModeBar": False, "staticPlot": True})
-
-    st.markdown("---")
+        _hm_color = [[_dir_to_val(d) for d in row] for row in _hm_dir]
+        _hm_fig   = go.Figure(data=go.Heatmap(
+            z            = _hm_color,
+            x            = _tf_list,
+            y            = _hm_pairs,
+            text         = _hm_text,
+            texttemplate = "%{text}",
+            textfont     = {"size": 9},
+            colorscale   = [
+                [0.0,  "#ff4b4b"],
+                [0.25, "#ffaaaa"],
+                [0.5,  "#888888"],
+                [0.75, "#99e6cc"],
+                [1.0,  "#00d4aa"],
+            ],
+            zmin=-1, zmax=1,
+            showscale=False,
+            hovertemplate="<b>%{y}</b> / %{x}<br>%{text}<extra></extra>",
+        ))
+        _hm_fig.update_layout(
+            height=max(250, 32 * len(_hm_pairs) + 60),
+            margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font=dict(color="#fafafa", size=9),
+            xaxis=dict(side="top", tickfont=dict(size=9)),
+            yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
+        )
+        st.plotly_chart(_hm_fig, width="stretch",
+                        config={"displayModeBar": False, "staticPlot": True})
+        st.markdown("---")
 
     # ── Quick-View Card Grid — all coins at a glance (teen-friendly) ──────────
     _ui.section_header(
@@ -2332,6 +2413,17 @@ def page_dashboard():
         ),
     )
 
+    # Item 7: "What Does This Mean For Me?" — beginner/intermediate contextual dollar summary
+    if _user_lv in ("beginner", "intermediate"):
+        try:
+            _portfolio_sz = float(_cached_alerts_config().get("portfolio_size", 1000))
+        except Exception:
+            _portfolio_sz = 1000.0
+        st.markdown(
+            _ui.wdtmfm_html(direction, entry, stop, exit_, conf, _portfolio_sz),
+            unsafe_allow_html=True,
+        )
+
     # Gradient confidence bar (#62) — signal-aware color-coded bar
     st.markdown(_ui.render_confidence_bar(conf, direction), unsafe_allow_html=True)
 
@@ -2403,8 +2495,27 @@ def page_dashboard():
         unsafe_allow_html=True,
     )
 
+    # ── Item 6 Tier 2: "Why this signal?" plain-English reasoning ─────────────
+    if _user_lv in ("beginner", "intermediate"):
+        with st.expander("🔍 Why this signal? — Plain-English reasons", expanded=False):
+            st.markdown(
+                _ui.why_signal_html(
+                    direction     = direction,
+                    conf          = conf,
+                    rsi           = _km_rsi,
+                    adx           = _km_adx,
+                    mtf           = mtf,
+                    consensus     = r.get("consensus", 0.0),
+                    regime        = r.get("regime", ""),
+                    bias          = r.get("strategy_bias", ""),
+                    funding_rate  = _km_fr,
+                ),
+                unsafe_allow_html=True,
+            )
+
     # ── Advanced Details (collapsed by default) ────────────────────────────────
-    with st.expander("📊 More Details — Timeframes & Technicals", expanded=False):
+    _adv_label = "📊 Technical Details" if _user_lv == "beginner" else "📊 More Details — Timeframes & Technicals"
+    with st.expander(_adv_label, expanded=False):
         tp2       = r.get("tp2")
         tp3       = r.get("tp3")
         lev_rec   = r.get("leverage_rec") or {}
@@ -3668,12 +3779,67 @@ def _start_scan():
 # PAGE 2: CONFIG EDITOR
 # ──────────────────────────────────────────────
 def page_config():
+    _cfg_lv = st.session_state.get("user_level", "beginner")
+    _cfg_title = "⚙️ Settings" if _cfg_lv in ("beginner", "intermediate") else "⚙️ Config Editor"
     st.markdown(
-        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">Config Editor</h1>',
+        f'<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        f'letter-spacing:-0.5px;margin-bottom:0">{_cfg_title}</h1>',
         unsafe_allow_html=True,
     )
     st.caption("Changes are saved to config_overrides.json and applied on next scan.")
+
+    # ── Item 14: Beginner simplified settings — 3 controls only ──────────────
+    if _cfg_lv == "beginner":
+        st.markdown("### The 3 things that matter most")
+        _beg_overrides = {}
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            _beg_port = st.number_input(
+                "💰 How much money are you trading with? (USD)",
+                min_value=100.0, max_value=10_000_000.0,
+                value=float(model.PORTFOLIO_SIZE_USD), step=100.0,
+                help="This sets the dollar amount used to calculate trade sizes and risk. Example: if you have $1,000 to trade, enter 1000.",
+            )
+            _beg_overrides["PORTFOLIO_SIZE_USD"] = _beg_port
+        with bc2:
+            _beg_risk = st.number_input(
+                "🛡️ Max risk per trade (%)",
+                min_value=0.1, max_value=5.0,
+                value=float(model.RISK_PER_TRADE_PCT), step=0.1,
+                help="The maximum % of your portfolio to risk on any single trade. 1-2% is a safe starting range. Higher = bigger possible gains AND bigger possible losses.",
+            )
+            _beg_overrides["RISK_PER_TRADE_PCT"] = _beg_risk
+
+        # API key quick-entry (most-needed for beginners to get live data)
+        with st.expander("🔑 API Keys", expanded=False):
+            st.caption("Enter your exchange API keys to enable live price data and alerts. You can skip this for now — the app works without them using public data.")
+            _ak1, _ak2 = st.columns(2)
+            with _ak1:
+                _beg_ok_key = st.text_input("OKX API Key", type="password", key="beg_okx_key",
+                                             help="Get your free API key from okx.com → Account → API.")
+            with _ak2:
+                _beg_ok_sec = st.text_input("OKX Secret Key", type="password", key="beg_okx_sec")
+
+        _beg_saved_col, _ = st.columns([1, 3])
+        with _beg_saved_col:
+            if st.button("💾 Save Settings", type="primary", width="stretch", key="beg_save_cfg"):
+                try:
+                    import json as _json, os as _os
+                    _ov_path = "config_overrides.json"
+                    _existing = {}
+                    if _os.path.exists(_ov_path):
+                        with open(_ov_path) as _f:
+                            _existing = _json.load(_f)
+                    _existing.update(_beg_overrides)
+                    with open(_ov_path, "w") as _f:
+                        _json.dump(_existing, _f, indent=2)
+                    st.success("✅ Settings saved! They'll apply on the next scan.")
+                except Exception as _e:
+                    st.error(f"Couldn't save settings — {_e}")
+
+        with st.expander("🔧 Advanced Settings (for experienced users)", expanded=False):
+            st.info("These are technical settings. Leave them as-is unless you know what you're doing.")
+        return  # beginners only see the 3-control view above
 
     overrides = {}
 
@@ -4550,11 +4716,15 @@ def _backtest_progress():
 # PAGE 3: BACKTEST VIEWER
 # ──────────────────────────────────────────────
 def page_backtest():
+    _bt_lv = st.session_state.get("user_level", "beginner")
+    _bt_title = "Performance History" if _bt_lv in ("beginner", "intermediate") else "Backtest Viewer"
     st.markdown(
-        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">Backtest Viewer</h1>',
+        f'<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
         unsafe_allow_html=True,
     )
+    if _bt_lv == "beginner":
+        st.caption("See how the model has performed in the past — like a report card for the AI signals.")
 
     run_col, _ = st.columns([2, 6])
     with run_col:
@@ -4587,44 +4757,80 @@ def page_backtest():
 
     if metrics:
         m = metrics
-        mc = st.columns(6)
-        mc[0].metric("Trades Simulated", m["total_trades"],
-                     help=_ui.HELP_TOTAL_TRADES)
         _wr = m['win_rate']
-        mc[1].metric(f"Profitable Trades", f"{_wr}%",
-                     delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip",
-                     help=_ui.HELP_WIN_RATE)
-        mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%",
-                     help=_ui.HELP_AVG_PNL)
-        mc[3].metric("Profit vs Loss Ratio", m["profit_factor"],
-                     help=_ui.HELP_PROFIT_FACTOR)
-        mc[4].metric("Performance Quality", m["sharpe"],
-                     help=_ui.HELP_SHARPE)
-        mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%",
-                     help=_ui.HELP_MAX_DRAWDOWN)
 
-        mc2 = st.columns(5)
-        mc2[0].metric("Total Return", f"{m['total_return']}%")
-        mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
-                      help=_ui.HELP_SORTINO)
-        mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
-                      help=_ui.HELP_CALMAR)
-        mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"),
-                      help="How many trades in a row lost money at worst. Lower = more consistent.")
-        mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%",
-                      help=_ui.HELP_EXPECTANCY)
+        # ── Item 12: Beginner simplified view — 3 big metrics ─────────────────
+        if _bt_lv == "beginner":
+            bm = st.columns(3)
+            bm[0].metric(
+                "✅ Win Rate",
+                f"{_wr}%",
+                delta=f"{round(_wr - 50, 1):+.1f}% better than a coin flip",
+                help="Out of every 100 signals the model gave, this percentage made money. Above 50% means it's right more often than wrong.",
+            )
+            bm[1].metric(
+                "💰 Total Return",
+                f"{m['total_return']}%",
+                help="If you had followed every signal since the start, this is the total gain or loss on your portfolio.",
+            )
+            bm[2].metric(
+                "🛡️ Worst Drawdown",
+                f"{m['max_drawdown']}%",
+                help="The biggest drop from a high point before recovering. Think of it as the worst losing patch. Lower is safer.",
+            )
+            with st.expander("📊 Full Performance Stats", expanded=False):
+                mc = st.columns(6)
+                mc[0].metric("Trades Simulated", m["total_trades"], help=_ui.HELP_TOTAL_TRADES)
+                mc[1].metric("Profitable Trades", f"{_wr}%", delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip", help=_ui.HELP_WIN_RATE)
+                mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%", help=_ui.HELP_AVG_PNL)
+                mc[3].metric("Profit vs Loss Ratio", m["profit_factor"], help=_ui.HELP_PROFIT_FACTOR)
+                mc[4].metric("Performance Quality", m["sharpe"], help=_ui.HELP_SHARPE)
+                mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%", help=_ui.HELP_MAX_DRAWDOWN)
+                mc2 = st.columns(5)
+                mc2[0].metric("Total Return", f"{m['total_return']}%")
+                mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"), help=_ui.HELP_SORTINO)
+                mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"), help=_ui.HELP_CALMAR)
+                mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"), help="How many trades in a row lost money at worst.")
+                mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%", help=_ui.HELP_EXPECTANCY)
+        else:
+            # Intermediate / Advanced — full metric grids
+            mc = st.columns(6)
+            mc[0].metric("Trades Simulated", m["total_trades"],
+                         help=_ui.HELP_TOTAL_TRADES)
+            mc[1].metric(f"Profitable Trades", f"{_wr}%",
+                         delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip",
+                         help=_ui.HELP_WIN_RATE)
+            mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%",
+                         help=_ui.HELP_AVG_PNL)
+            mc[3].metric("Profit vs Loss Ratio", m["profit_factor"],
+                         help=_ui.HELP_PROFIT_FACTOR)
+            mc[4].metric("Performance Quality", m["sharpe"],
+                         help=_ui.HELP_SHARPE)
+            mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%",
+                         help=_ui.HELP_MAX_DRAWDOWN)
 
-        mc3 = st.columns(3)
-        mc3[0].metric("Bad-Day Loss (VaR)", f"{m.get('var_95', 'N/A')}%",
-                      help="On a bad day (worst 5% of trades), how much could you lose on a single trade?")
-        mc3[1].metric("CVaR (95%)", f"{m.get('cvar_95', 'N/A')}%",
-                      help="Conditional VaR: average loss when VaR threshold is breached (expected shortfall).")
-        trailing_label = "Trailing Stops" if model.TRAILING_STOP_ENABLED else "Fixed Stops"
-        mc3[2].metric("Stop Mode", trailing_label,
-                      help="Trailing: stop advances with price to lock in profits. Fixed: stop stays at initial level.")
+            mc2 = st.columns(5)
+            mc2[0].metric("Total Return", f"{m['total_return']}%")
+            mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
+                          help=_ui.HELP_SORTINO)
+            mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
+                          help=_ui.HELP_CALMAR)
+            mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"),
+                          help="How many trades in a row lost money at worst. Lower = more consistent.")
+            mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%",
+                          help=_ui.HELP_EXPECTANCY)
 
-        # ── Fee & slippage breakdown ──
-        if m.get("total_fees_usd") is not None:
+            mc3 = st.columns(3)
+            mc3[0].metric("Bad-Day Loss (VaR)", f"{m.get('var_95', 'N/A')}%",
+                          help="On a bad day (worst 5% of trades), how much could you lose on a single trade?")
+            mc3[1].metric("CVaR (95%)", f"{m.get('cvar_95', 'N/A')}%",
+                          help="Conditional VaR: average loss when VaR threshold is breached (expected shortfall).")
+            trailing_label = "Trailing Stops" if model.TRAILING_STOP_ENABLED else "Fixed Stops"
+            mc3[2].metric("Stop Mode", trailing_label,
+                          help="Trailing: stop advances with price to lock in profits. Fixed: stop stays at initial level.")
+
+        # ── Fee & slippage breakdown — intermediate/advanced only ──
+        if _bt_lv != "beginner" and m.get("total_fees_usd") is not None:
             st.markdown("**Fee & Slippage Breakdown**")
             mf = st.columns(5)
             mf[0].metric("Gross Return", f"{m.get('gross_return', 'N/A')}%",
@@ -4794,8 +5000,8 @@ def page_backtest():
             fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
             st.plotly_chart(fig2, width="stretch")
 
-        # Monte Carlo simulation
-        if 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
+        # Monte Carlo simulation — advanced only (Item 12)
+        if _bt_lv != "beginner" and 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
             _ui.section_header("Monte Carlo Simulation",
                                "Bootstrap resamples trade sequence to estimate distribution of equity outcomes and max drawdown", icon="🎲")
             mc_c1, mc_c2 = st.columns([1, 4])
@@ -4843,6 +5049,10 @@ def page_backtest():
                 st.plotly_chart(fig_mc, width="stretch")
             elif mc_r and 'error' in mc_r:
                 st.warning(mc_r['error'])
+
+    # Walk-Forward + Deep Backtest — intermediate/advanced only (Item 12)
+    if _bt_lv == "beginner":
+        return  # beginners see metrics + equity curve only — no advanced simulation panels
 
     # Walk-forward out-of-sample validation
     st.markdown("---")
@@ -6034,11 +6244,20 @@ def page_trade_log():
 # PAGE: ARBITRAGE
 # ──────────────────────────────────────────────
 def page_arbitrage():
-    st.title("⚡ Arbitrage Scanner")
-    st.caption(
-        "Cross-exchange spot price spreads and funding-rate carry trades. "
-        "Net spread = gross spread − round-trip taker fees."
-    )
+    _arb_lv = st.session_state.get("user_level", "beginner")
+    _arb_title = "⚡ Opportunities" if _arb_lv in ("beginner", "intermediate") else "⚡ Arbitrage Scanner"
+    st.title(_arb_title)
+    if _arb_lv == "beginner":
+        st.caption(
+            "Sometimes the same coin costs different amounts on different exchanges. "
+            "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another. "
+            "Each card below tells you exactly what to do in plain English."
+        )
+    else:
+        st.caption(
+            "Cross-exchange spot price spreads and funding-rate carry trades. "
+            "Net spread = gross spread − round-trip taker fees."
+        )
 
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
@@ -6057,10 +6276,18 @@ def page_arbitrage():
     if run_scan:
         with st.spinner("Fetching prices from OKX, KuCoin, Kraken, Gate.io …", show_time=True):
             arb_results = _arb.scan_all_arb(model.PAIRS)
-        st.session_state["arb_results"] = arb_results
+        st.session_state["arb_results"]    = arb_results
+        st.session_state["arb_run_ts"]     = time.time()
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
         st.session_state["arb_ts"] = ts
         st.success(f"Scan complete — {ts}")
+
+    # Item 17: Freshness dot for arb data
+    _arb_run_ts = st.session_state.get("arb_run_ts")
+    st.markdown(
+        _ui.freshness_dot_html(_arb_run_ts, max_age_sec=300, label="Opportunity data"),
+        unsafe_allow_html=True,
+    )
 
     arb_results = st.session_state.get("arb_results")
     if not arb_results:
@@ -6134,23 +6361,39 @@ def page_arbitrage():
 
         # Detail expanders for each opportunity
         if opp_rows:
-            st.markdown("#### Active Opportunities")
-            for r in opp_rows:
-                with st.expander(
-                    f"🟢 {r['pair']}  →  Buy {r['buy_exchange']}  Sell {r['sell_exchange']}  "
-                    f"| Net {r['net_spread_pct']:.4f}%",
-                    expanded=True,
-                ):
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Buy Exchange",  r["buy_exchange"])
-                    c2.metric("Sell Exchange", r["sell_exchange"])
-                    c3.metric("Gross Spread",  f"{r['gross_spread_pct']:.4f}%")
-                    c4.metric("Net Spread",    f"{r['net_spread_pct']:.4f}%")
-                    st.caption(
-                        f"Buy at ${r['buy_price']:,.4f} on {r['buy_exchange']}, "
-                        f"sell at ${r['sell_price']:,.4f} on {r['sell_exchange']}. "
-                        f"Round-trip fees: {r['fees_pct']:.4f}%."
+            if _arb_lv in ("beginner", "intermediate"):
+                # Item 13: plain-English story cards
+                st.markdown("#### 🟢 Active Opportunities")
+                for r in opp_rows:
+                    st.markdown(
+                        _ui.arb_opportunity_story_html(
+                            pair          = r["pair"],
+                            buy_ex        = r["buy_exchange"] or "?",
+                            sell_ex       = r["sell_exchange"] or "?",
+                            net_spread_pct= r["net_spread_pct"],
+                            buy_price     = r["buy_price"] or 0,
+                            sell_price    = r["sell_price"] or 0,
+                        ),
+                        unsafe_allow_html=True,
                     )
+            else:
+                st.markdown("#### Active Opportunities")
+                for r in opp_rows:
+                    with st.expander(
+                        f"🟢 {r['pair']}  →  Buy {r['buy_exchange']}  Sell {r['sell_exchange']}  "
+                        f"| Net {r['net_spread_pct']:.4f}%",
+                        expanded=True,
+                    ):
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Buy Exchange",  r["buy_exchange"])
+                        c2.metric("Sell Exchange", r["sell_exchange"])
+                        c3.metric("Gross Spread",  f"{r['gross_spread_pct']:.4f}%")
+                        c4.metric("Net Spread",    f"{r['net_spread_pct']:.4f}%")
+                        st.caption(
+                            f"Buy at ${r['buy_price']:,.4f} on {r['buy_exchange']}, "
+                            f"sell at ${r['sell_price']:,.4f} on {r['sell_exchange']}. "
+                            f"Round-trip fees: {r['fees_pct']:.4f}%."
+                        )
     else:
         st.info("No spot prices returned — check network connectivity.")
 
@@ -6399,12 +6642,20 @@ def page_arbitrage():
 # PAGE: AUTONOMOUS AGENT
 # ──────────────────────────────────────────────
 def page_agent():
-    st.title("🤖 Autonomous Agent")
-    st.caption(
-        "LangGraph + Claude claude-sonnet-4-6 autonomous trading agent. "
-        "Hard Python risk gates before and after every Claude decision. "
-        "Claude may only approve or reject — never place orders directly."
-    )
+    _ag_lv = st.session_state.get("user_level", "beginner")
+    _ag_title = "🤖 AI Assistant" if _ag_lv in ("beginner", "intermediate") else "🤖 Autonomous Agent"
+    st.title(_ag_title)
+    if _ag_lv == "beginner":
+        st.caption(
+            "Your AI assistant watches the markets 24/7 and tells you when it thinks there's an opportunity. "
+            "It never makes trades for you — it only gives you advice, and you decide what to do."
+        )
+    else:
+        st.caption(
+            "LangGraph + Claude claude-sonnet-4-6 autonomous trading agent. "
+            "Hard Python risk gates before and after every Claude decision. "
+            "Claude may only approve or reject — never place orders directly."
+        )
 
     if _agent is None:
         st.error("agent.py failed to import. Check logs for details.")
@@ -6420,11 +6671,13 @@ def page_agent():
     col_status, col_start, col_stop, col_spacer = st.columns([2, 1, 1, 3])
     with col_status:
         if is_running:
-            st.success("▲ RUNNING")
-        elif status.get("kill_requested", False):  # APP-20: .get() avoids KeyError
-            st.warning("■ STOPPING…")
+            _run_label = "✅ AI is watching the market" if _ag_lv == "beginner" else "▲ RUNNING"
+            st.success(_run_label)
+        elif status.get("kill_requested", False):
+            st.warning("⏳ Stopping…" if _ag_lv == "beginner" else "■ STOPPING…")
         else:
-            st.error("▼ STOPPED")
+            _stop_label = "⏸ AI is paused — click Start to activate" if _ag_lv == "beginner" else "▼ STOPPED"
+            st.error(_stop_label)
     with col_start:
         if st.button("▶ Start", width="stretch", type="primary",
                      disabled=is_running, key="agent_start_btn"):

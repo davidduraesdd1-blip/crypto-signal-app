@@ -621,6 +621,42 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 }
 
 /* ═══════════════════════════════════════════════
+   PHONE — 375px breakpoint (iPhone SE / small Android)
+   Item 16: Small-phone layout hardening
+═══════════════════════════════════════════════ */
+@media (max-width: 390px) {
+    /* Tighter padding on very small screens */
+    .block-container { padding-left: 0.25rem !important; padding-right: 0.25rem !important; }
+    /* Metric values: clamp to fit 375px without overflow */
+    [data-testid="stMetricValue"] > div { font-size: clamp(16px, 4vw, 22px) !important; }
+    [data-testid="stMetricLabel"] { font-size: 11px !important; }
+    /* Section headers: reduce padding */
+    .section-header { padding: 8px 10px !important; }
+    /* Hero cards: single column, full width */
+    .hero-card { min-width: 100% !important; max-width: 100% !important; }
+    /* Coin cards grid: single column */
+    .coin-card { min-width: calc(100% - 8px) !important; max-width: 100% !important; }
+    /* Signal rank list: hide entry/stop columns to save space */
+    .rank-stop-col { display: none !important; }
+    /* Sidebar: smaller text */
+    [data-testid="stSidebar"] { font-size: 12px !important; }
+    /* Buttons: full width, 44px minimum height */
+    div[data-testid="stButton"] > button {
+        min-height: 44px !important;
+        width: 100% !important;
+        font-size: 14px !important;
+    }
+    /* Selectbox: 44px minimum height */
+    [data-baseweb="select"] > div { min-height: 44px !important; }
+    /* Input fields: larger font for readability */
+    input[type="text"], input[type="number"] { font-size: 16px !important; }
+    /* Tables: allow horizontal scroll */
+    .stDataFrame { overflow-x: auto !important; }
+    /* Charts: no overflow */
+    .js-plotly-plot { max-width: 100vw !important; overflow: hidden !important; }
+}
+
+/* ═══════════════════════════════════════════════
    LIGHT MODE — WCAG AA contrast
    Activated via st.session_state["_sg_theme"] = "light"
 ═══════════════════════════════════════════════ */
@@ -2494,6 +2530,600 @@ def render_welcome_banner() -> None:
         if st.button("✕", key="_sg_dismiss_welcome", help="Dismiss welcome message"):
             st.session_state["_sg_welcome_dismissed"] = True
             st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UI OVERHAUL — Beginner-first components (Items 1-17 sprint)
+# Target audience: high school seniors, young adults, first-time retail investors
+# ══════════════════════════════════════════════════════════════════════════════
+
+def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
+    """
+    Item 1/2 — Hero panel: top 3 signals as large, clear action cards.
+    First thing a beginner sees after scan. Zero scrolling required.
+    Shows up to 3 cards (top picks first, then highest confidence).
+    """
+    if not results:
+        return ""
+    if ws_prices is None:
+        ws_prices = {}
+
+    def _dir_style(d: str):
+        d = (d or "").upper()
+        if "BUY" in d:
+            return "#00d4aa", "rgba(0,212,170,0.13)", "▲", "rgba(0,212,170,0.35)"
+        if "SELL" in d:
+            return "#f6465d", "rgba(246,70,93,0.13)", "▼", "rgba(246,70,93,0.35)"
+        return "#f59e0b", "rgba(245,158,11,0.10)", "■", "rgba(245,158,11,0.30)"
+
+    def _score(conf):
+        return max(1, min(10, round((conf or 0) / 10)))
+
+    def _fmt(p):
+        if p is None:
+            return "—"
+        return f"${p:,.4f}" if p < 1 else f"${p:,.2f}"
+
+    sorted_r = sorted(results,
+                      key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)),
+                      reverse=True)
+    top3 = sorted_r[:3]
+
+    cards_html = ""
+    for r in top3:
+        pair  = r.get("pair", "?")
+        sym   = pair.replace("/USDT", "")
+        conf  = float(r.get("confidence_avg_pct") or 0)
+        dirn  = r.get("direction", "WAIT")
+        score = _score(conf)
+        entry = r.get("entry")
+        stop  = r.get("stop_loss")
+        tgt   = r.get("exit") or r.get("tp1")
+        is_hc = r.get("high_conf", False)
+        color, bg, arrow, border_col = _dir_style(dirn)
+
+        ws    = ws_prices.get(pair, {})
+        price = ws.get("price") or r.get("price_usd")
+        chg   = ws.get("change_24h_pct", 0) or 0
+        chg_c = "#00d4aa" if chg >= 0 else "#f6465d"
+        price_str = _fmt(price) if price else "—"
+        chg_str = f'<span style="color:{chg_c};font-size:11px">{chg:+.2f}%</span>' if ws else ""
+
+        # Donut gauge — pure SVG, no deps
+        gauge_pct = conf / 100
+        r_outer, cx, cy, sw = 28, 34, 34, 9
+        circ = 2 * 3.14159 * (r_outer - sw / 2)
+        dash_filled = circ * gauge_pct
+        dash_empty  = circ - dash_filled
+        gauge_svg = (
+            f'<svg width="68" height="68" viewBox="0 0 68 68">'
+            f'<circle cx="{cx}" cy="{cy}" r="{r_outer - sw/2}" fill="none" '
+            f'stroke="rgba(255,255,255,0.07)" stroke-width="{sw}"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="{r_outer - sw/2}" fill="none" '
+            f'stroke="{color}" stroke-width="{sw}" stroke-linecap="round" '
+            f'stroke-dasharray="{dash_filled:.1f} {dash_empty:.1f}" '
+            f'transform="rotate(-90 {cx} {cy})"/>'
+            f'<text x="{cx}" y="{cy+1}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-size="15" font-weight="800" fill="{color}">{score}</text>'
+            f'<text x="{cx}" y="{cy+14}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-size="7" fill="rgba(255,255,255,0.4)">/10</text>'
+            f'</svg>'
+        )
+
+        hc_badge = (
+            f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
+            f'font-size:9px;font-weight:800;padding:2px 8px;margin-left:6px;'
+            f'letter-spacing:0.5px">⚡ TOP PICK</span>'
+        ) if is_hc else ""
+
+        # Plain-English one-liner
+        if "BUY" in (dirn or "").upper():
+            plain = f"Model thinks <strong style='color:{color}'>{sym}</strong> price will go UP"
+        elif "SELL" in (dirn or "").upper():
+            plain = f"Model thinks <strong style='color:{color}'>{sym}</strong> price will go DOWN"
+        else:
+            plain = f"Model sees <strong style='color:{color}'>no clear direction</strong> yet"
+
+        cards_html += f"""
+<div style="flex:1;min-width:220px;max-width:380px;
+            background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));
+            border:1px solid {border_col};border-top:3px solid {color};
+            border-radius:16px;padding:20px;box-sizing:border-box;position:relative">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <div style="font-size:22px;font-weight:800;color:#e8ecf4;letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
+    </div>
+    <div style="text-align:center">{gauge_svg}</div>
+  </div>
+  <div style="margin:12px 0 8px">
+    <span style="background:{color};color:#060f18;border-radius:999px;padding:5px 16px;
+                 font-size:14px;font-weight:800;letter-spacing:0.3px">{arrow} {dirn}</span>
+  </div>
+  <div style="font-size:12px;color:rgba(200,210,230,0.75);margin-bottom:10px;line-height:1.5">{plain}</div>
+  <div style="display:flex;gap:12px;font-size:11px;font-family:'JetBrains Mono',monospace">
+    <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
+         <span style="color:#e8ecf4;font-size:13px;font-weight:600">{price_str} {chg_str}</span></div>
+    <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
+         <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
+    <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
+         <span style="color:#f6465d;font-weight:600">{_fmt(stop)}</span></div>
+    <div><span style="color:rgba(168,180,200,0.45)">Target</span><br/>
+         <span style="color:#00d4aa;font-weight:600">{_fmt(tgt)}</span></div>
+  </div>
+</div>"""
+
+    return f"""
+<div style="margin:0 0 20px 0">
+  <div style="font-size:10px;color:rgba(168,180,200,0.4);text-transform:uppercase;
+              letter-spacing:1px;font-weight:600;margin-bottom:10px">
+    ⚡ Today's Top Picks — model's highest-confidence signals
+  </div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap">{cards_html}</div>
+  <div style="font-size:10px;color:rgba(168,180,200,0.3);margin-top:8px">
+    Score 7–10/10 = actionable signal &nbsp;·&nbsp; 5–6 = watch &nbsp;·&nbsp;
+    1–4 = avoid &nbsp;·&nbsp; Always set a Stop Loss before entering any trade
+  </div>
+</div>"""
+
+
+def confidence_gauge_svg(score: int, color: str = "#00d4aa",
+                          size: int = 80) -> str:
+    """
+    Item 5 — Circular SVG confidence gauge. Returns inline SVG string.
+    score: 1-10
+    """
+    score = max(1, min(10, score))
+    pct   = score / 10
+    r_o   = size // 2 - 6
+    cx = cy = size // 2
+    sw    = max(7, size // 10)
+    circ  = 2 * 3.14159 * (r_o - sw / 2)
+    filled = circ * pct
+    empty  = circ - filled
+
+    if score <= 4:
+        zone_color = "#f6465d"
+        zone_label = "Avoid"
+    elif score <= 6:
+        zone_color = "#f59e0b"
+        zone_label = "Watch"
+    else:
+        zone_color = "#00d4aa"
+        zone_label = "Act"
+
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+        f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
+        f'stroke="rgba(255,255,255,0.07)" stroke-width="{sw}"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
+        f'stroke="{zone_color}" stroke-width="{sw}" stroke-linecap="round" '
+        f'stroke-dasharray="{filled:.1f} {empty:.1f}" '
+        f'transform="rotate(-90 {cx} {cy})"/>'
+        f'<text x="{cx}" y="{cy - 4}" text-anchor="middle" dominant-baseline="middle" '
+        f'font-size="{size//5}" font-weight="800" fill="{zone_color}">{score}</text>'
+        f'<text x="{cx}" y="{cy + size//8}" text-anchor="middle" dominant-baseline="middle" '
+        f'font-size="{size//9}" fill="rgba(255,255,255,0.35)">{zone_label}</text>'
+        f'</svg>'
+    )
+
+
+def how_it_works_html(win_rate: float = 0, n_months: int = 0,
+                       n_indicators: int = 24) -> str:
+    """
+    Item 11 — Trust card: brief plain-English model explainer.
+    Shown as a collapsible card near the top of Dashboard.
+    """
+    wr_str = f"{win_rate:.0f}%" if win_rate else "calculating…"
+    mo_str = f"{n_months} months" if n_months else "extensive history"
+    return f"""
+<div style="background:rgba(0,212,170,0.04);border:1px solid rgba(0,212,170,0.15);
+            border-left:3px solid #00d4aa;border-radius:10px;padding:14px 18px;
+            margin:0 0 16px 0;font-size:12px;color:rgba(200,210,230,0.8);line-height:1.7">
+  <div style="font-size:11px;color:#00d4aa;font-weight:700;text-transform:uppercase;
+              letter-spacing:0.8px;margin-bottom:6px">🔬 How This Model Works</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+    <div>📊 Watches <strong style="color:#e8ecf4">{n_indicators} indicators</strong>
+         across 4 timeframes</div>
+    <div>🕐 Backtested over <strong style="color:#e8ecf4">{mo_str}</strong> of data</div>
+    <div>🎯 Win rate in backtesting: <strong style="color:#00d4aa">{wr_str}</strong></div>
+    <div>🛡️ Signals 7/10+ confidence have historically been most reliable</div>
+  </div>
+</div>"""
+
+
+def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
+                 conf: float, portfolio_usd: float = 1000) -> str:
+    """
+    Item 7 — 'What Does This Mean For Me?' contextual box.
+    Converts abstract signal data into a concrete personal dollar example.
+    portfolio_usd: user's configured portfolio size (default $1,000 example).
+    """
+    d = (direction or "").upper()
+    if "BUY" in d:
+        accent = "#00d4aa"
+        verb   = "going UP"
+        action = "BUY"
+    elif "SELL" in d:
+        accent = "#f6465d"
+        verb   = "going DOWN"
+        action = "SELL (or skip)"
+    else:
+        return ""
+
+    score = max(1, min(10, round((conf or 0) / 10)))
+
+    if entry and stop and target:
+        risk_pct   = abs(entry - stop) / entry * 100 if entry > 0 else 0
+        reward_pct = abs(target - entry) / entry * 100 if entry > 0 else 0
+        rr         = reward_pct / risk_pct if risk_pct > 0 else 0
+        risk_usd   = portfolio_usd * (risk_pct / 100)
+        reward_usd = portfolio_usd * (reward_pct / 100)
+        numbers = (
+            f"On a <strong style='color:#e8ecf4'>${portfolio_usd:,.0f}</strong> position — "
+            f"risk up to <strong style='color:#f6465d'>${risk_usd:,.0f}</strong> "
+            f"({risk_pct:.1f}%) to potentially gain "
+            f"<strong style='color:#00d4aa'>${reward_usd:,.0f}</strong> "
+            f"({reward_pct:.1f}%). Risk/reward = <strong style='color:#e8ecf4'>{rr:.1f}×</strong>."
+        )
+    else:
+        numbers = "Set your portfolio size in Settings to see your personal dollar figures."
+
+    return f"""
+<div style="background:rgba(0,212,170,0.04);border:1px solid rgba(0,212,170,0.12);
+            border-left:3px solid {accent};border-radius:10px;
+            padding:12px 16px;margin:8px 0 12px 0;font-size:12px;
+            color:rgba(200,210,230,0.85);line-height:1.7">
+  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+              letter-spacing:0.8px;margin-bottom:4px">💡 What Does This Mean For Me?</div>
+  The model thinks this coin has a <strong style="color:{accent}">{conf:.0f}%</strong>
+  chance of {verb}. Confidence score: <strong style="color:{accent}">{score}/10</strong>
+  {'— strong signal' if score >= 7 else '— watch but be cautious' if score >= 5 else '— uncertain, avoid acting'}.
+  Suggested action: <strong style="color:{accent}">{action}</strong>.<br/>
+  {numbers}
+</div>"""
+
+
+def why_signal_html(
+    direction: str,
+    conf: float,
+    rsi: float | None,
+    adx: float | None,
+    mtf: float,
+    consensus: float,
+    regime: str,
+    bias: str,
+    funding_rate: float | None,
+) -> str:
+    """
+    Item 6 — Tier 2 'Why this signal?' plain-English reasoning panel.
+    Converts raw indicator values into human-readable bullet-point reasons
+    so beginners understand *why* the model says BUY/SELL — not just that it does.
+    """
+    d = (direction or "").upper()
+    is_buy  = "BUY"  in d
+    is_sell = "SELL" in d
+    if not is_buy and not is_sell:
+        return ""
+
+    accent = "#00d4aa" if is_buy else "#f6465d"
+    reasons: list[str] = []
+
+    # Tooltip wrappers for key jargon — Item 10
+    _rsi_tip = tt("RSI", "Relative Strength Index — a momentum indicator (0–100). Above 70 = potentially overbought, below 30 = potentially oversold.")
+    _adx_tip = tt("ADX", "Average Directional Index — measures trend strength (0–100). Above 25 = strong trend, below 20 = choppy/sideways market.")
+    _fr_tip  = tt("funding rate", "A fee paid between long and short traders every 8 hours in perpetual futures. Positive = longs pay shorts (bullish crowd). Negative = shorts pay longs (bearish crowd).")
+    _mtf_tip = tt("timeframes", "Multiple time periods checked: 1 hour, 4 hours, daily, and weekly charts. When all agree it's more reliable.")
+
+    # ── RSI reason ────────────────────────────────────────────────────────────
+    if rsi is not None:
+        if rsi >= 70:
+            if is_sell:
+                reasons.append(f"🌡️ <b>Price looks overheated</b> — the momentum indicator ({_rsi_tip}: {rsi:.0f}) is very high, suggesting a potential pullback.")
+            else:
+                reasons.append(f"🌡️ <b>Momentum is strong</b> — {_rsi_tip} of {rsi:.0f} confirms buyers are in control, even in overbought territory.")
+        elif rsi <= 30:
+            if is_buy:
+                reasons.append(f"🧊 <b>Price looks oversold</b> — {_rsi_tip} of {rsi:.0f} shows extreme selling pressure, which often precedes a bounce.")
+            else:
+                reasons.append(f"🧊 <b>Momentum is weak</b> — {_rsi_tip} of {rsi:.0f} confirms sellers are in control.")
+        elif rsi >= 55 and is_buy:
+            reasons.append(f"📈 <b>Momentum is building</b> — {_rsi_tip} of {rsi:.0f} shows buyers are gaining the upper hand.")
+        elif rsi <= 45 and is_sell:
+            reasons.append(f"📉 <b>Momentum is fading</b> — {_rsi_tip} of {rsi:.0f} shows sellers are pushing price lower.")
+        else:
+            reasons.append(f"↔️ <b>Momentum is neutral</b> — {_rsi_tip} of {rsi:.0f} means no clear momentum edge right now.")
+
+    # ── ADX reason ────────────────────────────────────────────────────────────
+    if adx is not None:
+        if adx >= 25:
+            reasons.append(f"💪 <b>Strong trend confirmed</b> — trend strength ({_adx_tip}: {adx:.0f}) is above 25, meaning this isn't random noise.")
+        elif adx >= 15:
+            reasons.append(f"🔎 <b>Moderate trend forming</b> — {_adx_tip} of {adx:.0f} suggests a trend is developing but not yet fully confirmed.")
+        else:
+            reasons.append(f"😴 <b>Market is ranging / choppy</b> — {_adx_tip} of {adx:.0f} is low, which means signals are less reliable in sideways markets.")
+
+    # ── Multi-timeframe alignment reason ─────────────────────────────────────
+    if mtf >= 75:
+        reasons.append(f"🕐 <b>Multiple {_mtf_tip} agree</b> — the 1h, 4h, and daily charts all point the same direction ({mtf:.0f}% alignment). Strong consensus.")
+    elif mtf >= 50:
+        reasons.append(f"🕐 <b>Most {_mtf_tip} agree</b> — about {mtf:.0f}% of time periods confirm this direction. Good but not perfect.")
+    elif mtf > 0:
+        reasons.append(f"⚠️ <b>Mixed {_mtf_tip} signals</b> — only {mtf:.0f}% of time periods agree. The model is less certain here.")
+
+    # ── AI consensus reason ───────────────────────────────────────────────────
+    agents_agree = round((consensus or 0) * 6)
+    if agents_agree >= 5:
+        reasons.append(f"🤖 <b>Strong AI consensus</b> — {agents_agree} out of 6 AI models independently agree on this direction. Very high confidence.")
+    elif agents_agree >= 3:
+        reasons.append(f"🤖 <b>Majority AI agreement</b> — {agents_agree} of 6 AI models agree. A solid signal but monitor closely.")
+    elif agents_agree >= 1:
+        reasons.append(f"🤖 <b>Weak AI agreement</b> — only {agents_agree} of 6 AI models agree. The models are divided.")
+
+    # ── Regime reason ─────────────────────────────────────────────────────────
+    reg = (regime or "").upper()
+    if "BULL" in reg or "TRENDING_UP" in reg:
+        reasons.append("🐂 <b>Bullish market environment</b> — the overall market trend favours upward moves.")
+    elif "BEAR" in reg or "TRENDING_DOWN" in reg:
+        reasons.append("🐻 <b>Bearish market environment</b> — the overall trend is downward, supporting the sell signal.")
+    elif "RANGING" in reg or "SIDEWAYS" in reg:
+        reasons.append("↔️ <b>Sideways / ranging market</b> — the market has no clear direction right now. Use tighter stops.")
+
+    # ── Funding rate reason ───────────────────────────────────────────────────
+    if funding_rate is not None and abs(funding_rate) > 0.02:
+        if funding_rate > 0.05 and is_sell:
+            reasons.append(f"📊 <b>Overextended longs</b> — {_fr_tip} ({funding_rate:+.3f}%) shows longs are paying shorts heavily, signalling a crowded trade that could reverse.")
+        elif funding_rate < -0.03 and is_buy:
+            reasons.append(f"📊 <b>Overextended shorts</b> — {_fr_tip} ({funding_rate:+.3f}%) shows shorts paying longs — a potential short squeeze setup.")
+
+    if not reasons:
+        reasons.append(f"📊 The model analysed {24} technical indicators across 4 timeframes and found a {conf:.0f}% confidence {direction} signal.")
+
+    bullet_html = "".join(
+        f'<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04)">'
+        f'<span style="min-width:4px;background:{accent};border-radius:2px;align-self:stretch"></span>'
+        f'<span>{r}</span>'
+        f'</div>'
+        for r in reasons
+    )
+
+    return f"""
+<div style="background:rgba(20,24,36,0.6);border:1px solid rgba(255,255,255,0.06);
+            border-radius:10px;padding:14px 16px;margin:4px 0 8px 0;font-size:12.5px;
+            color:rgba(200,210,230,0.85);line-height:1.65">
+  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+              letter-spacing:0.8px;margin-bottom:10px">🔍 Why this signal?</div>
+  {bullet_html}
+</div>"""
+
+
+def render_micro_tutorial() -> None:
+    """
+    Item 9 — 3-step beginner micro-tutorial shown on first visit.
+    Stored in session_state so it only shows once per session.
+    Revisitable via sidebar button (set _sg_show_tutorial=True to re-trigger).
+    """
+    if st.session_state.get("user_level", "beginner") != "beginner":
+        return
+    if st.session_state.get("_sg_tutorial_done") and not st.session_state.get("_sg_show_tutorial"):
+        return
+
+    step = st.session_state.get("_sg_tutorial_step", 0)
+
+    steps = [
+        {
+            "icon": "📈",
+            "title": "Step 1 of 3 — Reading a Signal",
+            "body": (
+                "**BUY (▲)** = the model thinks the price will go up.  \n"
+                "**SELL (▼)** = the model thinks the price will go down.  \n"
+                "**WAIT (■)** = the model isn't sure — sit it out.  \n\n"
+                "The **score (1–10)** shows how confident the model is. "
+                "**7 or higher** = actionable. **5 or below** = too uncertain to trade."
+            ),
+        },
+        {
+            "icon": "🛡️",
+            "title": "Step 2 of 3 — Protecting Yourself",
+            "body": (
+                "Every signal comes with a **Stop Loss** price.  \n"
+                "This is the price where you exit if the trade goes wrong — it limits your loss.  \n\n"
+                "**Rule:** Always set your Stop Loss *before* you enter any trade.  \n"
+                "The model also shows a **Target** (Take Profit) — the price where you take your gains."
+            ),
+        },
+        {
+            "icon": "📋",
+            "title": "Step 3 of 3 — Tracking Progress",
+            "body": (
+                "Go to **My Trades** in the menu to see your paper trading history.  \n"
+                "Paper trading = simulated trades with fake money. No real money at risk.  \n\n"
+                "Use paper trading to learn the system and build confidence before using real money.  \n"
+                "Check **Performance** to see how the model has done historically."
+            ),
+        },
+    ]
+
+    s = steps[step]
+    st.info(
+        f"{s['icon']} **{s['title']}**  \n\n{s['body']}",
+        icon=None,
+    )
+    c1, c2, c3 = st.columns([2, 2, 4])
+    with c1:
+        if step > 0:
+            if st.button("← Back", key="_sg_tut_back"):
+                st.session_state["_sg_tutorial_step"] = step - 1
+                st.rerun()
+    with c2:
+        if step < len(steps) - 1:
+            if st.button("Next →", key="_sg_tut_next", type="primary"):
+                st.session_state["_sg_tutorial_step"] = step + 1
+                st.rerun()
+        else:
+            if st.button("Got it! ✓", key="_sg_tut_done", type="primary"):
+                st.session_state["_sg_tutorial_done"] = True
+                st.session_state["_sg_show_tutorial"] = False
+                st.session_state["_sg_tutorial_step"] = 0
+                st.rerun()
+    with c3:
+        if st.button("Skip tutorial", key="_sg_tut_skip"):
+            st.session_state["_sg_tutorial_done"] = True
+            st.session_state["_sg_show_tutorial"] = False
+            st.session_state["_sg_tutorial_step"] = 0
+            st.rerun()
+
+
+def tt(term: str, definition: str, color: str = "#00d4aa") -> str:
+    """
+    Item 10 — Inline glossary tooltip. Wraps a jargon term with a dashed
+    underline and HTML title attribute (hover tooltip).
+    Returns HTML string: <span title="definition">term</span>
+    """
+    safe_def = definition.replace('"', '&quot;').replace("'", "&#39;")
+    return (
+        f'<span title="{safe_def}" style="border-bottom:1px dashed {color};'
+        f'cursor:help;color:inherit">{term}</span>'
+    )
+
+
+def freshness_dot_html(last_updated_ts: float | None, max_age_sec: int,
+                        label: str) -> str:
+    """
+    Item 17 — Colored freshness dot with tooltip.
+    Returns HTML string: colored circle + label.
+    last_updated_ts: unix timestamp of last update (None = unknown/stale)
+    max_age_sec: threshold for 'fresh' (green). amber at 2×, red at 4×.
+    """
+    import time as _time
+    if last_updated_ts is None:
+        color, tip = "#6b7280", f"{label}: unknown age"
+    else:
+        age = _time.time() - last_updated_ts
+        if age < max_age_sec:
+            color, tip = "#22c55e", f"{label}: {int(age//60)}m ago (fresh)"
+        elif age < max_age_sec * 2:
+            color, tip = "#f59e0b", f"{label}: {int(age//60)}m ago (aging)"
+        else:
+            color, tip = "#ef4444", f"{label}: {int(age//60)}m ago (stale)"
+    return (
+        f'<span title="{tip}" style="display:inline-block;width:8px;height:8px;'
+        f'border-radius:50%;background:{color};margin-right:4px;'
+        f'cursor:help;vertical-align:middle"></span>'
+        f'<span style="font-size:11px;color:rgba(168,180,200,0.5)">{label}</span>'
+    )
+
+
+def signal_rank_list_html(results: list, max_show: int = 20) -> str:
+    """
+    Item 8 — Beginner-friendly ranked signal list to replace the Plotly heatmap.
+    Renders a compact scrollable card-list sorted by confidence descending.
+    Each row shows: rank, coin name, direction badge (▲/▼/■), confidence bar, entry/stop.
+    """
+    if not results:
+        return '<div style="color:rgba(168,180,200,0.5);padding:12px">No signals yet — run a scan first.</div>'
+
+    sorted_r = sorted(results, key=lambda x: x.get("confidence_avg_pct", 0), reverse=True)[:max_show]
+
+    rows_html = ""
+    for i, r in enumerate(sorted_r, 1):
+        pair  = r.get("pair", "?")
+        coin  = pair.replace("/USDT", "").replace("/USD", "")
+        conf  = float(r.get("confidence_avg_pct", 0) or 0)
+        d     = (r.get("direction") or "NEUTRAL").upper()
+        entry = r.get("entry")
+        stop  = r.get("stop_loss")
+        hc    = r.get("high_conf", False)
+
+        if "BUY" in d:
+            dir_color  = "#00d4aa"
+            dir_symbol = "▲"
+            dir_label  = "BUY" if "STRONG" not in d else "STRONG BUY"
+            bar_color  = "#00d4aa"
+        elif "SELL" in d:
+            dir_color  = "#f6465d"
+            dir_symbol = "▼"
+            dir_label  = "SELL" if "STRONG" not in d else "STRONG SELL"
+            bar_color  = "#f6465d"
+        else:
+            dir_color  = "#888"
+            dir_symbol = "■"
+            dir_label  = "WAIT"
+            bar_color  = "#888"
+
+        score    = max(1, min(10, round(conf / 10)))
+        bar_w    = max(4, int(conf))
+        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:#00d4aa;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
+
+        entry_str = f"${entry:,.4f}" if entry else "—"
+        stop_str  = f"${stop:,.4f}"  if stop  else "—"
+
+        rows_html += f"""
+<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+            border-bottom:1px solid rgba(255,255,255,0.04);
+            background:{'rgba(0,212,170,0.03)' if hc else 'transparent'}">
+  <span style="color:rgba(168,180,200,0.35);font-size:11px;min-width:18px;text-align:right">{i}</span>
+  <span style="font-size:13px;font-weight:700;color:#e8ecf4;min-width:52px">{coin}</span>
+  <span style="background:rgba({('0,212,170' if 'BUY' in d else ('246,70,93' if 'SELL' in d else '136,136,136'))},0.15);
+              color:{dir_color};border-radius:5px;padding:2px 7px;font-size:11px;
+              font-weight:700;min-width:70px;text-align:center">{dir_symbol} {dir_label}</span>
+  <div style="flex:1;background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
+    <div style="width:{bar_w}%;background:{bar_color};border-radius:4px;height:6px;
+                transition:width 0.3s ease"></div>
+  </div>
+  <span style="font-size:11px;color:{bar_color};font-weight:700;min-width:32px;text-align:right">{score}/10</span>
+  <span style="font-size:10px;color:rgba(168,180,200,0.5);min-width:80px">▶ {entry_str}</span>
+  <span style="font-size:10px;color:rgba(246,70,93,0.7);min-width:80px">✕ {stop_str}</span>
+  {hc_badge}
+</div>"""
+
+    return f"""
+<div style="background:#0d1117;border:1px solid rgba(255,255,255,0.07);border-radius:10px;
+            overflow:hidden;margin-bottom:8px">
+  <div style="display:flex;gap:10px;padding:6px 10px;background:rgba(255,255,255,0.03);
+              border-bottom:1px solid rgba(255,255,255,0.06);font-size:10px;
+              color:rgba(168,180,200,0.4);font-weight:600;text-transform:uppercase;
+              letter-spacing:0.6px">
+    <span style="min-width:18px">#</span>
+    <span style="min-width:52px">Coin</span>
+    <span style="min-width:70px">Signal</span>
+    <span style="flex:1">Strength</span>
+    <span style="min-width:32px;text-align:right">Score</span>
+    <span style="min-width:80px">Entry</span>
+    <span style="min-width:80px">Stop</span>
+  </div>
+  <div style="max-height:460px;overflow-y:auto">{rows_html}</div>
+</div>"""
+
+
+def arb_opportunity_story_html(pair: str, buy_ex: str, sell_ex: str,
+                                net_spread_pct: float,
+                                buy_price: float, sell_price: float) -> str:
+    """
+    Item 13 — Arbitrage opportunity as a plain-English story card.
+    """
+    profit_per_1k = net_spread_pct / 100 * 1000
+    color = "#00d4aa" if net_spread_pct >= 0.5 else "#f59e0b"
+    return f"""
+<div style="background:rgba(17,24,40,0.95);border:1px solid {color}33;
+            border-left:3px solid {color};border-radius:12px;
+            padding:16px 20px;margin:8px 0;font-size:13px;
+            color:rgba(200,210,230,0.9)">
+  <div style="font-weight:700;font-size:15px;color:#e8ecf4;margin-bottom:6px">
+    {pair.replace('/USDT','')} &nbsp;
+    <span style="color:{color};font-size:13px">{net_spread_pct:.2f}% profit</span>
+  </div>
+  Buy on <strong style="color:#e8ecf4">{buy_ex}</strong> at
+  <strong style="color:#e8ecf4">${buy_price:,.4f}</strong>,
+  sell on <strong style="color:#e8ecf4">{sell_ex}</strong> at
+  <strong style="color:#e8ecf4">${sell_price:,.4f}</strong> —
+  pocket <strong style="color:{color}">{net_spread_pct:.2f}%</strong> after fees.<br/>
+  <span style="font-size:11px;color:rgba(168,180,200,0.5)">
+    On a $1,000 trade that's approximately
+    <strong style="color:{color}">${profit_per_1k:.2f}</strong>.
+  </span>
+</div>"""
 
 
 # ── Signal Badge — Shape Encoding (Phase 3, item 22) ──────────────────────────
