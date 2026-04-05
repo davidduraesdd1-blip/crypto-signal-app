@@ -1165,6 +1165,50 @@ def conf_badge(c):
     col = "🟢" if c >= model.HIGH_CONF_THRESHOLD else "🟡" if c >= 55 else "🔴"
     return f"{col} {c:.0f}%"
 
+
+def _freshness_badge(cache_key: str, ttl_seconds: int, label: str = "") -> str:
+    """
+    F6 — Return HTML freshness badge for a data panel.
+    Green = fresh (<50% TTL), Amber = aging (50-90%), Red = stale (>90% or never).
+    """
+    age = data_feeds.get_cache_age_seconds(cache_key)
+    if age is None:
+        color, text = "#6B7280", "No data yet"
+    else:
+        age_min = int(age // 60)
+        age_str = (
+            "< 1 min ago" if age_min < 1 else
+            "1 min ago"   if age_min == 1 else
+            f"{age_min} min ago" if age_min < 60 else
+            f"{age_min // 60}h {age_min % 60}m ago"
+        )
+        ratio = age / max(ttl_seconds, 1)
+        color = "#22c55e" if ratio < 0.5 else "#f59e0b" if ratio < 0.9 else "#ef4444"
+        text  = age_str
+
+    prefix = f"{label} · " if label else ""
+    return (
+        f'<span style="font-size:11px;color:{color};font-family:monospace;'
+        f'background:rgba(0,0,0,0.15);border-radius:4px;padding:1px 6px;">'
+        f'⏱ {prefix}{text}</span>'
+    )
+
+
+def _csv_button(df: "pd.DataFrame", filename: str, label: str = "⬇ Export CSV",
+                key: str | None = None) -> None:
+    """F5 — Render a CSV download button for *df*. No-op if df is empty."""
+    if df is None or df.empty:
+        return
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label=label,
+        data=csv_bytes,
+        file_name=filename,
+        mime="text/csv",
+        key=key or f"csv_{filename}_{id(df)}",
+    )
+
+
 # ──────────────────────────────────────────────
 # PAGE 1: DASHBOARD
 # ──────────────────────────────────────────────
@@ -1554,6 +1598,15 @@ def page_dashboard():
     st.markdown("---")
 
     # ── Blood in the Streets · DCA Multiplier · Macro Overlay (Group 3) ──────
+    # F6 — data freshness badges for macro panels
+    _fb_cols = st.columns(3)
+    with _fb_cols[0]:
+        st.markdown(_freshness_badge("fred_macro",      3600, "FRED Macro"),     unsafe_allow_html=True)
+    with _fb_cols[1]:
+        st.markdown(_freshness_badge("yfinance_macro",  3600, "YF Macro"),       unsafe_allow_html=True)
+    with _fb_cols[2]:
+        st.markdown(_freshness_badge("coinalyze_funding", 300, "Funding Rates"), unsafe_allow_html=True)
+
     try:
         _fg_val3   = results[0].get("fng_value", 50) if results else 50
         _btc_res   = next((r for r in results if r.get("pair") == "BTC/USDT"), {})
@@ -5897,6 +5950,7 @@ def page_arbitrage():
             width="stretch",
             hide_index=True,
         )
+        _csv_button(spot_df, "arb_spot_spreads.csv", key="csv_arb_spot")
 
         # Detail expanders for each opportunity
         if opp_rows:
@@ -5940,6 +5994,7 @@ def page_arbitrage():
         f_df = pd.DataFrame(f_rows)
 
         st.dataframe(f_df, width="stretch", hide_index=True)
+        _csv_button(f_df, "arb_funding_carry.csv", key="csv_arb_funding")
         st.caption(
             "**Strategy**: Collect funding payments by holding opposite spot + perp positions. "
             "Positive funding → Short Perp + Long Spot. "
@@ -6341,6 +6396,38 @@ def page_agent():
             )
     except Exception as _g3e:
         st.caption(f"Accuracy data unavailable: {_g3e}")
+
+    # F1 — Rolling 7-day win rate chart (30-day lookback)
+    try:
+        from ai_feedback import get_rolling_win_rate_history as _get_wr_hist
+        _wr_hist = _get_wr_hist(window_days=30, rolling_window=7)
+        if _wr_hist:
+            _wr_df = pd.DataFrame(_wr_hist)
+            _avg_wr = _wr_df["win_rate"].mean()
+            _wr_fig = go.Figure()
+            _wr_fig.add_trace(go.Scatter(
+                x=_wr_df["date"], y=_wr_df["win_rate"],
+                mode="lines+markers",
+                line=dict(color="#00d4aa", width=2),
+                marker=dict(size=5),
+                name="Rolling 7-day Win Rate",
+                hovertemplate="%{x}: %{y:.1f}%<extra></extra>",
+            ))
+            _wr_fig.add_hline(
+                y=_avg_wr, line_dash="dash", line_color="#f59e0b",
+                annotation_text=f"30d avg {_avg_wr:.1f}%",
+                annotation_position="bottom right",
+            )
+            _wr_fig.update_layout(
+                height=220, margin=dict(l=0, r=0, t=10, b=0),
+                xaxis_title="Date", yaxis_title="Win Rate %",
+                yaxis=dict(range=[0, 100]),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            _ui.section_header("Rolling Win Rate", "7-day rolling window over past 30 days")
+            st.plotly_chart(_wr_fig, width="stretch")
+    except Exception:
+        pass
 
     st.markdown("---")
     _ui.section_header("Recent Agent Decisions", "Last 200 cycles from agent_log table")

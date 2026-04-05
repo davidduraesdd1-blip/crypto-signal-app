@@ -3586,6 +3586,39 @@ _MACRO_INFLIGHT: dict = {}   # key → threading.Event sentinel (TOCTOU guard)
 _MACRO_TTL = 3600  # 1 hour
 
 
+def get_cache_age_seconds(key: str) -> float | None:
+    """
+    F6 — Freshness badges: return seconds since last successful cache population
+    for *key*. Searches all internal caches (macro, funding, on-chain).
+    Returns None if never populated.
+    Used by app.py to render colored data-age indicators on each panel.
+    """
+    import time as _time
+    now = _time.time()
+
+    # Check macro cache first (FRED, yfinance)
+    with _MACRO_CACHE_LOCK_SG:
+        entry = _MACRO_CACHE_SG.get(key)
+    if entry:
+        return now - entry["_ts"]
+
+    # Check funding rate cache
+    with _FUNDING_CACHE_LOCK:
+        entry = _BINANCE_FUNDING_CACHE.get(key)
+    if entry:
+        ts = entry.get("_ts", 0)
+        return now - ts if ts else None
+
+    # Check on-chain cache
+    with _ONCHAIN_CACHE_LOCK:
+        entry = _ONCHAIN_CACHE.get(key)
+    if entry:
+        ts = entry.get("_ts", 0)
+        return now - ts if ts else None
+
+    return None
+
+
 def _macro_cached_get(key: str, ttl: int, fetch_fn):
     """TTL cache wrapper for macro data with TOCTOU guard.
 
@@ -3637,8 +3670,9 @@ def fetch_fred_macro() -> dict:
     Returns fallback values on error.
     """
     def _fetch():
-        result = {}
-        for key, series_id in _FRED_MACRO_SERIES_SG.items():
+        # B1: Parallelize FRED CSV fetches — was sequential, now concurrent
+        def _fetch_one(key_series):
+            key, series_id = key_series
             try:
                 url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
                 resp = _FRED_SESSION.get(url, timeout=5)
@@ -3647,10 +3681,16 @@ def fetch_fred_macro() -> dict:
                     for line in reversed(lines[1:]):
                         parts = line.split(",")
                         if len(parts) == 2 and parts[1].strip() not in (".", ""):
-                            result[key] = round(float(parts[1].strip()), 4)
-                            break
+                            return key, round(float(parts[1].strip()), 4)
             except Exception as e:
                 logging.debug("[FRED] %s failed: %s", series_id, e)
+            return key, None
+
+        result = {}
+        with ThreadPoolExecutor(max_workers=len(_FRED_MACRO_SERIES_SG)) as _fex:
+            for key, val in _fex.map(_fetch_one, _FRED_MACRO_SERIES_SG.items()):
+                if val is not None:
+                    result[key] = val
         if len(result) < 1:
             return None
         for k, v in _FRED_MACRO_FALLBACKS_SG.items():

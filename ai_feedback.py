@@ -197,6 +197,73 @@ def get_dual_window_accuracy(pair: str = None) -> dict:
     return {"acc_30d": acc_30d, "acc_7d": acc_7d, "trend": trend}
 
 
+# ─── F1: Rolling Win-Rate History ─────────────────────────────────────────────
+
+def get_rolling_win_rate_history(window_days: int = 30, rolling_window: int = 7) -> list:
+    """
+    F1: Return daily rolling win-rate history over the past *window_days* days,
+    computed using a *rolling_window*-day rolling window.
+
+    Returns list of dicts: [{date: str, win_rate: float, total: int}, ...]
+    sorted by date ascending. Empty list if no data.
+    """
+    if window_days <= 0 or rolling_window <= 0:
+        logger.debug("[ai_feedback] get_rolling_win_rate_history: invalid params "
+                     "window_days=%d rolling_window=%d", window_days, rolling_window)
+        return []
+
+    import collections
+    from datetime import date as _date, timedelta as _td
+
+    conn = db._get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days + rolling_window)).isoformat()
+    try:
+        rows = conn.execute(
+            """
+            SELECT DATE(timestamp) AS day, was_correct
+            FROM feedback_log
+            WHERE timestamp >= ? AND was_correct IS NOT NULL
+            ORDER BY day ASC
+            """,
+            (cutoff,),
+        ).fetchall()
+    except Exception as e:
+        logger.debug("[ai_feedback] rolling win rate query failed: %s", e)
+        return []
+    finally:
+        conn.close()
+
+    if not rows:
+        return []
+
+    # Group outcomes by day
+    daily: dict = collections.defaultdict(list)
+    for row in rows:
+        daily[row[0]].append(int(row[1]))  # 1=win, 0=loss
+
+    start_day = datetime.now(timezone.utc).date() - timedelta(days=window_days)
+    today = datetime.now(timezone.utc).date()
+    results = []
+    d = start_day
+    while d <= today:
+        ds = d.isoformat()
+        # Collect rolling_window days of data ending on d
+        window_days_list = [(d - _td(days=i)).isoformat() for i in range(rolling_window)]
+        outcomes = []
+        for wd in window_days_list:
+            outcomes.extend(daily.get(wd, []))
+        if outcomes:
+            wins = sum(outcomes)
+            results.append({
+                "date":     ds,
+                "win_rate": round(wins / len(outcomes) * 100, 1),
+                "total":    len(outcomes),
+            })
+        d += _td(days=1)
+
+    return results
+
+
 def _empty_result(pair) -> dict:
     return {
         "pair":          pair or "all",
