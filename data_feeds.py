@@ -3567,12 +3567,16 @@ def get_hyperliquid_batch(pairs: list) -> dict:
 _FRED_MACRO_SERIES_SG = {
     "m2_supply_bn":      "M2SL",
     "ten_yr_yield":      "DGS10",
+    "two_yr_yield":      "DGS2",         # C2: US 2-year yield (for yield curve spread)
+    "cpi_yoy":           "CPIAUCSL_PC1", # C2: CPI YoY % (for composite signal)
     "ism_manufacturing": "NAPM",
 }
 
 _FRED_MACRO_FALLBACKS_SG = {
     "m2_supply_bn":      21_500.0,
     "ten_yr_yield":          4.35,
+    "two_yr_yield":          4.70,  # C2: 2Y yield fallback
+    "cpi_yoy":               3.2,   # C2: CPI fallback
     "ism_manufacturing":    52.0,
 }
 
@@ -3651,6 +3655,11 @@ def fetch_fred_macro() -> dict:
             return None
         for k, v in _FRED_MACRO_FALLBACKS_SG.items():
             result.setdefault(k, v)
+        # C2: Compute 2Y10Y yield spread for composite signal scoring
+        _ten = result.get("ten_yr_yield")
+        _two = result.get("two_yr_yield")
+        if _ten is not None and _two is not None:
+            result["yield_spread_2y10y"] = round(float(_ten) - float(_two), 4)
         result["source"] = "FRED"
         import datetime as _dt
         result["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
