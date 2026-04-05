@@ -787,6 +787,78 @@ def get_open_interest_batch(pairs: list) -> dict:
         return result
 
 
+def get_liquidation_pressure(pairs: list) -> list:
+    """
+    S24 (free-tier): Estimate liquidation squeeze risk per pair by combining
+    OKX open interest (free) and Binance funding rates (free).
+
+    Squeeze Risk Score = sqrt(OI_USD / 1e9) × abs(funding_rate_pct) × 100
+    A high score means large capital + extreme funding → more fuel for a cascade.
+
+    Returns sorted list of dicts:
+      [{pair, oi_usd, oi_signal, funding_rate_pct, funding_bias, squeeze_score,
+        squeeze_signal, long_risk, short_risk}, ...]
+    Sorted by squeeze_score descending.
+    """
+    import math
+    from concurrent.futures import ThreadPoolExecutor
+
+    oi_data = get_open_interest_batch(pairs)
+
+    # Fetch Binance funding for all pairs in parallel
+    fr_data: dict = {}
+    def _get_fr(p):
+        try:
+            fr = get_binance_funding_rate(p)
+            return p, fr
+        except Exception:
+            return p, {}
+
+    with ThreadPoolExecutor(max_workers=min(len(pairs), 8)) as ex:
+        for pair, fr in ex.map(_get_fr, pairs):
+            fr_data[pair] = fr
+
+    results = []
+    for pair in pairs:
+        oi    = oi_data.get(pair, {})
+        fr    = fr_data.get(pair, {})
+        oi_usd = float(oi.get("oi_usd") or 0.0)
+        fr_pct  = float(fr.get("funding_rate_pct") or 0.0)
+
+        # Squeeze score: OI in billions × absolute funding extremity
+        sq_score = round(math.sqrt(max(oi_usd / 1e9, 0)) * abs(fr_pct) * 100, 3)
+
+        # Bias: positive funding = longs heavy = long squeeze risk if price drops
+        if fr_pct > 0.02:
+            bias, long_risk, short_risk = "LONGS_HEAVY", True, False
+        elif fr_pct < -0.02:
+            bias, long_risk, short_risk = "SHORTS_HEAVY", False, True
+        else:
+            bias, long_risk, short_risk = "BALANCED", False, False
+
+        # Squeeze signal
+        if sq_score > 0.05:
+            squeeze_sig = "HIGH_RISK"
+        elif sq_score > 0.01:
+            squeeze_sig = "ELEVATED"
+        else:
+            squeeze_sig = "NORMAL"
+
+        results.append({
+            "pair":              pair,
+            "oi_usd":            oi_usd,
+            "oi_signal":         oi.get("signal", "N/A"),
+            "funding_rate_pct":  fr_pct,
+            "funding_bias":      bias,
+            "squeeze_score":     sq_score,
+            "squeeze_signal":    squeeze_sig,
+            "long_risk":         long_risk,
+            "short_risk":        short_risk,
+        })
+
+    return sorted(results, key=lambda x: x["squeeze_score"], reverse=True)
+
+
 # ──────────────────────────────────────────────
 # DERIBIT OPTIONS IV (DVOL — 30-day implied vol index)
 # Free public API — no key required — BTC + ETH only

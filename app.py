@@ -1839,6 +1839,82 @@ def page_dashboard():
                         unsafe_allow_html=True,
                     )
 
+    # ── S24: Liquidation Pressure Monitor ────────────────────────────────────
+    with st.expander("💥 Liquidation Pressure Monitor — OI + Funding Rate Squeeze Risk", expanded=False):
+        st.caption(
+            "Estimates squeeze risk per pair by combining open interest (OKX, free) and "
+            "funding rates (Binance). High OI + extreme funding = more capital at risk of "
+            "cascade liquidation. Data is fetched on demand."
+        )
+        _liq_pairs = model.PAIRS[:12]
+        _liq_load  = st.button("🔄 Load Liquidation Data", key="btn_liq_load")
+        if _liq_load:
+            with st.spinner("Fetching OI + funding from OKX & Binance…", show_time=True):
+                _liq_data = data_feeds.get_liquidation_pressure(_liq_pairs)
+            st.session_state["liq_data"] = _liq_data
+
+        _liq_data = st.session_state.get("liq_data")
+        if _liq_data:
+            _liq_rows = []
+            for d in _liq_data:
+                _sq = d["squeeze_signal"]
+                _sq_icon = {"HIGH_RISK": "🔴", "ELEVATED": "🟡", "NORMAL": "🟢"}.get(_sq, "⚪")
+                _bias_icon = {"LONGS_HEAVY": "▲ Longs", "SHORTS_HEAVY": "▼ Shorts", "BALANCED": "■ Balanced"}.get(d["funding_bias"], "—")
+                _liq_rows.append({
+                    "Pair":            d["pair"].replace("/USDT", ""),
+                    "OI (USD)":        f"${d['oi_usd']/1e6:.0f}M" if d["oi_usd"] > 0 else "—",
+                    "OI Level":        d["oi_signal"],
+                    "Funding %":       f"{d['funding_rate_pct']:+.4f}%",
+                    "Bias":            _bias_icon,
+                    "Squeeze Score":   f"{d['squeeze_score']:.4f}",
+                    "Squeeze Risk":    f"{_sq_icon} {_sq}",
+                })
+            _liq_df = pd.DataFrame(_liq_rows)
+
+            def _color_sq(val: str) -> str:
+                if "HIGH_RISK" in val: return "color:#ef4444;font-weight:bold"
+                if "ELEVATED"  in val: return "color:#f59e0b"
+                return "color:#22c55e"
+
+            st.dataframe(
+                _liq_df.style.map(_color_sq, subset=["Squeeze Risk"]),
+                width="stretch", hide_index=True,
+            )
+
+            # Bar chart of squeeze scores
+            _top = [d for d in _liq_data if d["squeeze_score"] > 0][:10]
+            if _top:
+                _bar_pairs  = [d["pair"].replace("/USDT","") for d in _top]
+                _bar_scores = [d["squeeze_score"] for d in _top]
+                _bar_colors = ["#ef4444" if d["squeeze_signal"] == "HIGH_RISK" else
+                               "#f59e0b" if d["squeeze_signal"] == "ELEVATED" else
+                               "#22c55e" for d in _top]
+                _liq_fig = go.Figure(go.Bar(
+                    x=_bar_pairs, y=_bar_scores,
+                    marker_color=_bar_colors,
+                    hovertemplate="%{x}: %{y:.4f}<extra></extra>",
+                ))
+                _liq_fig.update_layout(
+                    height=220, margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis_title="", yaxis_title="Squeeze Score",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(_liq_fig, width="stretch")
+                st.caption(
+                    "Score = √(OI/1B) × |funding %| × 100. "
+                    "🔴 High Risk: large OI + extreme funding → cascade risk if price moves against dominant side."
+                )
+
+            if st.session_state.get("user_level", "beginner") == "beginner":
+                st.caption(
+                    "**What this means:** When lots of traders borrow money to bet in one direction "
+                    "(e.g., all betting price goes up), a sudden price drop can force them all to sell at once, "
+                    "causing a bigger crash — called a 'liquidation cascade.' This panel shows which coins are "
+                    "most at risk of that happening right now."
+                )
+        else:
+            st.info("Press **Load Liquidation Data** to analyse squeeze risk across pairs.")
+
     st.markdown("---")
 
     # ── Signal Heatmap — pairs × timeframes ──
