@@ -65,8 +65,13 @@ PAIRS = [
     'NEAR/USDT', 'APT/USDT', 'POL/USDT', 'OP/USDT', 'ARB/USDT',
     'ATOM/USDT', 'FIL/USDT', 'INJ/USDT', 'PENDLE/USDT', 'WIF/USDT',
     'PYTH/USDT', 'JUP/USDT', 'HBAR/USDT', 'FLR/USDT',
-    # XDC, WFLR, FXRP, SHX, ZBCN, CC: primarily on DEX/low-liquidity CEX —
-    # added to DEX scanner in Defi Model; omitted here for CEX signal quality
+    # ── Required coins (CLAUDE.md mandate) — low-liquidity CEX via MEXC/Gate.io fallback ──
+    # OHLCV sourced from MEXC/Gate.io (US-accessible); signals may be noisier on thin markets
+    'CC/USDT',   # Canton Network — MEXC: CCUSDT, Gate.io: CC_USDT
+    'XDC/USDT',  # XDC Network   — MEXC: XDCUSDT, Gate.io: XDC_USDT
+    'SHX/USDT',  # Stronghold    — MEXC: SHXUSDT, Gate.io: SHX_USDT
+    'ZBCN/USDT', # Zebec Network — MEXC: ZBCNUSDT, Gate.io: ZBCN_USDT
+    # WFLR, FXRP: wrapped Flare ecosystem tokens — near-zero CEX volume, chart-only
 ]
 TIMEFRAMES = ['1h', '4h', '1d', '1w']
 OHLCV_LIMIT      = 500  # Ichimoku (10/30/45) needs 45-bar warmup; 500 gives 455 usable bars on 1h (~18.9 days)
@@ -503,6 +508,112 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
                 logging.debug("Gate.io REST fallback %s %s: %s", pair, timeframe, str(_ge)[:80])
         logging.debug(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
         return pd.DataFrame()
+
+
+# ── Chart-specific OHLCV fetcher ─────────────────────────────────────────────
+# Returns raw ccxt-format list [[ts_ms, open, high, low, close, volume], ...]
+# (not a DataFrame) because build_chart_html() expects this format.
+# 6-exchange fallback chain — covers every pair in the universe including
+# low-liquidity required coins (CC, XDC, SHX, ZBCN) via MEXC/Gate.io.
+
+def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
+    """
+    Fetch OHLCV for charting with a 6-exchange fallback chain.
+    Returns ccxt-format raw list: [[ts_ms, open, high, low, close, volume], ...]
+    Fallback order (all US-accessible):
+      1. Kraken (ccxt)  — BTC, ETH, XRP, ADA, LTC, LINK, DOGE, SOL, ...
+      2. OKX REST       — wide coverage, confirmed US-accessible
+      3. Gate.io REST   — very wide coverage, covers XDC, SHX, ZBCN, TAO, etc.
+      4. Bybit REST     — direct API (not ccxt), covers CC and others
+      5. MEXC REST      — covers CC, XDC, SHX, ZBCN and hundreds of alts
+      6. CoinGecko OHLCV — last resort, free tier ≤ 30 days
+    """
+    import data_feeds as _df
+
+    # ── 1. Kraken (ccxt) ──────────────────────────────────────────────────
+    try:
+        _ex = get_exchange_instance('kraken')
+        if _ex and pair in _ex.markets:
+            _raw = _ex.fetch_ohlcv(pair, timeframe, limit=limit)
+            if _raw:
+                return _raw
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] Kraken %s %s: %s", pair, timeframe, _e)
+
+    # ── 2. OKX REST ───────────────────────────────────────────────────────
+    try:
+        _okx_sym = pair.replace('/', '-')   # BTC/USDT → BTC-USDT
+        _rows = _df.fetch_okx_klines(_okx_sym, timeframe, limit)
+        if _rows:
+            return _rows
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] OKX %s %s: %s", pair, timeframe, _e)
+
+    # ── 3. Gate.io REST ───────────────────────────────────────────────────
+    try:
+        _gate_sym = pair.replace('/', '_')  # BTC/USDT → BTC_USDT
+        _rows = _df.fetch_gateio_klines(_gate_sym, timeframe, limit)
+        if _rows:
+            return _rows
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] Gate.io %s %s: %s", pair, timeframe, _e)
+
+    # ── 4. Bybit REST (direct API — not ccxt) ─────────────────────────────
+    try:
+        _bybit_sym = pair.replace('/', '')  # BTC/USDT → BTCUSDT
+        _rows = _df.fetch_bybit_klines(_bybit_sym, timeframe, limit)
+        if _rows:
+            return _rows
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] Bybit %s %s: %s", pair, timeframe, _e)
+
+    # ── 5. MEXC REST ──────────────────────────────────────────────────────
+    try:
+        _mexc_sym = pair.replace('/', '')   # CC/USDT → CCUSDT
+        _rows = _df.fetch_mexc_klines(_mexc_sym, timeframe, limit)
+        if _rows:
+            return _rows
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] MEXC %s %s: %s", pair, timeframe, _e)
+
+    # ── 6. CoinGecko OHLCV (last resort — max 30 days on free tier) ───────
+    try:
+        _cg_id_map = {
+            'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana',
+            'XRP': 'ripple', 'DOGE': 'dogecoin', 'BNB': 'binancecoin',
+            'ADA': 'cardano', 'TRX': 'tron', 'AVAX': 'avalanche-2',
+            'LINK': 'chainlink', 'LTC': 'litecoin', 'XLM': 'stellar',
+            'BCH': 'bitcoin-cash', 'SUI': 'sui', 'TAO': 'bittensor',
+            'NEAR': 'near', 'APT': 'aptos', 'POL': 'matic-network',
+            'OP': 'optimism', 'ARB': 'arbitrum', 'ATOM': 'cosmos',
+            'FIL': 'filecoin', 'INJ': 'injective-protocol',
+            'PENDLE': 'pendle', 'WIF': 'dogwifcoin', 'PYTH': 'pyth-network',
+            'JUP': 'jupiter-exchange-solana', 'HBAR': 'hedera-hashgraph',
+            'FLR': 'flare-networks', 'XDC': 'xdce-crowd-sale',
+            'CC': 'canton-network', 'SHX': 'stronghold-token',
+            'ZBCN': 'zebec-network', 'WFLR': 'wrapped-flare',
+            'FXRP': 'fxrp',
+        }
+        _tf_days = {'1h': 1, '4h': 7, '1d': 30, '1w': 90}
+        _base = pair.split('/')[0]
+        _cg_id = _cg_id_map.get(_base)
+        _days = _tf_days.get(timeframe, 30)
+        if _cg_id:
+            _r = _df._SESSION.get(
+                f"https://api.coingecko.com/api/v3/coins/{_cg_id}/ohlc",
+                params={"vs_currency": "usd", "days": str(_days)},
+                timeout=10,
+            )
+            if _r.status_code == 200:
+                _cg_rows = _r.json()
+                if isinstance(_cg_rows, list) and _cg_rows:
+                    # CoinGecko format: [ts_ms, open, high, low, close]
+                    return [[int(r[0]), r[1], r[2], r[3], r[4], 0.0]
+                            for r in _cg_rows if len(r) >= 5]
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] CoinGecko %s %s: %s", pair, timeframe, _e)
+
+    return []
 
 
 def get_enriched_df(ex, pair: str, timeframe: str, limit: int = None) -> "pd.DataFrame":

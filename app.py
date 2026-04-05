@@ -2818,7 +2818,17 @@ def page_dashboard():
     _ui.section_header("Live Chart", "Candlestick chart with entry / target / stop overlays", icon="📈")
     ch_c1, ch_c2, ch_c3 = st.columns([3, 2, 2])
     with ch_c1:
-        chart_pair_opts = [r["pair"] for r in sorted_results]
+        # Merge scan results (first, so last-scanned pairs appear at top) with
+        # the full static universe — always chartable regardless of scan state.
+        _scan_pairs = [r["pair"] for r in sorted_results]
+        _extra_pairs = [
+            p for p in (
+                model.PAIRS
+                + ['WFLR/USDT', 'FXRP/USDT']   # chart-only pairs (not in scan)
+            )
+            if p not in _scan_pairs
+        ]
+        chart_pair_opts = _scan_pairs + sorted(_extra_pairs)
         chart_pair = st.selectbox("Pair", chart_pair_opts, key="chart_pair_select")
     with ch_c2:
         _default_tf_idx = (
@@ -2835,10 +2845,9 @@ def page_dashboard():
 
     if load_chart:
         try:
-            exchange = model.get_exchange_instance(model.TA_EXCHANGE)
-            if exchange:
-                with st.spinner(f"Fetching {chart_pair} {chart_tf}...", show_time=True):
-                    ohlcv = exchange.fetch_ohlcv(chart_pair, chart_tf, limit=250)
+            with st.spinner(f"Fetching {chart_pair} {chart_tf}...", show_time=True):
+                ohlcv = model.fetch_chart_ohlcv(chart_pair, chart_tf, limit=250)
+            if ohlcv:
                 r_sel = next((r for r in results if r["pair"] == chart_pair), {})
                 st.session_state["chart_html"] = _chart.build_chart_html(
                     ohlcv, chart_pair, chart_tf,
@@ -2848,9 +2857,17 @@ def page_dashboard():
                 )
                 st.session_state["chart_pair_label"] = f"{chart_pair} · {chart_tf}"
             else:
-                st.error("Exchange unavailable — cannot load chart.")
+                st.warning(
+                    f"No chart data available for **{chart_pair}** on {chart_tf}. "
+                    "This pair may have very low liquidity on all exchanges. "
+                    "Try a different timeframe or pair."
+                )
         except Exception as e:
-            st.error(f"Chart load failed: {e}")
+            logging.warning("[chart] %s %s: %s", chart_pair, chart_tf, e)
+            st.warning(
+                f"Chart data couldn't load for **{chart_pair}** right now — "
+                "this is usually temporary. Try refreshing in 30 seconds."
+            )
 
     _chart_html = st.session_state.get("chart_html")
     if _chart_html:

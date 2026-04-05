@@ -498,6 +498,36 @@ def fetch_bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> l
     return []
 
 
+def fetch_mexc_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+    """
+    Fetch OHLCV candlestick data from MEXC public REST API (no API key required).
+    MEXC is accessible from US Streamlit Cloud servers and covers many tokens not
+    listed on Kraken/OKX/Gate.io (e.g. CC/Canton, XDC, SHX, ZBCN).
+    symbol: e.g. "CCUSDT" (no slash, no hyphen)
+    interval: "1h", "4h", "1d", "1w" — mapped to MEXC values: 60m, 4h, 1d, 1W
+    Returns list of [startTime(int ms), open, high, low, close, volume] rows (oldest-first).
+    """
+    _interval_map = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                     "1h": "60m", "4h": "4h", "1d": "1d", "1w": "1W"}
+    mexc_interval = _interval_map.get(interval, "60m")
+    limit = min(limit, 1000)
+    try:
+        r = _SESSION.get(
+            "https://api.mexc.com/api/v3/klines",
+            params={"symbol": symbol, "interval": mexc_interval, "limit": limit},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            if isinstance(rows, list) and rows:
+                # MEXC format: [openTime, open, high, low, close, volume, closeTime, ...]
+                return [[int(row[0]), row[1], row[2], row[3], row[4], row[5]]
+                        for row in rows if len(row) >= 6]
+    except Exception as e:
+        logging.debug("[MEXC klines] %s/%s failed: %s", symbol, interval, e)
+    return []
+
+
 def _fetch_binance_24hr(symbol: str) -> dict | None:
     """Fetch 24hr stats. Primary: OKX ticker (accessible from US Cloud). Fallback: Binance.
     Returns a dict with keys matching Binance 24hr ticker format (normalised).
