@@ -1671,6 +1671,93 @@ def page_dashboard():
     except Exception:
         pass
 
+    # ── S25: Macro Intelligence panel ────────────────────────────────────────
+    with st.expander("🌐 Macro Intelligence — M2 · Yield Curve · DXY · VIX Term Structure", expanded=False):
+        try:
+            _me = data_feeds.get_macro_enrichment()
+            _sig_col = {
+                "RISK_ON":       "#00d4aa", "MILD_RISK_ON":  "#22c55e",
+                "NEUTRAL":       "#6b7280", "MILD_RISK_OFF": "#f59e0b",
+                "RISK_OFF":      "#ef4444",
+            }
+            _sig_bg  = {
+                "RISK_ON":       "rgba(0,212,170,0.08)", "MILD_RISK_ON":  "rgba(34,197,94,0.08)",
+                "NEUTRAL":       "rgba(107,114,128,0.08)", "MILD_RISK_OFF": "rgba(245,158,11,0.08)",
+                "RISK_OFF":      "rgba(239,68,68,0.08)",
+            }
+            _ms = _me["macro_signal"]
+            _mc = _sig_col.get(_ms, "#6b7280")
+            _mb = _sig_bg.get(_ms, "rgba(107,114,128,0.08)")
+
+            # Composite score card
+            st.markdown(
+                f'<div style="background:{_mb};border:1px solid {_mc}33;border-left:4px solid {_mc};'
+                f'border-radius:8px;padding:12px 16px;margin-bottom:12px">'
+                f'<span style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px">Macro Signal</span>'
+                f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{_mc}">{_ms.replace("_"," ")}</span>'
+                f'&nbsp;&nbsp;<span style="font-size:13px;color:#9ca3af">Score: {_me["macro_score"]:+d} / 4</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            _mi_c1, _mi_c2, _mi_c3, _mi_c4 = st.columns(4)
+
+            # M2 trend card
+            _m2c = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_me["m2_trend"], "#6b7280")
+            with _mi_c1:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_m2c};border-radius:10px;padding:14px">
+  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">Global M2</div>
+  <div style="font-size:16px;font-weight:700;color:{_m2c}">{_me["m2_trend"]}</div>
+  <div style="font-size:11px;color:#9ca3af;margin-top:4px">{_me["m2_pct_change_90d"]:+.2f}% (90d)</div>
+  <div style="font-size:10px;color:#4b5563;margin-top:6px">Expanding = more liquidity = risk-on tailwind</div>
+</div>""", unsafe_allow_html=True)
+
+            # Yield curve card
+            _ycc = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_me["yield_curve"], "#6b7280")
+            with _mi_c2:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_ycc};border-radius:10px;padding:14px">
+  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">Yield Curve (2Y/10Y)</div>
+  <div style="font-size:16px;font-weight:700;color:{_ycc}">{_me["yield_curve"]}</div>
+  <div style="font-size:11px;color:#9ca3af;margin-top:4px">Spread: {_me["yield_spread_pp"]:+.2f}pp</div>
+  <div style="font-size:10px;color:#4b5563;margin-top:6px">Inverted = recession signal; Normal = growth</div>
+</div>""", unsafe_allow_html=True)
+
+            # DXY trend card
+            _dxc = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_me["dxy_trend"], "#6b7280")
+            with _mi_c3:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dxc};border-radius:10px;padding:14px">
+  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">DXY (US Dollar)</div>
+  <div style="font-size:16px;font-weight:700;color:{_dxc}">{_me["dxy_trend"].replace("_"," ")}</div>
+  <div style="font-size:11px;color:#9ca3af;margin-top:4px">DXY {_me["dxy"]:.1f}</div>
+  <div style="font-size:10px;color:#4b5563;margin-top:6px">Weak dollar = crypto tailwind; Strong = headwind</div>
+</div>""", unsafe_allow_html=True)
+
+            # VIX term structure card
+            _vtc = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_me["vix_structure"], "#6b7280")
+            with _mi_c4:
+                st.markdown(f"""
+<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_vtc};border-radius:10px;padding:14px">
+  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">VIX Term Structure</div>
+  <div style="font-size:16px;font-weight:700;color:{_vtc}">{_me["vix_structure"]}</div>
+  <div style="font-size:11px;color:#9ca3af;margin-top:4px">VIX {_me["vix"]:.1f} · VIX3M {_me["vix3m"]:.1f} (Δ{_me["vix_spread"]:+.1f})</div>
+  <div style="font-size:10px;color:#4b5563;margin-top:6px">Contango = calm; Backwardation = crisis/fear spike</div>
+</div>""", unsafe_allow_html=True)
+
+            if st.session_state.get("user_level", "beginner") == "beginner":
+                _ux = {
+                    "RISK_ON":      "The macro environment strongly supports higher risk assets like crypto right now.",
+                    "MILD_RISK_ON": "Conditions are moderately supportive for risk assets.",
+                    "NEUTRAL":      "Macro conditions are mixed — no strong directional push.",
+                    "MILD_RISK_OFF":"Some macro headwinds are present. Be more cautious with position sizes.",
+                    "RISK_OFF":     "Multiple macro headwinds active. This is a difficult environment for crypto.",
+                }
+                st.caption(_ux.get(_ms, ""))
+        except Exception as _me_err:
+            st.caption(f"Macro enrichment unavailable: {_me_err}")
+
     st.markdown("---")
 
     # ── Wyckoff Phase Summary (item 23) ─────────────────────────────────────────

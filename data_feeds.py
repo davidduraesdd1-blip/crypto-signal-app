@@ -3874,7 +3874,7 @@ def fetch_yfinance_macro() -> dict:
     Fallback: Binance spot for Gold proxy (PAXG/USDT), static values for others.
     """
     _YF_FALLBACKS = {
-        "dxy": 104.0, "vix": 18.0, "gold_spot": 2900.0,
+        "dxy": 104.0, "vix": 18.0, "vix3m": 20.0, "gold_spot": 2900.0,
         "spx": 5800.0, "oil": 67.5,
     }
 
@@ -3887,6 +3887,7 @@ def fetch_yfinance_macro() -> dict:
             _MAP = {
                 "dxy":       "DX-Y.NYB",
                 "vix":       "^VIX",
+                "vix3m":     "^VIX3M",   # S25: 93-day VIX for term structure
                 "gold_spot": "GC=F",
                 "spx":       "^GSPC",
                 "oil":       "CL=F",
@@ -4121,6 +4122,112 @@ def get_macro_signal_adjustment() -> dict:
         "ten_yr":     ten_yr,
         "dxy_signal": "headwind" if dxy_head else ("tailwind" if dxy_tail else "neutral"),
         "yr_signal":  "headwind" if yr_head  else ("tailwind" if yr_tail  else "neutral"),
+    }
+
+
+def get_macro_enrichment() -> dict:
+    """
+    S25: Macro layer enrichment — combines M2 trend, yield curve shape,
+    DXY trend, and VIX term structure into one structured macro picture.
+
+    Returns:
+      m2_trend:          'EXPANDING' | 'CONTRACTING' | 'FLAT' | 'N/A'
+      m2_pct_change_90d: float (% change in global M2 over 90 days)
+      yield_curve:       'NORMAL' | 'FLAT' | 'INVERTED'
+      yield_spread_pp:   float (10Y minus 2Y in percentage points)
+      dxy_trend:         'STRONG_DOLLAR' | 'WEAK_DOLLAR' | 'NEUTRAL'
+      dxy:               float
+      vix_structure:     'CONTANGO' | 'BACKWARDATION' | 'N/A'
+      vix:               float
+      vix3m:             float
+      vix_spread:        float  (VIX3M - VIX; positive = contango = calm)
+      macro_score:       int  -4 … +4 (positive = bullish for risk assets)
+      macro_signal:      'RISK_ON' | 'MILD_RISK_ON' | 'NEUTRAL' |
+                         'MILD_RISK_OFF' | 'RISK_OFF'
+    """
+    fred   = fetch_fred_macro()
+    yf_mac = fetch_yfinance_macro()
+
+    # ── M2 trend ─────────────────────────────────────────────────────────────
+    try:
+        m2_data = fetch_global_m2_composite(lag_days=90)
+        m2_pct  = m2_data.get("m2_pct_change_90d", 0.0) or 0.0
+    except Exception:
+        m2_pct = 0.0
+    if m2_pct is None:
+        m2_pct = 0.0
+    if m2_pct > 1.0:
+        m2_trend = "EXPANDING"
+    elif m2_pct < -0.5:
+        m2_trend = "CONTRACTING"
+    else:
+        m2_trend = "FLAT"
+
+    # ── Yield curve shape (10Y minus 2Y) ─────────────────────────────────────
+    ten_yr = fred.get("ten_yr_yield", 4.35)
+    two_yr = fred.get("two_yr_yield", 4.70)
+    spread = round(float(ten_yr) - float(two_yr), 3)
+    if spread > 0.25:
+        yield_curve = "NORMAL"     # upward sloping — growth expected
+    elif spread < -0.25:
+        yield_curve = "INVERTED"   # recession signal
+    else:
+        yield_curve = "FLAT"
+
+    # ── DXY trend ─────────────────────────────────────────────────────────────
+    dxy = float(yf_mac.get("dxy", 104.0))
+    if dxy > 105.0:
+        dxy_trend = "STRONG_DOLLAR"   # headwind for crypto/risk assets
+    elif dxy < 100.0:
+        dxy_trend = "WEAK_DOLLAR"     # tailwind
+    else:
+        dxy_trend = "NEUTRAL"
+
+    # ── VIX term structure ────────────────────────────────────────────────────
+    vix   = float(yf_mac.get("vix",   18.0))
+    vix3m = float(yf_mac.get("vix3m", 20.0))
+    vix_spread = round(vix3m - vix, 2)
+    if vix3m > vix + 1.0:
+        vix_structure = "CONTANGO"        # calm — normal risk environment
+    elif vix > vix3m + 1.0:
+        vix_structure = "BACKWARDATION"   # crisis/fear — near-term vol > future
+    else:
+        vix_structure = "FLAT"
+
+    # ── Composite macro score (-4 … +4) ──────────────────────────────────────
+    score = 0
+    # M2: expanding = +1 (liquidity expanding supports risk), contracting = -1
+    if m2_trend == "EXPANDING":      score += 1
+    elif m2_trend == "CONTRACTING":  score -= 1
+    # Yield curve: normal = +1 (healthy), inverted = -2 (recession risk)
+    if yield_curve == "NORMAL":    score += 1
+    elif yield_curve == "INVERTED": score -= 2
+    # DXY: weak dollar = +1 (tailwind), strong dollar = -1
+    if dxy_trend == "WEAK_DOLLAR":    score += 1
+    elif dxy_trend == "STRONG_DOLLAR": score -= 1
+    # VIX structure: contango = +1 (calm), backwardation = -1 (crisis)
+    if vix_structure == "CONTANGO":      score += 1
+    elif vix_structure == "BACKWARDATION": score -= 1
+
+    if score >= 3:      macro_signal = "RISK_ON"
+    elif score >= 1:    macro_signal = "MILD_RISK_ON"
+    elif score <= -3:   macro_signal = "RISK_OFF"
+    elif score <= -1:   macro_signal = "MILD_RISK_OFF"
+    else:               macro_signal = "NEUTRAL"
+
+    return {
+        "m2_trend":          m2_trend,
+        "m2_pct_change_90d": round(float(m2_pct), 2),
+        "yield_curve":       yield_curve,
+        "yield_spread_pp":   spread,
+        "dxy_trend":         dxy_trend,
+        "dxy":               dxy,
+        "vix_structure":     vix_structure,
+        "vix":               vix,
+        "vix3m":             vix3m,
+        "vix_spread":        vix_spread,
+        "macro_score":       score,
+        "macro_signal":      macro_signal,
     }
 
 
