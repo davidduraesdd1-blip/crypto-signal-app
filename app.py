@@ -1397,8 +1397,11 @@ def page_dashboard():
     else:
         results = st.session_state.get("scan_results", [])
     if not results:
-        st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
-        return
+        if user_level == "Beginner" and not st.session_state.get("scan_run"):
+            st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
+        else:
+            st.info("No scan results yet — click **Run Scan** in the sidebar to begin.")
+        return  # A4: guard — always return on empty results, prevents results[0] IndexError
 
     # Separate Tier 1 and Tier 2 results (#88)
     tier1_results = [r for r in results if r.get("tier", 1) == 1]
@@ -1483,10 +1486,10 @@ def page_dashboard():
         st.success(f"⚡ Top Picks this scan — the model's highest-confidence opportunities: **{pairs_str}**")
 
     # ── F&G visual gauge + summary metrics ────────────────────────────────────
-    _fng_r0     = results[0]
+    _fng_r0     = results[0] if results else {}   # A4: guard (belt-and-suspenders — return above should fire first)
     _fng_val    = _fng_r0.get("fng_value", 50)
     _fng_cat    = _fng_r0.get("fng_category", "Neutral")
-    _ac_raw  = sum(r.get("confidence_avg_pct") or 0 for r in results) / len(results)
+    _ac_raw  = sum(r.get("confidence_avg_pct") or 0 for r in results) / max(len(results), 1)
     avg_conf = round(_ac_raw if _ac_raw == _ac_raw else 0.0, 1)  # APP-21: NaN guard
     buy_count   = sum(1 for r in results if "BUY"  in r.get("direction", ""))
     sell_count  = sum(1 for r in results if "SELL" in r.get("direction", ""))

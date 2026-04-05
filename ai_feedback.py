@@ -16,7 +16,8 @@ import database as db
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-_LOOKBACK_DAYS   = 30        # rolling accuracy window
+_LOOKBACK_DAYS   = 30        # primary rolling accuracy window (30-day)
+_LOOKBACK_7D     = 7         # G3: secondary short-window (7-day, matches DeFi Model dual-window)
 _MIN_SAMPLES     = 5         # minimum records before grading activates
 _EXP_HALF_LIFE   = 14.0     # exponential time-weight half-life in days
 
@@ -33,12 +34,14 @@ _MIN_KELLY_WIN_RATE = 0.40   # need ≥40% win rate to take any position
 
 # ─── Core Accuracy Computation ────────────────────────────────────────────────
 
-def compute_accuracy(pair: str = None) -> dict:
+def compute_accuracy(pair: str = None, window_days: int = None) -> dict:
     """
     Compute rolling accuracy metrics from the feedback_log table.
 
     Args:
-        pair: specific pair (e.g. 'BTC/USDT') or None for overall accuracy
+        pair:         specific pair (e.g. 'BTC/USDT') or None for overall accuracy
+        window_days:  lookback window in days (default: _LOOKBACK_DAYS=30).
+                      Pass 7 for short-window comparison (G3 — DeFi Model dual-window pattern).
 
     Returns:
         accuracy_pct:       % of signals where direction was correct (was_correct=1)
@@ -48,9 +51,11 @@ def compute_accuracy(pair: str = None) -> dict:
         grade:              A / B / C / D / F
         health_score:       0–100 composite for UI display
         message:            human-readable status
+        window_days:        which window was used (G3 dual-window display)
     """
+    days = window_days if window_days is not None else _LOOKBACK_DAYS
     conn = db._get_conn()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
         if pair:
             rows = conn.execute(
@@ -158,7 +163,38 @@ def compute_accuracy(pair: str = None) -> dict:
         "grade":         grade,
         "health_score":  health_score,
         "message":       _health_message(health_score, grade),
+        "window_days":   days,   # G3: expose window for dual-window UI display
     }
+
+
+# ─── G3: Dual-window accuracy summary (30-day vs 7-day) ──────────────────────
+
+def get_dual_window_accuracy(pair: str = None) -> dict:
+    """
+    G3: Return both 30-day and 7-day accuracy metrics.
+    Matches DeFi Model's dual-window evaluation pattern.
+
+    Returns:
+        acc_30d:  compute_accuracy result over 30-day window
+        acc_7d:   compute_accuracy result over 7-day window
+        trend:    'improving' | 'declining' | 'stable' | 'building'
+    """
+    acc_30d = compute_accuracy(pair=pair, window_days=30)
+    acc_7d  = compute_accuracy(pair=pair, window_days=7)
+
+    wr_30 = acc_30d.get("win_rate")
+    wr_7  = acc_7d.get("win_rate")
+
+    if wr_30 is None or wr_7 is None:
+        trend = "building"
+    elif wr_7 > wr_30 + 5:
+        trend = "improving"
+    elif wr_7 < wr_30 - 5:
+        trend = "declining"
+    else:
+        trend = "stable"
+
+    return {"acc_30d": acc_30d, "acc_7d": acc_7d, "trend": trend}
 
 
 def _empty_result(pair) -> dict:

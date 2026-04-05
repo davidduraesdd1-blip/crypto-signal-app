@@ -25,6 +25,7 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional, TypedDict
 
 import database as _db
@@ -70,22 +71,160 @@ def _get_model():
     return _model
 
 
+# ─── G7: Composite Signal Gate — cached 30 min ───────────────────────────────
+# Evaluates macro + on-chain environment before allowing new entries.
+# RISK_OFF (score <= -0.30) suppresses all new trade entries for the cycle.
+
+_COMPOSITE_GATE_CACHE: dict = {"result": None, "ts": 0.0}
+_COMPOSITE_GATE_TTL  = 1800  # 30 minutes — avoids API calls on every tick
+
+
+def _get_composite_gate_result() -> dict:
+    """
+    Return cached composite signal (refreshes every 30 min).
+    Uses BTC/USDT as the market environment reference (MVRV Z, Hash Ribbons, Puell).
+    Gracefully handles missing data — each sub-indicator returns 0.0 when None.
+    """
+    import time as _time_mod
+    now = _time_mod.time()
+    if _COMPOSITE_GATE_CACHE["result"] and now - _COMPOSITE_GATE_CACHE["ts"] < _COMPOSITE_GATE_TTL:
+        return _COMPOSITE_GATE_CACHE["result"]
+
+    try:
+        import data_feeds as _df
+        import composite_signal as _cs
+
+        yf_mac = _df.fetch_yfinance_macro()
+        fred   = _df.fetch_fred_macro()
+        oc     = _df.get_onchain_metrics("BTC/USDT")
+        fg     = _df.get_fear_greed()
+
+        macro_data = {
+            "dxy":               yf_mac.get("dxy"),
+            "vix":               yf_mac.get("vix"),
+            "yield_spread_2y10y": fred.get("yield_spread_2y10y"),  # None if not yet in FRED feed
+            "cpi_yoy":           fred.get("cpi_yoy"),              # None if not yet in FRED feed
+        }
+        onchain_data = {
+            "sopr":              oc.get("sopr"),
+            "mvrv_z":            oc.get("mvrv_z"),
+            "hash_ribbon_signal": oc.get("hash_ribbon_signal"),
+            "puell_multiple":    oc.get("puell_multiple"),
+        }
+        fg_value = fg.get("value") if isinstance(fg, dict) else None
+
+        result = _cs.compute_composite_signal(macro_data, onchain_data, fg_value)
+        _COMPOSITE_GATE_CACHE["result"] = result
+        _COMPOSITE_GATE_CACHE["ts"]     = now
+        return result
+    except Exception as exc:
+        logger.debug("[agent] composite gate fetch failed (allowing trade): %s", exc)
+        # On failure: return NEUTRAL so the gate never blocks on data errors
+        return {"score": 0.0, "signal": "NEUTRAL", "risk_off": False}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─── G2: Sliding Presets System (ported from DeFi Model agents/config.py) ─────
+# Users can tune agent risk parameters from the Agent Config UI without editing code.
+# Overrides are stored in agent_overrides.json, applied every cycle start.
+# Whitelists and security settings are NEVER overridable.
+
+_AGENT_DATA_DIR    = Path(__file__).parent / "data" / "agent"
+_AGENT_OVERRIDES_FILE = _AGENT_DATA_DIR / "agent_overrides.json"
+
+# Defaults — every overridable key must have a typed default here
+_AGENT_DEFAULTS: dict = {
+    "agent_min_confidence":           80.0,   # % — minimum signal confidence to act
+    "agent_max_concurrent_positions": 3,      # max open trades at once
+    "agent_daily_loss_limit_pct":     5.0,    # % — daily loss halt
+    "agent_portfolio_size_usd":       10_000.0,  # virtual portfolio size
+    "agent_interval_seconds":         60,     # cycle interval
+    "agent_max_trade_size_pct":       10.0,   # % of portfolio per trade
+    "agent_max_drawdown_pct":         15.0,   # % from peak → emergency stop
+    "agent_cooldown_after_loss_s":    1800,   # seconds to pause after a loss
+}
+
+# Only numeric/bool keys are patchable from the UI — never security fields
+_OVERRIDABLE_KEYS: frozenset = frozenset(_AGENT_DEFAULTS.keys())
+
+
+def save_overrides(overrides: dict) -> None:
+    """Write agent parameter overrides from the UI. Called from app Config page."""
+    try:
+        _AGENT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        safe = {k: v for k, v in overrides.items() if k in _OVERRIDABLE_KEYS}
+        _AGENT_OVERRIDES_FILE.write_text(json.dumps(safe, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning("[agent] save_overrides failed: %s", e)
+
+
+def load_overrides() -> dict:
+    """Read current UI overrides. Returns {} on missing file or parse error."""
+    try:
+        if _AGENT_OVERRIDES_FILE.exists():
+            return json.loads(_AGENT_OVERRIDES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _apply_overrides(cfg: dict) -> dict:
+    """
+    Merge user overrides from agent_overrides.json into the live config dict.
+    Called at the start of every agent cycle. Safe to call repeatedly.
+    Only patches keys in _OVERRIDABLE_KEYS — security settings are never touched.
+    """
+    try:
+        overrides = load_overrides()
+        for key, val in overrides.items():
+            if key in _OVERRIDABLE_KEYS and key in cfg:
+                cfg[key] = type(_AGENT_DEFAULTS.get(key, val))(val)
+    except Exception as e:
+        logger.warning("[agent] _apply_overrides failed (using defaults): %s", e)
+    return cfg
+
+
+def get_active_limits(cfg: dict) -> dict:
+    """
+    Return human-readable current effective limits for the Active Limits panel in the UI.
+    Shows 'custom' badge when any value differs from default.
+    """
+    overrides = load_overrides()
+    limits = {}
+    for key, default in _AGENT_DEFAULTS.items():
+        val = cfg.get(key, default)
+        limits[key] = {
+            "value":   val,
+            "default": default,
+            "custom":  key in overrides,
+        }
+    return limits
+
+
 def get_agent_config() -> dict:
-    """Return agent config from alerts_config.json (merged with defaults)."""
+    """Return agent config from alerts_config.json merged with UI overrides."""
     cfg = _alerts.load_alerts_config()
-    return {
+    base = {
         "enabled":                  bool(cfg.get("agent_enabled", False)),
-        "interval_seconds":         int(cfg.get("agent_interval_seconds", 60)),
-        "min_confidence":           float(cfg.get("agent_min_confidence", 80.0)),
-        "max_concurrent_positions": int(cfg.get("agent_max_concurrent_positions", 3)),
-        "daily_loss_limit_pct":     float(cfg.get("agent_daily_loss_limit_pct", 5.0)),
-        "portfolio_size_usd":       float(cfg.get("agent_portfolio_size_usd", 10_000.0)),
+        "interval_seconds":         int(cfg.get("agent_interval_seconds", _AGENT_DEFAULTS["agent_interval_seconds"])),
+        "min_confidence":           float(cfg.get("agent_min_confidence", _AGENT_DEFAULTS["agent_min_confidence"])),
+        "max_concurrent_positions": int(cfg.get("agent_max_concurrent_positions", _AGENT_DEFAULTS["agent_max_concurrent_positions"])),
+        "daily_loss_limit_pct":     float(cfg.get("agent_daily_loss_limit_pct", _AGENT_DEFAULTS["agent_daily_loss_limit_pct"])),
+        "portfolio_size_usd":       float(cfg.get("agent_portfolio_size_usd", _AGENT_DEFAULTS["agent_portfolio_size_usd"])),
         "dry_run":                  bool(cfg.get("agent_dry_run", True)),
+        "agent_min_confidence":     float(cfg.get("agent_min_confidence", _AGENT_DEFAULTS["agent_min_confidence"])),
+        "agent_max_concurrent_positions": int(cfg.get("agent_max_concurrent_positions", _AGENT_DEFAULTS["agent_max_concurrent_positions"])),
+        "agent_daily_loss_limit_pct": float(cfg.get("agent_daily_loss_limit_pct", _AGENT_DEFAULTS["agent_daily_loss_limit_pct"])),
+        "agent_portfolio_size_usd": float(cfg.get("agent_portfolio_size_usd", _AGENT_DEFAULTS["agent_portfolio_size_usd"])),
+        "agent_interval_seconds":   int(cfg.get("agent_interval_seconds", _AGENT_DEFAULTS["agent_interval_seconds"])),
+        "agent_max_trade_size_pct": float(_AGENT_DEFAULTS["agent_max_trade_size_pct"]),
+        "agent_max_drawdown_pct":   float(_AGENT_DEFAULTS["agent_max_drawdown_pct"]),
+        "agent_cooldown_after_loss_s": int(_AGENT_DEFAULTS["agent_cooldown_after_loss_s"]),
     }
+    return _apply_overrides(base)  # G2: merge live UI overrides at every call
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,6 +323,17 @@ def _check_pre_risk(state: AgentState, cfg: dict) -> tuple:
     pf   = state["portfolio_state"]
     sig  = state["signal_result"]
     pair = state["pair"]
+
+    # G7: Composite signal gate — RISK_OFF blocks all new entries
+    try:
+        gate = _get_composite_gate_result()
+        if gate.get("risk_off", False):
+            return False, (
+                f"Market environment is {gate.get('signal', 'RISK_OFF')} "
+                f"(score={gate.get('score', 0):.2f}) — holding all new entries"
+            )
+    except Exception:
+        pass  # gate errors never block — fail-open
 
     direction = sig.get("direction", "NEUTRAL")
     if "NEUTRAL" in direction or not direction:
