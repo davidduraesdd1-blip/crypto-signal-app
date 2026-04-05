@@ -2859,7 +2859,7 @@ def page_dashboard():
             st.caption(
                 f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
             )
-        st.iframe(_chart_html, height=560, scrolling=False)
+        st.iframe(_chart_html, height=560)
 
     st.markdown("---")
 
