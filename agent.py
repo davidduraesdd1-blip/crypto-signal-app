@@ -767,6 +767,12 @@ def _node_claude_reason(state: AgentState) -> AgentState:
 - Portfolio Equity: ${_sanitize(pf["equity_usd"])}
 - Today's PnL: {_sanitize(pf["daily_pnl_pct"])}%
 
+## Extended Reasoning Requirements (G10)
+Before calling a tool, in your rationale/reason field include:
+1. What the PRIMARY factor driving this decision is (cite specific indicator value)
+2. What ALTERNATIVES you considered — e.g., "considered waiting for lower RSI but SuperTrend is firmly bullish"
+3. What single condition would FLIP this decision to the opposite
+
 Call approve_trade if the signal is clear and risk is acceptable.
 Call reject_trade if indicators conflict, momentum is weak, or risk is too high.
 You MUST call exactly one tool."""

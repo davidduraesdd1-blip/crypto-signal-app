@@ -22,10 +22,36 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+import random
+
 import database as db
 import alerts as _alerts
 
 logger = logging.getLogger(__name__)
+
+
+# ─── G6: Realistic Paper Trade Slippage Model ────────────────────────────────
+# Ported from DeFi Model agents/paper_trader.py — calibrated on DEX/CEX data.
+# Used only in paper mode fills; live mode uses actual exchange fill price.
+
+_MAX_SLIPPAGE_PCT = 0.005  # 0.5% hard cap — matches DeFi model
+
+
+def _simulate_slippage(size_usd: float) -> float:
+    """
+    Realistic slippage model for crypto CEX/spot fills (paper mode).
+    Small trades: ~0.1%. Large trades scale up to 0.5% cap.
+    Adds random micro-noise to prevent deterministic fills.
+    """
+    base        = 0.001                                       # 0.1% base
+    size_factor = min(size_usd / 10_000, 1.0) * 0.003        # +0–0.3% for large trades
+    noise       = random.uniform(-0.0005, 0.0005)             # ±0.05% micro-noise
+    return max(0.0, min(_MAX_SLIPPAGE_PCT, base + size_factor + noise))
+
+
+def _simulate_exchange_fee(size_usd: float) -> float:
+    """Simulate CEX taker fee: 0.1% (Binance/OKX standard taker rate)."""
+    return size_usd * 0.001
 
 try:
     import ccxt
@@ -257,17 +283,21 @@ def place_order(
             result["error"] = "No price available for paper fill — WebSocket not connected and no scan price"
             _log_to_db(result)
             return result
-        fill_price         = current_price
+        # G6: Apply realistic slippage model — fill price includes simulated market impact
+        _slippage     = _simulate_slippage(size_usd)
+        _fee_usd      = _simulate_exchange_fee(size_usd)
+        _slip_mult    = (1 + _slippage) if side.upper() == "BUY" else (1 - _slippage)
+        fill_price    = current_price * _slip_mult
+        effective_usd = size_usd * (1 + _slippage) + _fee_usd
         result["ok"]       = True
         result["order_id"] = f"PAPER-{uuid.uuid4().hex[:12]}-{pair.replace('/', '')}"
         result["price"]    = fill_price
-        # T3-11: slippage vs expected (for paper, expected_price is the signal entry price)
-        _ref = expected_price or fill_price
-        if _ref and _ref > 0:
-            result["slippage_pct"] = round(abs(fill_price - _ref) / _ref * 100, 4)
+        result["slippage_pct"]   = round(_slippage * 100, 4)
+        result["fee_usd"]        = round(_fee_usd, 4)
+        result["effective_usd"]  = round(effective_usd, 4)
         logger.info(
-            "[EXEC] PAPER %s %s $%.0f @ $%.4f",
-            side.upper(), pair, size_usd, fill_price,
+            "[EXEC] PAPER %s %s $%.0f @ $%.4f (slip=%.3f%%)",
+            side.upper(), pair, size_usd, fill_price, _slippage * 100,
         )
         _log_to_db(result)
         return result
