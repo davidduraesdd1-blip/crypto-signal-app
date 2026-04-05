@@ -6106,11 +6106,11 @@ def page_arbitrage():
                 if val >= 10: return "color: #7ecb9a"
                 return ""
 
-            exch_cols = [c for c in ["OKX", "BINANCE", "BYBIT", "KUCOIN"] if c in frdata_feeds.columns]
-            ann_cols  = ["Ann. Yield%"] if "Ann. Yield%" in frdata_feeds.columns else []
+            exch_cols = [c for c in ["OKX", "BINANCE", "BYBIT", "KUCOIN"] if c in fr_df.columns]
+            ann_cols  = ["Ann. Yield%"] if "Ann. Yield%" in fr_df.columns else []
 
             st.dataframe(
-                frdata_feeds.style
+                fr_df.style
                     .map(_color_fr,  subset=exch_cols)
                     .map(_color_ann, subset=ann_cols),
                 width="stretch",
@@ -6166,6 +6166,53 @@ def page_arbitrage():
             else:
                 st.info("No carry trade opportunities above 0.01% threshold for the selected pairs.")
 
+    # ── E1: Hyperliquid DEX Funding Rates ────────────────────────────────────
+    with st.expander("🔷 Hyperliquid DEX — Funding Rates & Open Interest", expanded=False):
+        st.caption(
+            "Hyperliquid is the largest on-chain perp DEX. "
+            "Funding rates > 0.03% (8h) = longs paying shorts — BULLISH signal. "
+            "Rates < −0.01% = shorts paying longs — BEARISH. "
+            "Data is public, no API key required."
+        )
+        _hl_pairs = [p.replace("/USDT", "") for p in model.PAIRS[:10]]
+        _hl_load = st.button("🔄 Load Hyperliquid Data", key="btn_hl_load")
+        if _hl_load:
+            with st.spinner("Fetching Hyperliquid funding rates…", show_time=True):
+                _hl_data = data_feeds.get_hyperliquid_batch(_hl_pairs)
+            st.session_state["hl_data"] = _hl_data
+
+        _hl_data = st.session_state.get("hl_data")
+        if _hl_data:
+            _hl_rows = []
+            for coin, d in _hl_data.items():
+                if d.get("error"):
+                    continue
+                _sig = d.get("signal", "NEUTRAL")
+                _sig_icon = {"BULLISH": "▲", "BEARISH": "▼", "NEUTRAL": "■"}.get(_sig, "■")
+                _hl_rows.append({
+                    "Coin":            coin,
+                    "Mark Price":      f"${d.get('mark_price', 0):,.4f}" if d.get("mark_price") else "—",
+                    "Funding 8h":      f"{d.get('funding_rate_pct', 0):+.4f}%",
+                    "Open Interest":   f"${d.get('open_interest_usd', 0):,.0f}" if d.get("open_interest_usd") else "—",
+                    "Signal":          f"{_sig_icon} {_sig}",
+                })
+            if _hl_rows:
+                _hl_df = pd.DataFrame(_hl_rows)
+
+                def _color_hl_sig(val: str) -> str:
+                    if "BULLISH"  in val: return "color:#00d4aa;font-weight:bold"
+                    if "BEARISH"  in val: return "color:#ef4444;font-weight:bold"
+                    return "color:#6b7280"
+
+                st.dataframe(
+                    _hl_df.style.map(_color_hl_sig, subset=["Signal"]),
+                    width="stretch", hide_index=True,
+                )
+                _csv_button(_hl_df, "hyperliquid_funding.csv", key="csv_hl_funding")
+            else:
+                st.info("No Hyperliquid data returned for the selected pairs.")
+        else:
+            st.info("Press **Load Hyperliquid Data** to fetch on-chain DEX funding rates.")
 
 
 # ──────────────────────────────────────────────
