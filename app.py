@@ -6211,6 +6211,11 @@ def page_agent():
                 "Min Confidence to Act (%)", min_value=50.0, max_value=99.0,
                 value=float(_cfg["min_confidence"]), step=1.0,
             )
+            _max_trade = st.slider(
+                "Max Trade Size (% of portfolio)", min_value=1.0, max_value=50.0,
+                value=float(_cfg.get("agent_max_trade_size_pct", 10.0)), step=0.5,
+                help="Hard cap on any single trade as a % of total portfolio equity",
+            )
         with ac2:
             _max_pos  = st.number_input(
                 "Max Concurrent Positions", min_value=1, max_value=10,
@@ -6224,6 +6229,16 @@ def page_agent():
                 "Portfolio Size (USD)", min_value=100.0, max_value=1_000_000.0,
                 value=float(_cfg["portfolio_size_usd"]), step=500.0, format="%.0f",
             )
+            _max_dd = st.slider(
+                "Max Drawdown from Peak (%)", min_value=5.0, max_value=50.0,
+                value=float(_cfg.get("agent_max_drawdown_pct", 15.0)), step=1.0,
+                help="Agent halts all new entries if portfolio drawdown exceeds this level",
+            )
+            _cooldown = st.number_input(
+                "Cooldown After Loss (seconds)", min_value=0, max_value=86400,
+                value=int(_cfg.get("agent_cooldown_after_loss_s", 1800)), step=300,
+                help="Pause period before next trade after a losing cycle",
+            )
         if st.form_submit_button("💾 Save Agent Config", type="secondary",
                                   width="stretch"):
             _saved = _cached_alerts_config()
@@ -6234,7 +6249,29 @@ def page_agent():
             _saved["agent_daily_loss_limit_pct"]     = float(_loss_lim)
             _saved["agent_portfolio_size_usd"]       = float(_port_sz)
             _save_alerts_config_and_clear(_saved)
+            # G2: also persist all override params to agent_overrides.json
+            _agent.save_overrides({
+                "agent_min_confidence":           float(_min_conf),
+                "agent_max_concurrent_positions": int(_max_pos),
+                "agent_daily_loss_limit_pct":     float(_loss_lim),
+                "agent_portfolio_size_usd":       float(_port_sz),
+                "agent_interval_seconds":         int(_interval),
+                "agent_max_trade_size_pct":       float(_max_trade),
+                "agent_max_drawdown_pct":         float(_max_dd),
+                "agent_cooldown_after_loss_s":    int(_cooldown),
+            })
             st.success("Agent config saved.")
+
+    # G2: Active Limits panel — shows current effective values with custom badges
+    with st.expander("📋 Active Limits (current effective values)", expanded=False):
+        _limits = _agent.get_active_limits(_agent.get_agent_config())
+        _lim_col1, _lim_col2 = st.columns(2)
+        for i, (key, info) in enumerate(_limits.items()):
+            _col = _lim_col1 if i % 2 == 0 else _lim_col2
+            with _col:
+                _badge = " 🔧 custom" if info["custom"] else ""
+                _label = key.replace("agent_", "").replace("_", " ").title()
+                st.metric(_label + _badge, info["value"], delta=None)
 
     # ── Architecture notes ──
     st.markdown("---")
@@ -6254,6 +6291,37 @@ def page_agent():
 """)
 
     # ── Decision log ──
+    st.markdown("---")
+    # G3: Dual-window accuracy panel (7-day vs 30-day with trend)
+    st.markdown("---")
+    _ui.section_header("Agent Accuracy", "30-day vs 7-day win rate comparison")
+    try:
+        from ai_feedback import get_dual_window_accuracy
+        _dwa = get_dual_window_accuracy()
+        _acc30 = _dwa.get("acc_30d", {})
+        _acc7  = _dwa.get("acc_7d",  {})
+        _trend = _dwa.get("trend", "stable")
+        _wr30  = _acc30.get("win_rate", 0) or 0
+        _wr7   = _acc7.get("win_rate",  0) or 0
+        _trend_icon = {"improving": "📈", "degrading": "📉", "stable": "➡️"}.get(_trend, "➡️")
+        _trend_color = {"improving": "#22c55e", "degrading": "#ef4444", "stable": "#9CA3AF"}.get(_trend, "#9CA3AF")
+        _g3c1, _g3c2, _g3c3 = st.columns(3)
+        _g3c1.metric("30-Day Win Rate", f"{_wr30:.0%}",
+                     delta=None, help="Fraction of signal outcomes resolved as correct over the past 30 days")
+        _g3c2.metric("7-Day Win Rate", f"{_wr7:.0%}",
+                     delta=f"{(_wr7 - _wr30) * 100:+.1f}pp vs 30d",
+                     help="Fraction of signal outcomes resolved as correct over the past 7 days")
+        _g3c3.metric("Accuracy Trend", f"{_trend_icon} {_trend.title()}",
+                     help="Improving = 7-day win rate at least 5pp above 30-day baseline")
+        if user_level == "Beginner":
+            st.caption(
+                f"This shows how well the model's signals have performed recently. "
+                f"The 7-day rate gives the latest picture; the 30-day rate is the longer-run baseline. "
+                f"A {_trend} trend means recent accuracy is {'better' if _trend == 'improving' else ('worse' if _trend == 'degrading' else 'similar')} than the baseline."
+            )
+    except Exception as _g3e:
+        st.caption(f"Accuracy data unavailable: {_g3e}")
+
     st.markdown("---")
     _ui.section_header("Recent Agent Decisions", "Last 200 cycles from agent_log table")
     _log_df = _cached_agent_log_df(limit=200)
