@@ -740,6 +740,49 @@ def section_header(title: str, subtitle: str = None, icon: str = None):
     )
 
 
+# ── Reusable card wrapper ────────────────────────────────────────────────────
+
+from contextlib import contextmanager as _contextmanager
+
+@_contextmanager
+def render_card(title: str = None, icon: str = None, accent: str = "#00d4aa",
+                padding: str = "18px 20px", compact: bool = False):
+    """
+    Context manager that wraps Streamlit content in a glass-morphism card.
+
+    Usage::
+
+        with _ui.render_card("Market Snapshot", icon="🌐"):
+            st.metric("BTC", "$65,000")
+            st.metric("ETH", "$3,200")
+
+    Args:
+        title:   Optional card title (displayed in small caps above content).
+        icon:    Optional emoji icon prepended to the title.
+        accent:  Accent color for the left border stripe (hex or CSS var).
+        padding: Inner padding CSS value.
+        compact: If True, uses tighter padding.
+    """
+    pad = "12px 14px" if compact else padding
+    header_html = ""
+    if icon or title:
+        label = f"{icon} {title}" if icon and title else (icon or title)
+        header_html = (
+            f'<div style="font-size:11px;font-weight:600;color:rgba(168,180,200,0.55);'
+            f'text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px">{label}</div>'
+        )
+    st.markdown(
+        f'<div style="background:rgba(14,18,30,0.72);border:1px solid rgba(255,255,255,0.07);'
+        f'border-left:3px solid {accent};border-radius:12px;padding:{pad};margin-bottom:12px">'
+        f'{header_html}',
+        unsafe_allow_html=True,
+    )
+    try:
+        yield
+    finally:
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 # ── Signal direction pill ──────────────────────────────────────────────────────
 
 _PILL_CFG = {

@@ -721,12 +721,10 @@ st.sidebar.markdown("---")
 # Advanced:     all 6 pages
 _NAV_BEGINNER = [
     "📊 My Signals",
-    "📋 My Trades",
     "🤖 AI Assistant",
 ]
 _NAV_INTERMEDIATE = [
     "📊 My Signals",
-    "📋 My Trades",
     "🤖 AI Assistant",
     "📈 Performance",
     "⚡ Opportunities",
@@ -735,7 +733,6 @@ _NAV_ADVANCED = [
     "📊 My Signals",
     "⚙️ Settings",
     "📈 Performance",
-    "📋 My Trades",
     "⚡ Opportunities",
     "🤖 AI Assistant",
 ]
@@ -759,13 +756,17 @@ _PAGE_MAP = {
     "⚙️ Settings":      "Config Editor",
     "📈 Performance":   "Backtest Viewer",
     "📈 Performance History": "Backtest Viewer",
-    "📋 My Trades":     "Trade Log & History",
     "⚡ Opportunities": "Arbitrage",
     "⚡ Arbitrage":     "Arbitrage",
     "🤖 AI Assistant":  "Agent",
     "🤖 AI Agent":      "Agent",
 }
-page = _PAGE_MAP.get(page, page)
+# Override page if a programmatic navigation target was set (e.g. "Configure Alerts" button)
+_nav_override = st.session_state.pop("_nav_target", None)
+if _nav_override:
+    page = _nav_override
+else:
+    page = _PAGE_MAP.get(page, page)
 
 # ──────────────────────────────────────────────
 # SIDEBAR: AUTO-SCAN (Item 4 — compact for beginners)
@@ -861,200 +862,75 @@ with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
         _save_alerts_config_and_clear(_alert_cfg)
 
 # ──────────────────────────────────────────────
-# SIDEBAR: TELEGRAM ALERTS
+# SIDEBAR: ALERT TOGGLES (compact — full config in Settings → Alerts)
 # ──────────────────────────────────────────────
-with st.sidebar.expander("🔔 Telegram Alerts", expanded=False):
-    _alert_cfg2 = _sidebar_alerts_cfg.copy()
+st.sidebar.markdown(
+    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
+    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
+    'Alerts</span>',
+    unsafe_allow_html=True,
+)
+_alert_cfg_sidebar = _sidebar_alerts_cfg.copy()
+_alerts_changed = False
 
-    tg_enabled = st.toggle(
-        "Enable Telegram Alerts",
-        value=_alert_cfg2.get("telegram_enabled", False),
-        key="tg_enabled",
-    )
-    tg_token = st.text_input(
-        "Bot Token",
-        value=_alert_cfg2.get("telegram_token", ""),
-        type="password",
-        placeholder="123456:ABC-DEF...",
-        key="tg_token",
-        disabled=not tg_enabled,
-    )
-    tg_chat_id = st.text_input(
-        "Chat ID",
-        value=_alert_cfg2.get("telegram_chat_id", ""),
-        placeholder="-1001234567890 or your user ID",
-        key="tg_chat_id",
-        disabled=not tg_enabled,
-    )
-    tg_min_conf = st.slider(
-        "Alert threshold (%)",
-        min_value=50, max_value=95,
-        value=int(_alert_cfg2.get("min_confidence", 70)),
-        step=5,
-        key="tg_min_conf",
-        disabled=not tg_enabled,
-    )
+_tg_on = st.sidebar.toggle(
+    "🔔 Telegram",
+    value=_alert_cfg_sidebar.get("telegram_enabled", False),
+    key="sb_tg_toggle",
+    help="Enable Telegram alerts for high-confidence signals. Configure token/chat ID in Settings → Alerts.",
+)
+if _tg_on != _alert_cfg_sidebar.get("telegram_enabled", False):
+    _alert_cfg_sidebar["telegram_enabled"] = _tg_on
+    _alerts_changed = True
 
-    col_save_tg, col_test_tg = st.columns(2)
-    with col_save_tg:
-        if st.button("Save", key="tg_save", width="stretch"):
-            _alert_cfg2.update({
-                "telegram_enabled": tg_enabled,
-                "telegram_token": tg_token.strip(),
-                "telegram_chat_id": tg_chat_id.strip(),
-                "min_confidence": tg_min_conf,
-            })
-            _save_alerts_config_and_clear(_alert_cfg2)
-            st.success("Saved!")
-    with col_test_tg:
-        if st.button("Test", key="tg_test", width="stretch", disabled=not tg_enabled):
-            ok, err = _alerts.send_telegram(
-                tg_token.strip(), tg_chat_id.strip(),
-                "✅ <b>Crypto Signal Model</b>\nTelegram alert test — connection successful!"
-            )
-            if ok:
-                st.success("Message sent!")
-            else:
-                st.error(f"Failed: {err}")
+_em_on = st.sidebar.toggle(
+    "📧 Email",
+    value=_alert_cfg_sidebar.get("email_enabled", False),
+    key="sb_em_toggle",
+    help="Enable email alerts. Configure in Settings → Alerts.",
+)
+if _em_on != _alert_cfg_sidebar.get("email_enabled", False):
+    _alert_cfg_sidebar["email_enabled"] = _em_on
+    _alerts_changed = True
 
-    st.caption("Get a bot token from @BotFather on Telegram.\nGet your chat ID from @userinfobot.")
+_dc_on = st.sidebar.toggle(
+    "💬 Discord",
+    value=_alert_cfg_sidebar.get("discord_enabled", False),
+    key="sb_dc_toggle",
+    help="Enable Discord webhook alerts. Configure in Settings → Alerts.",
+)
+if _dc_on != _alert_cfg_sidebar.get("discord_enabled", False):
+    _alert_cfg_sidebar["discord_enabled"] = _dc_on
+    _alerts_changed = True
+
+if _alerts_changed:
+    _save_alerts_config_and_clear(_alert_cfg_sidebar)
+
+if st.sidebar.button("⚙️ Configure Alerts", key="sb_cfg_alerts_btn", width="stretch"):
+    st.session_state["_nav_target"] = "Config Editor"
+    st.session_state["_settings_tab"] = "Alerts"
+    st.rerun()
 
 # ──────────────────────────────────────────────
-# SIDEBAR: AUTO-REFRESH
+# SIDEBAR: AUTO-REFRESH (compact inline)
 # ──────────────────────────────────────────────
-with st.sidebar.expander("🔄 Auto-Refresh", expanded=False):
-    _ar_enabled = st.toggle(
-        "Refresh Dashboard Live",
-        value=st.session_state.get("auto_refresh_enabled", False),
-        key="auto_refresh_toggle",
-    )
-    st.session_state["auto_refresh_enabled"] = _ar_enabled
-    _ar_options = {"10 seconds": 10, "30 seconds": 30, "1 minute": 60, "5 minutes": 300}
-    _ar_label = st.selectbox(
-        "Refresh interval",
+_ar_enabled = st.sidebar.toggle(
+    "🔄 Live Refresh",
+    value=st.session_state.get("auto_refresh_enabled", False),
+    key="auto_refresh_toggle",
+    help="Automatically reload the dashboard at the selected interval.",
+)
+st.session_state["auto_refresh_enabled"] = _ar_enabled
+if _ar_enabled:
+    _ar_options = {"30s": 30, "1m": 60, "5m": 300}
+    _ar_label = st.sidebar.selectbox(
+        "Interval",
         options=list(_ar_options.keys()),
         index=1,
         key="auto_refresh_interval_label",
-        disabled=not _ar_enabled,
+        label_visibility="collapsed",
     )
     st.session_state["auto_refresh_interval"] = _ar_options[_ar_label]
-    if _ar_enabled:
-        st.caption(f"Dashboard reloads every {_ar_label}.")
-    else:
-        st.caption("Enable to keep dashboard live.")
-
-# ──────────────────────────────────────────────
-# SIDEBAR: EMAIL ALERTS
-# ──────────────────────────────────────────────
-with st.sidebar.expander("📧 Email Alerts", expanded=False):
-    _alert_cfg_em = _sidebar_alerts_cfg.copy()
-    em_enabled = st.toggle(
-        "Enable Email Alerts",
-        value=_alert_cfg_em.get("email_enabled", False),
-        key="em_enabled",
-    )
-    em_to = st.text_input(
-        "Recipient email",
-        value=_alert_cfg_em.get("email_to", ""),
-        placeholder="you@example.com",
-        key="em_to",
-        disabled=not em_enabled,
-    )
-    em_from = st.text_input(
-        "Sender email (Gmail)",
-        value=_alert_cfg_em.get("email_from", ""),
-        placeholder="yourbot@gmail.com",
-        key="em_from",
-        disabled=not em_enabled,
-    )
-    em_pass = st.text_input(
-        "App password",
-        value=_alert_cfg_em.get("email_pass", ""),
-        type="password",
-        placeholder="Gmail App Password (not your main password)",
-        key="em_pass",
-        disabled=not em_enabled,
-    )
-    em_min_conf = st.slider(
-        "Alert threshold (%)",
-        min_value=50, max_value=95,
-        value=int(_alert_cfg_em.get("email_min_confidence", 70)),
-        step=5,
-        key="em_min_conf",
-        disabled=not em_enabled,
-    )
-    col_save_em, col_test_em = st.columns(2)
-    with col_save_em:
-        if st.button("Save", key="em_save", width="stretch"):
-            _alert_cfg_em.update({
-                "email_enabled": em_enabled,
-                "email_to": em_to.strip(),
-                "email_from": em_from.strip(),
-                "email_pass": em_pass,
-                "email_min_confidence": em_min_conf,
-            })
-            _save_alerts_config_and_clear(_alert_cfg_em)
-            st.success("Saved!")
-    with col_test_em:
-        if st.button("Test", key="em_test", width="stretch", disabled=not em_enabled):
-            ok, err = _alerts.send_email_alert(
-                em_from.strip(), em_pass, em_to.strip(),
-                "Crypto Signal Model — Test Alert",
-                "✅ Email alert test successful. Your email alerts are configured correctly.",
-            )
-            if ok:
-                st.success("Email sent!")
-            else:
-                st.error(f"Failed: {err}")
-    st.caption("Use a Gmail App Password (Settings → Security → 2FA → App passwords).")
-
-# ──────────────────────────────────────────────
-# SIDEBAR: DISCORD ALERTS
-# ──────────────────────────────────────────────
-with st.sidebar.expander("💬 Discord Alerts", expanded=False):
-    _alert_cfg_dc = _sidebar_alerts_cfg.copy()
-    dc_enabled = st.toggle(
-        "Enable Discord Alerts",
-        value=_alert_cfg_dc.get("discord_enabled", False),
-        key="dc_enabled",
-    )
-    dc_webhook = st.text_input(
-        "Webhook URL",
-        value=_alert_cfg_dc.get("discord_webhook_url", ""),
-        type="password",
-        placeholder="https://discord.com/api/webhooks/...",
-        key="dc_webhook",
-        disabled=not dc_enabled,
-    )
-    dc_min_conf = st.slider(
-        "Alert threshold (%)",
-        min_value=50, max_value=95,
-        value=int(_alert_cfg_dc.get("discord_min_confidence", 70)),
-        step=5,
-        key="dc_min_conf",
-        disabled=not dc_enabled,
-    )
-    col_save_dc, col_test_dc = st.columns(2)
-    with col_save_dc:
-        if st.button("Save", key="dc_save", width="stretch"):
-            _alert_cfg_dc.update({
-                "discord_enabled": dc_enabled,
-                "discord_webhook_url": dc_webhook.strip(),
-                "discord_min_confidence": dc_min_conf,
-            })
-            _save_alerts_config_and_clear(_alert_cfg_dc)
-            st.success("Saved!")
-    with col_test_dc:
-        if st.button("Test", key="dc_test", width="stretch", disabled=not dc_enabled):
-            ok, err = _alerts.send_discord(
-                dc_webhook.strip(),
-                "✅ **Crypto Signal Model** — Discord alert test, connection successful!"
-            )
-            if ok:
-                st.success("Message sent!")
-            else:
-                st.error(f"Failed: {err}")
-    st.caption("Create a webhook: Discord channel → Edit → Integrations → Webhooks → New Webhook.")
 
 # ──────────────────────────────────────────────
 # SIDEBAR: LIVE PRICE FEED STATUS
@@ -1566,2007 +1442,2039 @@ def page_dashboard():
     if hc and _user_lv != "beginner":
         pairs_str = ", ".join(r["pair"] for r in hc)
         st.success(f"⚡ Top Picks this scan — the model's highest-confidence opportunities: **{pairs_str}**")
-
-    # ── Item 9: 3-step micro-tutorial (beginner first visit) ─────────────────
-    _ui.render_micro_tutorial()
-
-    # ── Item 17: Data freshness dot ───────────────────────────────────────────
-    _scan_ts_str = st.session_state.get("scan_timestamp")
-    _scan_ts_unix: float | None = None
-    if _scan_ts_str:
-        try:
-            import datetime as _dt
-            _scan_ts_unix = _dt.datetime.fromisoformat(str(_scan_ts_str)).timestamp()
-        except Exception:
-            pass
-    st.markdown(
-        _ui.freshness_dot_html(_scan_ts_unix, max_age_sec=900, label="Scan data"),
-        unsafe_allow_html=True,
-    )
-
-    # ── Items 1 & 2: Today's Top Picks Hero Panel (beginner first, always) ───
-    st.markdown(
-        _ui.top_picks_hero_html(results, ws_prices=_live_prices),
-        unsafe_allow_html=True,
-    )
-
-    # ── Item 11: How This Model Works trust card (collapsible) ───────────────
-    if _user_lv in ("beginner", "intermediate"):
-        with st.expander("🔬 How does this model work?", expanded=False):
-            _bt_df  = _cached_backtest_df()
-            _wr_raw = 0.0
-            if not _bt_df.empty and "result" in _bt_df.columns:
-                _wins = (_bt_df["result"] == "WIN").sum()
-                _wr_raw = _wins / max(len(_bt_df), 1) * 100
-            st.markdown(
-                _ui.how_it_works_html(win_rate=_wr_raw, n_months=3, n_indicators=24),
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("---")
-
-    # ── F&G visual gauge + summary metrics ────────────────────────────────────
-    _fng_r0     = results[0] if results else {}   # A4: guard (belt-and-suspenders — return above should fire first)
-    _fng_val    = _fng_r0.get("fng_value", 50)
-    _fng_cat    = _fng_r0.get("fng_category", "Neutral")
-    _ac_raw  = sum(r.get("confidence_avg_pct") or 0 for r in results) / max(len(results), 1)
-    avg_conf = round(_ac_raw if _ac_raw == _ac_raw else 0.0, 1)  # APP-21: NaN guard
-    buy_count   = sum(1 for r in results if "BUY"  in r.get("direction", ""))
-    sell_count  = sum(1 for r in results if "SELL" in r.get("direction", ""))
-
-    _fng_col, _metrics_col = st.columns([2, 3])
-    with _fng_col:
-        st.markdown(_ui.fng_gauge_html(_fng_val, _fng_cat), unsafe_allow_html=True)
-    with _metrics_col:
-        mc = st.columns(4)
-        mc[0].metric("Coins Scanned", len(results), help=_ui.HELP_PAIRS_SCANNED)
-        mc[1].metric("Top Picks ⚡", len(hc),       help=_ui.HELP_HIGH_CONF)
-        mc[2].metric("Avg Strength", f"{avg_conf}%", help=_ui.HELP_AVG_CONF)
-        _signal_label = f"▲{buy_count} Buy · ▼{sell_count} Sell"
-        mc[3].metric("Signals", _signal_label,
-                     help=_ui.HELP_BUY_SIGNALS + " " + _ui.HELP_SELL_SIGNALS)
-
-    # ── Action CTA — best opportunity card (beginner-focused) ─────────────────
-    if hc:
-        _best = hc[0]
-        _ui.scan_action_cta(
-            pair      = _best["pair"],
-            direction = _best.get("direction", ""),
-            conf      = _best.get("confidence_avg_pct", 0),
-            entry     = _best.get("entry"),
-            stop      = _best.get("stop_loss"),
-            exit_     = _best.get("exit"),
-        )
-
-    # ── Market regime banner + Hurst / Squeeze context ────────────────────────
-    try:
-        _r0_tf_vals = list(results[0].get("timeframes", {}).values()) if results else []
-        _r0_tf = _r0_tf_vals[0] if _r0_tf_vals else {}
-        _regime_str = _r0_tf.get("regime", "Neutral: Unknown")
-        _regime_key = _regime_str.split(":")[0].strip().split(" ")[-1] if ":" in _regime_str else "Neutral"
-        # Map HMM regime strings to 4-state keys
-        _regime_map = {"Trending": "BULL", "Ranging": "RANGING", "Neutral": "RANGING", "Volatile": "CRISIS"}
-        _regime_4 = _regime_map.get(_regime_key, "RANGING")
-        _hurst_val = _r0_tf.get("hurst", None)
-        _squeeze_sig = _r0_tf.get("squeeze_signal", "NO_SQUEEZE")
-        st.markdown(
-            _ui.regime_banner_html(
-                regime=_regime_4,
-                hurst=float(_hurst_val) if _hurst_val is not None else None,
-                squeeze_active=("SQUEEZE" in str(_squeeze_sig)),
-            ),
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        pass
-
-    # ── Top Movers bento card (3 gainers / 3 losers from CoinGecko) ──────────
-    # PERF-20: route through cached wrapper (2-min TTL) instead of direct API call
-    try:
-        _movers = _cached_top_movers(top_n=3)
-        _gainers = _movers.get("gainers", [])
-        _losers  = _movers.get("losers", [])
-        if _gainers or _losers:
-            st.markdown(_ui.top_movers_card_html(_gainers, _losers), unsafe_allow_html=True)
-    except Exception:
-        pass
-
-    st.markdown("---")
-
-    # ── Blood in the Streets · DCA Multiplier · Macro Overlay (Group 3) ──────
-    # F6 — data freshness badges for macro panels
-    _fb_cols = st.columns(3)
-    with _fb_cols[0]:
-        st.markdown(_freshness_badge("fred_macro",      3600, "FRED Macro"),     unsafe_allow_html=True)
-    with _fb_cols[1]:
-        st.markdown(_freshness_badge("yfinance_macro",  3600, "YF Macro"),       unsafe_allow_html=True)
-    with _fb_cols[2]:
-        st.markdown(_freshness_badge("coinalyze_funding", 300, "Funding Rates"), unsafe_allow_html=True)
-
-    try:
-        _fg_val3   = results[0].get("fng_value", 50) if results else 50
-        _btc_res   = next((r for r in results if r.get("pair") == "BTC/USDT"), {})
-        _btc_rsi3  = (_btc_res.get("timeframes", {}).get("1d", {}) or {}).get("rsi", None)
-        _bits3     = _cached_blood_in_streets(_fg_val3, _btc_rsi3)
-        _dca_m3    = _bits3["dca_multiplier"]
-        _macro3    = _cached_macro_signal_adjustment()
-        # Only render if signal is notable (not all-normal)
-        if _bits3["signal"] != "NORMAL" or _macro3["adjustment"] != 0.0:
-            _bc3    = {"BLOOD_IN_STREETS": "#ef4444", "EXTREME_FEAR": "#f59e0b", "NORMAL": "#6b7280"}.get(_bits3["signal"], "#6b7280")
-            _bg3    = {"BLOOD_IN_STREETS": "#1f0000",  "EXTREME_FEAR": "#1c1200", "NORMAL": "#111827"}.get(_bits3["signal"], "#111827")
-            _dc3    = {0.0: "#ef4444", 0.5: "#f97316", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
-            _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
-            _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f97316", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
-            _sk3    = _cached_deribit_options_skew("BTC")
-            _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "N/A"), "#6b7280")
-            _b1, _b2, _b3, _b4 = st.columns(4)
-            with _b1:
-                st.markdown(f"""
-<div style="background:{_bg3};border:1px solid {_bc3};border-top:3px solid {_bc3};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Blood in Streets</div>
-  <div style="font-size:18px;font-weight:700;color:{_bc3}">{_bits3["signal"].replace("_", " ")}</div>
-  <div style="font-size:12px;color:#9ca3af;margin-top:4px">{_bits3["strength"]} · {_bits3["criteria_met"]}/3 criteria</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">{_bits3["description"]}</div>
-  <div style="margin-top:10px;font-size:11px;color:#6b7280">
-    {"✅" if _bits3["criteria"]["extreme_fear"] else "❌"} F&amp;G≤25 &nbsp;
-    {"✅" if _bits3["criteria"]["rsi_oversold"] else "❌"} RSI≤30 &nbsp;
-    {"✅" if _bits3["criteria"]["exchange_outflow"] else "❌"} Outflow
-  </div>
-</div>
-""", unsafe_allow_html=True)
-            with _b2:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dc3};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">DCA Multiplier</div>
-  <div style="font-size:36px;font-weight:700;color:{_dc3}">{_dca_m3}×</div>
-  <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_dl3}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">F&amp;G: {_fg_val3}/100 · BTC RSI-1D: {f"{_btc_rsi3:.1f}" if _btc_rsi3 else "—"}</div>
-</div>
-""", unsafe_allow_html=True)
-            with _b3:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_rc3};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Macro Overlay</div>
-  <div style="font-size:18px;font-weight:700;color:{_rc3}">{_macro3["regime"].replace("_", " ")}</div>
-  <div style="font-size:12px;color:#9ca3af;margin-top:4px">Confidence adj: {_macro3["adjustment"]:+.0f} pts</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">DXY {_macro3["dxy"]:.1f} ({_macro3["dxy_signal"]}) · 10Y {_macro3["ten_yr"]:.2f}% ({_macro3["yr_signal"]})</div>
-</div>
-""", unsafe_allow_html=True)
-            with _b4:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_skc3};border-radius:10px;padding:16px">
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Options Skew (Deribit)</div>
-  <div style="font-size:18px;font-weight:700;color:{_skc3}">{_sk3.get("signal", "N/A")}</div>
-  <div style="font-size:12px;color:#9ca3af;margin-top:4px">Skew: {f"{_sk3['skew']:+.1f}%" if "skew" in _sk3 else "—"}</div>
-  <div style="font-size:11px;color:#6b7280;margin-top:8px">
-    Put IV {f"{_sk3['put_iv']:.1f}%" if "put_iv" in _sk3 else "—"} · Call IV {f"{_sk3['call_iv']:.1f}%" if "call_iv" in _sk3 else "—"}
-  </div>
-  {f'<div style="font-size:10px;color:#4b5563;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
-</div>
-""", unsafe_allow_html=True)
-    except Exception:
-        pass
-
-    # ── S25: Macro Intelligence panel ────────────────────────────────────────
-    with st.expander("🌐 Macro Intelligence — M2 · Yield Curve · DXY · VIX Term Structure", expanded=False):
-        try:
-            _me = data_feeds.get_macro_enrichment()
-            _sig_col = {
-                "RISK_ON":       "#00d4aa", "MILD_RISK_ON":  "#22c55e",
-                "NEUTRAL":       "#6b7280", "MILD_RISK_OFF": "#f59e0b",
-                "RISK_OFF":      "#ef4444",
-            }
-            _sig_bg  = {
-                "RISK_ON":       "rgba(0,212,170,0.08)", "MILD_RISK_ON":  "rgba(34,197,94,0.08)",
-                "NEUTRAL":       "rgba(107,114,128,0.08)", "MILD_RISK_OFF": "rgba(245,158,11,0.08)",
-                "RISK_OFF":      "rgba(239,68,68,0.08)",
-            }
-            _ms = _me["macro_signal"]
-            _mc = _sig_col.get(_ms, "#6b7280")
-            _mb = _sig_bg.get(_ms, "rgba(107,114,128,0.08)")
-
-            # Composite score card
-            st.markdown(
-                f'<div style="background:{_mb};border:1px solid {_mc}33;border-left:4px solid {_mc};'
-                f'border-radius:8px;padding:12px 16px;margin-bottom:12px">'
-                f'<span style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px">Macro Signal</span>'
-                f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{_mc}">{_ms.replace("_"," ")}</span>'
-                f'&nbsp;&nbsp;<span style="font-size:13px;color:#9ca3af">Score: {_me["macro_score"]:+d} / 4</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-            _mi_c1, _mi_c2, _mi_c3, _mi_c4 = st.columns(4)
-
-            # M2 trend card
-            _m2c = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_me["m2_trend"], "#6b7280")
-            with _mi_c1:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_m2c};border-radius:10px;padding:14px">
-  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">Global M2</div>
-  <div style="font-size:16px;font-weight:700;color:{_m2c}">{_me["m2_trend"]}</div>
-  <div style="font-size:11px;color:#9ca3af;margin-top:4px">{_me["m2_pct_change_90d"]:+.2f}% (90d)</div>
-  <div style="font-size:10px;color:#4b5563;margin-top:6px">Expanding = more liquidity = risk-on tailwind</div>
-</div>""", unsafe_allow_html=True)
-
-            # Yield curve card
-            _ycc = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_me["yield_curve"], "#6b7280")
-            with _mi_c2:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_ycc};border-radius:10px;padding:14px">
-  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">Yield Curve (2Y/10Y)</div>
-  <div style="font-size:16px;font-weight:700;color:{_ycc}">{_me["yield_curve"]}</div>
-  <div style="font-size:11px;color:#9ca3af;margin-top:4px">Spread: {_me["yield_spread_pp"]:+.2f}pp</div>
-  <div style="font-size:10px;color:#4b5563;margin-top:6px">Inverted = recession signal; Normal = growth</div>
-</div>""", unsafe_allow_html=True)
-
-            # DXY trend card
-            _dxc = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_me["dxy_trend"], "#6b7280")
-            with _mi_c3:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dxc};border-radius:10px;padding:14px">
-  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">DXY (US Dollar)</div>
-  <div style="font-size:16px;font-weight:700;color:{_dxc}">{_me["dxy_trend"].replace("_"," ")}</div>
-  <div style="font-size:11px;color:#9ca3af;margin-top:4px">DXY {_me["dxy"]:.1f}</div>
-  <div style="font-size:10px;color:#4b5563;margin-top:6px">Weak dollar = crypto tailwind; Strong = headwind</div>
-</div>""", unsafe_allow_html=True)
-
-            # VIX term structure card
-            _vtc = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_me["vix_structure"], "#6b7280")
-            with _mi_c4:
-                st.markdown(f"""
-<div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_vtc};border-radius:10px;padding:14px">
-  <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">VIX Term Structure</div>
-  <div style="font-size:16px;font-weight:700;color:{_vtc}">{_me["vix_structure"]}</div>
-  <div style="font-size:11px;color:#9ca3af;margin-top:4px">VIX {_me["vix"]:.1f} · VIX3M {_me["vix3m"]:.1f} (Δ{_me["vix_spread"]:+.1f})</div>
-  <div style="font-size:10px;color:#4b5563;margin-top:6px">Contango = calm; Backwardation = crisis/fear spike</div>
-</div>""", unsafe_allow_html=True)
-
-            if st.session_state.get("user_level", "beginner") == "beginner":
-                _ux = {
-                    "RISK_ON":      "The macro environment strongly supports higher risk assets like crypto right now.",
-                    "MILD_RISK_ON": "Conditions are moderately supportive for risk assets.",
-                    "NEUTRAL":      "Macro conditions are mixed — no strong directional push.",
-                    "MILD_RISK_OFF":"Some macro headwinds are present. Be more cautious with position sizes.",
-                    "RISK_OFF":     "Multiple macro headwinds active. This is a difficult environment for crypto.",
-                }
-                st.caption(_ux.get(_ms, ""))
-        except Exception as _me_err:
-            st.caption(f"Macro enrichment unavailable: {_me_err}")
-
-    st.markdown("---")
-
-    # ── Wyckoff Phase Summary (item 23) ─────────────────────────────────────────
-    _wyck_results = [(r.get("pair",""), r.get("wyckoff_phase","Unknown"), r.get("wyckoff_conf",0),
-                      r.get("wyckoff_desc",""), r.get("wyckoff_plain",""),
-                      r.get("wyckoff_spring",False), r.get("wyckoff_upthrust",False))
-                     for r in results if r.get("wyckoff_phase","Unknown") != "Unknown"]
-    if _wyck_results:
-        _user_level_wyck = st.session_state.get("user_level", "beginner")
-        _ui.section_header("Wyckoff Phase Analysis",
-                           "Richard Wyckoff's 4-phase market cycle: Accumulation → Markup → Distribution → Markdown. "
-                           "Identifies where institutional money is flowing.",
-                           icon="🔄")
-        _WYCK_COLOR = {
-            "Accumulation": "#00d4aa", "Markup": "#22c55e",
-            "Distribution": "#f59e0b", "Markdown": "#ef4444",
-        }
-        _WYCK_BG = {
-            "Accumulation": "rgba(0,212,170,0.08)", "Markup": "rgba(34,197,94,0.08)",
-            "Distribution": "rgba(245,158,11,0.08)", "Markdown": "rgba(239,68,68,0.08)",
-        }
-        _WYCK_ICON = {
-            "Accumulation": "🏦", "Markup": "📈",
-            "Distribution": "🏧", "Markdown": "📉",
-        }
-        if _user_level_wyck == "beginner":
-            # Show the top 3 cards with plain English
-            _wc = st.columns(min(3, len(_wyck_results)))
-            for _ci, (_wp, _wph, _wco, _wd, _wpl, _wsp, _wup) in enumerate(_wyck_results[:3]):
-                with _wc[_ci]:
-                    _wcc = _WYCK_COLOR.get(_wph, "#64748b")
-                    _wcb = _WYCK_BG.get(_wph, "rgba(100,116,139,0.08)")
-                    _wico = _WYCK_ICON.get(_wph, "⬜")
-                    _extra = " 🔔 SPRING" if _wsp else (" 🔔 UPTHRUST" if _wup else "")
-                    st.markdown(
-                        f"<div style='background:{_wcb};border:1px solid {_wcc}33;"
-                        f"border-top:3px solid {_wcc};border-radius:10px;padding:14px'>"
-                        f"<div style='font-size:10px;color:#6b7280;text-transform:uppercase;"
-                        f"letter-spacing:0.8px'>{_wp.replace('/USDT','')}</div>"
-                        f"<div style='font-size:16px;font-weight:700;color:{_wcc};margin-top:2px'>"
-                        f"{_wico} {_wph}{_extra}</div>"
-                        f"<div style='font-size:11px;color:#9ca3af;margin-top:6px'>{_wpl}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-        else:
-            # Table view for intermediate/advanced
-            _phase_counts: dict = {}
-            for _, _wph, _, _, _, _wsp, _wup in _wyck_results:
-                _phase_counts[_wph] = _phase_counts.get(_wph, 0) + 1
-            _pc = st.columns(4)
-            for _pi, _ph in enumerate(["Accumulation", "Markup", "Distribution", "Markdown"]):
-                with _pc[_pi]:
-                    _cnt = _phase_counts.get(_ph, 0)
-                    _wcc = _WYCK_COLOR.get(_ph, "#64748b")
-                    _wico = _WYCK_ICON.get(_ph, "⬜")
-                    st.markdown(
-                        f"<div style='text-align:center;background:{_WYCK_BG.get(_ph,'rgba(100,116,139,0.08)')};"
-                        f"border:1px solid {_wcc}33;border-radius:8px;padding:12px'>"
-                        f"<div style='font-size:12px;color:#6b7280'>{_wico} {_ph}</div>"
-                        f"<div style='font-size:28px;font-weight:700;color:{_wcc}'>{_cnt}</div>"
-                        f"<div style='font-size:10px;color:#4b5563'>pairs</div></div>",
-                        unsafe_allow_html=True,
-                    )
-            if _user_level_wyck == "advanced":
-                # Detailed table
-                _spring_pairs   = [_wp for _wp, _, _, _, _, _wsp, _ in _wyck_results if _wsp]
-                _upthrust_pairs = [_wp for _wp, _, _, _, _, _, _wup in _wyck_results if _wup]
-                if _spring_pairs:
-                    st.markdown(
-                        f"<div style='margin-top:8px;font-size:12px;color:#00d4aa'>"
-                        f"🔔 Springs: {', '.join(p.replace('/USDT','') for p in _spring_pairs)}</div>",
-                        unsafe_allow_html=True,
-                    )
-                if _upthrust_pairs:
-                    st.markdown(
-                        f"<div style='font-size:12px;color:#f59e0b'>"
-                        f"🔔 Upthrusts: {', '.join(p.replace('/USDT','') for p in _upthrust_pairs)}</div>",
-                        unsafe_allow_html=True,
-                    )
-
-    # ── S24: Liquidation Pressure Monitor ────────────────────────────────────
-    with st.expander("💥 Liquidation Pressure Monitor — OI + Funding Rate Squeeze Risk", expanded=False):
-        st.caption(
-            "Estimates squeeze risk per pair by combining open interest (OKX, free) and "
-            "funding rates (Binance). High OI + extreme funding = more capital at risk of "
-            "cascade liquidation. Data is fetched on demand."
-        )
-        _liq_pairs = model.PAIRS[:12]
-        _liq_load  = st.button("🔄 Load Liquidation Data", key="btn_liq_load")
-        if _liq_load:
-            with st.spinner("Fetching OI + funding from OKX & Binance…", show_time=True):
-                _liq_data = data_feeds.get_liquidation_pressure(_liq_pairs)
-            st.session_state["liq_data"] = _liq_data
-
-        _liq_data = st.session_state.get("liq_data")
-        if _liq_data:
-            _liq_rows = []
-            for d in _liq_data:
-                _sq = d["squeeze_signal"]
-                _sq_icon = {"HIGH_RISK": "🔴", "ELEVATED": "🟡", "NORMAL": "🟢"}.get(_sq, "⚪")
-                _bias_icon = {"LONGS_HEAVY": "▲ Longs", "SHORTS_HEAVY": "▼ Shorts", "BALANCED": "■ Balanced"}.get(d["funding_bias"], "—")
-                _liq_rows.append({
-                    "Pair":            d["pair"].replace("/USDT", ""),
-                    "OI (USD)":        f"${d['oi_usd']/1e6:.0f}M" if d["oi_usd"] > 0 else "—",
-                    "OI Level":        d["oi_signal"],
-                    "Funding %":       f"{d['funding_rate_pct']:+.4f}%",
-                    "Bias":            _bias_icon,
-                    "Squeeze Score":   f"{d['squeeze_score']:.4f}",
-                    "Squeeze Risk":    f"{_sq_icon} {_sq}",
-                })
-            _liq_df = pd.DataFrame(_liq_rows)
-
-            def _color_sq(val: str) -> str:
-                if "HIGH_RISK" in val: return "color:#ef4444;font-weight:bold"
-                if "ELEVATED"  in val: return "color:#f59e0b"
-                return "color:#22c55e"
-
-            st.dataframe(
-                _liq_df.style.map(_color_sq, subset=["Squeeze Risk"]),
-                width="stretch", hide_index=True,
-            )
-
-            # Bar chart of squeeze scores
-            _top = [d for d in _liq_data if d["squeeze_score"] > 0][:10]
-            if _top:
-                _bar_pairs  = [d["pair"].replace("/USDT","") for d in _top]
-                _bar_scores = [d["squeeze_score"] for d in _top]
-                _bar_colors = ["#ef4444" if d["squeeze_signal"] == "HIGH_RISK" else
-                               "#f59e0b" if d["squeeze_signal"] == "ELEVATED" else
-                               "#22c55e" for d in _top]
-                _liq_fig = go.Figure(go.Bar(
-                    x=_bar_pairs, y=_bar_scores,
-                    marker_color=_bar_colors,
-                    hovertemplate="%{x}: %{y:.4f}<extra></extra>",
-                ))
-                _liq_fig.update_layout(
-                    height=220, margin=dict(l=0, r=0, t=10, b=0),
-                    xaxis_title="", yaxis_title="Squeeze Score",
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(_liq_fig, width="stretch")
-                st.caption(
-                    "Score = √(OI/1B) × |funding %| × 100. "
-                    "🔴 High Risk: large OI + extreme funding → cascade risk if price moves against dominant side."
-                )
-
-            if st.session_state.get("user_level", "beginner") == "beginner":
-                st.caption(
-                    "**What this means:** When lots of traders borrow money to bet in one direction "
-                    "(e.g., all betting price goes up), a sudden price drop can force them all to sell at once, "
-                    "causing a bigger crash — called a 'liquidation cascade.' This panel shows which coins are "
-                    "most at risk of that happening right now."
-                )
-        else:
-            st.info("Press **Load Liquidation Data** to analyse squeeze risk across pairs.")
-
-    st.markdown("---")
-
-    # ── Signal Heatmap — pairs × timeframes (Item 8: card list for beginners) ──
-    if _user_lv in ("beginner", "intermediate"):
-        _ui.section_header(
-            "All Signals — Ranked by Strength",
-            "Coins sorted from strongest to weakest signal. ▲ = potential buy, ▼ = potential sell, ■ = wait/unclear.",
-            icon="🏆",
-        )
-        st.markdown(_ui.signal_rank_list_html(results), unsafe_allow_html=True)
-        st.markdown("---")
-    else:
-        _ui.section_header("Signal Heatmap",
-                           "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",
-                           icon="🗺️")
-        _tf_list  = model.TIMEFRAMES
-        _hm_pairs = [r["pair"] for r in results]
-        _hm_conf  = []
-        _hm_text  = []
-        _hm_dir   = []
-        for r in results:
-            _tfd      = r.get("timeframes", {})
-            _row_conf = []
-            _row_text = []
-            _row_dir  = []
-            for tf in _tf_list:
-                _cell = _tfd.get(tf, {})
-                _c    = float(_cell.get("confidence", 0) or 0)
-                _d    = str(_cell.get("direction", "NO DATA") or "NO DATA")
-                _row_conf.append(_c)
-                _row_text.append(f"{int(_c)}%\n{_d[:3]}")
-                _row_dir.append(_d)
-            _hm_conf.append(_row_conf)
-            _hm_text.append(_row_text)
-            _hm_dir.append(_row_dir)
-
-        def _dir_to_val(d: str) -> float:
-            d = d.upper()
-            if "STRONG BUY"  in d: return  1.0
-            if "BUY"         in d: return  0.5
-            if "STRONG SELL" in d: return -1.0
-            if "SELL"        in d: return -0.5
-            return 0.0
-
-        _hm_color = [[_dir_to_val(d) for d in row] for row in _hm_dir]
-        _hm_fig   = go.Figure(data=go.Heatmap(
-            z            = _hm_color,
-            x            = _tf_list,
-            y            = _hm_pairs,
-            text         = _hm_text,
-            texttemplate = "%{text}",
-            textfont     = {"size": 9},
-            colorscale   = [
-                [0.0,  "#ff4b4b"],
-                [0.25, "#ffaaaa"],
-                [0.5,  "#888888"],
-                [0.75, "#99e6cc"],
-                [1.0,  "#00d4aa"],
-            ],
-            zmin=-1, zmax=1,
-            showscale=False,
-            hovertemplate="<b>%{y}</b> / %{x}<br>%{text}<extra></extra>",
-        ))
-        _hm_fig.update_layout(
-            height=max(250, 32 * len(_hm_pairs) + 60),
-            margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor="#0e1117",
-            plot_bgcolor="#0e1117",
-            font=dict(color="#fafafa", size=9),
-            xaxis=dict(side="top", tickfont=dict(size=9)),
-            yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
-        )
-        st.plotly_chart(_hm_fig, width="stretch",
-                        config={"displayModeBar": False, "staticPlot": True})
-        st.markdown("---")
-
-    # ── Quick-View Card Grid — all coins at a glance (teen-friendly) ──────────
-    _ui.section_header(
-        "What To Do Right Now",
-        "Each card shows whether to BUY, SELL, or WAIT — score out of 10 shows how strong the signal is",
-        icon="🎯",
-    )
-    # PERF-28: use the single _live_prices fetched at the top of page_dashboard()
-    _all_ws_prices = _live_prices
-    # Sort: high-conf first, then by confidence descending for card grid
-    _grid_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
-    st.markdown(
-        _ui.coin_cards_grid_html(_grid_results, ws_prices=_all_ws_prices),
-        unsafe_allow_html=True,
-    )
-
-    # Quick-glance summary table (advanced users)
-    with st.expander("📋 Full Summary Table", expanded=False):
-        summary_rows = []
-        for r in results:
-            _st = _all_ws_prices.get(r["pair"])
-            _live_str = (
-                f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
-            )
-            _tp1 = r.get("tp1")
-            summary_rows.append({
-                "Coin": r["pair"],
-                "Price": _live_str,
-                "Signal": r.get("direction", "N/A"),
-                "Strength": f"{r.get('confidence_avg_pct', 0)}%",
-                "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
-                "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
-                "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
-                "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
-            })
-        st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), width="stretch")
-    st.markdown("---")
-
-    # Sort results: high-conf first, then by confidence descending
+    # Pre-compute shared variables used across multiple tabs
     sorted_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
-
-    # Fetch once — avoids N×2 disk reads of alerts_config.json (PERF-02)
     _exec_status = _exec.get_status()
     _exec_cfg    = _exec.get_exec_config()
 
-    # ── Scan Overview — Sparkline Mini-Grid (#60) ─────────────────────────────
-    _ui.section_header("Scan Overview", "Mini sparklines — 24h price trend for each pair at a glance. Green = up, Red = down.", icon="📈")
-    # #59 Mobile-responsive layout: 2-column grid on wide screens; note if only 1 result
-    _spk_n_results = len(sorted_results)
-    if _spk_n_results == 1:
-        st.caption("Single result — showing in single-column layout.")
-        _spk_n_cols = 1
-    else:
-        _spk_n_cols = min(_spk_n_results, 4)  # up to 4 columns; CSS grid handles responsive wrap
-    _spk_cols = st.columns(_spk_n_cols)
-    _spk_pairs_12 = [_sr["pair"] for _sr in sorted_results[:12]]
-    # PERF-27: fetch all sparklines in parallel (was sequential — N × round-trip latency)
-    try:
-        from concurrent.futures import ThreadPoolExecutor as _SpkTEx
-        def _fetch_spk(pair_):
+    # ─── 5-TAB DASHBOARD STRUCTURE ───────────────────────────────────────────
+    _dash_tab1, _dash_tab2, _dash_tab3, _dash_tab4, _dash_tab5 = st.tabs([
+        "🎯 Today",
+        "📊 All Coins",
+        "🔍 Coin Detail",
+        "🌐 Market Intel",
+        "🔬 Analysis",
+    ])
+
+    with _dash_tab1:
+        # ── Item 9: 3-step micro-tutorial (beginner first visit) ─────────────────
+        _ui.render_micro_tutorial()
+
+        # ── Item 17: Data freshness dot ───────────────────────────────────────────
+        _scan_ts_str = st.session_state.get("scan_timestamp")
+        _scan_ts_unix: float | None = None
+        if _scan_ts_str:
             try:
-                return data_feeds.fetch_sparkline_closes(pair_, n=24)
-            except Exception:
-                return []
-        with _SpkTEx(max_workers=min(len(_spk_pairs_12), 12)) as _spk_ex:
-            _spk_results = dict(zip(_spk_pairs_12, _spk_ex.map(_fetch_spk, _spk_pairs_12)))
-    except Exception:
-        _spk_results = {}
-    for _si, _sr in enumerate(sorted_results[:12]):  # max 12 cards in grid
-        _col_idx = _si % _spk_n_cols
-        with _spk_cols[_col_idx]:
-            _spk_closes = _spk_results.get(_sr["pair"], [])
-            _spk_html = _ui.scan_sparkline_card_html(
-                pair      = _sr["pair"],
-                direction = _sr.get("direction", "—"),
-                conf      = _sr.get("confidence_avg_pct", 0),
-                closes    = _spk_closes,
-            )
-            st.markdown(_spk_html, unsafe_allow_html=True)
-            st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
-    st.markdown("---")
-
-    # ── S1-S10 Advanced Analytics Panels ─────────────────────────────────────
-    _s_macro_regime = results[0].get("macro_regime", "MACRO_NEUTRAL") if results else "MACRO_NEUTRAL"
-    _s_altcoin      = results[0].get("altcoin_season", "MIXED") if results else "MIXED"
-
-    # S10 — Market Regime Banner (BULL / BEAR / SIDEWAYS from buy/sell majority + F&G)
-    try:
-        _ui.render_market_regime_banner(results, _fng_val, _s_macro_regime, _s_altcoin)
-    except Exception:
-        pass
-
-    # S1 — TTM Squeeze Momentum Panel
-    try:
-        _ui.render_ttm_squeeze_panel(_spk_results, results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S2 — Hurst Exponent Panel
-    try:
-        _ui.render_hurst_exponent_panel(_spk_results, results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S3 — RSI / MACD Divergence Panel
-    try:
-        _ui.render_rsi_macd_divergence_panel(results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S4 — Funding Rate Arbitrage Panel
-    try:
-        _ui.render_funding_rate_arb_panel(results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S5 — Liquidation Overlay Panel
-    try:
-        _ui.render_liquidation_overlay_panel(results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S6 — Social Momentum Panel
-    try:
-        _ui.render_social_momentum_panel(results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S7 — GitHub Developer Activity Panel
-    try:
-        _ui.render_github_dev_activity_panel(_sg_level_val)
-    except Exception:
-        pass
-
-    # S8 — Trader vs Investor Split Panel
-    try:
-        _ui.render_trader_investor_split(results, _sg_level_val)
-    except Exception:
-        pass
-
-    # S9 — Threshold Alerts Panel
-    try:
-        _ui.render_threshold_alerts_panel(results, _sg_level_val)
-    except Exception:
-        pass
-
-    st.markdown("---")
-
-    # ── Tier 2 Pairs Results (#88) — collapsible section ──────────────────────
-    if tier2_results:
-        with st.expander(
-            f"📊 Tier 2 Pairs — {len(tier2_results)} mid-cap coins scanned",
-            expanded=False,
-        ):
-            st.markdown(
-                '<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);'
-                'border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#f59e0b">'
-                '⚠️ <b>Tier 2 pairs have lower liquidity and may have less accurate signals.</b> '
-                'Use these results as supplementary context only — verify before acting.'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            # Summary metrics for Tier 2
-            _t2_hc = [r for r in tier2_results if r.get("high_conf")]
-            _t2_buy  = sum(1 for r in tier2_results if "BUY"  in r.get("direction", ""))
-            _t2_sell = sum(1 for r in tier2_results if "SELL" in r.get("direction", ""))
-            _t2_mc = st.columns(4)
-            _t2_mc[0].metric("Tier 2 Scanned", len(tier2_results))
-            _t2_mc[1].metric("Top Picks ⚡", len(_t2_hc))
-            _t2_mc[2].metric("Buy Signals", f"▲{_t2_buy}")
-            _t2_mc[3].metric("Sell Signals", f"▼{_t2_sell}")
-            # Coin cards for Tier 2
-            _t2_sorted = sorted(
-                tier2_results,
-                key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)),
-                reverse=True,
-            )
-            _all_ws_t2 = _live_prices  # PERF-28: reuse single ws prices fetch
-            st.markdown(
-                _ui.coin_cards_grid_html(_t2_sorted, ws_prices=_all_ws_t2),
-                unsafe_allow_html=True,
-            )
-            # Summary table
-            _t2_rows = []
-            for _t2r in _t2_sorted:
-                _t2_tp = _t2r.get("tp1")
-                _t2_rows.append({
-                    "Coin":       _t2r.get("pair", "N/A"),
-                    "Signal":     _t2r.get("direction", "N/A"),
-                    "Strength":   f"{_t2r.get('confidence_avg_pct', 0)}%",
-                    "Entry":      f"${_t2r['entry']:,.4f}"   if _t2r.get("entry")    else "N/A",
-                    "Take Profit":f"${_t2_tp:,.4f}"          if _t2_tp              else "N/A",
-                    "Stop Loss":  f"${_t2r['stop_loss']:,.4f}" if _t2r.get("stop_loss") else "N/A",
-                    "Top Pick":   "⚡ Yes" if _t2r.get("high_conf") else "—",
-                })
-            if _t2_rows:
-                st.dataframe(pd.DataFrame(_t2_rows).set_index("Coin"), width="stretch")
-    elif st.session_state.get("include_tier2"):
-        st.info("Tier 2 scan is enabled — run a new scan to include Tier 2 pairs.")
-
-    st.markdown("---")
-
-    # ── Coin Selector Dropdown ─────────────────────────────────────────────────
-    _ui.section_header("Dive Deeper — Pick a Coin", "Choose a coin below to see the full breakdown: entry price, stop loss, AI prediction, news sentiment, and more", icon="🔬")
-
-    def _pair_label(r):
-        _d  = r.get("direction", "N/A")
-        _c  = r.get("confidence_avg_pct", 0)
-        _ic = direction_color(_d)
-        _hc = "  ⚡ TOP PICK" if r.get("high_conf") else ""
-        _tr = "  🔥" if r.get("trending") else ""
-        # Risk indicator for the dropdown label
-        _pos = r.get("position_size_pct") or 10
-        if _c >= 70 and _pos <= 15:
-            _risk = "🟢 Low Risk"
-        elif _c >= 55 and _pos <= 25:
-            _risk = "🟡 Med Risk"
-        else:
-            _risk = "🔴 Higher Risk"
-        return f"{_ic}  {r['pair']}  ·  {_c:.0f}% strength  ·  {_d}  ·  {_risk}{_hc}{_tr}"
-
-    _pair_labels  = [_pair_label(r) for r in sorted_results]
-    _label_to_r   = dict(zip(_pair_labels, sorted_results))
-
-    _selected_label = st.selectbox(
-        "Choose a coin to inspect",
-        options=_pair_labels,
-        index=0,
-        label_visibility="collapsed",
-        key="coin_selector",
-    )
-    r = _label_to_r[_selected_label]
-    # PERF-24: prefer full result from module-level store (avoids session_state serialization)
-    pair = r["pair"]
-    r = _SCAN_RESULTS_STORE.get(pair, r)  # fall back to session_state copy if store not populated
-
-    # ── Selected Coin Detail Panel ─────────────────────────────────────────────
-    pair        = r["pair"]
-    conf        = r.get("confidence_avg_pct", 0)
-    direction   = r.get("direction", "N/A")
-    bias        = r.get("strategy_bias", "N/A")
-    mtf         = r.get("mtf_alignment", 0)
-    price       = r.get("price_usd")
-    entry       = r.get("entry")
-    exit_       = r.get("exit")
-    stop        = r.get("stop_loss")
-    pos_pct     = r.get("position_size_pct")
-    is_hc       = r.get("high_conf", False)
-    is_trending = r.get("trending", False)
-
-    _ui.signal_card_header(
-        pair=pair, direction=direction, conf=conf,
-        bias=bias, regime=r.get("regime", "N/A"), is_hc=is_hc,
-    )
-
-    # Signal strength visual dots + risk badge — beginner at-a-glance indicators
-    _str_dots  = _ui.signal_strength_stars(conf)
-    _risk_chip = _ui.risk_level_badge_html(conf, pos_pct)
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:16px;margin:-6px 0 10px 0">'
-        f'{_str_dots}'
-        f'<span style="opacity:0.3">|</span>'
-        f'{_risk_chip}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Plain English summary — designed for users unfamiliar with trading terms
-    _plain_summary = _ui.signal_plain_english(
-        pair=pair, direction=direction, conf=conf, mtf=mtf,
-        regime=r.get("regime", ""), entry=entry, stop=stop, exit_=exit_,
-    )
-    _ui.plain_english_box(_plain_summary, direction)
-
-    if is_trending:
-        st.markdown(
-            '<span style="display:inline-block;padding:2px 10px;border-radius:20px;'
-            'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
-            'color:#00d4aa;font-size:11px;font-weight:600;margin-bottom:6px">'
-            '🔥 Trending on CoinGecko right now</span>',
-            unsafe_allow_html=True,
-        )
-
-    # #26 Pi Cycle Top warning on the coin detail card
-    _r_pi_flags = r.get("signal_flags", [])
-    if "PI_CYCLE_TOP_WARNING" in _r_pi_flags:
-        st.warning(
-            "⚠️ **PI_CYCLE_TOP_WARNING** — Confidence capped at 30% (cycle top indicator active). "
-            "Exercise extreme caution with new BUY entries."
-        )
-
-    # ── Row 1: Price · Entry · Stop Loss ──────────────────────────────────────
-    top_cols = st.columns(3)
-    _live_tick = _ws.get_price(pair)
-    if _live_tick and "price" in _live_tick and "change_24h_pct" in _live_tick:
-        top_cols[0].metric(
-            "Current Price ⬤ LIVE",
-            f"${_live_tick['price']:,.4f}",
-            delta=f"{_live_tick['change_24h_pct']:+.2f}% today",
-            help="Live price from OKX.",
-        )
-    else:
-        top_cols[0].metric("Current Price", f"${price:,.4f}" if price else "N/A")
-    _entry_label = "Buy At" if "BUY" in direction.upper() else ("Sell At" if "SELL" in direction.upper() else "Entry Price")
-    top_cols[1].metric(_entry_label, f"${entry:,.4f}" if entry else "N/A",
-                       help="The price to enter this trade. Try to get close to this level.")
-    top_cols[2].metric("Stop Loss — Exit If Wrong", f"${stop:,.4f}" if stop else "N/A",
-                       help="If price hits this level, exit the trade to limit your loss.")
-
-    # ── Row 2: Take Profit · Signal Strength · Trade Size ─────────────────────
-    bot_cols = st.columns(3)
-    _tp1_val = r.get("tp1") or exit_
-    bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
-                       help="This is your TARGET — the price to sell at and take your profit. Think of it as the finish line.")
-    # Score out of 10 alongside % — research shows teens prefer a 1-10 scale
-    _score_10 = max(1, min(10, round(conf / 10)))
-    bot_cols[1].metric("Confidence Score", f"{_score_10}/10  ({conf:.0f}%)",
-                       help="How strongly our model agrees on the signal direction. Above 65% = actionable. 7+/10 = strong signal. 5 or below = uncertain — don't trade this.")
-    # #50 Fractional Kelly position sizing — display recommended size from Kelly formula
-    _kelly_pos_pct = pos_pct   # default to model-computed size
-    try:
-        import risk_metrics as _risk_mod
-        # Use cached backtest DF — avoids an expensive uncached DB read on every card render
-        _bt_kelly = _cached_backtest_df()
-        if not _bt_kelly.empty:
-            _bt_valid = _bt_kelly[_bt_kelly['pnl_pct'].notna()]
-            if len(_bt_valid) >= 20:
-                _wins_k   = _bt_valid[_bt_valid['pnl_pct'] > 0]
-                _losses_k = _bt_valid[_bt_valid['pnl_pct'] <= 0]
-                if len(_wins_k) > 0 and len(_losses_k) > 0:
-                    _wr  = len(_wins_k) / len(_bt_valid)
-                    _aw  = float(_wins_k['pnl_pct'].mean()) / 100
-                    _al  = float(abs(_losses_k['pnl_pct'].mean())) / 100
-                    _kf  = _risk_mod.compute_kelly_fraction(_wr, _aw, _al, fraction=0.25)
-                    _kelly_pos_pct = _kf.get("recommended_position_pct", pos_pct)
-    except Exception:
-        pass
-    bot_cols[2].metric(
-        "Suggested Trade Size",
-        f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "N/A",
-        help=(
-            "Recommended position size as % of portfolio based on historical win rate. "
-            "Fractional Kelly (25%) reduces risk of ruin. "
-            "If you have $1,000 and it says 10%, use $100."
-        ),
-    )
-
-    # Item 7: "What Does This Mean For Me?" — beginner/intermediate contextual dollar summary
-    if _user_lv in ("beginner", "intermediate"):
-        try:
-            _portfolio_sz = float(_cached_alerts_config().get("portfolio_size", 1000))
-        except Exception:
-            _portfolio_sz = 1000.0
-        st.markdown(
-            _ui.wdtmfm_html(direction, entry, stop, exit_, conf, _portfolio_sz),
-            unsafe_allow_html=True,
-        )
-
-    # Gradient confidence bar (#62) — signal-aware color-coded bar
-    st.markdown(_ui.render_confidence_bar(conf, direction), unsafe_allow_html=True)
-
-    # ── #59 Key metrics row with beginner tooltips ─────────────────────────────
-    _km_tf1 = (list(r.get("timeframes", {}).values()) or [{}])[0]
-    try:
-        _km_rsi_raw = _km_tf1.get("rsi")
-        _km_rsi = float(_km_rsi_raw) if _km_rsi_raw is not None else None
-    except (TypeError, ValueError):
-        _km_rsi = None
-    try:
-        _km_adx_raw = _km_tf1.get("adx")
-        _km_adx = float(_km_adx_raw) if _km_adx_raw is not None else None
-    except (TypeError, ValueError):
-        _km_adx = None
-    try:
-        _km_fr_raw = r.get("funding_rate_pct") or (r.get("timeframes", {}).get("1h", {}) or {}).get("funding")
-        _km_fr = float(_km_fr_raw) if _km_fr_raw is not None else None
-    except (TypeError, ValueError):
-        _km_fr = None
-    _km_chg = (_ws.get_price(pair) or {}).get("change_24h_pct")
-    _km_c1, _km_c2, _km_c3, _km_c4 = st.columns(4)
-    _km_c1.metric(
-        "Current Price",
-        f"${price:,.4f}" if price else "N/A",
-        delta=f"{_km_chg:+.2f}% 24h" if _km_chg is not None else None,
-    )
-    _km_c2.metric(
-        "RSI (1h)",
-        f"{_km_rsi:.1f}" if _km_rsi is not None else "N/A",
-        help="RSI above 70 = overbought, below 30 = oversold. Best range: 40-60 for entries.",
-    )
-    _km_c3.metric(
-        "ADX (1h)",
-        f"{_km_adx:.1f}" if _km_adx is not None else "N/A",
-        help="Trend strength indicator. Above 25 = strong trend. Below 20 = choppy/ranging.",
-    )
-    _km_c4.metric(
-        "Funding Rate",
-        f"{_km_fr:+.4f}%" if _km_fr is not None else "N/A",
-        help="Positive = longs pay shorts (bullish market). Negative = shorts pay longs (bearish market). Extreme values warn of reversals.",
-    )
-
-    # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
-    _consensus     = r.get("consensus", 0.0)
-    _agents_agree  = round(_consensus * 6)   # consensus = fraction of 6 agents with abs(vote)>70
-    _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#f6465d")
-
-    # Signal accuracy badge — shows historical win rate for this pair/direction
-    try:
-        _acc_data = _cached_signal_win_rate(pair=pair, direction=direction, days=90)
-        _acc_badge = _ui.signal_accuracy_badge_html(
-            win_rate    = _acc_data.get("win_rate", 0.5),
-            sample_size = _acc_data.get("sample_size", 0),
-            signal_type = direction.replace("STRONG ", ""),
-        )
-    except Exception:
-        _acc_badge = ""
-
-    st.markdown(
-        f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;'
-        f'font-size:12px;color:rgba(168,180,200,0.6);margin:-4px 0 10px 0">'
-        f'<span>'
-        f'<span style="color:{_agree_color};font-weight:700">{_agents_agree} of 6</span>'
-        f' AI models agree on this signal'
-        f'</span>'
-        f'{_acc_badge}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Item 6 Tier 2: "Why this signal?" plain-English reasoning ─────────────
-    if _user_lv in ("beginner", "intermediate"):
-        with st.expander("🔍 Why this signal? — Plain-English reasons", expanded=False):
-            st.markdown(
-                _ui.why_signal_html(
-                    direction     = direction,
-                    conf          = conf,
-                    rsi           = _km_rsi,
-                    adx           = _km_adx,
-                    mtf           = mtf,
-                    consensus     = r.get("consensus", 0.0),
-                    regime        = r.get("regime", ""),
-                    bias          = r.get("strategy_bias", ""),
-                    funding_rate  = _km_fr,
-                ),
-                unsafe_allow_html=True,
-            )
-
-    # ── Advanced Details (collapsed by default) ────────────────────────────────
-    _adv_label = "📊 Technical Details" if _user_lv == "beginner" else "📊 More Details — Timeframes & Technicals"
-    with st.expander(_adv_label, expanded=False):
-        tp2       = r.get("tp2")
-        tp3       = r.get("tp3")
-        lev_rec   = r.get("leverage_rec") or {}
-        lev_label = lev_rec.get("label", "N/A")
-        lev_basis = lev_rec.get("basis", "")
-        mtf_conf  = r.get("mtf_confirmed", True)
-        rr        = r.get("rr_ratios") or {}
-
-        adv_cols = st.columns(4)
-        # Show "N/A" when mtf_alignment is 0 and no valid timeframes had data
-        _mtf_display = "N/A" if mtf == 0 and not any(
-            td.get("direction") not in ("NO DATA", "N/A", "LOW VOL")
-            for td in r.get("timeframes", {}).values()
-        ) else f"{mtf}%"
-        adv_cols[0].metric("Timeframes Agreeing", _mtf_display, help=_ui.HELP_MTF_ALIGN)
-        adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "N/A",
-                           delta=rr.get("tp2", ""), help="Second profit target — sell another 40% here.")
-        adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "N/A",
-                           delta=rr.get("tp3", ""), help="Final ambitious target — hold last 20% here.")
-        adv_cols[3].metric(
-            "Leverage (Futures Only)",
-            lev_label,
-            delta="✓ All timeframes agree" if mtf_conf else "⚠️ Mixed signals",
-            delta_color="normal" if mtf_conf else "inverse",
-            help=(f"For futures trading only. Basis: {lev_basis}. " if lev_basis else "") +
-                 "Use 1× for spot trading. Never use leverage you don't understand.",
-        )
-
-        tf_data = r.get("timeframes", {})
-        if tf_data:
-            _tf_head_col, _tf_info_col = st.columns([5, 1])
-            with _tf_head_col:
-                st.markdown("**What each timeframe says**")
-            with _tf_info_col:
-                _ui.tf_column_guide_popover()
-            _tf_rows = []
-            # Plain-English timeframe labels (research: teens respond to time they understand)
-            _TF_PLAIN = {"1h": "1 Hour", "4h": "4 Hours", "1d": "Daily", "1w": "Weekly"}
-            for tf, td in tf_data.items():
-                _td_dir = td.get("direction", "N/A")
-                _no_data = _td_dir in ("NO DATA", "N/A")
-                _td_conf = td.get("confidence", 0)
-                _rsi_raw = td.get("rsi", "N/A")
-                # Plain English RSI — "Heat Level: Overheated (72)", "Heat Level: Cool (28)"
-                try:
-                    _rsi_v = float(_rsi_raw)
-                    if _rsi_v >= 70:
-                        _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
-                    elif _rsi_v <= 30:
-                        _rsi_str = f"🧊 Very Cool ({_rsi_v:.0f})"
-                    elif _rsi_v >= 55:
-                        _rsi_str = f"Warm ({_rsi_v:.0f})"
-                    elif _rsi_v <= 45:
-                        _rsi_str = f"Cool ({_rsi_v:.0f})"
-                    else:
-                        _rsi_str = f"Neutral ({_rsi_v:.0f})"
-                except (ValueError, TypeError):
-                    _rsi_str = str(_rsi_raw)
-                _tf_rows.append({
-                    "Time Period": _TF_PLAIN.get(tf, tf),
-                    "Signal": _td_dir,
-                    # Show "—" instead of "0%" when a timeframe returned no data
-                    "Strength": "—" if _no_data else f"{_td_conf}%",
-                    "Heat Level (RSI)": _rsi_str,
-                    "Trend Power (ADX)": td.get("adx", "N/A"),
-                    "Trend Direction": td.get("supertrend", "N/A"),
-                    "Market Mode": _ui.regime_label(td.get("regime", "")),
-                    "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
-                })
-            st.dataframe(pd.DataFrame(_tf_rows).set_index("Time Period"), width="stretch")
-
-    # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
-    try:
-        _casc = _cached_liquidation_cascade(pair)
-        if _casc and not _casc.get("error"):
-            st.markdown(
-                _ui.cascade_risk_card_html(
-                    score      = _casc.get("score", 0),
-                    risk_level = _casc.get("risk_level", "LOW"),
-                    direction  = _casc.get("direction", "NEUTRAL"),
-                    components = _casc.get("components"),
-                ),
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        pass
-
-    # ── News Sentiment ─────────────────────────────────────────────────────────
-    if _news_mod is not None:
-        try:
-            _news = _cached_news_sentiment(pair)
-            _nsig = _news.get("sentiment", "NEUTRAL")
-            _nscore = _news.get("score", 0.0)
-            _nsig_color = "🟢" if _nsig == "BULLISH" else "🔴" if _nsig == "BEARISH" else "⚪"
-            with st.expander(f"📰 News Sentiment — {_nsig_color} {_nsig}", expanded=False):
-                _nc0, _nc1, _nc2, _nc3 = st.columns(4)
-                _nc0.metric("Sentiment", f"{_nsig_color} {_nsig}")
-                _nc1.metric("Score", f"{_nscore:+.2f}")
-                _nc2.metric("Bullish Headlines", _news.get("bullish", 0))
-                _nc3.metric("Bearish Headlines", _news.get("bearish", 0))
-                _theme = _news.get("key_theme", "")
-                if _theme:
-                    st.caption(f"Key theme: {_theme}")
-                st.caption(f"Source: {_news.get('source','—')} · {_news.get('articles_analyzed',0)} articles analyzed")
-        except Exception as _ne:
-            st.caption(f"News fetch unavailable: {_ne}")
-
-    # ── Whale Tracker ───────────────────────────────────────────────────────────
-    if _whale_mod is not None:
-        try:
-            _whale = _cached_whale_activity(pair, float(price or 0))
-            _wsig = _whale.get("signal", "NEUTRAL")
-            if _wsig != "NEUTRAL" or _whale.get("whale_count", 0) > 0:
-                _wemoji = "🐋" if "ACCUMULATION" in _wsig else "🔴" if "DISTRIBUTION" in _wsig else "⚪"
-                with st.expander(f"{_wemoji} Whale Activity — {_wsig}", expanded=False):
-                    _wc1, _wc2, _wc3, _wc4 = st.columns(4)
-                    _wc1.metric("Signal", _wsig.replace("_", " ").title())
-                    _wc2.metric("Whale Txns", _whale.get("whale_count", 0))
-                    _wc3.metric("Large Whales", _whale.get("large_whale_count", 0))
-                    _total_usd = _whale.get("total_usd", 0)
-                    _wc4.metric("Total Volume", f"${_total_usd/1e6:.1f}M" if _total_usd >= 1e6 else f"${_total_usd:,.0f}")
-        except Exception:
-            pass
-
-    # ── ML Price Prediction ─────────────────────────────────────────────────────
-    # PERF-22: run get_enriched_df() in a background thread with 10s timeout so
-    # TA computation (RSI/MACD/BB/Ichimoku/SuperTrend etc.) doesn't block the main render thread.
-    if _ml_mod is not None:
-        try:
-            _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
-            import concurrent.futures as _cf22
-            with st.spinner("Calculating signals..."):
-                with _cf22.ThreadPoolExecutor(max_workers=1) as _ex22:
-                    _ml_future = _ex22.submit(
-                        model.get_enriched_df,
-                        model.get_exchange_instance(model.TA_EXCHANGE),
-                        pair,
-                        _ml_tf,
-                    )
-                    try:
-                        _ml_df = _ml_future.result(timeout=10)
-                    except _cf22.TimeoutError:
-                        _ml_df = None
-            if _ml_df is not None and not _ml_df.empty:
-                _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
-                _ml_pred = _ml.get("prediction", "UNCERTAIN")
-                _ml_prob = _ml.get("probability", 0.5)
-                _ml_acc  = _ml.get("model_accuracy", 0.0)
-                _ml_sig  = _ml.get("signal", "NEUTRAL")
-                _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ff4b4b" if _ml_sig == "SELL" else "#f59e0b"
-                _ml_emoji = "📈" if _ml_sig == "BUY" else ("📉" if _ml_sig == "SELL" else "😐")
-                _ml_plain = (
-                    "The AI thinks the price will go UP in the next few hours."
-                    if _ml_sig == "BUY" else
-                    "The AI thinks the price will go DOWN in the next few hours."
-                    if _ml_sig == "SELL" else
-                    "The AI isn't sure which way the price will go."
-                )
-                st.markdown(
-                    f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
-                    f'padding:12px 16px;margin:8px 0;border-left:3px solid {_ml_col};">'
-                    f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:4px;">'
-                    f'{_ml_emoji} AI Price Prediction — Next Few Hours</div>'
-                    f'<div style="font-size:12px;color:#a8b4c8;">{_ml_plain}</div>'
-                    f'<div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:6px;">'
-                    f'Confidence: <span style="color:{_ml_col};font-weight:700;">{_ml_prob:.0%}</span>'
-                    f' &nbsp;·&nbsp; Model accuracy: {_ml_acc:.0%}'
-                    f' &nbsp;·&nbsp; <span style="color:{_ml_col};">{_ml_pred}</span></div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-                # ── #48 HMM Regime — displayed alongside existing macro regime ────────
-                try:
-                    if pair == "BTC/USDT" and not _ml_df.empty and "close" in _ml_df.columns:
-                        _hmm_prices = list(_ml_df["close"].dropna().tail(400))
-                        _hmm_res    = _ml_mod.fit_hmm_regime(_hmm_prices)
-                        _hmm_state  = _hmm_res.get("current_state", "UNKNOWN")
-                        _hmm_conf   = _hmm_res.get("confidence", 0.0)
-                        _hmm_probs  = _hmm_res.get("state_probabilities", [0.0, 0.0, 0.0])
-                        if _hmm_state != "UNKNOWN" and not _hmm_res.get("error"):
-                            _hmm_col = (
-                                "#00d4aa" if _hmm_state == "Bull" else
-                                "#ef4444" if _hmm_state == "Bear" else
-                                "#f59e0b"
-                            )
-                            # Build state-probability mini-bar chart labels
-                            _labels = ["Bear", "Neutral", "Bull"]
-                            _bar_parts = ""
-                            for _lbl, _pb in zip(_labels, _hmm_probs):
-                                _bw = int(round(_pb * 100))
-                                _bc = "#00d4aa" if _lbl == "Bull" else "#ef4444" if _lbl == "Bear" else "#f59e0b"
-                                _bar_parts += (
-                                    f'<div style="margin-bottom:3px">'
-                                    f'<div style="display:flex;align-items:center;gap:6px">'
-                                    f'<span style="font-size:10px;color:#9ca3af;width:44px">{_lbl}</span>'
-                                    f'<div style="flex:1;background:#1f2937;border-radius:3px;height:6px">'
-                                    f'<div style="background:{_bc};width:{_bw}%;height:6px;border-radius:3px"></div>'
-                                    f'</div>'
-                                    f'<span style="font-size:10px;color:#9ca3af;width:32px;text-align:right">{_pb:.0%}</span>'
-                                    f'</div></div>'
-                                )
-                            st.markdown(
-                                f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
-                                f'padding:12px 16px;margin:8px 0;border-left:3px solid {_hmm_col};">'
-                                f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:6px;">'
-                                f'🧬 HMM Regime — Current State: '
-                                f'<span style="color:{_hmm_col}">{_hmm_state}</span>'
-                                f' ({_hmm_conf:.0%} confidence)</div>'
-                                f'{_bar_parts}'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # ── #61 Signal Story — 1-2 plain English sentences below the signal card ──
-    if _llm is not None:
-        try:
-            _story_indicators = {}
-            _story_tf_data = r.get("timeframes", {})
-            _story_first_td = (list(_story_tf_data.values()) or [{}])[0]
-            _story_indicators["rsi"]             = _story_first_td.get("rsi")
-            _story_indicators["adx"]             = _story_first_td.get("adx")
-            _story_indicators["macd_div"]        = _story_first_td.get("macd_div")
-            _story_indicators["supertrend"]      = _story_first_td.get("supertrend")
-            _story_indicators["regime"]          = _story_first_td.get("regime", "")
-            _story_indicators["funding_rate_pct"] = (
-                r.get("funding_rate_pct") or
-                (r.get("timeframes", {}).get("1h", {}) or {}).get("funding", "")
-            )
-            _story_text = _llm.generate_signal_story(pair, direction, conf, _story_indicators)
-            if _story_text:
-                _story_sig_col = (
-                    "#00d4aa" if "BUY" in direction.upper() else
-                    "#ef4444" if "SELL" in direction.upper() else
-                    "#f59e0b"
-                )
-                st.markdown(
-                    f'<div style="background:rgba(17,24,39,0.7);border-radius:8px;'
-                    f'padding:10px 14px;margin:4px 0 10px 0;border-left:2px solid {_story_sig_col};">'
-                    f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;'
-                    f'letter-spacing:0.6px;margin-bottom:4px">Signal Story</div>'
-                    f'<div style="font-size:13px;color:#c8d4e8;line-height:1.5">{_story_text}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-        except Exception:
-            pass
-
-    # ── AI Analysis — st.dialog renders in modal overlay, outside page diff cycle ──
-    ai_key = f"ai_explanation_{pair}"
-
-    @st.dialog(f"AI Analysis — {pair}", width="large")
-    def _show_ai_dialog():
-        if _llm is None:
-            st.warning("LLM analysis module not available — check llm_analysis.py installation.")
-            return
-        cached = st.session_state.get(ai_key)
-        if cached:
-            st.info(cached)
-        else:
-            with st.spinner("Asking Claude...", show_time=True):
-                explanation = _llm.get_signal_explanation(pair, r)
-            st.session_state[ai_key] = explanation
-            st.info(explanation)
-
-    if st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", width="stretch"):
-        _show_ai_dialog()
-
-    # ── Order Execution ────────────────────────────────────────────────────────
-    st.markdown("---")
-    _ui.risk_disclaimer_banner()
-    if not _exec_status.get("ccxt_available", False):
-        st.caption("ccxt not installed — run: pip install ccxt")
-    else:
-        _mode_label = "🔴 LIVE" if _exec_cfg.get("live_trading", False) else "📄 Paper"
-        _cur_price  = (_ws.get_price(pair) or {}).get("price") or price
-        _exec_size  = (float(pos_pct or 10) / 100) * float(
-            getattr(model, "PORTFOLIO_SIZE_USD", 10000)
-        )
-        ex_c0, ex_c1, ex_c2, ex_c3 = st.columns([2, 2, 2, 2])
-        with ex_c0:
-            st.caption(f"Mode: {_mode_label}")
-            st.caption(f"Order size: ${_exec_size:,.0f}")
-        with ex_c1:
-            if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{pair}",
-                         type="primary" if "BUY" in direction else "secondary",
-                         width="stretch"):
-                _res = _exec.place_order(pair, "BUY", _exec_size, current_price=_cur_price)
-                if _res["ok"]:
-                    st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} BUY placed — ID: {_res['order_id']}")
-                else:
-                    st.error(f"Order failed: {_res['error']}")
-        with ex_c2:
-            if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{pair}",
-                         type="primary" if "SELL" in direction else "secondary",
-                         width="stretch"):
-                _res = _exec.place_order(pair, "SELL", _exec_size, current_price=_cur_price)
-                if _res["ok"]:
-                    st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} SELL placed — ID: {_res['order_id']}")
-                else:
-                    st.error(f"Order failed: {_res['error']}")
-        with ex_c3:
-            _open_pos = _db.load_positions()
-            if pair in _open_pos:
-                _pos_dir = _open_pos[pair].get("direction", "BUY")
-                if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{pair}",
-                             width="stretch"):
-                    _res = _exec.close_position(pair, _pos_dir, _exec_size, current_price=_cur_price)
-                    if _res["ok"]:
-                        st.success(f"Position closed — ID: {_res['order_id']}")
-                    else:
-                        st.error(f"Close failed: {_res['error']}")
-            else:
-                st.caption("No open position")
-
-        # ── Advanced Order Types (T3-9/T3-10) ────────────────────────────────
-        with st.expander("⚙ Advanced Orders", expanded=False):
-            _adv_c1, _adv_c2 = st.columns(2)
-            with _adv_c1:
-                st.caption("**TWAP** — split into equal time slices")
-                _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"twap_dir_{pair}")
-                _twap_slices = st.number_input("Slices", 2, 20, 5, key=f"twap_slices_{pair}")
-                _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key=f"twap_int_{pair}")
-                if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{pair}", width="stretch"):
-                    _tr = _exec.place_twap_order(
-                        pair, _twap_dir, _exec_size,
-                        n_slices=int(_twap_slices),
-                        interval_seconds=int(_twap_interval),
-                        current_price=_cur_price,
-                        expected_price=r.get("entry"),
-                    )
-                    if _tr.get("ok"):  # APP-24: mirror iceberg pattern — check ok before accessing keys
-                        st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
-                    else:
-                        st.error(f"TWAP failed: {_tr.get('error', 'unknown error')}")
-            with _adv_c2:
-                st.caption("**Iceberg** — hide order size in OB")
-                _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"ice_dir_{pair}")
-                _ice_vis  = st.slider("Visible %", 10, 50, 20, step=5, key=f"ice_vis_{pair}") / 100.0
-                _ice_limit = st.number_input("Limit Price (0=market)", 0.0, 1e9,
-                                             float(r.get("entry") or 0), step=0.01, format="%.4f",
-                                             key=f"ice_lim_{pair}")
-                if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{pair}", width="stretch"):
-                    _ir = _exec.place_iceberg_order(
-                        pair, _ice_dir, _exec_size,
-                        visible_pct=_ice_vis,
-                        current_price=_cur_price,
-                        limit_price=_ice_limit if _ice_limit > 0 else None,
-                        expected_price=r.get("entry"),
-                    )
-                    if _ir["ok"]:
-                        st.success(f"Iceberg placed — ID: {_ir['order_id']}")
-                    else:
-                        st.error(f"Iceberg failed: {_ir['error']}")
-
-    # ── Confidence History (Pro Mode only) ─────────────────────────────────
-    if not st.session_state.get("beginner_mode", True):
-        try:
-            _ch_history = _cached_confidence_history(pair, days=30)
-            if _ch_history:
-                _ch_ts    = [h["timestamp"] for h in _ch_history]
-                _ch_conf  = [h["confidence"] for h in _ch_history]
-                _ch_sigs  = [h["signal"] for h in _ch_history]
-                _ch_colors = [
-                    "#00C853" if s == "BUY" else "#D50000" if s == "SELL" else "#9E9E9E"
-                    for s in _ch_sigs
-                ]
-                _ch_fig = go.Figure()
-                _ch_fig.add_trace(go.Scatter(
-                    x=_ch_ts,
-                    y=_ch_conf,
-                    mode="lines+markers",
-                    name="Confidence %",
-                    line=dict(color="#818cf8", width=1.5),
-                    marker=dict(color=_ch_colors, size=6),
-                    hovertemplate="%{x}<br>Confidence: %{y:.1f}%<extra></extra>",
-                ))
-                _ch_fig.update_layout(
-                    height=160,
-                    margin=dict(l=0, r=0, t=24, b=0),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    title=dict(
-                        text=f"Confidence History — {pair} (last 30 days)  "
-                             '<span style="color:#00C853">● BUY</span> '
-                             '<span style="color:#D50000">● SELL</span> '
-                             '<span style="color:#9E9E9E">● HOLD</span>',
-                        font=dict(size=11),
-                        x=0,
-                    ),
-                    yaxis=dict(
-                        range=[0, 100],
-                        ticksuffix="%",
-                        gridcolor="#222",
-                        tickfont=dict(size=9),
-                    ),
-                    xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
-                    showlegend=False,
-                )
-                st.plotly_chart(_ch_fig, width="stretch", key=f"conf_hist_{pair}")
-        except Exception:
-            pass
-
-    st.markdown("---")
-
-    # ── Live Chart ──────────────────────────────────────────────────────────
-    _ui.section_header("Live Chart", "Candlestick chart with entry / target / stop overlays", icon="📈")
-    ch_c1, ch_c2, ch_c3 = st.columns([3, 2, 2])
-    with ch_c1:
-        # Merge scan results (first, so last-scanned pairs appear at top) with
-        # the full static universe — always chartable regardless of scan state.
-        _scan_pairs = [r["pair"] for r in sorted_results]
-        _extra_pairs = [
-            p for p in (
-                model.PAIRS
-                + ['WFLR/USDT', 'FXRP/USDT']   # chart-only pairs (not in scan)
-            )
-            if p not in _scan_pairs
-        ]
-        chart_pair_opts = _scan_pairs + sorted(_extra_pairs)
-        chart_pair = st.selectbox("Pair", chart_pair_opts, key="chart_pair_select")
-    with ch_c2:
-        _default_tf_idx = (
-            model.TIMEFRAMES.index("1h") if "1h" in model.TIMEFRAMES else 0
-        )
-        chart_tf = st.selectbox(
-            "Timeframe", model.TIMEFRAMES, index=_default_tf_idx, key="chart_tf_select"
-        )
-    with ch_c3:
-        st.write("")
-        load_chart = st.button(
-            "Load Chart", type="primary", width="stretch", key="btn_load_chart"
-        )
-
-    if load_chart:
-        try:
-            with st.spinner(f"Fetching {chart_pair} {chart_tf}...", show_time=True):
-                ohlcv = model.fetch_chart_ohlcv(chart_pair, chart_tf, limit=250)
-            if ohlcv:
-                r_sel = next((r for r in results if r["pair"] == chart_pair), {})
-                st.session_state["chart_html"] = _chart.build_chart_html(
-                    ohlcv, chart_pair, chart_tf,
-                    entry=r_sel.get("entry"),
-                    stop=r_sel.get("stop_loss"),
-                    target=r_sel.get("exit"),
-                )
-                st.session_state["chart_pair_label"] = f"{chart_pair} · {chart_tf}"
-            else:
-                st.warning(
-                    f"No chart data available for **{chart_pair}** on {chart_tf}. "
-                    "This pair may have very low liquidity on all exchanges. "
-                    "Try a different timeframe or pair."
-                )
-        except Exception as e:
-            logging.warning("[chart] %s %s: %s", chart_pair, chart_tf, e)
-            st.warning(
-                f"Chart data couldn't load for **{chart_pair}** right now — "
-                "this is usually temporary. Try refreshing in 30 seconds."
-            )
-
-    _chart_html = st.session_state.get("chart_html")
-    if _chart_html:
-        _chart_label = st.session_state.get("chart_pair_label", "")
-        if _chart_label:
-            st.caption(
-                f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
-            )
-        st.iframe(_chart_html, height=560)
-
-    st.markdown("---")
-
-    # Export buttons
-    if results:
-        col_csv, col_json, col_pdf = st.columns(3)
-        with col_csv:
-            st.download_button(
-                "📥 Export CSV",
-                data=_export_scan_results(results, "csv"),
-                file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                width="stretch",
-                key="dl_scan_csv",
-            )
-        with col_json:
-            st.download_button(
-                "📥 Export JSON",
-                data=_export_scan_results(results, "json"),
-                file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                width="stretch",
-                key="dl_scan_json",
-            )
-        with col_pdf:
-            ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
-            try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
-                if _pdf is None:
-                    raise ImportError("pdf_export module not available")
-                if st.session_state.get("_scan_pdf_ts") != ts_str:
-                    st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
-                    st.session_state["_scan_pdf_ts"] = ts_str
-                _pdf_data = st.session_state.get("_scan_pdf_bytes")
-                if _pdf_data:
-                    st.download_button(
-                        "⬇ Download PDF",
-                        data=_pdf_data,
-                        file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                        key="dl_scan_pdf",
-                    )
-                else:
-                    st.caption("PDF unavailable")
-            except Exception as _pdf_err:
-                st.caption(f"PDF generation failed: {_pdf_err}")
-
-    # ── Autonomous Agent Status Panel ─────────────────────────────────────────
-    _agent_cfg = _cached_alerts_config()
-    if _agent_cfg.get("agent_enabled", False):
-        # Auto-start supervisor if enabled in config and not already running
-        try:
-            if _agent is not None and not _agent.supervisor.is_running():
-                _agent.supervisor.start()
-        except Exception:
-            pass
-        st.markdown("---")
-        _ui.section_header("Autonomous Agent", "24/7 AI trading agent status", icon="🤖")
-        try:
-            _ag_st = _agent.supervisor.status() if _agent is not None else {}
-        except Exception:
-            _ag_st = {}
-        # ── agent status metrics ──────────────────────────────────────────────
-        import crypto_model_core as _cmc_ag
-        _ag_n_pairs   = len(_cmc_ag.PAIRS)
-        _ag_cur_pair  = _ag_st.get("current_pair", "") or ""   # pair in-flight right now
-        _ag_last_pair = _ag_st.get("last_pair", "")  or ""     # last completed pair
-
-        _ag_c1, _ag_c2, _ag_c3, _ag_c4 = st.columns(4)
-        _ag_c1.metric(
-            "Status",
-            "🟢 RUNNING" if _ag_st.get("running") else "🔴 STOPPED",
-            delta="LangGraph" if _ag_st.get("langgraph") else "Fallback pipeline",
-            delta_color="normal",
-        )
-        _ag_c2.metric(
-            "Pairs in Scope",
-            _ag_n_pairs,
-            delta="all pairs every cycle",
-            delta_color="normal",
-            help=f"Agent scans all {_ag_n_pairs} pairs in model.PAIRS every cycle — not just BTC. "
-                 f"Pairs: {', '.join(_cmc_ag.PAIRS)}",
-        )
-        _ag_c3.metric(
-            "Now Analyzing",
-            _ag_cur_pair.replace("/USDT", "") if _ag_cur_pair else "—",
-            delta="in-flight" if _ag_cur_pair else "between cycles",
-            delta_color="normal",
-            help="The pair the agent is currently running signal analysis on. Updates live.",
-        )
-        _ag_c4.metric(
-            "Total Pair Scans",
-            _ag_st.get("cycles_total", 0),
-            delta=f"restarts: {_ag_st.get('restart_count', 0)}",
-            delta_color="normal",
-            help="Total number of individual pair evaluations since the agent started.",
-        )
-        if (_ag_st.get("last_run_ts") or 0) > 0:
-            _last_ago = int(time.time() - _ag_st["last_run_ts"])
-            _last_decision = _ag_st.get("last_decision") or "—"
-            st.caption(
-                f"Last completed: **{_ag_last_pair}** → {_last_decision} | {_last_ago}s ago "
-                f"| Dry-run: {'ON' if _agent_cfg.get('agent_dry_run', True) else 'OFF'} "
-                f"| Scanning all {_ag_n_pairs} pairs each cycle"
-            )
-        with st.expander(f"Recent Agent Decisions (all {_ag_n_pairs} pairs)", expanded=False):
-            try:
-                _ag_log_df = _cached_agent_log_df(limit=50)
-                if _ag_log_df.empty:
-                    st.caption("No decisions recorded yet.")
-                else:
-                    _show_cols = [c for c in ["logged_at", "pair", "direction",
-                                              "confidence", "claude_decision",
-                                              "action_taken", "claude_rationale"]
-                                  if c in _ag_log_df.columns]
-                    # Sort by logged_at desc so newest pair decisions are at top
-                    _disp_df = _ag_log_df[_show_cols]
-                    if "logged_at" in _disp_df.columns:
-                        _disp_df = _disp_df.sort_values("logged_at", ascending=False)
-                    st.dataframe(_disp_df, width="stretch", hide_index=True)
-                    # Show unique pairs covered this session
-                    if "pair" in _ag_log_df.columns:
-                        _seen_pairs = sorted(_ag_log_df["pair"].dropna().unique().tolist())
-                        st.caption(f"Pairs with decisions logged: {', '.join(_seen_pairs)}")
-            except Exception as _ae:
-                st.caption(f"Agent log unavailable: {_ae}")
-    else:
-        # Config was disabled — stop the running supervisor if active
-        try:
-            if _agent is not None and _agent.supervisor.is_running():
-                _agent.supervisor.stop()
-        except Exception:
-            pass
-
-    # ── Connected Wallet Panel (#110 / #111) ──────────────────────────────────
-    _wh = st.session_state.get("wallet_holdings")
-    _zp = st.session_state.get("zerion_portfolio")
-    if _wh or _zp:
-        st.markdown("---")
-        _ui.section_header("Connected Wallet", "Read-only portfolio import", icon="🔗")
-        _portfolio = _zp or _wh  # prefer full Zerion portfolio when available
-        _wh_c1, _wh_c2, _wh_c3 = st.columns(3)
-        _wh_c1.metric("Total Value", f"${_portfolio.get('total_value_usd', 0):,.2f}")
-        _wh_c2.metric("Address", (_portfolio.get('address', '') or '')[:10] + "…")
-        _wh_c3.metric("Source", (_portfolio.get('source') or 'zerion').upper())
-
-        # 24h change (Zerion only)
-        if _zp and _zp.get("change_24h_pct") is not None:
-            _chg = _zp.get("change_24h_pct", 0.0)
-            st.metric("24h Change", f"{_chg:+.2f}%", delta=f"{_chg:+.2f}%")
-
-        # Top holdings
-        _tokens = _portfolio.get("tokens") or _portfolio.get("positions") or []
-        if _tokens:
-            with st.expander("Top Holdings", expanded=True):
-                _top5 = sorted(_tokens, key=lambda x: x.get("value_usd") or 0, reverse=True)[:5]
-                _tok_rows = []
-                for _tok in _top5:
-                    _tok_rows.append({
-                        "Symbol":     _tok.get("symbol", ""),
-                        "Balance":    f"{_tok.get('balance', 0):,.4f}",
-                        "Value USD":  f"${_tok.get('value_usd', 0):,.2f}",
-                        "24h %":      f"{_tok.get('change_pct_1d', 0):+.2f}%" if _tok.get('change_pct_1d') is not None else "—",
-                        "Chain":      _tok.get("chain") or "Ethereum",
-                    })
-                if _tok_rows:
-                    st.dataframe(pd.DataFrame(_tok_rows), width="stretch", hide_index=True)
-
-        # Chain breakdown (Zerion full portfolio)
-        if _zp and _zp.get("chains"):
-            with st.expander("Chain Breakdown", expanded=False):
-                _chain_data = _zp["chains"]
-                _chain_rows = [{"Chain": c, "Value USD": f"${v:,.2f}"} for c, v in _chain_data.items()]
-                if _chain_rows:
-                    st.dataframe(pd.DataFrame(_chain_rows), width="stretch", hide_index=True)
-
-    # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
-    if results:
-        st.markdown("---")
-        _ui.section_header("Signal Heatmap", "All pairs — color = signal strength (green=BUY, red=SELL, grey=HOLD)", icon="🗺️")
-
-        from crypto_model_core import SECTOR_MAP, PAIRS as _ALL_PAIRS
-
-        # Map pair → signal score for color coding
-        _sig_map = {}
-        for _r in results:
-            _p   = _r.get("pair", "")
-            _dir = _r.get("direction", "")
-            _sc  = _r.get("score", 0.0) or 0.0
-            _sig_map[_p] = (_dir, _sc)
-
-        # Build grid ordered by sector then pair name
-        _sector_order = ["store_of_value", "layer1", "payments", "defi", "exchange", "layer2", "infrastructure", "ai", "meme", "other"]
-        _by_sector: dict = {}
-        for _pp in _ALL_PAIRS:
-            _s = SECTOR_MAP.get(_pp, "other")
-            _by_sector.setdefault(_s, []).append(_pp)
-
-        _heat_html = "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;'>"
-        for _sec in _sector_order:
-            _sec_pairs = _by_sector.get(_sec, [])
-            if not _sec_pairs:
-                continue
-            # Sector label
-            _heat_html += (
-                f"<div style='width:100%;font-size:10px;text-transform:uppercase;"
-                f"letter-spacing:0.8px;color:#6b7280;margin:8px 0 4px;font-weight:600;'>"
-                f"{_sec.replace('_', ' ')}</div>"
-            )
-            _heat_html += "<div style='display:flex;flex-wrap:wrap;gap:6px;'>"
-            for _pp in _sec_pairs:
-                _base = _pp.split("/")[0]
-                _dir, _sc = _sig_map.get(_pp, ("HOLD", 0.0))
-                if "BUY" in _dir:
-                    _bg   = f"rgba(0,212,170,{min(0.85, 0.25 + abs(_sc)/100)})"
-                    _border = "#00d4aa"
-                    _tc   = "#e2e8f0"
-                elif "SELL" in _dir:
-                    _bg   = f"rgba(246,70,93,{min(0.85, 0.25 + abs(_sc)/100)})"
-                    _border = "#f6465d"
-                    _tc   = "#e2e8f0"
-                else:
-                    _bg   = "rgba(107,114,128,0.15)"
-                    _border = "#374151"
-                    _tc   = "#6b7280"
-                _sc_str = f"{_sc:+.0f}" if _sc != 0 else "—"
-                _heat_html += (
-                    f"<div style='background:{_bg};border:1px solid {_border};"
-                    f"border-radius:8px;padding:6px 10px;min-width:64px;text-align:center;"
-                    f"cursor:default;'>"
-                    f"<div style='font-size:12px;font-weight:700;color:{_tc};'>{_base}</div>"
-                    f"<div style='font-size:10px;color:{_border};margin-top:2px;font-weight:600;'>"
-                    f"{_dir.replace('STRONG_', '').replace('_BIAS', '')} {_sc_str}</div>"
-                    f"</div>"
-                )
-            _heat_html += "</div>"
-        _heat_html += "</div>"
-
-        st.markdown(_heat_html, unsafe_allow_html=True)
-        _buys  = sum(1 for d, _ in _sig_map.values() if "BUY"  in d)
-        _sells = sum(1 for d, _ in _sig_map.values() if "SELL" in d)
-        _holds = len(_sig_map) - _buys - _sells
-        st.caption(f"Signal summary: {_buys} BUY · {_sells} SELL · {_holds} HOLD · Score = composite signal strength (higher = stronger)")
-
-    # ── Global Market Context (folded in from Market Overview) ─────────────────
-    with st.expander("🌍 Global Market Context", expanded=False):
-        _gm  = _cached_global_market()
-        _gtr = _cached_trending_coins()
-
-        def _fmt_cap_d(v):
-            if v >= 1e12: return f"${v/1e12:.2f}T"
-            if v >= 1e9:  return f"${v/1e9:.1f}B"
-            return f"${v/1e6:.0f}M"
-
-        _tm   = _gm.get("total_market_cap_usd", 0)
-        _bd   = _gm.get("btc_dominance", 0.0)
-        _ed   = _gm.get("eth_dominance", 0.0)
-        _mchg = _gm.get("market_cap_change_24h", 0.0)
-        _vol  = _gm.get("total_volume_24h_usd", 0)
-        _alt  = _gm.get("altcoin_season_label", "N/A")
-        _gdc  = "#00c076" if _mchg >= 0 else "#f6465d"
-        _ga   = "▲" if _mchg >= 0 else "▼"
-        _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
-        with _gc1:
-            st.metric("Total Market Cap", _fmt_cap_d(_tm),
-                      delta=f"{_ga} {abs(_mchg):.2f}% 24h", delta_color="normal")
-        with _gc2:
-            st.metric("BTC Dominance", f"{_bd:.1f}%")
-        with _gc3:
-            st.metric("ETH Dominance", f"{_ed:.1f}%")
-        with _gc4:
-            st.metric("24h Volume", _fmt_cap_d(_vol))
-        with _gc5:
-            st.metric("Market Regime", _alt.replace("_", " "))
-
-        if _gtr:
-            _chips = " ".join(
-                f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
-                f'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
-                f'color:#00d4aa;font-size:12px;font-weight:600;margin:2px">{s}</span>'
-                for s in _gtr[:10]
-            )
-            st.markdown(
-                f'<div style="margin:4px 0 12px">'
-                f'<span style="color:rgba(255,255,255,0.45);font-size:11px;'
-                f'text-transform:uppercase;letter-spacing:0.8px;margin-right:10px">🔥 Trending</span>'
-                + _chips + '</div>',
-                unsafe_allow_html=True,
-            )
-
-
-    with st.expander("📊 Market Analysis Tools — Correlation · Volatility · Pair Trades", expanded=False):
-        st.caption(
-            "Correlation: which assets move together (diversification guide). "
-            "Vol Rankings: 7-day realized volatility. "
-            "Pair Trading: cointegrated pairs with z-score signals."
-        )
-
-        # ── Correlation Matrix ──
-        _ui.section_header("Asset Correlation Matrix",
-                           "Pairwise Pearson correlation of daily returns — Red = strong positive · Blue = negative",
-                           icon="🔥")
-
-        col_lk, col_tf, col_run = st.columns([2, 2, 2])
-        with col_lk:
-            lookback = st.slider("Lookback (days)", min_value=7, max_value=90,
-                                 value=30, step=7, key="corr_lookback")
-        with col_tf:
-            corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
-        with col_run:
-            st.write("")
-            run_corr = st.button("Compute Correlation", type="primary", width="stretch", key="run_corr")
-
-        if run_corr:
-            with st.spinner("Fetching OHLCV data...", show_time=True):
-                corr_matrix, err = model.compute_correlation_matrix(
-                    pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
-                )
-            if err:
-                st.error(f"Correlation error: {err}")
-                st.session_state["corr_matrix_data"] = None
-                st.session_state["corr_error"] = err
-            else:
-                # PERF: store DataFrame directly — was .to_dict() + pd.DataFrame() round-trip on every render
-                st.session_state["corr_matrix_data"] = corr_matrix
-                st.session_state["corr_error"] = None
-
-        cached = st.session_state.get("corr_matrix_data")
-        if cached is not None:
-            corr_df = cached
-            pairs_list = list(corr_df.columns)
-
-            fig_corr = go.Figure(data=go.Heatmap(
-                z=corr_df.values,
-                x=corr_df.columns.tolist(),
-                y=corr_df.index.tolist(),
-                colorscale="RdBu_r",
-                zmin=-1, zmax=1,
-                text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
-                texttemplate="%{text}",
-                hoverongaps=False,
-            ))
-            fig_corr.update_layout(
-                height=450,
-                margin=dict(l=0, r=0, t=10, b=0),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig_corr, width="stretch",
-                            config={"displayModeBar": False, "staticPlot": True})
-
-            # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
-            st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
-            _corr_arr = corr_df.values
-            _rows_idx, _cols_idx = np.where(
-                (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
-            )
-            high_corr_rows = []
-            try:
-                high_corr_rows = [
-                    {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
-                    for i, j in zip(_rows_idx, _cols_idx)
-                ]
+                import datetime as _dt
+                _scan_ts_unix = _dt.datetime.fromisoformat(str(_scan_ts_str)).timestamp()
             except Exception:
                 pass
-            if high_corr_rows:
-                st.dataframe(pd.DataFrame(high_corr_rows), width="stretch", hide_index=True)
-            else:
-                st.info("No pairs exceed the 0.75 correlation threshold for this period.")
-        elif st.session_state.get("corr_error"):
-            st.error(f"Correlation error: {st.session_state['corr_error']}")
+        st.markdown(
+            _ui.freshness_dot_html(_scan_ts_unix, max_age_sec=900, label="Scan data"),
+            unsafe_allow_html=True,
+        )
 
+        # ── Items 1 & 2: Today's Top Picks Hero Panel (beginner first, always) ───
+        st.markdown(
+            _ui.top_picks_hero_html(results, ws_prices=_live_prices),
+            unsafe_allow_html=True,
+        )
+
+        # ── Item 11: How This Model Works trust card (collapsible) ───────────────
+        if _user_lv in ("beginner", "intermediate"):
+            with st.expander("🔬 How does this model work?", expanded=False):
+                _bt_df  = _cached_backtest_df()
+                _wr_raw = 0.0
+                if not _bt_df.empty and "result" in _bt_df.columns:
+                    _wins = (_bt_df["result"] == "WIN").sum()
+                    _wr_raw = _wins / max(len(_bt_df), 1) * 100
+                st.markdown(
+                    _ui.how_it_works_html(win_rate=_wr_raw, n_months=3, n_indicators=24),
+                    unsafe_allow_html=True,
+                )
 
         st.markdown("---")
 
-        # ── Realized Volatility Rankings (Phase 11) ───────────────────────────────
-        _ui.section_header(
-            "Realized Volatility Rankings",
-            "7-day annualized realized volatility across all pairs — rank from calmest to most explosive",
-            icon="📉",
-        )
-        st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
+        # ── F&G visual gauge + summary metrics ────────────────────────────────────
+        _fng_r0     = results[0] if results else {}   # A4: guard (belt-and-suspenders — return above should fire first)
+        _fng_val    = _fng_r0.get("fng_value", 50)
+        _fng_cat    = _fng_r0.get("fng_category", "Neutral")
+        _ac_raw  = sum(r.get("confidence_avg_pct") or 0 for r in results) / max(len(results), 1)
+        avg_conf = round(_ac_raw if _ac_raw == _ac_raw else 0.0, 1)  # APP-21: NaN guard
+        buy_count   = sum(1 for r in results if "BUY"  in r.get("direction", ""))
+        sell_count  = sum(1 for r in results if "SELL" in r.get("direction", ""))
 
-        if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
-            import statistics as _stat
-            with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
-                _vol_rows = []
-                _first_err = None
-                _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
-                if _exchange:
-                    for _vp in model.PAIRS:
-                        try:
-                            _df_ohlcv = model.robust_fetch_ohlcv(_exchange, _vp, "1d", limit=9)
-                            if len(_df_ohlcv) >= 3:
-                                _cls = [v for v in _df_ohlcv["close"].tolist() if v and v > 0]
-                                _rets = [
-                                    (_cls[i] - _cls[i - 1]) / _cls[i - 1]
-                                    for i in range(1, len(_cls))
-                                    if _cls[i - 1] > 0
-                                ]
-                                if len(_rets) >= 2:
-                                    _daily_vol = _stat.stdev(_rets)
-                                    _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
-                                    _sector    = model.SECTOR_MAP.get(_vp, "other")
-                                    _vol_rows.append({
-                                        "Asset":    _vp.replace("/USDT", ""),
-                                        "Sector":   _sector.replace("_", " ").title(),
-                                        "Ann. Vol%": _ann_vol,
-                                        "7d Close": round(_cls[-1], 4),
-                                    })
-                        except Exception as _e:
-                            if _first_err is None:
-                                _first_err = str(_e)[:100]
-                else:
-                    _first_err = "Exchange unavailable"
-                st.session_state["vol_rank_data"] = _vol_rows
-                st.session_state["vol_rank_err"]  = _first_err
+        _fng_col, _metrics_col = st.columns([2, 3])
+        with _fng_col:
+            st.markdown(_ui.fng_gauge_html(_fng_val, _fng_cat), unsafe_allow_html=True)
+        with _metrics_col:
+            mc = st.columns(4)
+            mc[0].metric("Coins Scanned", len(results), help=_ui.HELP_PAIRS_SCANNED)
+            mc[1].metric("Top Picks ⚡", len(hc),       help=_ui.HELP_HIGH_CONF)
+            mc[2].metric("Avg Strength", f"{avg_conf}%", help=_ui.HELP_AVG_CONF)
+            _signal_label = f"▲{buy_count} Buy · ▼{sell_count} Sell"
+            mc[3].metric("Signals", _signal_label,
+                         help=_ui.HELP_BUY_SIGNALS + " " + _ui.HELP_SELL_SIGNALS)
 
-        _vol_data = st.session_state.get("vol_rank_data")
-        if _vol_data:
-            _vol_df = pd.DataFrame(_vol_data).sort_values("Ann. Vol%", ascending=False).reset_index(drop=True)
+        # ── Action CTA — best opportunity card (beginner-focused) ─────────────────
+        if hc:
+            _best = hc[0]
+            _ui.scan_action_cta(
+                pair      = _best["pair"],
+                direction = _best.get("direction", ""),
+                conf      = _best.get("confidence_avg_pct", 0),
+                entry     = _best.get("entry"),
+                stop      = _best.get("stop_loss"),
+                exit_     = _best.get("exit"),
+            )
 
-            # Rank chips — color by volatility tier
-            _chips_vol = ""
-            _vmax = _vol_df["Ann. Vol%"].max() if not _vol_df.empty else 1
-            for _, _vr in _vol_df.iterrows():
-                _v = _vr["Ann. Vol%"]
-                _pct = _v / max(_vmax, 1)
-                _vc = "#f6465d" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
-                _chips_vol += (
-                    f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
-                    f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
-                    f'border:1px solid {_vc}50;margin:2px;min-width:52px">'
-                    f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_vr["Asset"]}</span>'
-                    f'<span style="font-size:10px;color:{_vc};font-weight:600">{_v:.0f}%</span>'
-                    f'</span>'
-                )
+        # ── Market regime banner + Hurst / Squeeze context ────────────────────────
+        try:
+            _r0_tf_vals = list(results[0].get("timeframes", {}).values()) if results else []
+            _r0_tf = _r0_tf_vals[0] if _r0_tf_vals else {}
+            _regime_str = _r0_tf.get("regime", "Neutral: Unknown")
+            _regime_key = _regime_str.split(":")[0].strip().split(" ")[-1] if ":" in _regime_str else "Neutral"
+            # Map HMM regime strings to 4-state keys
+            _regime_map = {"Trending": "BULL", "Ranging": "RANGING", "Neutral": "RANGING", "Volatile": "CRISIS"}
+            _regime_4 = _regime_map.get(_regime_key, "RANGING")
+            _hurst_val = _r0_tf.get("hurst", None)
+            _squeeze_sig = _r0_tf.get("squeeze_signal", "NO_SQUEEZE")
             st.markdown(
-                f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_vol}</div>',
+                _ui.regime_banner_html(
+                    regime=_regime_4,
+                    hurst=float(_hurst_val) if _hurst_val is not None else None,
+                    squeeze_active=("SQUEEZE" in str(_squeeze_sig)),
+                ),
                 unsafe_allow_html=True,
             )
-            st.caption("🔴 High vol (>70th pct) · 🟡 Medium · 🟢 Low — annualized, based on 7-day daily returns")
+        except Exception:
+            pass
 
-            with st.expander("Full volatility table"):
-                st.dataframe(
-                    _vol_df,
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
-                        "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
-                    },
-                )
-        elif _vol_data is not None and len(_vol_data) == 0:
-            _vol_err = st.session_state.get("vol_rank_err")
-            st.warning(f"No volatility data returned — {_vol_err}" if _vol_err else "No volatility data returned — check exchange connectivity.")
-
+        # ── Top Movers bento card (3 gainers / 3 losers from CoinGecko) ──────────
+        # PERF-20: route through cached wrapper (2-min TTL) instead of direct API call
+        try:
+            _movers = _cached_top_movers(top_n=3)
+            _gainers = _movers.get("gainers", [])
+            _losers  = _movers.get("losers", [])
+            if _gainers or _losers:
+                st.markdown(_ui.top_movers_card_html(_gainers, _losers), unsafe_allow_html=True)
+        except Exception:
+            pass
 
         st.markdown("---")
 
-        # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
-        _ui.section_header(
-            "Pair Trade Scanner",
-            "Finds cryptocurrency pairs that move together — then signals when one is unusually cheap or expensive vs the other",
-            icon="⚖️",
-        )
-        st.caption(
-            "A pair trade buys the underpriced coin and sells the overpriced one, profiting when prices converge. "
-            "Only pairs with a statistically significant relationship (p < 0.05) are shown."
-        )
 
-        _coint_col1, _coint_col2, _coint_col3 = st.columns([2, 2, 2])
-        with _coint_col1:
-            _coint_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="coint_tf")
-        with _coint_col2:
-            _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
-        with _coint_col3:
-            st.write("")
-            _run_coint = st.button("Scan for Pair Trades", type="primary", width="stretch", key="run_coint")
+    with _dash_tab4:
+        # ── Blood in the Streets · DCA Multiplier · Macro Overlay (Group 3) ──────
+        # F6 — data freshness badges for macro panels
+        _fb_cols = st.columns(3)
+        with _fb_cols[0]:
+            st.markdown(_freshness_badge("fred_macro",      3600, "FRED Macro"),     unsafe_allow_html=True)
+        with _fb_cols[1]:
+            st.markdown(_freshness_badge("yfinance_macro",  3600, "YF Macro"),       unsafe_allow_html=True)
+        with _fb_cols[2]:
+            st.markdown(_freshness_badge("coinalyze_funding", 300, "Funding Rates"), unsafe_allow_html=True)
 
-        if _run_coint:
-            with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
-                _coint_results, _coint_err = model.run_cointegration_scan(
-                    pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
-                )
-            if _coint_err:
-                st.error(f"Scan error: {_coint_err}")
-                st.session_state["coint_results"] = None
-            else:
-                st.session_state["coint_results"] = _coint_results
-                st.session_state["coint_err"] = None
+        try:
+            _fg_val3   = results[0].get("fng_value", 50) if results else 50
+            _btc_res   = next((r for r in results if r.get("pair") == "BTC/USDT"), {})
+            _btc_rsi3  = (_btc_res.get("timeframes", {}).get("1d", {}) or {}).get("rsi", None)
+            _bits3     = _cached_blood_in_streets(_fg_val3, _btc_rsi3)
+            _dca_m3    = _bits3["dca_multiplier"]
+            _macro3    = _cached_macro_signal_adjustment()
+            # Only render if signal is notable (not all-normal)
+            if _bits3["signal"] != "NORMAL" or _macro3["adjustment"] != 0.0:
+                _bc3    = {"BLOOD_IN_STREETS": "#ef4444", "EXTREME_FEAR": "#f59e0b", "NORMAL": "#6b7280"}.get(_bits3["signal"], "#6b7280")
+                _bg3    = {"BLOOD_IN_STREETS": "#1f0000",  "EXTREME_FEAR": "#1c1200", "NORMAL": "#111827"}.get(_bits3["signal"], "#111827")
+                _dc3    = {0.0: "#ef4444", 0.5: "#f97316", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
+                _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
+                _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f97316", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
+                _sk3    = _cached_deribit_options_skew("BTC")
+                _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "N/A"), "#6b7280")
+                _b1, _b2, _b3, _b4 = st.columns(4)
+                with _b1:
+                    st.markdown(f"""
+    <div style="background:{_bg3};border:1px solid {_bc3};border-top:3px solid {_bc3};border-radius:10px;padding:16px">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Blood in Streets</div>
+      <div style="font-size:18px;font-weight:700;color:{_bc3}">{_bits3["signal"].replace("_", " ")}</div>
+      <div style="font-size:12px;color:#9ca3af;margin-top:4px">{_bits3["strength"]} · {_bits3["criteria_met"]}/3 criteria</div>
+      <div style="font-size:11px;color:#6b7280;margin-top:8px">{_bits3["description"]}</div>
+      <div style="margin-top:10px;font-size:11px;color:#6b7280">
+        {"✅" if _bits3["criteria"]["extreme_fear"] else "❌"} F&amp;G≤25 &nbsp;
+        {"✅" if _bits3["criteria"]["rsi_oversold"] else "❌"} RSI≤30 &nbsp;
+        {"✅" if _bits3["criteria"]["exchange_outflow"] else "❌"} Outflow
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+                with _b2:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dc3};border-radius:10px;padding:16px">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">DCA Multiplier</div>
+      <div style="font-size:36px;font-weight:700;color:{_dc3}">{_dca_m3}×</div>
+      <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_dl3}</div>
+      <div style="font-size:11px;color:#6b7280;margin-top:8px">F&amp;G: {_fg_val3}/100 · BTC RSI-1D: {f"{_btc_rsi3:.1f}" if _btc_rsi3 else "—"}</div>
+    </div>
+    """, unsafe_allow_html=True)
+                with _b3:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_rc3};border-radius:10px;padding:16px">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Macro Overlay</div>
+      <div style="font-size:18px;font-weight:700;color:{_rc3}">{_macro3["regime"].replace("_", " ")}</div>
+      <div style="font-size:12px;color:#9ca3af;margin-top:4px">Confidence adj: {_macro3["adjustment"]:+.0f} pts</div>
+      <div style="font-size:11px;color:#6b7280;margin-top:8px">DXY {_macro3["dxy"]:.1f} ({_macro3["dxy_signal"]}) · 10Y {_macro3["ten_yr"]:.2f}% ({_macro3["yr_signal"]})</div>
+    </div>
+    """, unsafe_allow_html=True)
+                with _b4:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_skc3};border-radius:10px;padding:16px">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Options Skew (Deribit)</div>
+      <div style="font-size:18px;font-weight:700;color:{_skc3}">{_sk3.get("signal", "N/A")}</div>
+      <div style="font-size:12px;color:#9ca3af;margin-top:4px">Skew: {f"{_sk3['skew']:+.1f}%" if "skew" in _sk3 else "—"}</div>
+      <div style="font-size:11px;color:#6b7280;margin-top:8px">
+        Put IV {f"{_sk3['put_iv']:.1f}%" if "put_iv" in _sk3 else "—"} · Call IV {f"{_sk3['call_iv']:.1f}%" if "call_iv" in _sk3 else "—"}
+      </div>
+      {f'<div style="font-size:10px;color:#4b5563;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
+    </div>
+    """, unsafe_allow_html=True)
+        except Exception:
+            pass
 
-        _coint_data = st.session_state.get("coint_results")
-        if _coint_data is not None:
-            if not _coint_data:
-                st.info("No cointegrated pairs found — try a longer lookback or different timeframe.")
-            else:
-                # Signal color map
-                _COINT_COLORS = {
-                    "LONG_SPREAD":  "#00d4aa",
-                    "SHORT_SPREAD": "#f6465d",
-                    "EXIT_SPREAD":  "#f59e0b",
-                    "NEUTRAL":      "#64748b",
+        # ── S25: Macro Intelligence panel ────────────────────────────────────────
+        with st.expander("🌐 Macro Intelligence — M2 · Yield Curve · DXY · VIX Term Structure", expanded=False):
+            try:
+                _me = data_feeds.get_macro_enrichment()
+                _sig_col = {
+                    "RISK_ON":       "#00d4aa", "MILD_RISK_ON":  "#22c55e",
+                    "NEUTRAL":       "#6b7280", "MILD_RISK_OFF": "#f59e0b",
+                    "RISK_OFF":      "#ef4444",
                 }
+                _sig_bg  = {
+                    "RISK_ON":       "rgba(0,212,170,0.08)", "MILD_RISK_ON":  "rgba(34,197,94,0.08)",
+                    "NEUTRAL":       "rgba(107,114,128,0.08)", "MILD_RISK_OFF": "rgba(245,158,11,0.08)",
+                    "RISK_OFF":      "rgba(239,68,68,0.08)",
+                }
+                _ms = _me["macro_signal"]
+                _mc = _sig_col.get(_ms, "#6b7280")
+                _mb = _sig_bg.get(_ms, "rgba(107,114,128,0.08)")
 
-                # Summary banner
-                _actionable = [r for r in _coint_data if r["signal"] not in ("NEUTRAL", "EXIT_SPREAD")]
-                if _actionable:
-                    st.success(
-                        f"⚖️ **{len(_actionable)} actionable pair trade{'s' if len(_actionable) != 1 else ''}** found "
-                        f"out of {len(_coint_data)} cointegrated pairs."
+                # Composite score card
+                st.markdown(
+                    f'<div style="background:{_mb};border:1px solid {_mc}33;border-left:4px solid {_mc};'
+                    f'border-radius:8px;padding:12px 16px;margin-bottom:12px">'
+                    f'<span style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px">Macro Signal</span>'
+                    f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{_mc}">{_ms.replace("_"," ")}</span>'
+                    f'&nbsp;&nbsp;<span style="font-size:13px;color:#9ca3af">Score: {_me["macro_score"]:+d} / 4</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                _mi_c1, _mi_c2, _mi_c3, _mi_c4 = st.columns(4)
+
+                # M2 trend card
+                _m2c = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_me["m2_trend"], "#6b7280")
+                with _mi_c1:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_m2c};border-radius:10px;padding:14px">
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">Global M2</div>
+      <div style="font-size:16px;font-weight:700;color:{_m2c}">{_me["m2_trend"]}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">{_me["m2_pct_change_90d"]:+.2f}% (90d)</div>
+      <div style="font-size:10px;color:#4b5563;margin-top:6px">Expanding = more liquidity = risk-on tailwind</div>
+    </div>""", unsafe_allow_html=True)
+
+                # Yield curve card
+                _ycc = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_me["yield_curve"], "#6b7280")
+                with _mi_c2:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_ycc};border-radius:10px;padding:14px">
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">Yield Curve (2Y/10Y)</div>
+      <div style="font-size:16px;font-weight:700;color:{_ycc}">{_me["yield_curve"]}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">Spread: {_me["yield_spread_pp"]:+.2f}pp</div>
+      <div style="font-size:10px;color:#4b5563;margin-top:6px">Inverted = recession signal; Normal = growth</div>
+    </div>""", unsafe_allow_html=True)
+
+                # DXY trend card
+                _dxc = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_me["dxy_trend"], "#6b7280")
+                with _mi_c3:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dxc};border-radius:10px;padding:14px">
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">DXY (US Dollar)</div>
+      <div style="font-size:16px;font-weight:700;color:{_dxc}">{_me["dxy_trend"].replace("_"," ")}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">DXY {_me["dxy"]:.1f}</div>
+      <div style="font-size:10px;color:#4b5563;margin-top:6px">Weak dollar = crypto tailwind; Strong = headwind</div>
+    </div>""", unsafe_allow_html=True)
+
+                # VIX term structure card
+                _vtc = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_me["vix_structure"], "#6b7280")
+                with _mi_c4:
+                    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_vtc};border-radius:10px;padding:14px">
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">VIX Term Structure</div>
+      <div style="font-size:16px;font-weight:700;color:{_vtc}">{_me["vix_structure"]}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">VIX {_me["vix"]:.1f} · VIX3M {_me["vix3m"]:.1f} (Δ{_me["vix_spread"]:+.1f})</div>
+      <div style="font-size:10px;color:#4b5563;margin-top:6px">Contango = calm; Backwardation = crisis/fear spike</div>
+    </div>""", unsafe_allow_html=True)
+
+                if st.session_state.get("user_level", "beginner") == "beginner":
+                    _ux = {
+                        "RISK_ON":      "The macro environment strongly supports higher risk assets like crypto right now.",
+                        "MILD_RISK_ON": "Conditions are moderately supportive for risk assets.",
+                        "NEUTRAL":      "Macro conditions are mixed — no strong directional push.",
+                        "MILD_RISK_OFF":"Some macro headwinds are present. Be more cautious with position sizes.",
+                        "RISK_OFF":     "Multiple macro headwinds active. This is a difficult environment for crypto.",
+                    }
+                    st.caption(_ux.get(_ms, ""))
+            except Exception as _me_err:
+                st.caption(f"Macro enrichment unavailable: {_me_err}")
+
+        st.markdown("---")
+
+        # ── Wyckoff Phase Summary (item 23) ─────────────────────────────────────────
+        _wyck_results = [(r.get("pair",""), r.get("wyckoff_phase","Unknown"), r.get("wyckoff_conf",0),
+                          r.get("wyckoff_desc",""), r.get("wyckoff_plain",""),
+                          r.get("wyckoff_spring",False), r.get("wyckoff_upthrust",False))
+                         for r in results if r.get("wyckoff_phase","Unknown") != "Unknown"]
+        if _wyck_results:
+            _user_level_wyck = st.session_state.get("user_level", "beginner")
+            _ui.section_header("Wyckoff Phase Analysis",
+                               "Richard Wyckoff's 4-phase market cycle: Accumulation → Markup → Distribution → Markdown. "
+                               "Identifies where institutional money is flowing.",
+                               icon="🔄")
+            _WYCK_COLOR = {
+                "Accumulation": "#00d4aa", "Markup": "#22c55e",
+                "Distribution": "#f59e0b", "Markdown": "#ef4444",
+            }
+            _WYCK_BG = {
+                "Accumulation": "rgba(0,212,170,0.08)", "Markup": "rgba(34,197,94,0.08)",
+                "Distribution": "rgba(245,158,11,0.08)", "Markdown": "rgba(239,68,68,0.08)",
+            }
+            _WYCK_ICON = {
+                "Accumulation": "🏦", "Markup": "📈",
+                "Distribution": "🏧", "Markdown": "📉",
+            }
+            if _user_level_wyck == "beginner":
+                # Show the top 3 cards with plain English
+                _wc = st.columns(min(3, len(_wyck_results)))
+                for _ci, (_wp, _wph, _wco, _wd, _wpl, _wsp, _wup) in enumerate(_wyck_results[:3]):
+                    with _wc[_ci]:
+                        _wcc = _WYCK_COLOR.get(_wph, "#64748b")
+                        _wcb = _WYCK_BG.get(_wph, "rgba(100,116,139,0.08)")
+                        _wico = _WYCK_ICON.get(_wph, "⬜")
+                        _extra = " 🔔 SPRING" if _wsp else (" 🔔 UPTHRUST" if _wup else "")
+                        st.markdown(
+                            f"<div style='background:{_wcb};border:1px solid {_wcc}33;"
+                            f"border-top:3px solid {_wcc};border-radius:10px;padding:14px'>"
+                            f"<div style='font-size:10px;color:#6b7280;text-transform:uppercase;"
+                            f"letter-spacing:0.8px'>{_wp.replace('/USDT','')}</div>"
+                            f"<div style='font-size:16px;font-weight:700;color:{_wcc};margin-top:2px'>"
+                            f"{_wico} {_wph}{_extra}</div>"
+                            f"<div style='font-size:11px;color:#9ca3af;margin-top:6px'>{_wpl}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+            else:
+                # Table view for intermediate/advanced
+                _phase_counts: dict = {}
+                for _, _wph, _, _, _, _wsp, _wup in _wyck_results:
+                    _phase_counts[_wph] = _phase_counts.get(_wph, 0) + 1
+                _pc = st.columns(4)
+                for _pi, _ph in enumerate(["Accumulation", "Markup", "Distribution", "Markdown"]):
+                    with _pc[_pi]:
+                        _cnt = _phase_counts.get(_ph, 0)
+                        _wcc = _WYCK_COLOR.get(_ph, "#64748b")
+                        _wico = _WYCK_ICON.get(_ph, "⬜")
+                        st.markdown(
+                            f"<div style='text-align:center;background:{_WYCK_BG.get(_ph,'rgba(100,116,139,0.08)')};"
+                            f"border:1px solid {_wcc}33;border-radius:8px;padding:12px'>"
+                            f"<div style='font-size:12px;color:#6b7280'>{_wico} {_ph}</div>"
+                            f"<div style='font-size:28px;font-weight:700;color:{_wcc}'>{_cnt}</div>"
+                            f"<div style='font-size:10px;color:#4b5563'>pairs</div></div>",
+                            unsafe_allow_html=True,
+                        )
+                if _user_level_wyck == "advanced":
+                    # Detailed table
+                    _spring_pairs   = [_wp for _wp, _, _, _, _, _wsp, _ in _wyck_results if _wsp]
+                    _upthrust_pairs = [_wp for _wp, _, _, _, _, _, _wup in _wyck_results if _wup]
+                    if _spring_pairs:
+                        st.markdown(
+                            f"<div style='margin-top:8px;font-size:12px;color:#00d4aa'>"
+                            f"🔔 Springs: {', '.join(p.replace('/USDT','') for p in _spring_pairs)}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    if _upthrust_pairs:
+                        st.markdown(
+                            f"<div style='font-size:12px;color:#f59e0b'>"
+                            f"🔔 Upthrusts: {', '.join(p.replace('/USDT','') for p in _upthrust_pairs)}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+        # ── S24: Liquidation Pressure Monitor ────────────────────────────────────
+        with st.expander("💥 Liquidation Pressure Monitor — OI + Funding Rate Squeeze Risk", expanded=False):
+            st.caption(
+                "Estimates squeeze risk per pair by combining open interest (OKX, free) and "
+                "funding rates (Binance). High OI + extreme funding = more capital at risk of "
+                "cascade liquidation. Data is fetched on demand."
+            )
+            _liq_pairs = model.PAIRS[:12]
+            _liq_load  = st.button("🔄 Load Liquidation Data", key="btn_liq_load")
+            if _liq_load:
+                with st.spinner("Fetching OI + funding from OKX & Binance…", show_time=True):
+                    _liq_data = data_feeds.get_liquidation_pressure(_liq_pairs)
+                st.session_state["liq_data"] = _liq_data
+
+            _liq_data = st.session_state.get("liq_data")
+            if _liq_data:
+                _liq_rows = []
+                for d in _liq_data:
+                    _sq = d["squeeze_signal"]
+                    _sq_icon = {"HIGH_RISK": "🔴", "ELEVATED": "🟡", "NORMAL": "🟢"}.get(_sq, "⚪")
+                    _bias_icon = {"LONGS_HEAVY": "▲ Longs", "SHORTS_HEAVY": "▼ Shorts", "BALANCED": "■ Balanced"}.get(d["funding_bias"], "—")
+                    _liq_rows.append({
+                        "Pair":            d["pair"].replace("/USDT", ""),
+                        "OI (USD)":        f"${d['oi_usd']/1e6:.0f}M" if d["oi_usd"] > 0 else "—",
+                        "OI Level":        d["oi_signal"],
+                        "Funding %":       f"{d['funding_rate_pct']:+.4f}%",
+                        "Bias":            _bias_icon,
+                        "Squeeze Score":   f"{d['squeeze_score']:.4f}",
+                        "Squeeze Risk":    f"{_sq_icon} {_sq}",
+                    })
+                _liq_df = pd.DataFrame(_liq_rows)
+
+                def _color_sq(val: str) -> str:
+                    if "HIGH_RISK" in val: return "color:#ef4444;font-weight:bold"
+                    if "ELEVATED"  in val: return "color:#f59e0b"
+                    return "color:#22c55e"
+
+                st.dataframe(
+                    _liq_df.style.map(_color_sq, subset=["Squeeze Risk"]),
+                    width="stretch", hide_index=True,
+                )
+
+                # Bar chart of squeeze scores
+                _top = [d for d in _liq_data if d["squeeze_score"] > 0][:10]
+                if _top:
+                    _bar_pairs  = [d["pair"].replace("/USDT","") for d in _top]
+                    _bar_scores = [d["squeeze_score"] for d in _top]
+                    _bar_colors = ["#ef4444" if d["squeeze_signal"] == "HIGH_RISK" else
+                                   "#f59e0b" if d["squeeze_signal"] == "ELEVATED" else
+                                   "#22c55e" for d in _top]
+                    _liq_fig = go.Figure(go.Bar(
+                        x=_bar_pairs, y=_bar_scores,
+                        marker_color=_bar_colors,
+                        hovertemplate="%{x}: %{y:.4f}<extra></extra>",
+                    ))
+                    _liq_fig.update_layout(
+                        height=220, margin=dict(l=0, r=0, t=10, b=0),
+                        xaxis_title="", yaxis_title="Squeeze Score",
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_liq_fig, width="stretch")
+                    st.caption(
+                        "Score = √(OI/1B) × |funding %| × 100. "
+                        "🔴 High Risk: large OI + extreme funding → cascade risk if price moves against dominant side."
                     )
 
-                # Render cards for top pairs
-                for _cr in _coint_data[:12]:
-                    _sig_color = _COINT_COLORS.get(_cr["signal"], "#64748b")
-                    _z         = _cr["zscore"]
-                    _z_bar_pct = min(abs(_z) / 3.0 * 100, 100)
+                if st.session_state.get("user_level", "beginner") == "beginner":
+                    st.caption(
+                        "**What this means:** When lots of traders borrow money to bet in one direction "
+                        "(e.g., all betting price goes up), a sudden price drop can force them all to sell at once, "
+                        "causing a bigger crash — called a 'liquidation cascade.' This panel shows which coins are "
+                        "most at risk of that happening right now."
+                    )
+            else:
+                st.info("Press **Load Liquidation Data** to analyse squeeze risk across pairs.")
 
-                    # Plain English signal label
-                    _sig_labels = {
-                        "LONG_SPREAD":  "BUY SPREAD",
-                        "SHORT_SPREAD": "SELL SPREAD",
-                        "EXIT_SPREAD":  "CLOSE POSITION",
-                        "NEUTRAL":      "NEUTRAL",
-                    }
-                    _sig_label = _sig_labels.get(_cr["signal"], _cr["signal"])
+        st.markdown("---")
+        # ── Autonomous Agent Status Panel ─────────────────────────────────────────
+        _agent_cfg = _cached_alerts_config()
+        if _agent_cfg.get("agent_enabled", False):
+            # Auto-start supervisor if enabled in config and not already running
+            try:
+                if _agent is not None and not _agent.supervisor.is_running():
+                    _agent.supervisor.start()
+            except Exception:
+                pass
+            st.markdown("---")
+            _ui.section_header("Autonomous Agent", "24/7 AI trading agent status", icon="🤖")
+            try:
+                _ag_st = _agent.supervisor.status() if _agent is not None else {}
+            except Exception:
+                _ag_st = {}
+            # ── agent status metrics ──────────────────────────────────────────────
+            import crypto_model_core as _cmc_ag
+            _ag_n_pairs   = len(_cmc_ag.PAIRS)
+            _ag_cur_pair  = _ag_st.get("current_pair", "") or ""   # pair in-flight right now
+            _ag_last_pair = _ag_st.get("last_pair", "")  or ""     # last completed pair
 
+            _ag_c1, _ag_c2, _ag_c3, _ag_c4 = st.columns(4)
+            _ag_c1.metric(
+                "Status",
+                "🟢 RUNNING" if _ag_st.get("running") else "🔴 STOPPED",
+                delta="LangGraph" if _ag_st.get("langgraph") else "Fallback pipeline",
+                delta_color="normal",
+            )
+            _ag_c2.metric(
+                "Pairs in Scope",
+                _ag_n_pairs,
+                delta="all pairs every cycle",
+                delta_color="normal",
+                help=f"Agent scans all {_ag_n_pairs} pairs in model.PAIRS every cycle — not just BTC. "
+                     f"Pairs: {', '.join(_cmc_ag.PAIRS)}",
+            )
+            _ag_c3.metric(
+                "Now Analyzing",
+                _ag_cur_pair.replace("/USDT", "") if _ag_cur_pair else "—",
+                delta="in-flight" if _ag_cur_pair else "between cycles",
+                delta_color="normal",
+                help="The pair the agent is currently running signal analysis on. Updates live.",
+            )
+            _ag_c4.metric(
+                "Total Pair Scans",
+                _ag_st.get("cycles_total", 0),
+                delta=f"restarts: {_ag_st.get('restart_count', 0)}",
+                delta_color="normal",
+                help="Total number of individual pair evaluations since the agent started.",
+            )
+            if (_ag_st.get("last_run_ts") or 0) > 0:
+                _last_ago = int(time.time() - _ag_st["last_run_ts"])
+                _last_decision = _ag_st.get("last_decision") or "—"
+                st.caption(
+                    f"Last completed: **{_ag_last_pair}** → {_last_decision} | {_last_ago}s ago "
+                    f"| Dry-run: {'ON' if _agent_cfg.get('agent_dry_run', True) else 'OFF'} "
+                    f"| Scanning all {_ag_n_pairs} pairs each cycle"
+                )
+            with st.expander(f"Recent Agent Decisions (all {_ag_n_pairs} pairs)", expanded=False):
+                try:
+                    _ag_log_df = _cached_agent_log_df(limit=50)
+                    if _ag_log_df.empty:
+                        st.caption("No decisions recorded yet.")
+                    else:
+                        _show_cols = [c for c in ["logged_at", "pair", "direction",
+                                                  "confidence", "claude_decision",
+                                                  "action_taken", "claude_rationale"]
+                                      if c in _ag_log_df.columns]
+                        # Sort by logged_at desc so newest pair decisions are at top
+                        _disp_df = _ag_log_df[_show_cols]
+                        if "logged_at" in _disp_df.columns:
+                            _disp_df = _disp_df.sort_values("logged_at", ascending=False)
+                        st.dataframe(_disp_df, width="stretch", hide_index=True)
+                        # Show unique pairs covered this session
+                        if "pair" in _ag_log_df.columns:
+                            _seen_pairs = sorted(_ag_log_df["pair"].dropna().unique().tolist())
+                            st.caption(f"Pairs with decisions logged: {', '.join(_seen_pairs)}")
+                except Exception as _ae:
+                    st.caption(f"Agent log unavailable: {_ae}")
+        else:
+            # Config was disabled — stop the running supervisor if active
+            try:
+                if _agent is not None and _agent.supervisor.is_running():
+                    _agent.supervisor.stop()
+            except Exception:
+                pass
+
+        # ── Connected Wallet Panel (#110 / #111) ──────────────────────────────────
+        _wh = st.session_state.get("wallet_holdings")
+        _zp = st.session_state.get("zerion_portfolio")
+        if _wh or _zp:
+            st.markdown("---")
+            _ui.section_header("Connected Wallet", "Read-only portfolio import", icon="🔗")
+            _portfolio = _zp or _wh  # prefer full Zerion portfolio when available
+            _wh_c1, _wh_c2, _wh_c3 = st.columns(3)
+            _wh_c1.metric("Total Value", f"${_portfolio.get('total_value_usd', 0):,.2f}")
+            _wh_c2.metric("Address", (_portfolio.get('address', '') or '')[:10] + "…")
+            _wh_c3.metric("Source", (_portfolio.get('source') or 'zerion').upper())
+
+            # 24h change (Zerion only)
+            if _zp and _zp.get("change_24h_pct") is not None:
+                _chg = _zp.get("change_24h_pct", 0.0)
+                st.metric("24h Change", f"{_chg:+.2f}%", delta=f"{_chg:+.2f}%")
+
+            # Top holdings
+            _tokens = _portfolio.get("tokens") or _portfolio.get("positions") or []
+            if _tokens:
+                with st.expander("Top Holdings", expanded=True):
+                    _top5 = sorted(_tokens, key=lambda x: x.get("value_usd") or 0, reverse=True)[:5]
+                    _tok_rows = []
+                    for _tok in _top5:
+                        _tok_rows.append({
+                            "Symbol":     _tok.get("symbol", ""),
+                            "Balance":    f"{_tok.get('balance', 0):,.4f}",
+                            "Value USD":  f"${_tok.get('value_usd', 0):,.2f}",
+                            "24h %":      f"{_tok.get('change_pct_1d', 0):+.2f}%" if _tok.get('change_pct_1d') is not None else "—",
+                            "Chain":      _tok.get("chain") or "Ethereum",
+                        })
+                    if _tok_rows:
+                        st.dataframe(pd.DataFrame(_tok_rows), width="stretch", hide_index=True)
+
+            # Chain breakdown (Zerion full portfolio)
+            if _zp and _zp.get("chains"):
+                with st.expander("Chain Breakdown", expanded=False):
+                    _chain_data = _zp["chains"]
+                    _chain_rows = [{"Chain": c, "Value USD": f"${v:,.2f}"} for c, v in _chain_data.items()]
+                    if _chain_rows:
+                        st.dataframe(pd.DataFrame(_chain_rows), width="stretch", hide_index=True)
+
+
+    with _dash_tab2:
+        # ── Signal Heatmap — pairs × timeframes (Item 8: card list for beginners) ──
+        if _user_lv in ("beginner", "intermediate"):
+            _ui.section_header(
+                "All Signals — Ranked by Strength",
+                "Coins sorted from strongest to weakest signal. ▲ = potential buy, ▼ = potential sell, ■ = wait/unclear.",
+                icon="🏆",
+            )
+            st.markdown(_ui.signal_rank_list_html(results), unsafe_allow_html=True)
+            st.markdown("---")
+        else:
+            _ui.section_header("Signal Heatmap",
+                               "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",
+                               icon="🗺️")
+            _tf_list  = model.TIMEFRAMES
+            _hm_pairs = [r["pair"] for r in results]
+            _hm_conf  = []
+            _hm_text  = []
+            _hm_dir   = []
+            for r in results:
+                _tfd      = r.get("timeframes", {})
+                _row_conf = []
+                _row_text = []
+                _row_dir  = []
+                for tf in _tf_list:
+                    _cell = _tfd.get(tf, {})
+                    _c    = float(_cell.get("confidence", 0) or 0)
+                    _d    = str(_cell.get("direction", "NO DATA") or "NO DATA")
+                    _row_conf.append(_c)
+                    _row_text.append(f"{int(_c)}%\n{_d[:3]}")
+                    _row_dir.append(_d)
+                _hm_conf.append(_row_conf)
+                _hm_text.append(_row_text)
+                _hm_dir.append(_row_dir)
+
+            def _dir_to_val(d: str) -> float:
+                d = d.upper()
+                if "STRONG BUY"  in d: return  1.0
+                if "BUY"         in d: return  0.5
+                if "STRONG SELL" in d: return -1.0
+                if "SELL"        in d: return -0.5
+                return 0.0
+
+            _hm_color = [[_dir_to_val(d) for d in row] for row in _hm_dir]
+            _hm_fig   = go.Figure(data=go.Heatmap(
+                z            = _hm_color,
+                x            = _tf_list,
+                y            = _hm_pairs,
+                text         = _hm_text,
+                texttemplate = "%{text}",
+                textfont     = {"size": 9},
+                colorscale   = [
+                    [0.0,  "#ff4b4b"],
+                    [0.25, "#ffaaaa"],
+                    [0.5,  "#888888"],
+                    [0.75, "#99e6cc"],
+                    [1.0,  "#00d4aa"],
+                ],
+                zmin=-1, zmax=1,
+                showscale=False,
+                hovertemplate="<b>%{y}</b> / %{x}<br>%{text}<extra></extra>",
+            ))
+            _hm_fig.update_layout(
+                height=max(250, 32 * len(_hm_pairs) + 60),
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor="#0e1117",
+                plot_bgcolor="#0e1117",
+                font=dict(color="#fafafa", size=9),
+                xaxis=dict(side="top", tickfont=dict(size=9)),
+                yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
+            )
+            st.plotly_chart(_hm_fig, width="stretch",
+                            config={"displayModeBar": False, "staticPlot": True})
+            st.markdown("---")
+
+        # ── Quick-View Card Grid — all coins at a glance (teen-friendly) ──────────
+        _ui.section_header(
+            "What To Do Right Now",
+            "Each card shows whether to BUY, SELL, or WAIT — score out of 10 shows how strong the signal is",
+            icon="🎯",
+        )
+        # PERF-28: use the single _live_prices fetched at the top of page_dashboard()
+        _all_ws_prices = _live_prices
+        # Sort: high-conf first, then by confidence descending for card grid
+        _grid_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
+        st.markdown(
+            _ui.coin_cards_grid_html(_grid_results, ws_prices=_all_ws_prices),
+            unsafe_allow_html=True,
+        )
+
+        # Quick-glance summary table (advanced users)
+        with st.expander("📋 Full Summary Table", expanded=False):
+            summary_rows = []
+            for r in results:
+                _st = _all_ws_prices.get(r["pair"])
+                _live_str = (
+                    f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
+                )
+                _tp1 = r.get("tp1")
+                summary_rows.append({
+                    "Coin": r["pair"],
+                    "Price": _live_str,
+                    "Signal": r.get("direction", "N/A"),
+                    "Strength": f"{r.get('confidence_avg_pct', 0)}%",
+                    "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
+                    "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
+                    "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
+                    "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
+                })
+            st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), width="stretch")
+        st.markdown("---")
+
+
+        # ── Scan Overview — Sparkline Mini-Grid (#60) ─────────────────────────────
+        _ui.section_header("Scan Overview", "Mini sparklines — 24h price trend for each pair at a glance. Green = up, Red = down.", icon="📈")
+        # #59 Mobile-responsive layout: 2-column grid on wide screens; note if only 1 result
+        _spk_n_results = len(sorted_results)
+        if _spk_n_results == 1:
+            st.caption("Single result — showing in single-column layout.")
+            _spk_n_cols = 1
+        else:
+            _spk_n_cols = min(_spk_n_results, 4)  # up to 4 columns; CSS grid handles responsive wrap
+        _spk_cols = st.columns(_spk_n_cols)
+        _spk_pairs_12 = [_sr["pair"] for _sr in sorted_results[:12]]
+        # PERF-27: fetch all sparklines in parallel (was sequential — N × round-trip latency)
+        try:
+            from concurrent.futures import ThreadPoolExecutor as _SpkTEx
+            def _fetch_spk(pair_):
+                try:
+                    return data_feeds.fetch_sparkline_closes(pair_, n=24)
+                except Exception:
+                    return []
+            with _SpkTEx(max_workers=min(len(_spk_pairs_12), 12)) as _spk_ex:
+                _spk_results = dict(zip(_spk_pairs_12, _spk_ex.map(_fetch_spk, _spk_pairs_12)))
+        except Exception:
+            _spk_results = {}
+        for _si, _sr in enumerate(sorted_results[:12]):  # max 12 cards in grid
+            _col_idx = _si % _spk_n_cols
+            with _spk_cols[_col_idx]:
+                _spk_closes = _spk_results.get(_sr["pair"], [])
+                _spk_html = _ui.scan_sparkline_card_html(
+                    pair      = _sr["pair"],
+                    direction = _sr.get("direction", "—"),
+                    conf      = _sr.get("confidence_avg_pct", 0),
+                    closes    = _spk_closes,
+                )
+                st.markdown(_spk_html, unsafe_allow_html=True)
+                st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+        st.markdown("---")
+
+        # ── S1-S10 Advanced Analytics Panels ─────────────────────────────────────
+        _s_macro_regime = results[0].get("macro_regime", "MACRO_NEUTRAL") if results else "MACRO_NEUTRAL"
+        _s_altcoin      = results[0].get("altcoin_season", "MIXED") if results else "MIXED"
+
+        # S10 — Market Regime Banner (BULL / BEAR / SIDEWAYS from buy/sell majority + F&G)
+        try:
+            _ui.render_market_regime_banner(results, _fng_val, _s_macro_regime, _s_altcoin)
+        except Exception:
+            pass
+
+        # S1 — TTM Squeeze Momentum Panel
+        try:
+            _ui.render_ttm_squeeze_panel(_spk_results, results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S2 — Hurst Exponent Panel
+        try:
+            _ui.render_hurst_exponent_panel(_spk_results, results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S3 — RSI / MACD Divergence Panel
+        try:
+            _ui.render_rsi_macd_divergence_panel(results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S4 — Funding Rate Arbitrage Panel
+        try:
+            _ui.render_funding_rate_arb_panel(results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S5 — Liquidation Overlay Panel
+        try:
+            _ui.render_liquidation_overlay_panel(results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S6 — Social Momentum Panel
+        try:
+            _ui.render_social_momentum_panel(results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S7 — GitHub Developer Activity Panel
+        try:
+            _ui.render_github_dev_activity_panel(_sg_level_val)
+        except Exception:
+            pass
+
+        # S8 — Trader vs Investor Split Panel
+        try:
+            _ui.render_trader_investor_split(results, _sg_level_val)
+        except Exception:
+            pass
+
+        # S9 — Threshold Alerts Panel
+        try:
+            _ui.render_threshold_alerts_panel(results, _sg_level_val)
+        except Exception:
+            pass
+
+        st.markdown("---")
+
+        # ── Tier 2 Pairs Results (#88) — collapsible section ──────────────────────
+        if tier2_results:
+            with st.expander(
+                f"📊 Tier 2 Pairs — {len(tier2_results)} mid-cap coins scanned",
+                expanded=False,
+            ):
+                st.markdown(
+                    '<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);'
+                    'border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#f59e0b">'
+                    '⚠️ <b>Tier 2 pairs have lower liquidity and may have less accurate signals.</b> '
+                    'Use these results as supplementary context only — verify before acting.'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                # Summary metrics for Tier 2
+                _t2_hc = [r for r in tier2_results if r.get("high_conf")]
+                _t2_buy  = sum(1 for r in tier2_results if "BUY"  in r.get("direction", ""))
+                _t2_sell = sum(1 for r in tier2_results if "SELL" in r.get("direction", ""))
+                _t2_mc = st.columns(4)
+                _t2_mc[0].metric("Tier 2 Scanned", len(tier2_results))
+                _t2_mc[1].metric("Top Picks ⚡", len(_t2_hc))
+                _t2_mc[2].metric("Buy Signals", f"▲{_t2_buy}")
+                _t2_mc[3].metric("Sell Signals", f"▼{_t2_sell}")
+                # Coin cards for Tier 2
+                _t2_sorted = sorted(
+                    tier2_results,
+                    key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)),
+                    reverse=True,
+                )
+                _all_ws_t2 = _live_prices  # PERF-28: reuse single ws prices fetch
+                st.markdown(
+                    _ui.coin_cards_grid_html(_t2_sorted, ws_prices=_all_ws_t2),
+                    unsafe_allow_html=True,
+                )
+                # Summary table
+                _t2_rows = []
+                for _t2r in _t2_sorted:
+                    _t2_tp = _t2r.get("tp1")
+                    _t2_rows.append({
+                        "Coin":       _t2r.get("pair", "N/A"),
+                        "Signal":     _t2r.get("direction", "N/A"),
+                        "Strength":   f"{_t2r.get('confidence_avg_pct', 0)}%",
+                        "Entry":      f"${_t2r['entry']:,.4f}"   if _t2r.get("entry")    else "N/A",
+                        "Take Profit":f"${_t2_tp:,.4f}"          if _t2_tp              else "N/A",
+                        "Stop Loss":  f"${_t2r['stop_loss']:,.4f}" if _t2r.get("stop_loss") else "N/A",
+                        "Top Pick":   "⚡ Yes" if _t2r.get("high_conf") else "—",
+                    })
+                if _t2_rows:
+                    st.dataframe(pd.DataFrame(_t2_rows).set_index("Coin"), width="stretch")
+        elif st.session_state.get("include_tier2"):
+            st.info("Tier 2 scan is enabled — run a new scan to include Tier 2 pairs.")
+
+        st.markdown("---")
+        # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
+        if results:
+            st.markdown("---")
+            _ui.section_header("Signal Heatmap", "All pairs — color = signal strength (green=BUY, red=SELL, grey=HOLD)", icon="🗺️")
+
+            from crypto_model_core import SECTOR_MAP, PAIRS as _ALL_PAIRS
+
+            # Map pair → signal score for color coding
+            _sig_map = {}
+            for _r in results:
+                _p   = _r.get("pair", "")
+                _dir = _r.get("direction", "")
+                _sc  = _r.get("score", 0.0) or 0.0
+                _sig_map[_p] = (_dir, _sc)
+
+            # Build grid ordered by sector then pair name
+            _sector_order = ["store_of_value", "layer1", "payments", "defi", "exchange", "layer2", "infrastructure", "ai", "meme", "other"]
+            _by_sector: dict = {}
+            for _pp in _ALL_PAIRS:
+                _s = SECTOR_MAP.get(_pp, "other")
+                _by_sector.setdefault(_s, []).append(_pp)
+
+            _heat_html = "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;'>"
+            for _sec in _sector_order:
+                _sec_pairs = _by_sector.get(_sec, [])
+                if not _sec_pairs:
+                    continue
+                # Sector label
+                _heat_html += (
+                    f"<div style='width:100%;font-size:10px;text-transform:uppercase;"
+                    f"letter-spacing:0.8px;color:#6b7280;margin:8px 0 4px;font-weight:600;'>"
+                    f"{_sec.replace('_', ' ')}</div>"
+                )
+                _heat_html += "<div style='display:flex;flex-wrap:wrap;gap:6px;'>"
+                for _pp in _sec_pairs:
+                    _base = _pp.split("/")[0]
+                    _dir, _sc = _sig_map.get(_pp, ("HOLD", 0.0))
+                    if "BUY" in _dir:
+                        _bg   = f"rgba(0,212,170,{min(0.85, 0.25 + abs(_sc)/100)})"
+                        _border = "#00d4aa"
+                        _tc   = "#e2e8f0"
+                    elif "SELL" in _dir:
+                        _bg   = f"rgba(246,70,93,{min(0.85, 0.25 + abs(_sc)/100)})"
+                        _border = "#f6465d"
+                        _tc   = "#e2e8f0"
+                    else:
+                        _bg   = "rgba(107,114,128,0.15)"
+                        _border = "#374151"
+                        _tc   = "#6b7280"
+                    _sc_str = f"{_sc:+.0f}" if _sc != 0 else "—"
+                    _heat_html += (
+                        f"<div style='background:{_bg};border:1px solid {_border};"
+                        f"border-radius:8px;padding:6px 10px;min-width:64px;text-align:center;"
+                        f"cursor:default;'>"
+                        f"<div style='font-size:12px;font-weight:700;color:{_tc};'>{_base}</div>"
+                        f"<div style='font-size:10px;color:{_border};margin-top:2px;font-weight:600;'>"
+                        f"{_dir.replace('STRONG_', '').replace('_BIAS', '')} {_sc_str}</div>"
+                        f"</div>"
+                    )
+                _heat_html += "</div>"
+            _heat_html += "</div>"
+
+            st.markdown(_heat_html, unsafe_allow_html=True)
+            _buys  = sum(1 for d, _ in _sig_map.values() if "BUY"  in d)
+            _sells = sum(1 for d, _ in _sig_map.values() if "SELL" in d)
+            _holds = len(_sig_map) - _buys - _sells
+            st.caption(f"Signal summary: {_buys} BUY · {_sells} SELL · {_holds} HOLD · Score = composite signal strength (higher = stronger)")
+
+        # ── Global Market Context (folded in from Market Overview) ─────────────────
+        with st.expander("🌍 Global Market Context", expanded=False):
+            _gm  = _cached_global_market()
+            _gtr = _cached_trending_coins()
+
+            def _fmt_cap_d(v):
+                if v >= 1e12: return f"${v/1e12:.2f}T"
+                if v >= 1e9:  return f"${v/1e9:.1f}B"
+                return f"${v/1e6:.0f}M"
+
+            _tm   = _gm.get("total_market_cap_usd", 0)
+            _bd   = _gm.get("btc_dominance", 0.0)
+            _ed   = _gm.get("eth_dominance", 0.0)
+            _mchg = _gm.get("market_cap_change_24h", 0.0)
+            _vol  = _gm.get("total_volume_24h_usd", 0)
+            _alt  = _gm.get("altcoin_season_label", "N/A")
+            _gdc  = "#00c076" if _mchg >= 0 else "#f6465d"
+            _ga   = "▲" if _mchg >= 0 else "▼"
+            _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
+            with _gc1:
+                st.metric("Total Market Cap", _fmt_cap_d(_tm),
+                          delta=f"{_ga} {abs(_mchg):.2f}% 24h", delta_color="normal")
+            with _gc2:
+                st.metric("BTC Dominance", f"{_bd:.1f}%")
+            with _gc3:
+                st.metric("ETH Dominance", f"{_ed:.1f}%")
+            with _gc4:
+                st.metric("24h Volume", _fmt_cap_d(_vol))
+            with _gc5:
+                st.metric("Market Regime", _alt.replace("_", " "))
+
+            if _gtr:
+                _chips = " ".join(
+                    f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
+                    f'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
+                    f'color:#00d4aa;font-size:12px;font-weight:600;margin:2px">{s}</span>'
+                    for s in _gtr[:10]
+                )
+                st.markdown(
+                    f'<div style="margin:4px 0 12px">'
+                    f'<span style="color:rgba(255,255,255,0.45);font-size:11px;'
+                    f'text-transform:uppercase;letter-spacing:0.8px;margin-right:10px">🔥 Trending</span>'
+                    + _chips + '</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+
+    with _dash_tab3:
+        # ── Coin Selector Dropdown ─────────────────────────────────────────────────
+        _ui.section_header("Dive Deeper — Pick a Coin", "Choose a coin below to see the full breakdown: entry price, stop loss, AI prediction, news sentiment, and more", icon="🔬")
+
+        def _pair_label(r):
+            _d  = r.get("direction", "N/A")
+            _c  = r.get("confidence_avg_pct", 0)
+            _ic = direction_color(_d)
+            _hc = "  ⚡ TOP PICK" if r.get("high_conf") else ""
+            _tr = "  🔥" if r.get("trending") else ""
+            # Risk indicator for the dropdown label
+            _pos = r.get("position_size_pct") or 10
+            if _c >= 70 and _pos <= 15:
+                _risk = "🟢 Low Risk"
+            elif _c >= 55 and _pos <= 25:
+                _risk = "🟡 Med Risk"
+            else:
+                _risk = "🔴 Higher Risk"
+            return f"{_ic}  {r['pair']}  ·  {_c:.0f}% strength  ·  {_d}  ·  {_risk}{_hc}{_tr}"
+
+        _pair_labels  = [_pair_label(r) for r in sorted_results]
+        _label_to_r   = dict(zip(_pair_labels, sorted_results))
+
+        _selected_label = st.selectbox(
+            "Choose a coin to inspect",
+            options=_pair_labels,
+            index=0,
+            label_visibility="collapsed",
+            key="coin_selector",
+        )
+        r = _label_to_r[_selected_label]
+        # PERF-24: prefer full result from module-level store (avoids session_state serialization)
+        pair = r["pair"]
+        r = _SCAN_RESULTS_STORE.get(pair, r)  # fall back to session_state copy if store not populated
+
+        # ── Selected Coin Detail Panel ─────────────────────────────────────────────
+        pair        = r["pair"]
+        conf        = r.get("confidence_avg_pct", 0)
+        direction   = r.get("direction", "N/A")
+        bias        = r.get("strategy_bias", "N/A")
+        mtf         = r.get("mtf_alignment", 0)
+        price       = r.get("price_usd")
+        entry       = r.get("entry")
+        exit_       = r.get("exit")
+        stop        = r.get("stop_loss")
+        pos_pct     = r.get("position_size_pct")
+        is_hc       = r.get("high_conf", False)
+        is_trending = r.get("trending", False)
+
+        _ui.signal_card_header(
+            pair=pair, direction=direction, conf=conf,
+            bias=bias, regime=r.get("regime", "N/A"), is_hc=is_hc,
+        )
+
+        # Signal strength visual dots + risk badge — beginner at-a-glance indicators
+        _str_dots  = _ui.signal_strength_stars(conf)
+        _risk_chip = _ui.risk_level_badge_html(conf, pos_pct)
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:16px;margin:-6px 0 10px 0">'
+            f'{_str_dots}'
+            f'<span style="opacity:0.3">|</span>'
+            f'{_risk_chip}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Plain English summary — designed for users unfamiliar with trading terms
+        _plain_summary = _ui.signal_plain_english(
+            pair=pair, direction=direction, conf=conf, mtf=mtf,
+            regime=r.get("regime", ""), entry=entry, stop=stop, exit_=exit_,
+        )
+        _ui.plain_english_box(_plain_summary, direction)
+
+        if is_trending:
+            st.markdown(
+                '<span style="display:inline-block;padding:2px 10px;border-radius:20px;'
+                'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
+                'color:#00d4aa;font-size:11px;font-weight:600;margin-bottom:6px">'
+                '🔥 Trending on CoinGecko right now</span>',
+                unsafe_allow_html=True,
+            )
+
+        # #26 Pi Cycle Top warning on the coin detail card
+        _r_pi_flags = r.get("signal_flags", [])
+        if "PI_CYCLE_TOP_WARNING" in _r_pi_flags:
+            st.warning(
+                "⚠️ **PI_CYCLE_TOP_WARNING** — Confidence capped at 30% (cycle top indicator active). "
+                "Exercise extreme caution with new BUY entries."
+            )
+
+        # ── Row 1: Price · Entry · Stop Loss ──────────────────────────────────────
+        top_cols = st.columns(3)
+        _live_tick = _ws.get_price(pair)
+        if _live_tick and "price" in _live_tick and "change_24h_pct" in _live_tick:
+            top_cols[0].metric(
+                "Current Price ⬤ LIVE",
+                f"${_live_tick['price']:,.4f}",
+                delta=f"{_live_tick['change_24h_pct']:+.2f}% today",
+                help="Live price from OKX.",
+            )
+        else:
+            top_cols[0].metric("Current Price", f"${price:,.4f}" if price else "N/A")
+        _entry_label = "Buy At" if "BUY" in direction.upper() else ("Sell At" if "SELL" in direction.upper() else "Entry Price")
+        top_cols[1].metric(_entry_label, f"${entry:,.4f}" if entry else "N/A",
+                           help="The price to enter this trade. Try to get close to this level.")
+        top_cols[2].metric("Stop Loss — Exit If Wrong", f"${stop:,.4f}" if stop else "N/A",
+                           help="If price hits this level, exit the trade to limit your loss.")
+
+        # ── Row 2: Take Profit · Signal Strength · Trade Size ─────────────────────
+        bot_cols = st.columns(3)
+        _tp1_val = r.get("tp1") or exit_
+        bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
+                           help="This is your TARGET — the price to sell at and take your profit. Think of it as the finish line.")
+        # Score out of 10 alongside % — research shows teens prefer a 1-10 scale
+        _score_10 = max(1, min(10, round(conf / 10)))
+        bot_cols[1].metric("Confidence Score", f"{_score_10}/10  ({conf:.0f}%)",
+                           help="How strongly our model agrees on the signal direction. Above 65% = actionable. 7+/10 = strong signal. 5 or below = uncertain — don't trade this.")
+        # #50 Fractional Kelly position sizing — display recommended size from Kelly formula
+        _kelly_pos_pct = pos_pct   # default to model-computed size
+        try:
+            import risk_metrics as _risk_mod
+            # Use cached backtest DF — avoids an expensive uncached DB read on every card render
+            _bt_kelly = _cached_backtest_df()
+            if not _bt_kelly.empty:
+                _bt_valid = _bt_kelly[_bt_kelly['pnl_pct'].notna()]
+                if len(_bt_valid) >= 20:
+                    _wins_k   = _bt_valid[_bt_valid['pnl_pct'] > 0]
+                    _losses_k = _bt_valid[_bt_valid['pnl_pct'] <= 0]
+                    if len(_wins_k) > 0 and len(_losses_k) > 0:
+                        _wr  = len(_wins_k) / len(_bt_valid)
+                        _aw  = float(_wins_k['pnl_pct'].mean()) / 100
+                        _al  = float(abs(_losses_k['pnl_pct'].mean())) / 100
+                        _kf  = _risk_mod.compute_kelly_fraction(_wr, _aw, _al, fraction=0.25)
+                        _kelly_pos_pct = _kf.get("recommended_position_pct", pos_pct)
+        except Exception:
+            pass
+        bot_cols[2].metric(
+            "Suggested Trade Size",
+            f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "N/A",
+            help=(
+                "Recommended position size as % of portfolio based on historical win rate. "
+                "Fractional Kelly (25%) reduces risk of ruin. "
+                "If you have $1,000 and it says 10%, use $100."
+            ),
+        )
+
+        # Item 7: "What Does This Mean For Me?" — beginner/intermediate contextual dollar summary
+        if _user_lv in ("beginner", "intermediate"):
+            try:
+                _portfolio_sz = float(_cached_alerts_config().get("portfolio_size", 1000))
+            except Exception:
+                _portfolio_sz = 1000.0
+            st.markdown(
+                _ui.wdtmfm_html(direction, entry, stop, exit_, conf, _portfolio_sz),
+                unsafe_allow_html=True,
+            )
+
+        # Gradient confidence bar (#62) — signal-aware color-coded bar
+        st.markdown(_ui.render_confidence_bar(conf, direction), unsafe_allow_html=True)
+
+        # ── #59 Key metrics row with beginner tooltips ─────────────────────────────
+        _km_tf1 = (list(r.get("timeframes", {}).values()) or [{}])[0]
+        try:
+            _km_rsi_raw = _km_tf1.get("rsi")
+            _km_rsi = float(_km_rsi_raw) if _km_rsi_raw is not None else None
+        except (TypeError, ValueError):
+            _km_rsi = None
+        try:
+            _km_adx_raw = _km_tf1.get("adx")
+            _km_adx = float(_km_adx_raw) if _km_adx_raw is not None else None
+        except (TypeError, ValueError):
+            _km_adx = None
+        try:
+            _km_fr_raw = r.get("funding_rate_pct") or (r.get("timeframes", {}).get("1h", {}) or {}).get("funding")
+            _km_fr = float(_km_fr_raw) if _km_fr_raw is not None else None
+        except (TypeError, ValueError):
+            _km_fr = None
+        _km_chg = (_ws.get_price(pair) or {}).get("change_24h_pct")
+        _km_c1, _km_c2, _km_c3, _km_c4 = st.columns(4)
+        _km_c1.metric(
+            "Current Price",
+            f"${price:,.4f}" if price else "N/A",
+            delta=f"{_km_chg:+.2f}% 24h" if _km_chg is not None else None,
+        )
+        _km_c2.metric(
+            "RSI (1h)",
+            f"{_km_rsi:.1f}" if _km_rsi is not None else "N/A",
+            help="RSI above 70 = overbought, below 30 = oversold. Best range: 40-60 for entries.",
+        )
+        _km_c3.metric(
+            "ADX (1h)",
+            f"{_km_adx:.1f}" if _km_adx is not None else "N/A",
+            help="Trend strength indicator. Above 25 = strong trend. Below 20 = choppy/ranging.",
+        )
+        _km_c4.metric(
+            "Funding Rate",
+            f"{_km_fr:+.4f}%" if _km_fr is not None else "N/A",
+            help="Positive = longs pay shorts (bullish market). Negative = shorts pay longs (bearish market). Extreme values warn of reversals.",
+        )
+
+        # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
+        _consensus     = r.get("consensus", 0.0)
+        _agents_agree  = round(_consensus * 6)   # consensus = fraction of 6 agents with abs(vote)>70
+        _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#f6465d")
+
+        # Signal accuracy badge — shows historical win rate for this pair/direction
+        try:
+            _acc_data = _cached_signal_win_rate(pair=pair, direction=direction, days=90)
+            _acc_badge = _ui.signal_accuracy_badge_html(
+                win_rate    = _acc_data.get("win_rate", 0.5),
+                sample_size = _acc_data.get("sample_size", 0),
+                signal_type = direction.replace("STRONG ", ""),
+            )
+        except Exception:
+            _acc_badge = ""
+
+        st.markdown(
+            f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;'
+            f'font-size:12px;color:rgba(168,180,200,0.6);margin:-4px 0 10px 0">'
+            f'<span>'
+            f'<span style="color:{_agree_color};font-weight:700">{_agents_agree} of 6</span>'
+            f' AI models agree on this signal'
+            f'</span>'
+            f'{_acc_badge}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Item 6 Tier 2: "Why this signal?" plain-English reasoning ─────────────
+        if _user_lv in ("beginner", "intermediate"):
+            with st.expander("🔍 Why this signal? — Plain-English reasons", expanded=False):
+                st.markdown(
+                    _ui.why_signal_html(
+                        direction     = direction,
+                        conf          = conf,
+                        rsi           = _km_rsi,
+                        adx           = _km_adx,
+                        mtf           = mtf,
+                        consensus     = r.get("consensus", 0.0),
+                        regime        = r.get("regime", ""),
+                        bias          = r.get("strategy_bias", ""),
+                        funding_rate  = _km_fr,
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+        # ── Advanced Details (collapsed by default) ────────────────────────────────
+        _adv_label = "📊 Technical Details" if _user_lv == "beginner" else "📊 More Details — Timeframes & Technicals"
+        with st.expander(_adv_label, expanded=False):
+            tp2       = r.get("tp2")
+            tp3       = r.get("tp3")
+            lev_rec   = r.get("leverage_rec") or {}
+            lev_label = lev_rec.get("label", "N/A")
+            lev_basis = lev_rec.get("basis", "")
+            mtf_conf  = r.get("mtf_confirmed", True)
+            rr        = r.get("rr_ratios") or {}
+
+            adv_cols = st.columns(4)
+            # Show "N/A" when mtf_alignment is 0 and no valid timeframes had data
+            _mtf_display = "N/A" if mtf == 0 and not any(
+                td.get("direction") not in ("NO DATA", "N/A", "LOW VOL")
+                for td in r.get("timeframes", {}).values()
+            ) else f"{mtf}%"
+            adv_cols[0].metric("Timeframes Agreeing", _mtf_display, help=_ui.HELP_MTF_ALIGN)
+            adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "N/A",
+                               delta=rr.get("tp2", ""), help="Second profit target — sell another 40% here.")
+            adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "N/A",
+                               delta=rr.get("tp3", ""), help="Final ambitious target — hold last 20% here.")
+            adv_cols[3].metric(
+                "Leverage (Futures Only)",
+                lev_label,
+                delta="✓ All timeframes agree" if mtf_conf else "⚠️ Mixed signals",
+                delta_color="normal" if mtf_conf else "inverse",
+                help=(f"For futures trading only. Basis: {lev_basis}. " if lev_basis else "") +
+                     "Use 1× for spot trading. Never use leverage you don't understand.",
+            )
+
+            tf_data = r.get("timeframes", {})
+            if tf_data:
+                _tf_head_col, _tf_info_col = st.columns([5, 1])
+                with _tf_head_col:
+                    st.markdown("**What each timeframe says**")
+                with _tf_info_col:
+                    _ui.tf_column_guide_popover()
+                _tf_rows = []
+                # Plain-English timeframe labels (research: teens respond to time they understand)
+                _TF_PLAIN = {"1h": "1 Hour", "4h": "4 Hours", "1d": "Daily", "1w": "Weekly"}
+                for tf, td in tf_data.items():
+                    _td_dir = td.get("direction", "N/A")
+                    _no_data = _td_dir in ("NO DATA", "N/A")
+                    _td_conf = td.get("confidence", 0)
+                    _rsi_raw = td.get("rsi", "N/A")
+                    # Plain English RSI — "Heat Level: Overheated (72)", "Heat Level: Cool (28)"
+                    try:
+                        _rsi_v = float(_rsi_raw)
+                        if _rsi_v >= 70:
+                            _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
+                        elif _rsi_v <= 30:
+                            _rsi_str = f"🧊 Very Cool ({_rsi_v:.0f})"
+                        elif _rsi_v >= 55:
+                            _rsi_str = f"Warm ({_rsi_v:.0f})"
+                        elif _rsi_v <= 45:
+                            _rsi_str = f"Cool ({_rsi_v:.0f})"
+                        else:
+                            _rsi_str = f"Neutral ({_rsi_v:.0f})"
+                    except (ValueError, TypeError):
+                        _rsi_str = str(_rsi_raw)
+                    _tf_rows.append({
+                        "Time Period": _TF_PLAIN.get(tf, tf),
+                        "Signal": _td_dir,
+                        # Show "—" instead of "0%" when a timeframe returned no data
+                        "Strength": "—" if _no_data else f"{_td_conf}%",
+                        "Heat Level (RSI)": _rsi_str,
+                        "Trend Power (ADX)": td.get("adx", "N/A"),
+                        "Trend Direction": td.get("supertrend", "N/A"),
+                        "Market Mode": _ui.regime_label(td.get("regime", "")),
+                        "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
+                    })
+                st.dataframe(pd.DataFrame(_tf_rows).set_index("Time Period"), width="stretch")
+
+        # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
+        try:
+            _casc = _cached_liquidation_cascade(pair)
+            if _casc and not _casc.get("error"):
+                st.markdown(
+                    _ui.cascade_risk_card_html(
+                        score      = _casc.get("score", 0),
+                        risk_level = _casc.get("risk_level", "LOW"),
+                        direction  = _casc.get("direction", "NEUTRAL"),
+                        components = _casc.get("components"),
+                    ),
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            pass
+
+        # ── News Sentiment ─────────────────────────────────────────────────────────
+        if _news_mod is not None:
+            try:
+                _news = _cached_news_sentiment(pair)
+                _nsig = _news.get("sentiment", "NEUTRAL")
+                _nscore = _news.get("score", 0.0)
+                _nsig_color = "🟢" if _nsig == "BULLISH" else "🔴" if _nsig == "BEARISH" else "⚪"
+                with st.expander(f"📰 News Sentiment — {_nsig_color} {_nsig}", expanded=False):
+                    _nc0, _nc1, _nc2, _nc3 = st.columns(4)
+                    _nc0.metric("Sentiment", f"{_nsig_color} {_nsig}")
+                    _nc1.metric("Score", f"{_nscore:+.2f}")
+                    _nc2.metric("Bullish Headlines", _news.get("bullish", 0))
+                    _nc3.metric("Bearish Headlines", _news.get("bearish", 0))
+                    _theme = _news.get("key_theme", "")
+                    if _theme:
+                        st.caption(f"Key theme: {_theme}")
+                    st.caption(f"Source: {_news.get('source','—')} · {_news.get('articles_analyzed',0)} articles analyzed")
+            except Exception as _ne:
+                st.caption(f"News fetch unavailable: {_ne}")
+
+        # ── Whale Tracker ───────────────────────────────────────────────────────────
+        if _whale_mod is not None:
+            try:
+                _whale = _cached_whale_activity(pair, float(price or 0))
+                _wsig = _whale.get("signal", "NEUTRAL")
+                if _wsig != "NEUTRAL" or _whale.get("whale_count", 0) > 0:
+                    _wemoji = "🐋" if "ACCUMULATION" in _wsig else "🔴" if "DISTRIBUTION" in _wsig else "⚪"
+                    with st.expander(f"{_wemoji} Whale Activity — {_wsig}", expanded=False):
+                        _wc1, _wc2, _wc3, _wc4 = st.columns(4)
+                        _wc1.metric("Signal", _wsig.replace("_", " ").title())
+                        _wc2.metric("Whale Txns", _whale.get("whale_count", 0))
+                        _wc3.metric("Large Whales", _whale.get("large_whale_count", 0))
+                        _total_usd = _whale.get("total_usd", 0)
+                        _wc4.metric("Total Volume", f"${_total_usd/1e6:.1f}M" if _total_usd >= 1e6 else f"${_total_usd:,.0f}")
+            except Exception:
+                pass
+
+        # ── ML Price Prediction ─────────────────────────────────────────────────────
+        # PERF-22: run get_enriched_df() in a background thread with 10s timeout so
+        # TA computation (RSI/MACD/BB/Ichimoku/SuperTrend etc.) doesn't block the main render thread.
+        if _ml_mod is not None:
+            try:
+                _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
+                import concurrent.futures as _cf22
+                with st.spinner("Calculating signals..."):
+                    with _cf22.ThreadPoolExecutor(max_workers=1) as _ex22:
+                        _ml_future = _ex22.submit(
+                            model.get_enriched_df,
+                            model.get_exchange_instance(model.TA_EXCHANGE),
+                            pair,
+                            _ml_tf,
+                        )
+                        try:
+                            _ml_df = _ml_future.result(timeout=10)
+                        except _cf22.TimeoutError:
+                            _ml_df = None
+                if _ml_df is not None and not _ml_df.empty:
+                    _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
+                    _ml_pred = _ml.get("prediction", "UNCERTAIN")
+                    _ml_prob = _ml.get("probability", 0.5)
+                    _ml_acc  = _ml.get("model_accuracy", 0.0)
+                    _ml_sig  = _ml.get("signal", "NEUTRAL")
+                    _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ff4b4b" if _ml_sig == "SELL" else "#f59e0b"
+                    _ml_emoji = "📈" if _ml_sig == "BUY" else ("📉" if _ml_sig == "SELL" else "😐")
+                    _ml_plain = (
+                        "The AI thinks the price will go UP in the next few hours."
+                        if _ml_sig == "BUY" else
+                        "The AI thinks the price will go DOWN in the next few hours."
+                        if _ml_sig == "SELL" else
+                        "The AI isn't sure which way the price will go."
+                    )
                     st.markdown(
-                        f"""
-                        <div style="
-                            background:linear-gradient(rgba(14,18,30,0.8),rgba(14,18,30,0.8)) padding-box,
-                                       linear-gradient(135deg,{_sig_color}30,rgba(99,102,241,0.15)) border-box;
-                            border:1px solid transparent;border-radius:12px;
-                            padding:14px 18px;margin-bottom:8px;
-                            backdrop-filter:blur(12px)">
-                            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-                                <div>
-                                    <span style="font-size:15px;font-weight:800;color:#e8ecf4;
-                                                 font-family:'JetBrains Mono',monospace">
-                                        {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
-                                    </span>
-                                    <span style="font-size:11px;color:rgba(168,180,200,0.5);margin-left:10px">
-                                        hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
-                                    </span>
-                                </div>
-                                <span style="background:{_sig_color};color:#06101c;padding:4px 13px;
-                                             border-radius:999px;font-size:11px;font-weight:800;
-                                             letter-spacing:0.5px">{_sig_label}</span>
-                            </div>
-                            <div style="margin:10px 0 6px">
-                                <div style="display:flex;justify-content:space-between;
-                                            font-size:11px;color:rgba(168,180,200,0.5);margin-bottom:4px">
-                                    <span>Z-Score: <strong style="color:{_sig_color}">{_z:+.2f}</strong></span>
-                                    <span>±2σ threshold</span>
-                                </div>
-                                <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
-                                    <div style="
-                                        position:absolute;
-                                        {'left:50%;' if _z >= 0 else f'right:{50}%;'}
-                                        width:{_z_bar_pct/2:.1f}%;
-                                        height:6px;border-radius:4px;
-                                        background:{_sig_color};
-                                        transition:width 0.4s ease"></div>
-                                    <div style="position:absolute;left:50%;top:-2px;
-                                                width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
-                                </div>
-                            </div>
-                            <div style="font-size:12px;color:#c4cedd;line-height:1.5;
-                                        border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
-                                {_cr['signal_plain']}
-                            </div>
-                        </div>
-                        """,
+                        f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
+                        f'padding:12px 16px;margin:8px 0;border-left:3px solid {_ml_col};">'
+                        f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:4px;">'
+                        f'{_ml_emoji} AI Price Prediction — Next Few Hours</div>'
+                        f'<div style="font-size:12px;color:#a8b4c8;">{_ml_plain}</div>'
+                        f'<div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:6px;">'
+                        f'Confidence: <span style="color:{_ml_col};font-weight:700;">{_ml_prob:.0%}</span>'
+                        f' &nbsp;·&nbsp; Model accuracy: {_ml_acc:.0%}'
+                        f' &nbsp;·&nbsp; <span style="color:{_ml_col};">{_ml_pred}</span></div>'
+                        f'</div>',
                         unsafe_allow_html=True,
                     )
 
-                if len(_coint_data) > 12:
-                    st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
+                    # ── #48 HMM Regime — displayed alongside existing macro regime ────────
+                    try:
+                        if pair == "BTC/USDT" and not _ml_df.empty and "close" in _ml_df.columns:
+                            _hmm_prices = list(_ml_df["close"].dropna().tail(400))
+                            _hmm_res    = _ml_mod.fit_hmm_regime(_hmm_prices)
+                            _hmm_state  = _hmm_res.get("current_state", "UNKNOWN")
+                            _hmm_conf   = _hmm_res.get("confidence", 0.0)
+                            _hmm_probs  = _hmm_res.get("state_probabilities", [0.0, 0.0, 0.0])
+                            if _hmm_state != "UNKNOWN" and not _hmm_res.get("error"):
+                                _hmm_col = (
+                                    "#00d4aa" if _hmm_state == "Bull" else
+                                    "#ef4444" if _hmm_state == "Bear" else
+                                    "#f59e0b"
+                                )
+                                # Build state-probability mini-bar chart labels
+                                _labels = ["Bear", "Neutral", "Bull"]
+                                _bar_parts = ""
+                                for _lbl, _pb in zip(_labels, _hmm_probs):
+                                    _bw = int(round(_pb * 100))
+                                    _bc = "#00d4aa" if _lbl == "Bull" else "#ef4444" if _lbl == "Bear" else "#f59e0b"
+                                    _bar_parts += (
+                                        f'<div style="margin-bottom:3px">'
+                                        f'<div style="display:flex;align-items:center;gap:6px">'
+                                        f'<span style="font-size:10px;color:#9ca3af;width:44px">{_lbl}</span>'
+                                        f'<div style="flex:1;background:#1f2937;border-radius:3px;height:6px">'
+                                        f'<div style="background:{_bc};width:{_bw}%;height:6px;border-radius:3px"></div>'
+                                        f'</div>'
+                                        f'<span style="font-size:10px;color:#9ca3af;width:32px;text-align:right">{_pb:.0%}</span>'
+                                        f'</div></div>'
+                                    )
+                                st.markdown(
+                                    f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
+                                    f'padding:12px 16px;margin:8px 0;border-left:3px solid {_hmm_col};">'
+                                    f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:6px;">'
+                                    f'🧬 HMM Regime — Current State: '
+                                    f'<span style="color:{_hmm_col}">{_hmm_state}</span>'
+                                    f' ({_hmm_conf:.0%} confidence)</div>'
+                                    f'{_bar_parts}'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # ── #61 Signal Story — 1-2 plain English sentences below the signal card ──
+        if _llm is not None:
+            try:
+                _story_indicators = {}
+                _story_tf_data = r.get("timeframes", {})
+                _story_first_td = (list(_story_tf_data.values()) or [{}])[0]
+                _story_indicators["rsi"]             = _story_first_td.get("rsi")
+                _story_indicators["adx"]             = _story_first_td.get("adx")
+                _story_indicators["macd_div"]        = _story_first_td.get("macd_div")
+                _story_indicators["supertrend"]      = _story_first_td.get("supertrend")
+                _story_indicators["regime"]          = _story_first_td.get("regime", "")
+                _story_indicators["funding_rate_pct"] = (
+                    r.get("funding_rate_pct") or
+                    (r.get("timeframes", {}).get("1h", {}) or {}).get("funding", "")
+                )
+                _story_text = _llm.generate_signal_story(pair, direction, conf, _story_indicators)
+                if _story_text:
+                    _story_sig_col = (
+                        "#00d4aa" if "BUY" in direction.upper() else
+                        "#ef4444" if "SELL" in direction.upper() else
+                        "#f59e0b"
+                    )
+                    st.markdown(
+                        f'<div style="background:rgba(17,24,39,0.7);border-radius:8px;'
+                        f'padding:10px 14px;margin:4px 0 10px 0;border-left:2px solid {_story_sig_col};">'
+                        f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;'
+                        f'letter-spacing:0.6px;margin-bottom:4px">Signal Story</div>'
+                        f'<div style="font-size:13px;color:#c8d4e8;line-height:1.5">{_story_text}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                pass
+
+        # ── AI Analysis — st.dialog renders in modal overlay, outside page diff cycle ──
+        ai_key = f"ai_explanation_{pair}"
+
+        @st.dialog(f"AI Analysis — {pair}", width="large")
+        def _show_ai_dialog():
+            if _llm is None:
+                st.warning("LLM analysis module not available — check llm_analysis.py installation.")
+                return
+            cached = st.session_state.get(ai_key)
+            if cached:
+                st.info(cached)
+            else:
+                with st.spinner("Asking Claude...", show_time=True):
+                    explanation = _llm.get_signal_explanation(pair, r)
+                st.session_state[ai_key] = explanation
+                st.info(explanation)
+
+        if st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", width="stretch"):
+            _show_ai_dialog()
+
+        # ── Order Execution ────────────────────────────────────────────────────────
+        st.markdown("---")
+        _ui.risk_disclaimer_banner()
+        if not _exec_status.get("ccxt_available", False):
+            st.caption("ccxt not installed — run: pip install ccxt")
+        else:
+            _mode_label = "🔴 LIVE" if _exec_cfg.get("live_trading", False) else "📄 Paper"
+            _cur_price  = (_ws.get_price(pair) or {}).get("price") or price
+            _exec_size  = (float(pos_pct or 10) / 100) * float(
+                getattr(model, "PORTFOLIO_SIZE_USD", 10000)
+            )
+            ex_c0, ex_c1, ex_c2, ex_c3 = st.columns([2, 2, 2, 2])
+            with ex_c0:
+                st.caption(f"Mode: {_mode_label}")
+                st.caption(f"Order size: ${_exec_size:,.0f}")
+            with ex_c1:
+                if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{pair}",
+                             type="primary" if "BUY" in direction else "secondary",
+                             width="stretch"):
+                    _res = _exec.place_order(pair, "BUY", _exec_size, current_price=_cur_price)
+                    if _res["ok"]:
+                        st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} BUY placed — ID: {_res['order_id']}")
+                    else:
+                        st.error(f"Order failed: {_res['error']}")
+            with ex_c2:
+                if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{pair}",
+                             type="primary" if "SELL" in direction else "secondary",
+                             width="stretch"):
+                    _res = _exec.place_order(pair, "SELL", _exec_size, current_price=_cur_price)
+                    if _res["ok"]:
+                        st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} SELL placed — ID: {_res['order_id']}")
+                    else:
+                        st.error(f"Order failed: {_res['error']}")
+            with ex_c3:
+                _open_pos = _db.load_positions()
+                if pair in _open_pos:
+                    _pos_dir = _open_pos[pair].get("direction", "BUY")
+                    if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{pair}",
+                                 width="stretch"):
+                        _res = _exec.close_position(pair, _pos_dir, _exec_size, current_price=_cur_price)
+                        if _res["ok"]:
+                            st.success(f"Position closed — ID: {_res['order_id']}")
+                        else:
+                            st.error(f"Close failed: {_res['error']}")
+                else:
+                    st.caption("No open position")
+
+            # ── Advanced Order Types (T3-9/T3-10) ────────────────────────────────
+            with st.expander("⚙ Advanced Orders", expanded=False):
+                _adv_c1, _adv_c2 = st.columns(2)
+                with _adv_c1:
+                    st.caption("**TWAP** — split into equal time slices")
+                    _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"twap_dir_{pair}")
+                    _twap_slices = st.number_input("Slices", 2, 20, 5, key=f"twap_slices_{pair}")
+                    _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key=f"twap_int_{pair}")
+                    if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{pair}", width="stretch"):
+                        _tr = _exec.place_twap_order(
+                            pair, _twap_dir, _exec_size,
+                            n_slices=int(_twap_slices),
+                            interval_seconds=int(_twap_interval),
+                            current_price=_cur_price,
+                            expected_price=r.get("entry"),
+                        )
+                        if _tr.get("ok"):  # APP-24: mirror iceberg pattern — check ok before accessing keys
+                            st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
+                        else:
+                            st.error(f"TWAP failed: {_tr.get('error', 'unknown error')}")
+                with _adv_c2:
+                    st.caption("**Iceberg** — hide order size in OB")
+                    _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"ice_dir_{pair}")
+                    _ice_vis  = st.slider("Visible %", 10, 50, 20, step=5, key=f"ice_vis_{pair}") / 100.0
+                    _ice_limit = st.number_input("Limit Price (0=market)", 0.0, 1e9,
+                                                 float(r.get("entry") or 0), step=0.01, format="%.4f",
+                                                 key=f"ice_lim_{pair}")
+                    if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{pair}", width="stretch"):
+                        _ir = _exec.place_iceberg_order(
+                            pair, _ice_dir, _exec_size,
+                            visible_pct=_ice_vis,
+                            current_price=_cur_price,
+                            limit_price=_ice_limit if _ice_limit > 0 else None,
+                            expected_price=r.get("entry"),
+                        )
+                        if _ir["ok"]:
+                            st.success(f"Iceberg placed — ID: {_ir['order_id']}")
+                        else:
+                            st.error(f"Iceberg failed: {_ir['error']}")
+
+        # ── Confidence History (Pro Mode only) ─────────────────────────────────
+        if not st.session_state.get("beginner_mode", True):
+            try:
+                _ch_history = _cached_confidence_history(pair, days=30)
+                if _ch_history:
+                    _ch_ts    = [h["timestamp"] for h in _ch_history]
+                    _ch_conf  = [h["confidence"] for h in _ch_history]
+                    _ch_sigs  = [h["signal"] for h in _ch_history]
+                    _ch_colors = [
+                        "#00C853" if s == "BUY" else "#D50000" if s == "SELL" else "#9E9E9E"
+                        for s in _ch_sigs
+                    ]
+                    _ch_fig = go.Figure()
+                    _ch_fig.add_trace(go.Scatter(
+                        x=_ch_ts,
+                        y=_ch_conf,
+                        mode="lines+markers",
+                        name="Confidence %",
+                        line=dict(color="#818cf8", width=1.5),
+                        marker=dict(color=_ch_colors, size=6),
+                        hovertemplate="%{x}<br>Confidence: %{y:.1f}%<extra></extra>",
+                    ))
+                    _ch_fig.update_layout(
+                        height=160,
+                        margin=dict(l=0, r=0, t=24, b=0),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        title=dict(
+                            text=f"Confidence History — {pair} (last 30 days)  "
+                                 '<span style="color:#00C853">● BUY</span> '
+                                 '<span style="color:#D50000">● SELL</span> '
+                                 '<span style="color:#9E9E9E">● HOLD</span>',
+                            font=dict(size=11),
+                            x=0,
+                        ),
+                        yaxis=dict(
+                            range=[0, 100],
+                            ticksuffix="%",
+                            gridcolor="#222",
+                            tickfont=dict(size=9),
+                        ),
+                        xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_ch_fig, width="stretch", key=f"conf_hist_{pair}")
+            except Exception:
+                pass
+
+        st.markdown("---")
+
+        # ── Live Chart ──────────────────────────────────────────────────────────
+        _ui.section_header("Live Chart", "Candlestick chart with entry / target / stop overlays", icon="📈")
+        ch_c1, ch_c2, ch_c3 = st.columns([3, 2, 2])
+        with ch_c1:
+            # Merge scan results (first, so last-scanned pairs appear at top) with
+            # the full static universe — always chartable regardless of scan state.
+            _scan_pairs = [r["pair"] for r in sorted_results]
+            _extra_pairs = [
+                p for p in (
+                    model.PAIRS
+                    + ['WFLR/USDT', 'FXRP/USDT']   # chart-only pairs (not in scan)
+                )
+                if p not in _scan_pairs
+            ]
+            chart_pair_opts = _scan_pairs + sorted(_extra_pairs)
+            chart_pair = st.selectbox("Pair", chart_pair_opts, key="chart_pair_select")
+        with ch_c2:
+            _default_tf_idx = (
+                model.TIMEFRAMES.index("1h") if "1h" in model.TIMEFRAMES else 0
+            )
+            chart_tf = st.selectbox(
+                "Timeframe", model.TIMEFRAMES, index=_default_tf_idx, key="chart_tf_select"
+            )
+        with ch_c3:
+            st.write("")
+            load_chart = st.button(
+                "Load Chart", type="primary", width="stretch", key="btn_load_chart"
+            )
+
+        if load_chart:
+            try:
+                with st.spinner(f"Fetching {chart_pair} {chart_tf}...", show_time=True):
+                    ohlcv = model.fetch_chart_ohlcv(chart_pair, chart_tf, limit=250)
+                if ohlcv:
+                    r_sel = next((r for r in results if r["pair"] == chart_pair), {})
+                    st.session_state["chart_html"] = _chart.build_chart_html(
+                        ohlcv, chart_pair, chart_tf,
+                        entry=r_sel.get("entry"),
+                        stop=r_sel.get("stop_loss"),
+                        target=r_sel.get("exit"),
+                    )
+                    st.session_state["chart_pair_label"] = f"{chart_pair} · {chart_tf}"
+                else:
+                    st.warning(
+                        f"No chart data available for **{chart_pair}** on {chart_tf}. "
+                        "This pair may have very low liquidity on all exchanges. "
+                        "Try a different timeframe or pair."
+                    )
+            except Exception as e:
+                logging.warning("[chart] %s %s: %s", chart_pair, chart_tf, e)
+                st.warning(
+                    f"Chart data couldn't load for **{chart_pair}** right now — "
+                    "this is usually temporary. Try refreshing in 30 seconds."
+                )
+
+        _chart_html = st.session_state.get("chart_html")
+        if _chart_html:
+            _chart_label = st.session_state.get("chart_pair_label", "")
+            if _chart_label:
+                st.caption(
+                    f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
+                )
+            st.iframe(_chart_html, height=560)
+
+        st.markdown("---")
+
+        # Export buttons
+        if results:
+            col_csv, col_json, col_pdf = st.columns(3)
+            with col_csv:
+                st.download_button(
+                    "📥 Export CSV",
+                    data=_export_scan_results(results, "csv"),
+                    file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="dl_scan_csv",
+                )
+            with col_json:
+                st.download_button(
+                    "📥 Export JSON",
+                    data=_export_scan_results(results, "json"),
+                    file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    width="stretch",
+                    key="dl_scan_json",
+                )
+            with col_pdf:
+                ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
+                try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
+                    if _pdf is None:
+                        raise ImportError("pdf_export module not available")
+                    if st.session_state.get("_scan_pdf_ts") != ts_str:
+                        st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
+                        st.session_state["_scan_pdf_ts"] = ts_str
+                    _pdf_data = st.session_state.get("_scan_pdf_bytes")
+                    if _pdf_data:
+                        st.download_button(
+                            "⬇ Download PDF",
+                            data=_pdf_data,
+                            file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                            key="dl_scan_pdf",
+                        )
+                    else:
+                        st.caption("PDF unavailable")
+                except Exception as _pdf_err:
+                    st.caption(f"PDF generation failed: {_pdf_err}")
+
+
+    with _dash_tab5:
+        _analysis_lv = st.session_state.get("user_level", "beginner")
+        if _analysis_lv == "beginner":
+            st.markdown(
+                '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
+                'border-radius:12px;padding:28px 24px;text-align:center;margin:20px 0">'
+                '<div style="font-size:32px;margin-bottom:10px">\U0001f52c</div>'
+                '<div style="font-size:18px;font-weight:700;color:#e8ecf4;margin-bottom:8px">'
+                'Advanced Analysis Tools</div>'
+                '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:380px;margin:0 auto">'
+                'Correlation matrix, volatility rankings, and pair trade scanner are available at '
+                '<strong style="color:#818cf8">Intermediate</strong> or '
+                '<strong style="color:#a78bfa">Advanced</strong> level.<br><br>'
+                'Switch your experience level in the sidebar to unlock these tools.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            with st.expander("📊 Market Analysis Tools — Correlation · Volatility · Pair Trades", expanded=False):
+                st.caption(
+                    "Correlation: which assets move together (diversification guide). "
+                    "Vol Rankings: 7-day realized volatility. "
+                    "Pair Trading: cointegrated pairs with z-score signals."
+                )
+
+                # ── Correlation Matrix ──
+                _ui.section_header("Asset Correlation Matrix",
+                                   "Pairwise Pearson correlation of daily returns — Red = strong positive · Blue = negative",
+                                   icon="🔥")
+
+                col_lk, col_tf, col_run = st.columns([2, 2, 2])
+                with col_lk:
+                    lookback = st.slider("Lookback (days)", min_value=7, max_value=90,
+                                         value=30, step=7, key="corr_lookback")
+                with col_tf:
+                    corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
+                with col_run:
+                    st.write("")
+                    run_corr = st.button("Compute Correlation", type="primary", width="stretch", key="run_corr")
+
+                if run_corr:
+                    with st.spinner("Fetching OHLCV data...", show_time=True):
+                        corr_matrix, err = model.compute_correlation_matrix(
+                            pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
+                        )
+                    if err:
+                        st.error(f"Correlation error: {err}")
+                        st.session_state["corr_matrix_data"] = None
+                        st.session_state["corr_error"] = err
+                    else:
+                        # PERF: store DataFrame directly — was .to_dict() + pd.DataFrame() round-trip on every render
+                        st.session_state["corr_matrix_data"] = corr_matrix
+                        st.session_state["corr_error"] = None
+
+                cached = st.session_state.get("corr_matrix_data")
+                if cached is not None:
+                    corr_df = cached
+                    pairs_list = list(corr_df.columns)
+
+                    fig_corr = go.Figure(data=go.Heatmap(
+                        z=corr_df.values,
+                        x=corr_df.columns.tolist(),
+                        y=corr_df.index.tolist(),
+                        colorscale="RdBu_r",
+                        zmin=-1, zmax=1,
+                        text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
+                        texttemplate="%{text}",
+                        hoverongaps=False,
+                    ))
+                    fig_corr.update_layout(
+                        height=450,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_corr, width="stretch",
+                                    config={"displayModeBar": False, "staticPlot": True})
+
+                    # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
+                    st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
+                    _corr_arr = corr_df.values
+                    _rows_idx, _cols_idx = np.where(
+                        (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
+                    )
+                    high_corr_rows = []
+                    try:
+                        high_corr_rows = [
+                            {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
+                            for i, j in zip(_rows_idx, _cols_idx)
+                        ]
+                    except Exception:
+                        pass
+                    if high_corr_rows:
+                        st.dataframe(pd.DataFrame(high_corr_rows), width="stretch", hide_index=True)
+                    else:
+                        st.info("No pairs exceed the 0.75 correlation threshold for this period.")
+                elif st.session_state.get("corr_error"):
+                    st.error(f"Correlation error: {st.session_state['corr_error']}")
+
+
+                st.markdown("---")
+
+                # ── Realized Volatility Rankings (Phase 11) ───────────────────────────────
+                _ui.section_header(
+                    "Realized Volatility Rankings",
+                    "7-day annualized realized volatility across all pairs — rank from calmest to most explosive",
+                    icon="📉",
+                )
+                st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
+
+                if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
+                    import statistics as _stat
+                    with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
+                        _vol_rows = []
+                        _first_err = None
+                        _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
+                        if _exchange:
+                            for _vp in model.PAIRS:
+                                try:
+                                    _df_ohlcv = model.robust_fetch_ohlcv(_exchange, _vp, "1d", limit=9)
+                                    if len(_df_ohlcv) >= 3:
+                                        _cls = [v for v in _df_ohlcv["close"].tolist() if v and v > 0]
+                                        _rets = [
+                                            (_cls[i] - _cls[i - 1]) / _cls[i - 1]
+                                            for i in range(1, len(_cls))
+                                            if _cls[i - 1] > 0
+                                        ]
+                                        if len(_rets) >= 2:
+                                            _daily_vol = _stat.stdev(_rets)
+                                            _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
+                                            _sector    = model.SECTOR_MAP.get(_vp, "other")
+                                            _vol_rows.append({
+                                                "Asset":    _vp.replace("/USDT", ""),
+                                                "Sector":   _sector.replace("_", " ").title(),
+                                                "Ann. Vol%": _ann_vol,
+                                                "7d Close": round(_cls[-1], 4),
+                                            })
+                                except Exception as _e:
+                                    if _first_err is None:
+                                        _first_err = str(_e)[:100]
+                        else:
+                            _first_err = "Exchange unavailable"
+                        st.session_state["vol_rank_data"] = _vol_rows
+                        st.session_state["vol_rank_err"]  = _first_err
+
+                _vol_data = st.session_state.get("vol_rank_data")
+                if _vol_data:
+                    _vol_df = pd.DataFrame(_vol_data).sort_values("Ann. Vol%", ascending=False).reset_index(drop=True)
+
+                    # Rank chips — color by volatility tier
+                    _chips_vol = ""
+                    _vmax = _vol_df["Ann. Vol%"].max() if not _vol_df.empty else 1
+                    for _, _vr in _vol_df.iterrows():
+                        _v = _vr["Ann. Vol%"]
+                        _pct = _v / max(_vmax, 1)
+                        _vc = "#f6465d" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
+                        _chips_vol += (
+                            f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
+                            f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
+                            f'border:1px solid {_vc}50;margin:2px;min-width:52px">'
+                            f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_vr["Asset"]}</span>'
+                            f'<span style="font-size:10px;color:{_vc};font-weight:600">{_v:.0f}%</span>'
+                            f'</span>'
+                        )
+                    st.markdown(
+                        f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_vol}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("🔴 High vol (>70th pct) · 🟡 Medium · 🟢 Low — annualized, based on 7-day daily returns")
+
+                    with st.expander("Full volatility table"):
+                        st.dataframe(
+                            _vol_df,
+                            width="stretch", hide_index=True,
+                            column_config={
+                                "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
+                                "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
+                            },
+                        )
+                elif _vol_data is not None and len(_vol_data) == 0:
+                    _vol_err = st.session_state.get("vol_rank_err")
+                    st.warning(f"No volatility data returned — {_vol_err}" if _vol_err else "No volatility data returned — check exchange connectivity.")
+
+
+                st.markdown("---")
+
+                # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
+                _ui.section_header(
+                    "Pair Trade Scanner",
+                    "Finds cryptocurrency pairs that move together — then signals when one is unusually cheap or expensive vs the other",
+                    icon="⚖️",
+                )
+                st.caption(
+                    "A pair trade buys the underpriced coin and sells the overpriced one, profiting when prices converge. "
+                    "Only pairs with a statistically significant relationship (p < 0.05) are shown."
+                )
+
+                _coint_col1, _coint_col2, _coint_col3 = st.columns([2, 2, 2])
+                with _coint_col1:
+                    _coint_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="coint_tf")
+                with _coint_col2:
+                    _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
+                with _coint_col3:
+                    st.write("")
+                    _run_coint = st.button("Scan for Pair Trades", type="primary", width="stretch", key="run_coint")
+
+                if _run_coint:
+                    with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
+                        _coint_results, _coint_err = model.run_cointegration_scan(
+                            pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
+                        )
+                    if _coint_err:
+                        st.error(f"Scan error: {_coint_err}")
+                        st.session_state["coint_results"] = None
+                    else:
+                        st.session_state["coint_results"] = _coint_results
+                        st.session_state["coint_err"] = None
+
+                _coint_data = st.session_state.get("coint_results")
+                if _coint_data is not None:
+                    if not _coint_data:
+                        st.info("No cointegrated pairs found — try a longer lookback or different timeframe.")
+                    else:
+                        # Signal color map
+                        _COINT_COLORS = {
+                            "LONG_SPREAD":  "#00d4aa",
+                            "SHORT_SPREAD": "#f6465d",
+                            "EXIT_SPREAD":  "#f59e0b",
+                            "NEUTRAL":      "#64748b",
+                        }
+
+                        # Summary banner
+                        _actionable = [r for r in _coint_data if r["signal"] not in ("NEUTRAL", "EXIT_SPREAD")]
+                        if _actionable:
+                            st.success(
+                                f"⚖️ **{len(_actionable)} actionable pair trade{'s' if len(_actionable) != 1 else ''}** found "
+                                f"out of {len(_coint_data)} cointegrated pairs."
+                            )
+
+                        # Render cards for top pairs
+                        for _cr in _coint_data[:12]:
+                            _sig_color = _COINT_COLORS.get(_cr["signal"], "#64748b")
+                            _z         = _cr["zscore"]
+                            _z_bar_pct = min(abs(_z) / 3.0 * 100, 100)
+
+                            # Plain English signal label
+                            _sig_labels = {
+                                "LONG_SPREAD":  "BUY SPREAD",
+                                "SHORT_SPREAD": "SELL SPREAD",
+                                "EXIT_SPREAD":  "CLOSE POSITION",
+                                "NEUTRAL":      "NEUTRAL",
+                            }
+                            _sig_label = _sig_labels.get(_cr["signal"], _cr["signal"])
+
+                            st.markdown(
+                                f"""
+                                <div style="
+                                    background:linear-gradient(rgba(14,18,30,0.8),rgba(14,18,30,0.8)) padding-box,
+                                               linear-gradient(135deg,{_sig_color}30,rgba(99,102,241,0.15)) border-box;
+                                    border:1px solid transparent;border-radius:12px;
+                                    padding:14px 18px;margin-bottom:8px;
+                                    backdrop-filter:blur(12px)">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                                        <div>
+                                            <span style="font-size:15px;font-weight:800;color:#e8ecf4;
+                                                         font-family:'JetBrains Mono',monospace">
+                                                {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
+                                            </span>
+                                            <span style="font-size:11px;color:rgba(168,180,200,0.5);margin-left:10px">
+                                                hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
+                                            </span>
+                                        </div>
+                                        <span style="background:{_sig_color};color:#06101c;padding:4px 13px;
+                                                     border-radius:999px;font-size:11px;font-weight:800;
+                                                     letter-spacing:0.5px">{_sig_label}</span>
+                                    </div>
+                                    <div style="margin:10px 0 6px">
+                                        <div style="display:flex;justify-content:space-between;
+                                                    font-size:11px;color:rgba(168,180,200,0.5);margin-bottom:4px">
+                                            <span>Z-Score: <strong style="color:{_sig_color}">{_z:+.2f}</strong></span>
+                                            <span>±2σ threshold</span>
+                                        </div>
+                                        <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
+                                            <div style="
+                                                position:absolute;
+                                                {'left:50%;' if _z >= 0 else f'right:{50}%;'}
+                                                width:{_z_bar_pct/2:.1f}%;
+                                                height:6px;border-radius:4px;
+                                                background:{_sig_color};
+                                                transition:width 0.4s ease"></div>
+                                            <div style="position:absolute;left:50%;top:-2px;
+                                                        width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
+                                        </div>
+                                    </div>
+                                    <div style="font-size:12px;color:#c4cedd;line-height:1.5;
+                                                border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
+                                        {_cr['signal_plain']}
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+
+                        if len(_coint_data) > 12:
+                            st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
+
 
     # ── Auto-refresh trigger (fragment-based, non-blocking) ──
     # Uses a 1s fragment for the countdown so the main page only reruns at the real interval,
@@ -3843,7 +3751,94 @@ def page_config():
 
     overrides = {}
 
-    with st.expander("📊 Trading Parameters", expanded=True):
+    # ── Auto-jump to Alerts tab when navigated from sidebar
+    _cfg_initial_tab = 0
+    _st_tab_override = st.session_state.pop("_settings_tab", None)
+    _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🔔 Alerts", "🛠️ Dev Tools", "⚙️ Execution"]
+    if _st_tab_override and _st_tab_override in _cfg_tab_names:
+        _cfg_initial_tab = _cfg_tab_names.index(_st_tab_override)
+
+    _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4, _cfg_t5 = st.tabs(_cfg_tab_names)
+
+    # ── ALERTS TAB content definition (full config moved from sidebar)
+    def _render_alerts_tab():
+        """Full alert configuration — Telegram, Email, Discord."""
+        _at_cfg = _cached_alerts_config()
+
+        with st.expander("🔔 Telegram Alerts", expanded=_at_cfg.get("telegram_enabled", False)):
+            _at_cfg2 = _at_cfg.copy()
+            tg_enabled = st.toggle("Enable Telegram", value=_at_cfg2.get("telegram_enabled", False), key="cfg_tg_enabled")
+            tg_token   = st.text_input("Bot Token", value=_at_cfg2.get("telegram_token", ""), type="password",
+                                       placeholder="123456:ABC-DEF...", key="cfg_tg_token", disabled=not tg_enabled)
+            tg_chat_id = st.text_input("Chat ID", value=_at_cfg2.get("telegram_chat_id", ""),
+                                       placeholder="-1001234567890", key="cfg_tg_chat", disabled=not tg_enabled)
+            tg_min_conf = st.slider("Alert threshold (%)", 50, 95, int(_at_cfg2.get("min_confidence", 70)),
+                                    step=5, key="cfg_tg_thresh", disabled=not tg_enabled)
+            cst, ctest = st.columns(2)
+            with cst:
+                if st.button("Save Telegram", key="cfg_tg_save", width="stretch"):
+                    _at_cfg2.update({"telegram_enabled": tg_enabled, "telegram_token": tg_token.strip(),
+                                     "telegram_chat_id": tg_chat_id.strip(), "min_confidence": tg_min_conf})
+                    _save_alerts_config_and_clear(_at_cfg2)
+                    st.success("Saved!")
+            with ctest:
+                if st.button("Test", key="cfg_tg_test", width="stretch", disabled=not tg_enabled):
+                    ok, err = _alerts.send_telegram(tg_token.strip(), tg_chat_id.strip(),
+                                                    "\u2705 Telegram test — connection successful!")
+                    st.success("Message sent!") if ok else st.error(f"Failed: {err}")
+            st.caption("Get bot token from @BotFather · Chat ID from @userinfobot")
+
+        with st.expander("📧 Email Alerts", expanded=_at_cfg.get("email_enabled", False)):
+            _at_em = _at_cfg.copy()
+            em_on   = st.toggle("Enable Email", value=_at_em.get("email_enabled", False), key="cfg_em_on")
+            em_to   = st.text_input("Recipient", value=_at_em.get("email_to", ""), placeholder="you@example.com",
+                                    key="cfg_em_to", disabled=not em_on)
+            em_from = st.text_input("Sender (Gmail)", value=_at_em.get("email_from", ""),
+                                    placeholder="yourbot@gmail.com", key="cfg_em_from", disabled=not em_on)
+            em_pass = st.text_input("App Password", value=_at_em.get("email_pass", ""), type="password",
+                                    key="cfg_em_pass", disabled=not em_on)
+            em_min  = st.slider("Alert threshold (%)", 50, 95, int(_at_em.get("email_min_confidence", 70)),
+                                step=5, key="cfg_em_thresh", disabled=not em_on)
+            cse, cte = st.columns(2)
+            with cse:
+                if st.button("Save Email", key="cfg_em_save", width="stretch"):
+                    _at_em.update({"email_enabled": em_on, "email_to": em_to.strip(),
+                                   "email_from": em_from.strip(), "email_pass": em_pass,
+                                   "email_min_confidence": em_min})
+                    _save_alerts_config_and_clear(_at_em)
+                    st.success("Saved!")
+            with cte:
+                if st.button("Test", key="cfg_em_test", width="stretch", disabled=not em_on):
+                    ok, err = _alerts.send_email_alert(em_from.strip(), em_pass, em_to.strip(),
+                                                       "Crypto Signal Model — Test Alert",
+                                                       "\u2705 Email alert test successful.")
+                    st.success("Email sent!") if ok else st.error(f"Failed: {err}")
+            st.caption("Use a Gmail App Password (Settings → Security → 2FA → App passwords)")
+
+        with st.expander("💬 Discord Alerts", expanded=_at_cfg.get("discord_enabled", False)):
+            _at_dc = _at_cfg.copy()
+            dc_on  = st.toggle("Enable Discord", value=_at_dc.get("discord_enabled", False), key="cfg_dc_on")
+            dc_wh  = st.text_input("Webhook URL", value=_at_dc.get("discord_webhook_url", ""), type="password",
+                                   placeholder="https://discord.com/api/webhooks/...",
+                                   key="cfg_dc_wh", disabled=not dc_on)
+            dc_min = st.slider("Alert threshold (%)", 50, 95, int(_at_dc.get("discord_min_confidence", 70)),
+                               step=5, key="cfg_dc_thresh", disabled=not dc_on)
+            csd, ctd = st.columns(2)
+            with csd:
+                if st.button("Save Discord", key="cfg_dc_save", width="stretch"):
+                    _at_dc.update({"discord_enabled": dc_on, "discord_webhook_url": dc_wh.strip(),
+                                   "discord_min_confidence": dc_min})
+                    _save_alerts_config_and_clear(_at_dc)
+                    st.success("Saved!")
+            with ctd:
+                if st.button("Test", key="cfg_dc_test", width="stretch", disabled=not dc_on):
+                    ok, err = _alerts.send_discord(dc_wh.strip(),
+                                                   "\u2705 **Crypto Signal Model** — Discord test!")
+                    st.success("Message sent!") if ok else st.error(f"Failed: {err}")
+            st.caption("Create webhook: Channel → Edit → Integrations → Webhooks → New")
+
+    # ── Tab 1: Trading Parameters
+    with _cfg_t1:
         # ── Trading Pairs ──
         _ui.section_header("Trading Pairs", "Select which crypto pairs to include in each scan", icon="🪙")
         _common_pairs = [
@@ -3906,7 +3901,9 @@ def page_config():
         overrides["TA_EXCHANGE"] = ta_ex
 
 
-    with st.expander("⚡ Signal & Risk", expanded=False):
+
+    # ── Tab 2: Signal & Risk
+    with _cfg_t2:
         # ── Risk Parameters ──
         _ui.section_header("Risk Parameters", "Position sizing, Kelly Criterion inputs, and exposure limits", icon="⚖️")
         r1, r2, r3 = st.columns(3)
@@ -4146,7 +4143,12 @@ def page_config():
                 st.warning(f"Retrain skipped: {lgbm_r.get('message', 'Unknown error')}")
 
 
-    with st.expander("🔔 Notifications", expanded=False):
+
+    # ── Tab 3: Alerts (full config + notifications)
+    with _cfg_t3:
+        _render_alerts_tab()
+        st.markdown('---')
+        st.markdown('#### Notifications & Scheduler')
         # ── Paid API Keys ──
         st.markdown("---")
         _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
@@ -4284,7 +4286,9 @@ def page_config():
                 _reset_config()
 
 
-    with st.expander("🛠️ Developer Tools", expanded=False):
+
+    # ── Tab 4: Dev Tools
+    with _cfg_t4:
         # ── SQLite Database Stats ──────────────────────────────────────────────
         st.markdown("---")
         _ui.section_header("Database Health", "SQLite WAL-mode database — row counts and disk usage", icon="🗄️")
@@ -4372,7 +4376,9 @@ def page_config():
 
 
 
-    with st.expander("⚙️ Live Execution", expanded=False):
+
+    # ── Tab 5: Live Execution
+    with _cfg_t5:
         # ── Live Execution Settings ────────────────────────────────────────────────
         st.markdown("---")
         _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
@@ -4736,1095 +4742,1496 @@ def page_backtest():
     # here so its fragment key stays registered across rerenders (prevents $$ID KeyError).
     _backtest_progress()
 
-    if st.session_state.get("backtest_error"):
-        st.error(f"Backtest failed: {st.session_state['backtest_error']}")
+    _bt_t1, _bt_t2, _bt_t3 = st.tabs([
+        "📊 Summary",
+        "📋 Trade History",
+        "🔬 Advanced Backtests",
+    ])
 
-    # Show existing results — from session state (fresh run) or DB (prior run)
-    bt_res = st.session_state.get("backtest_results")
-    df_trades = _cached_backtest_df()
+    with _bt_t1:
+        if st.session_state.get("backtest_error"):
+            st.error(f"Backtest failed: {st.session_state['backtest_error']}")
 
-    if bt_res is None and df_trades.empty:
-        st.info("No backtest data yet. Run **▶ Run Backtest** or ensure the daily signals DB table has entries.")
-        return
+        # Show existing results — from session state (fresh run) or DB (prior run)
+        bt_res = st.session_state.get("backtest_results")
+        df_trades = _cached_backtest_df()
 
-    # Use session results if available, otherwise load from file
-    metrics = None
-    equity = None
-    if bt_res and isinstance(bt_res, dict):
-        metrics = bt_res.get("metrics")
-        equity = bt_res.get("equity")
-        df_trades = bt_res.get("trades", df_trades)
+        if bt_res is None and df_trades.empty:
+            st.info("No backtest data yet. Run **▶ Run Backtest** or ensure the daily signals DB table has entries.")
+            return
 
-    if metrics:
-        m = metrics
-        _wr = m['win_rate']
+        # Use session results if available, otherwise load from file
+        metrics = None
+        equity = None
+        if bt_res and isinstance(bt_res, dict):
+            metrics = bt_res.get("metrics")
+            equity = bt_res.get("equity")
+            df_trades = bt_res.get("trades", df_trades)
 
-        # ── Item 12: Beginner simplified view — 3 big metrics ─────────────────
-        if _bt_lv == "beginner":
-            bm = st.columns(3)
-            bm[0].metric(
-                "✅ Win Rate",
-                f"{_wr}%",
-                delta=f"{round(_wr - 50, 1):+.1f}% better than a coin flip",
-                help="Out of every 100 signals the model gave, this percentage made money. Above 50% means it's right more often than wrong.",
-            )
-            bm[1].metric(
-                "💰 Total Return",
-                f"{m['total_return']}%",
-                help="If you had followed every signal since the start, this is the total gain or loss on your portfolio.",
-            )
-            bm[2].metric(
-                "🛡️ Worst Drawdown",
-                f"{m['max_drawdown']}%",
-                help="The biggest drop from a high point before recovering. Think of it as the worst losing patch. Lower is safer.",
-            )
-            with st.expander("📊 Full Performance Stats", expanded=False):
+        if metrics:
+            m = metrics
+            _wr = m['win_rate']
+
+            # ── Item 12: Beginner simplified view — 3 big metrics ─────────────────
+            if _bt_lv == "beginner":
+                bm = st.columns(3)
+                bm[0].metric(
+                    "✅ Win Rate",
+                    f"{_wr}%",
+                    delta=f"{round(_wr - 50, 1):+.1f}% better than a coin flip",
+                    help="Out of every 100 signals the model gave, this percentage made money. Above 50% means it's right more often than wrong.",
+                )
+                bm[1].metric(
+                    "💰 Total Return",
+                    f"{m['total_return']}%",
+                    help="If you had followed every signal since the start, this is the total gain or loss on your portfolio.",
+                )
+                bm[2].metric(
+                    "🛡️ Worst Drawdown",
+                    f"{m['max_drawdown']}%",
+                    help="The biggest drop from a high point before recovering. Think of it as the worst losing patch. Lower is safer.",
+                )
+                with st.expander("📊 Full Performance Stats", expanded=False):
+                    mc = st.columns(6)
+                    mc[0].metric("Trades Simulated", m["total_trades"], help=_ui.HELP_TOTAL_TRADES)
+                    mc[1].metric("Profitable Trades", f"{_wr}%", delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip", help=_ui.HELP_WIN_RATE)
+                    mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%", help=_ui.HELP_AVG_PNL)
+                    mc[3].metric("Profit vs Loss Ratio", m["profit_factor"], help=_ui.HELP_PROFIT_FACTOR)
+                    mc[4].metric("Performance Quality", m["sharpe"], help=_ui.HELP_SHARPE)
+                    mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%", help=_ui.HELP_MAX_DRAWDOWN)
+                    mc2 = st.columns(5)
+                    mc2[0].metric("Total Return", f"{m['total_return']}%")
+                    mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"), help=_ui.HELP_SORTINO)
+                    mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"), help=_ui.HELP_CALMAR)
+                    mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"), help="How many trades in a row lost money at worst.")
+                    mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%", help=_ui.HELP_EXPECTANCY)
+            else:
+                # Intermediate / Advanced — full metric grids
                 mc = st.columns(6)
-                mc[0].metric("Trades Simulated", m["total_trades"], help=_ui.HELP_TOTAL_TRADES)
-                mc[1].metric("Profitable Trades", f"{_wr}%", delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip", help=_ui.HELP_WIN_RATE)
-                mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%", help=_ui.HELP_AVG_PNL)
-                mc[3].metric("Profit vs Loss Ratio", m["profit_factor"], help=_ui.HELP_PROFIT_FACTOR)
-                mc[4].metric("Performance Quality", m["sharpe"], help=_ui.HELP_SHARPE)
-                mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%", help=_ui.HELP_MAX_DRAWDOWN)
+                mc[0].metric("Trades Simulated", m["total_trades"],
+                             help=_ui.HELP_TOTAL_TRADES)
+                mc[1].metric(f"Profitable Trades", f"{_wr}%",
+                             delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip",
+                             help=_ui.HELP_WIN_RATE)
+                mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%",
+                             help=_ui.HELP_AVG_PNL)
+                mc[3].metric("Profit vs Loss Ratio", m["profit_factor"],
+                             help=_ui.HELP_PROFIT_FACTOR)
+                mc[4].metric("Performance Quality", m["sharpe"],
+                             help=_ui.HELP_SHARPE)
+                mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%",
+                             help=_ui.HELP_MAX_DRAWDOWN)
+
                 mc2 = st.columns(5)
                 mc2[0].metric("Total Return", f"{m['total_return']}%")
-                mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"), help=_ui.HELP_SORTINO)
-                mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"), help=_ui.HELP_CALMAR)
-                mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"), help="How many trades in a row lost money at worst.")
-                mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%", help=_ui.HELP_EXPECTANCY)
-        else:
-            # Intermediate / Advanced — full metric grids
-            mc = st.columns(6)
-            mc[0].metric("Trades Simulated", m["total_trades"],
-                         help=_ui.HELP_TOTAL_TRADES)
-            mc[1].metric(f"Profitable Trades", f"{_wr}%",
-                         delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip",
-                         help=_ui.HELP_WIN_RATE)
-            mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%",
-                         help=_ui.HELP_AVG_PNL)
-            mc[3].metric("Profit vs Loss Ratio", m["profit_factor"],
-                         help=_ui.HELP_PROFIT_FACTOR)
-            mc[4].metric("Performance Quality", m["sharpe"],
-                         help=_ui.HELP_SHARPE)
-            mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%",
-                         help=_ui.HELP_MAX_DRAWDOWN)
+                mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
+                              help=_ui.HELP_SORTINO)
+                mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
+                              help=_ui.HELP_CALMAR)
+                mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"),
+                              help="How many trades in a row lost money at worst. Lower = more consistent.")
+                mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%",
+                              help=_ui.HELP_EXPECTANCY)
 
-            mc2 = st.columns(5)
-            mc2[0].metric("Total Return", f"{m['total_return']}%")
-            mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
-                          help=_ui.HELP_SORTINO)
-            mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
-                          help=_ui.HELP_CALMAR)
-            mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"),
-                          help="How many trades in a row lost money at worst. Lower = more consistent.")
-            mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%",
-                          help=_ui.HELP_EXPECTANCY)
+                mc3 = st.columns(3)
+                mc3[0].metric("Bad-Day Loss (VaR)", f"{m.get('var_95', 'N/A')}%",
+                              help="On a bad day (worst 5% of trades), how much could you lose on a single trade?")
+                mc3[1].metric("CVaR (95%)", f"{m.get('cvar_95', 'N/A')}%",
+                              help="Conditional VaR: average loss when VaR threshold is breached (expected shortfall).")
+                trailing_label = "Trailing Stops" if model.TRAILING_STOP_ENABLED else "Fixed Stops"
+                mc3[2].metric("Stop Mode", trailing_label,
+                              help="Trailing: stop advances with price to lock in profits. Fixed: stop stays at initial level.")
 
-            mc3 = st.columns(3)
-            mc3[0].metric("Bad-Day Loss (VaR)", f"{m.get('var_95', 'N/A')}%",
-                          help="On a bad day (worst 5% of trades), how much could you lose on a single trade?")
-            mc3[1].metric("CVaR (95%)", f"{m.get('cvar_95', 'N/A')}%",
-                          help="Conditional VaR: average loss when VaR threshold is breached (expected shortfall).")
-            trailing_label = "Trailing Stops" if model.TRAILING_STOP_ENABLED else "Fixed Stops"
-            mc3[2].metric("Stop Mode", trailing_label,
-                          help="Trailing: stop advances with price to lock in profits. Fixed: stop stays at initial level.")
+            # ── Fee & slippage breakdown — intermediate/advanced only ──
+            if _bt_lv != "beginner" and m.get("total_fees_usd") is not None:
+                st.markdown("**Fee & Slippage Breakdown**")
+                mf = st.columns(5)
+                mf[0].metric("Gross Return", f"{m.get('gross_return', 'N/A')}%",
+                             help="Total return before exchange fees and slippage.")
+                mf[1].metric("Net Return", f"{m.get('total_return', 'N/A')}%",
+                             help="Total return after fees and slippage. This is what you actually keep.")
+                fee_drag = m.get('fee_drag_pct', 0)
+                mf[2].metric("Fee Drag", f"{fee_drag}%",
+                             delta=f"-{abs(fee_drag)}%" if fee_drag else None,
+                             delta_color="inverse",
+                             help="Gross Return minus Net Return. Total performance lost to exchange fees and slippage.")
+                mf[3].metric("Total Fees ($)", f"${m.get('total_fees_usd', 0):,.2f}",
+                             help=f"Sum of taker ({model.TAKER_FEE_PCT*100:.3f}%) + maker ({model.MAKER_FEE_PCT*100:.3f}%) fees across all trades.")
+                mf[4].metric("Total Slippage ($)", f"${m.get('total_slippage_usd', 0):,.2f}",
+                             help=f"Market impact cost ({model.SLIPPAGE_PCT*100:.3f}% per side) applied to market-order fills.")
+            st.markdown("---")
 
-        # ── Fee & slippage breakdown — intermediate/advanced only ──
-        if _bt_lv != "beginner" and m.get("total_fees_usd") is not None:
-            st.markdown("**Fee & Slippage Breakdown**")
-            mf = st.columns(5)
-            mf[0].metric("Gross Return", f"{m.get('gross_return', 'N/A')}%",
-                         help="Total return before exchange fees and slippage.")
-            mf[1].metric("Net Return", f"{m.get('total_return', 'N/A')}%",
-                         help="Total return after fees and slippage. This is what you actually keep.")
-            fee_drag = m.get('fee_drag_pct', 0)
-            mf[2].metric("Fee Drag", f"{fee_drag}%",
-                         delta=f"-{abs(fee_drag)}%" if fee_drag else None,
-                         delta_color="inverse",
-                         help="Gross Return minus Net Return. Total performance lost to exchange fees and slippage.")
-            mf[3].metric("Total Fees ($)", f"${m.get('total_fees_usd', 0):,.2f}",
-                         help=f"Sum of taker ({model.TAKER_FEE_PCT*100:.3f}%) + maker ({model.MAKER_FEE_PCT*100:.3f}%) fees across all trades.")
-            mf[4].metric("Total Slippage ($)", f"${m.get('total_slippage_usd', 0):,.2f}",
-                         help=f"Market impact cost ({model.SLIPPAGE_PCT*100:.3f}% per side) applied to market-order fills.")
-        st.markdown("---")
+        # Enhanced Equity Curve with drawdown subplot and win/loss markers
+        if equity and len(equity) > 1:
+            _ui.section_header("Equity Curve", "Portfolio value with drawdown — green dots=wins, red dots=losses", icon="📈")
 
-    # Enhanced Equity Curve with drawdown subplot and win/loss markers
-    if equity and len(equity) > 1:
-        _ui.section_header("Equity Curve", "Portfolio value with drawdown — green dots=wins, red dots=losses", icon="📈")
+            _eq = np.array(equity, dtype=float)
+            _x  = list(range(len(_eq)))
 
-        _eq = np.array(equity, dtype=float)
-        _x  = list(range(len(_eq)))
+            # Compute running peak and drawdown %
+            _peak = np.maximum.accumulate(_eq)
+            _dd   = np.where(_peak != 0, (_eq - _peak) / _peak * 100, 0.0)  # APP-22: guard zero equity start
 
-        # Compute running peak and drawdown %
-        _peak = np.maximum.accumulate(_eq)
-        _dd   = np.where(_peak != 0, (_eq - _peak) / _peak * 100, 0.0)  # APP-22: guard zero equity start
+            # Win/loss markers from trade log
+            _win_x, _win_y, _loss_x, _loss_y = [], [], [], []
+            if not df_trades.empty and "pnl_pct" in df_trades.columns:
+                for _ti, (_tidx, _trow) in enumerate(df_trades.iterrows()):
+                    if _ti < len(_eq):
+                        _pnl_val = float(_trow.get("pnl_pct", 0) or 0)
+                        if _pnl_val > 0:
+                            _win_x.append(_ti); _win_y.append(_eq[_ti])
+                        elif _pnl_val < 0:
+                            _loss_x.append(_ti); _loss_y.append(_eq[_ti])
 
-        # Win/loss markers from trade log
-        _win_x, _win_y, _loss_x, _loss_y = [], [], [], []
-        if not df_trades.empty and "pnl_pct" in df_trades.columns:
-            for _ti, (_tidx, _trow) in enumerate(df_trades.iterrows()):
-                if _ti < len(_eq):
-                    _pnl_val = float(_trow.get("pnl_pct", 0) or 0)
-                    if _pnl_val > 0:
-                        _win_x.append(_ti); _win_y.append(_eq[_ti])
-                    elif _pnl_val < 0:
-                        _loss_x.append(_ti); _loss_y.append(_eq[_ti])
+            _efig = make_subplots(
+                rows=2, cols=1,
+                row_heights=[0.65, 0.35],
+                shared_xaxes=True,
+                vertical_spacing=0.04,
+            )
 
-        _efig = make_subplots(
-            rows=2, cols=1,
-            row_heights=[0.65, 0.35],
-            shared_xaxes=True,
-            vertical_spacing=0.04,
-        )
-
-        # Row 1: equity curve + initial equity line + win/loss dots
-        _init_eq = float(_eq[0])
-        _efig.add_trace(go.Scatter(
-            x=_x, y=_eq.tolist(), mode="lines", name="Portfolio",
-            line=dict(color="#00d4aa", width=2),
-        ), row=1, col=1)
-        _efig.add_hline(y=_init_eq, line_dash="dot", line_color="#888888",
-                        annotation_text=f"Start ${_init_eq:,.0f}",
-                        annotation_position="bottom right", row=1, col=1)
-        if _win_x:
+            # Row 1: equity curve + initial equity line + win/loss dots
+            _init_eq = float(_eq[0])
             _efig.add_trace(go.Scatter(
-                x=_win_x, y=_win_y, mode="markers", name="Win",
-                marker=dict(color="#00cc96", size=5, symbol="circle"),
+                x=_x, y=_eq.tolist(), mode="lines", name="Portfolio",
+                line=dict(color="#00d4aa", width=2),
             ), row=1, col=1)
-        if _loss_x:
+            _efig.add_hline(y=_init_eq, line_dash="dot", line_color="#888888",
+                            annotation_text=f"Start ${_init_eq:,.0f}",
+                            annotation_position="bottom right", row=1, col=1)
+            if _win_x:
+                _efig.add_trace(go.Scatter(
+                    x=_win_x, y=_win_y, mode="markers", name="Win",
+                    marker=dict(color="#00cc96", size=5, symbol="circle"),
+                ), row=1, col=1)
+            if _loss_x:
+                _efig.add_trace(go.Scatter(
+                    x=_loss_x, y=_loss_y, mode="markers", name="Loss",
+                    marker=dict(color="#ff4b4b", size=5, symbol="circle"),
+                ), row=1, col=1)
+
+            # Row 2: drawdown % (filled red below 0)
             _efig.add_trace(go.Scatter(
-                x=_loss_x, y=_loss_y, mode="markers", name="Loss",
-                marker=dict(color="#ff4b4b", size=5, symbol="circle"),
-            ), row=1, col=1)
+                x=_x, y=_dd.tolist(), mode="lines", name="Drawdown %",
+                line=dict(color="#ff4b4b", width=1),
+                fill="tozeroy", fillcolor="rgba(255,75,75,0.2)",
+            ), row=2, col=1)
 
-        # Row 2: drawdown % (filled red below 0)
-        _efig.add_trace(go.Scatter(
-            x=_x, y=_dd.tolist(), mode="lines", name="Drawdown %",
-            line=dict(color="#ff4b4b", width=1),
-            fill="tozeroy", fillcolor="rgba(255,75,75,0.2)",
-        ), row=2, col=1)
-
-        _efig.update_layout(
-            height=480,
-            margin=dict(l=10, r=10, t=20, b=10),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            legend=dict(orientation="h", y=1.08, font=dict(size=9)),
-            showlegend=True,
-        )
-        _efig.update_yaxes(title_text="Portfolio ($)", row=1, col=1,
-                           gridcolor="#222", tickformat="$,.0f")
-        _efig.update_yaxes(title_text="Drawdown %", row=2, col=1,
-                           gridcolor="#222")
-        _efig.update_xaxes(title_text="Trade #", row=2, col=1,
-                           gridcolor="#222")
-        _efig.update_xaxes(gridcolor="#222", row=1, col=1)
-        st.plotly_chart(_efig, width="stretch")
-    elif os.path.exists("backtest_equity_curve.png"):
-        st.image("backtest_equity_curve.png", caption="Equity Curve (static)")
-
-    # Trade table
-    if not df_trades.empty:
-        st.subheader("Trade Log")
-
-        # Filters
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            pair_filter = st.multiselect("Filter by Pair",
-                                         options=df_trades['pair'].unique().tolist() if 'pair' in df_trades.columns else [],
-                                         default=[])
-        with f2:
-            dir_filter = st.multiselect("Filter by Direction",
-                                        options=['BUY', 'STRONG BUY', 'SELL', 'STRONG SELL'],
-                                        default=[])
-        with f3:
-            reason_filter = st.multiselect("Exit Reason",
-                                           options=df_trades['exit_reason'].unique().tolist() if 'exit_reason' in df_trades.columns else [],
-                                           default=[])
-
-        filtered = df_trades.copy()
-        if pair_filter and 'pair' in filtered.columns:
-            filtered = filtered[filtered['pair'].isin(pair_filter)]
-        if dir_filter and 'direction' in filtered.columns:
-            filtered = filtered[filtered['direction'].isin(dir_filter)]
-        if reason_filter and 'exit_reason' in filtered.columns:
-            filtered = filtered[filtered['exit_reason'].isin(reason_filter)]
-
-        st.dataframe(
-            filtered,
-            width="stretch", height=400,
-            column_config={
-                "pnl_pct": st.column_config.NumberColumn("PNL %", format="%.2f%%"),
-                "pnl_usd": st.column_config.NumberColumn("PNL $", format="$%.2f"),
-            },
-        )
-
-        dl_col1, dl_col2 = st.columns(2)
-        with dl_col1:
-            st.download_button(
-                "⬇ Download Trade Log (CSV)",
-                data=filtered.to_csv(index=False),
-                file_name="backtest_trades.csv",
-                mime="text/csv",
-                width="stretch",
-                key="dl_backtest_csv",
+            _efig.update_layout(
+                height=480,
+                margin=dict(l=10, r=10, t=20, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", y=1.08, font=dict(size=9)),
+                showlegend=True,
             )
-        with dl_col2:
-            if _pdf is not None:
-                try:
-                    bt_pdf_bytes = _pdf.generate_backtest_pdf(
-                        metrics=metrics,
-                        trades_df=filtered,
-                        scan_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    )
-                    st.download_button(
-                        "⬇ Download Report (PDF)",
-                        data=bt_pdf_bytes,
-                        file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                        key="dl_backtest_pdf",
-                    )
-                except Exception as _bt_pdf_err:
-                    st.caption(f"PDF generation failed: {_bt_pdf_err}")
-            else:
-                st.caption("PDF export unavailable")
+            _efig.update_yaxes(title_text="Portfolio ($)", row=1, col=1,
+                               gridcolor="#222", tickformat="$,.0f")
+            _efig.update_yaxes(title_text="Drawdown %", row=2, col=1,
+                               gridcolor="#222")
+            _efig.update_xaxes(title_text="Trade #", row=2, col=1,
+                               gridcolor="#222")
+            _efig.update_xaxes(gridcolor="#222", row=1, col=1)
+            st.plotly_chart(_efig, width="stretch")
+        elif os.path.exists("backtest_equity_curve.png"):
+            st.image("backtest_equity_curve.png", caption="Equity Curve (static)")
 
-        # PnL distribution
-        if 'pnl_pct' in df_trades.columns and len(df_trades) > 3:
-            st.subheader("PnL Distribution")
-            fig2 = px.histogram(df_trades, x='pnl_pct', nbins=20,
-                                color_discrete_sequence=['#636EFA'],
-                                labels={'pnl_pct': 'PnL %'})
-            fig2.add_vline(x=0, line_dash="dash", line_color="red")
-            fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
-            st.plotly_chart(fig2, width="stretch")
+        # Trade table
+        if not df_trades.empty:
+            st.subheader("Trade Log")
 
-        # Monte Carlo simulation — advanced only (Item 12)
-        if _bt_lv != "beginner" and 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
-            _ui.section_header("Monte Carlo Simulation",
-                               "Bootstrap resamples trade sequence to estimate distribution of equity outcomes and max drawdown", icon="🎲")
-            mc_c1, mc_c2 = st.columns([1, 4])
-            with mc_c1:
-                n_mc = st.number_input("Simulations", 100, 5000, 1000, step=100,
-                                       key="n_mc_sims")
-                if st.button("Run Monte Carlo", type="secondary", width="stretch",
-                             key="btn_monte_carlo"):
-                    with st.spinner(f"Running {int(n_mc)} Monte Carlo simulations...", show_time=True):
-                        mc_res = model.run_monte_carlo(df_trades, n_sim=int(n_mc))
-                    st.session_state["mc_result"] = mc_res
+            # Filters
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                pair_filter = st.multiselect("Filter by Pair",
+                                             options=df_trades['pair'].unique().tolist() if 'pair' in df_trades.columns else [],
+                                             default=[])
+            with f2:
+                dir_filter = st.multiselect("Filter by Direction",
+                                            options=['BUY', 'STRONG BUY', 'SELL', 'STRONG SELL'],
+                                            default=[])
+            with f3:
+                reason_filter = st.multiselect("Exit Reason",
+                                               options=df_trades['exit_reason'].unique().tolist() if 'exit_reason' in df_trades.columns else [],
+                                               default=[])
 
-            mc_r = st.session_state.get("mc_result")
-            if mc_r and 'error' not in mc_r:
-                with mc_c2:
-                    mc_m = st.columns(4)
-                    mc_m[0].metric("Profitable Runs", f"{mc_r['pct_profitable']}%",
-                                   help="% of simulations where final equity > starting equity")
-                    mc_m[1].metric("Median Equity", f"${mc_r['equity_p50']:,.0f}",
-                                   help="50th percentile final equity across all simulations")
-                    mc_m[2].metric("Worst 5% Equity", f"${mc_r['equity_p5']:,.0f}",
-                                   help="5th percentile — tail risk floor")
-                    mc_m[3].metric("Median Max DD", f"{mc_r['mdd_p50']}%",
-                                   help="Median max drawdown across all simulations")
+            filtered = df_trades.copy()
+            if pair_filter and 'pair' in filtered.columns:
+                filtered = filtered[filtered['pair'].isin(pair_filter)]
+            if dir_filter and 'direction' in filtered.columns:
+                filtered = filtered[filtered['direction'].isin(dir_filter)]
+            if reason_filter and 'exit_reason' in filtered.columns:
+                filtered = filtered[filtered['exit_reason'].isin(reason_filter)]
 
-                fig_mc = go.Figure()
-                fig_mc.add_trace(go.Histogram(
-                    x=mc_r['all_final_equities'],
-                    nbinsx=60,
-                    name="Final Equity",
-                    marker_color='#636EFA',
-                    opacity=0.75,
-                ))
-                fig_mc.add_vline(x=mc_r['initial_equity'], line_dash="dash",
-                                 line_color="white", annotation_text="Start")
-                fig_mc.add_vline(x=mc_r['equity_p5'], line_dash="dot",
-                                 line_color="red", annotation_text="P5")
-                fig_mc.add_vline(x=mc_r['equity_p95'], line_dash="dot",
-                                 line_color="green", annotation_text="P95")
-                fig_mc.update_layout(
-                    xaxis_title="Final Equity (USD)",
-                    yaxis_title="Frequency",
-                    height=300, margin=dict(l=0, r=0, t=10, b=0),
-                )
-                st.plotly_chart(fig_mc, width="stretch")
-            elif mc_r and 'error' in mc_r:
-                st.warning(mc_r['error'])
-
-    # Walk-Forward + Deep Backtest — intermediate/advanced only (Item 12)
-    if _bt_lv == "beginner":
-        return  # beginners see metrics + equity curve only — no advanced simulation panels
-
-    # Walk-forward out-of-sample validation
-    st.markdown("---")
-    _ui.section_header("Walk-Forward Validation",
-                       "Splits OHLCV into N windows · First 60% warm-up · Last 40% out-of-sample test · Checks signal predictiveness across regimes",
-                       icon="🔄")
-    wf_c1, wf_c2, wf_c3 = st.columns(3)
-    with wf_c1:
-        wf_splits = st.number_input("Windows", 2, 8, 4, step=1, key="wf_splits")
-    with wf_c2:
-        wf_pair = st.selectbox("Pair", model.PAIRS, index=0, key="wf_pair")
-    with wf_c3:
-        wf_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wf_tf")
-
-    if st.button("Run Walk-Forward Validation", type="secondary", width="stretch",
-                 key="btn_wf"):
-        with st.spinner(f"Running {int(wf_splits)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)", show_time=True):
-            wf_res = model.run_walk_forward(n_splits=int(wf_splits), pair=wf_pair, tf=wf_tf)
-        st.session_state["wf_result"] = wf_res
-
-    wf_r = st.session_state.get("wf_result")
-    if wf_r:
-        if 'error' in wf_r:
-            st.error(wf_r['error'])
-        else:
-            wf_cols = st.columns(2)
-            wf_cols[0].metric("Mean OOS Accuracy",
-                              f"{wf_r['mean_accuracy']}%" if wf_r['mean_accuracy'] else "N/A",
-                              help="Average directional accuracy across all out-of-sample test windows")
-            wf_cols[1].metric("Std Dev",
-                              f"±{wf_r['std_accuracy']}%" if wf_r['std_accuracy'] is not None else "N/A",
-                              help="Lower = more consistent across market regimes")
-            wf_df = pd.DataFrame(wf_r['windows'])
-            wf_df['accuracy_pct'] = wf_df['accuracy_pct'].apply(
-                lambda x: f"{x}%" if x is not None else "N/A"
-            )
-            st.dataframe(wf_df.rename(columns={
-                'window': 'Window', 'period': 'Period',
-                'test_signals': 'Test Signals', 'accuracy_pct': 'OOS Accuracy'
-            }).set_index('Window'), width="stretch")
-
-
-    # Deep OHLCV-replay backtest
-    st.markdown("---")
-    _ui.section_header("Deep OHLCV-Replay Backtest",
-                       "True bar-by-bar simulation using paginated historical data · No lookahead bias · Proper entry/stop/target replay",
-                       icon="🔬")
-    db_c1, db_c2, db_c3, db_c4 = st.columns(4)
-    with db_c1:
-        db_pair = st.selectbox("Pair", model.PAIRS, index=0, key="db_pair")
-    with db_c2:
-        db_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="db_tf")
-    with db_c3:
-        db_years = st.number_input("Years of History", 0.5, 5.0, 2.0, step=0.5, key="db_years")
-    with db_c4:
-        db_pos = st.number_input("Position Size %", 2.0, 25.0, 10.0, step=1.0, key="db_pos")
-
-    if st.button("Run Deep Backtest", type="primary", width="stretch", key="btn_deep_bt"):
-        with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min)", show_time=True):
-            deep_r = model.run_deep_backtest(
-                pair=db_pair, tf=db_tf, years=float(db_years), pos_pct=float(db_pos)
-            )
-        st.session_state["deep_backtest_result"] = deep_r
-
-    deep_r = st.session_state.get("deep_backtest_result")
-    if deep_r:
-        if deep_r.get("error"):
-            st.error(f"Deep Backtest: {deep_r['error']}")
-        else:
-            m = deep_r.get("metrics", {})
-            d_cols = st.columns(5)
-            d_cols[0].metric("Total Trades",    str(m.get("total_trades", 0)))
-            d_cols[1].metric("Win Rate",         f"{m.get('win_rate', 0)}%")
-            d_cols[2].metric("Avg PnL/Trade",    f"{m.get('avg_pnl', 0)}%")
-            d_cols[3].metric("Total Return",     f"{m.get('total_return', 0)}%")
-            d_cols[4].metric("Sharpe Ratio",     str(m.get("sharpe", 0)))
-            d_cols2 = st.columns(4)
-            d_cols2[0].metric("Max Drawdown",    f"{m.get('max_drawdown', 0)}%")
-            d_cols2[1].metric("Profit Factor",   str(m.get("profit_factor", 0)))
-            d_cols2[2].metric("Final Equity",    f"${m.get('final_equity', 0):,.0f}")
-            d_cols2[3].metric("Years Tested",    str(m.get("years_tested", 0)))
-
-            df_dbt = deep_r.get("trades", pd.DataFrame())
-            if not df_dbt.empty:
-                # Equity curve chart
-                fig_dbt = go.Figure()
-                fig_dbt.add_trace(go.Scatter(
-                    x=df_dbt['timestamp'], y=df_dbt['equity'],
-                    mode='lines', name='Equity', line=dict(color='#00d4aa', width=2)
-                ))
-                fig_dbt.update_layout(
-                    template='plotly_dark', title=f"Deep Backtest Equity Curve — {db_pair} {db_tf}",
-                    height=350, showlegend=True,
-                    xaxis_title="Date", yaxis_title="Equity ($)",
-                )
-                st.plotly_chart(fig_dbt, width="stretch")
-
-                # Trade log (first 100 rows)
-                with st.expander(f"Trade Log ({len(df_dbt)} trades)", expanded=False):
-                    st.dataframe(
-                        df_dbt[['timestamp', 'direction', 'confidence', 'entry', 'exit',
-                                 'exit_reason', 'pnl_pct', 'pnl_usd']].head(100),
-                        width="stretch"
-                    )
-                    csv_dbt = df_dbt.to_csv(index=False)
-                    st.download_button("📥 Download Full Deep Backtest CSV", csv_dbt,
-                                       f"deep_backtest_{db_pair.replace('/','')}_{db_tf}.csv",
-                                       "text/csv", key="dl_deep_bt")
-
-    # ── Signal Calibration Analytics ────────────────────────────────────────
-    st.divider()
-    _ui.section_header(
-        "Signal Calibration",
-        "How well does predicted confidence match actual win rate? Perfect calibration = diagonal line.",
-        icon="🎯",
-    )
-    _cal_df = _cached_resolved_feedback_df(days=365)
-    _cal_has = (
-        not _cal_df.empty
-        and "confidence" in _cal_df.columns
-        and "was_correct" in _cal_df.columns
-        and _cal_df["was_correct"].notna().any()
-    )
-    if not _cal_has:
-        st.info(
-            "No resolved feedback data yet. Run scans over time — outcomes are auto-resolved "
-            "after the hold period and used to calibrate confidence scores."
-        )
-    else:
-        _cal_df = _cal_df.dropna(subset=["confidence", "was_correct"]).copy()
-        _cal_df["conf_bucket"] = ((_cal_df["confidence"] // 10) * 10).clip(0, 90).astype(int)
-        _cal_summary = (
-            _cal_df.groupby("conf_bucket")
-            .agg(count=("was_correct", "count"), win_rate=("was_correct", "mean"))
-            .reset_index()
-        )
-        _cal_summary["win_rate_pct"] = (_cal_summary["win_rate"] * 100).round(1)
-        _cal_summary["label"] = _cal_summary["conf_bucket"].astype(str) + "–" + (_cal_summary["conf_bucket"] + 10).astype(str) + "%"
-
-        # Brier score = mean squared error between predicted prob and actual outcome
-        _brier = float(((_cal_df["confidence"] / 100 - _cal_df["was_correct"]) ** 2).mean())
-        # Expected Calibration Error (ECE) weighted by bucket size
-        _ece_rows = []
-        for _, _r in _cal_summary.iterrows():
-            _mid = (_r["conf_bucket"] + 5) / 100
-            _ece_rows.append(abs(_mid - _r["win_rate"]) * _r["count"])
-        _ece = sum(_ece_rows) / len(_cal_df) if len(_cal_df) > 0 else 0.0
-
-        _cm1, _cm2, _cm3, _cm4 = st.columns(4)
-        _cm1.metric("Signals Resolved", len(_cal_df))
-        _cm2.metric("Overall Win Rate", f"{_cal_df['was_correct'].mean() * 100:.1f}%")
-        _cm3.metric("Brier Score", f"{_brier:.4f}", help="Lower = better. 0 = perfect, 0.25 = random")
-        _cm4.metric("Calibration Error (ECE)", f"{_ece * 100:.1f}%", help="Mean absolute deviation between predicted and actual win rate")
-
-        # Calibration bar chart
-        _fig_cal = go.Figure()
-        _fig_cal.add_trace(go.Bar(
-            x=_cal_summary["label"],
-            y=_cal_summary["win_rate_pct"],
-            name="Actual Win Rate",
-            marker_color=[
-                "#00d4aa" if float(r["win_rate_pct"]) >= float(r["conf_bucket"]) + 5 else "#ff4b4b"
-                for _, r in _cal_summary.iterrows()
-            ],
-            text=_cal_summary.apply(lambda r: f"{r['win_rate_pct']:.0f}%<br>n={int(r['count'])}", axis=1),
-            textposition="outside",
-        ))
-        # Perfect calibration diagonal
-        _diag_x = _cal_summary["label"].tolist()
-        _diag_y = [(_r["conf_bucket"] + 5) for _, _r in _cal_summary.iterrows()]
-        _fig_cal.add_trace(go.Scatter(
-            x=_diag_x, y=_diag_y,
-            mode="lines", name="Perfect Calibration",
-            line=dict(color="#ffffff", width=1, dash="dot"),
-        ))
-        _fig_cal.update_layout(
-            template="plotly_dark", height=340,
-            title="Confidence Bucket vs Actual Win Rate (teal = over-performing, red = under-performing)",
-            xaxis_title="Predicted Confidence", yaxis_title="Actual Win Rate (%)",
-            yaxis=dict(range=[0, 110]),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        )
-        st.plotly_chart(_fig_cal, width="stretch")
-
-        # Per-pair calibration breakdown
-        with st.expander("Per-Pair Calibration Breakdown", expanded=False):
-            _pair_cal = (
-                _cal_df.groupby("pair")
-                .agg(signals=("was_correct", "count"), win_rate=("was_correct", "mean"),
-                     avg_conf=("confidence", "mean"))
-                .reset_index()
-            )
-            _pair_cal["win_rate"] = (_pair_cal["win_rate"] * 100).round(1)
-            _pair_cal["avg_conf"] = _pair_cal["avg_conf"].round(1)
-            _pair_cal["diff"] = (_pair_cal["win_rate"] - _pair_cal["avg_conf"]).round(1)
-            _pair_cal.columns = ["Pair", "Signals", "Win Rate %", "Avg Confidence %", "Conf − Win Rate"]
             st.dataframe(
-                _pair_cal.sort_values("Win Rate %", ascending=False),
-                width="stretch", hide_index=True,
+                filtered,
+                width="stretch", height=400,
+                column_config={
+                    "pnl_pct": st.column_config.NumberColumn("PNL %", format="%.2f%%"),
+                    "pnl_usd": st.column_config.NumberColumn("PNL $", format="$%.2f"),
+                },
             )
 
-    # ── Performance Attribution ────────────────────────────────────────────────
-    # ── IC & WFE Quick Card (DB-based, Batch 3 #36) ───────────────────────────
-    try:
-        st.divider()
-        _ui.section_header(
-            "IC & WFE Metrics",
-            "Information Coefficient (Spearman) and Walk-Forward Efficiency from resolved trade feedback",
-            icon="🎯",
-        )
-        _ic_wfe_c1, _ic_wfe_c2 = st.columns(2)
-        with _ic_wfe_c1:
-            st.markdown("**Information Coefficient (IC)**")
-            if st.button("Compute IC from Feedback Log", key="btn_ic_db", width="stretch"):
-                with st.spinner("Computing Spearman IC...", show_time=True):
-                    st.session_state["ic_db_result"] = _db.compute_and_save_ic(lookback_days=30)
-            _ic_db = st.session_state.get("ic_db_result")
-            if _ic_db:
-                _ic_db_val = _ic_db.get("ic")
-                _ic_db_note = _ic_db.get("ic_note")
-                if _ic_db_val is not None:
-                    _ic_color = "#10b981" if _ic_db_val > 0.05 else ("#ef4444" if _ic_db_val < 0 else "#f59e0b")
-                    _ic_skill = _ic_db.get("skill", "WEAK")
-                    _ic_n     = _ic_db.get("n_samples", 0)
-                    _ic_p     = _ic_db.get("ic_pvalue")
-                    _ic_cols  = st.columns(3)
-                    _ic_cols[0].metric("IC (30d)", f"{_ic_db_val:+.4f}")
-                    _ic_cols[1].metric("Skill", _ic_skill)
-                    _ic_cols[2].metric("n", _ic_n)
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button(
+                    "⬇ Download Trade Log (CSV)",
+                    data=filtered.to_csv(index=False),
+                    file_name="backtest_trades.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="dl_backtest_csv",
+                )
+            with dl_col2:
+                if _pdf is not None:
+                    try:
+                        bt_pdf_bytes = _pdf.generate_backtest_pdf(
+                            metrics=metrics,
+                            trades_df=filtered,
+                            scan_timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                        )
+                        st.download_button(
+                            "⬇ Download Report (PDF)",
+                            data=bt_pdf_bytes,
+                            file_name=f"backtest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                            key="dl_backtest_pdf",
+                        )
+                    except Exception as _bt_pdf_err:
+                        st.caption(f"PDF generation failed: {_bt_pdf_err}")
+                else:
+                    st.caption("PDF export unavailable")
+
+            # PnL distribution
+            if 'pnl_pct' in df_trades.columns and len(df_trades) > 3:
+                st.subheader("PnL Distribution")
+                fig2 = px.histogram(df_trades, x='pnl_pct', nbins=20,
+                                    color_discrete_sequence=['#636EFA'],
+                                    labels={'pnl_pct': 'PnL %'})
+                fig2.add_vline(x=0, line_dash="dash", line_color="red")
+                fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig2, width="stretch")
+
+            # Monte Carlo simulation — advanced only (Item 12)
+            if _bt_lv != "beginner" and 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
+                _ui.section_header("Monte Carlo Simulation",
+                                   "Bootstrap resamples trade sequence to estimate distribution of equity outcomes and max drawdown", icon="🎲")
+                mc_c1, mc_c2 = st.columns([1, 4])
+                with mc_c1:
+                    n_mc = st.number_input("Simulations", 100, 5000, 1000, step=100,
+                                           key="n_mc_sims")
+                    if st.button("Run Monte Carlo", type="secondary", width="stretch",
+                                 key="btn_monte_carlo"):
+                        with st.spinner(f"Running {int(n_mc)} Monte Carlo simulations...", show_time=True):
+                            mc_res = model.run_monte_carlo(df_trades, n_sim=int(n_mc))
+                        st.session_state["mc_result"] = mc_res
+
+                mc_r = st.session_state.get("mc_result")
+                if mc_r and 'error' not in mc_r:
+                    with mc_c2:
+                        mc_m = st.columns(4)
+                        mc_m[0].metric("Profitable Runs", f"{mc_r['pct_profitable']}%",
+                                       help="% of simulations where final equity > starting equity")
+                        mc_m[1].metric("Median Equity", f"${mc_r['equity_p50']:,.0f}",
+                                       help="50th percentile final equity across all simulations")
+                        mc_m[2].metric("Worst 5% Equity", f"${mc_r['equity_p5']:,.0f}",
+                                       help="5th percentile — tail risk floor")
+                        mc_m[3].metric("Median Max DD", f"{mc_r['mdd_p50']}%",
+                                       help="Median max drawdown across all simulations")
+
+                    fig_mc = go.Figure()
+                    fig_mc.add_trace(go.Histogram(
+                        x=mc_r['all_final_equities'],
+                        nbinsx=60,
+                        name="Final Equity",
+                        marker_color='#636EFA',
+                        opacity=0.75,
+                    ))
+                    fig_mc.add_vline(x=mc_r['initial_equity'], line_dash="dash",
+                                     line_color="white", annotation_text="Start")
+                    fig_mc.add_vline(x=mc_r['equity_p5'], line_dash="dot",
+                                     line_color="red", annotation_text="P5")
+                    fig_mc.add_vline(x=mc_r['equity_p95'], line_dash="dot",
+                                     line_color="green", annotation_text="P95")
+                    fig_mc.update_layout(
+                        xaxis_title="Final Equity (USD)",
+                        yaxis_title="Frequency",
+                        height=300, margin=dict(l=0, r=0, t=10, b=0),
+                    )
+                    st.plotly_chart(fig_mc, width="stretch")
+                elif mc_r and 'error' in mc_r:
+                    st.warning(mc_r['error'])
+
+
+    with _bt_t2:
+        tab_master, tab_paper, tab_feedback, tab_exec, tab_slip = st.tabs([
+            "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log", "Slippage Analytics"
+        ])
+
+        # ── Tab 1: Master Log ──
+        with tab_master:
+            df = _cached_signals_df()
+            if df.empty:
+                st.info("No master log data yet. Run a scan first.")
+            else:
+                # Summary metrics
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Records", len(df))
+                if 'direction' in df.columns:
+                    buys = df['direction'].str.contains("BUY", na=False).sum()
+                    sells = df['direction'].str.contains("SELL", na=False).sum()
+                    m2.metric("Total Buy Signals", int(buys))
+                    m3.metric("Total Sell Signals", int(sells))
+                if 'confidence_avg_pct' in df.columns:
+                    avg_conf = pd.to_numeric(df['confidence_avg_pct'], errors='coerce').mean()
+                    m4.metric("Avg Confidence", f"{avg_conf:.1f}%" if pd.notna(avg_conf) else "N/A")
+
+                st.markdown("---")
+
+                # Confidence trend per pair
+                if 'scan_timestamp' in df.columns and 'confidence_avg_pct' in df.columns and 'pair' in df.columns:
+                    st.subheader("Confidence Trend by Pair")
+                    pair_filter = st.multiselect("Select pairs", options=df['pair'].unique().tolist(),
+                                                  default=df['pair'].unique().tolist()[:3], key="master_pair_filter")
+                    df_plot = df[df['pair'].isin(pair_filter)] if pair_filter else df
+                    fig = px.line(df_plot, x='scan_timestamp', y='confidence_avg_pct',
+                                  color='pair', markers=True,
+                                  labels={'confidence_avg_pct': 'Confidence (%)', 'scan_timestamp': 'Scan Time'})
+                    fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green",
+                                  annotation_text=f"High-Conf ({model.HIGH_CONF_THRESHOLD}%)")
+                    fig.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
+                    st.plotly_chart(fig, width="stretch")
+
+                # Searchable table
+                st.subheader("All Records")
+                search = st.text_input("Search (pair, direction...)", key="master_search")
+                if search:
+                    _search_cols = [c for c in ['pair', 'direction', 'strategy_bias', 'regime'] if c in df.columns]
+                    _mask = df[_search_cols].astype(str).apply(lambda r: r.str.contains(search, case=False, na=False)).any(axis=1)
+                    display_df = df[_mask]
+                else:
+                    display_df = df
+
+                # Rename columns to human-readable labels for display
+                col_labels = {
+                    'scan_timestamp': 'Scan Time', 'pair': 'Pair', 'price_usd': 'Price (USD)',
+                    'confidence_avg_pct': 'Confidence %', 'direction': 'Direction',
+                    'strategy_bias': 'Strategy Bias', 'mtf_alignment': 'MTF Alignment',
+                    'high_conf': 'High Conf', 'fng_value': 'Fear & Greed', 'fng_category': 'F&G Label',
+                    'entry': 'Entry', 'exit': 'Target', 'stop_loss': 'Stop Loss',
+                    'risk_pct': 'Risk %', 'position_size_usd': 'Position USD',
+                    'position_size_pct': 'Position %', 'risk_mode': 'Risk Mode',
+                    'corr_with_btc': 'BTC Corr', 'corr_adjusted_size_pct': 'Corr-Adj Size %',
+                    'regime': 'Regime', 'sr_status': 'S/R Status',
+                    'circuit_breaker_triggered': 'CB Triggered',
+                    'circuit_breaker_drawdown_pct': 'CB Drawdown %', 'scan_sec': 'Scan Sec',
+                }
+                display_df = display_df.rename(columns={k: v for k, v in col_labels.items() if k in display_df.columns})
+                st.dataframe(display_df, width="stretch", height=400)
+                st.download_button("⬇ Download Master Log", data=df.to_csv(index=False),
+                                   file_name="daily_signals_master.csv", mime="text/csv",
+                                   key="dl_master_log")
+
+        # ── Tab 2: Paper Trades ──
+        with tab_paper:
+            df_closed = _cached_paper_trades_df()
+            try:
+                positions = model.load_positions()
+            except Exception as _e:
+                logging.warning(f"load_positions failed: {_e}")
+                positions = {}
+
+            # ── Portfolio Heat Strip ──────────────────────────────────────────────
+            if positions:
+                _total_exp  = sum(float(p.get("size_pct") or 0) for p in positions.values())  # APP-16: or 0 handles explicit None
+                _buy_exp    = sum(float(p.get("size_pct") or 0) for p in positions.values() if "BUY"  in str(p.get("direction", "")))
+                _sell_exp   = sum(float(p.get("size_pct") or 0) for p in positions.values() if "SELL" in str(p.get("direction", "")))
+                _n_pos      = len(positions)
+                # Heat color: green < 30%, amber 30–60%, red > 60%
+                _heat_color = "#00d4aa" if _total_exp < 30 else ("#f59e0b" if _total_exp < 60 else "#f6465d")
+                _heat_label = "Low" if _total_exp < 30 else ("Medium" if _total_exp < 60 else "High")
+                st.markdown(
+                    f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
+                    f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                    f'border-radius:10px;padding:10px 18px;text-align:center">'
+                    f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">PORTFOLIO HEAT</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:{_heat_color}">{_heat_label}</div>'
+                    f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">Total exposure</div></div>'
+                    f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                    f'border-radius:10px;padding:10px 18px;text-align:center">'
+                    f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">FUNDS IN TRADES</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:{_heat_color}">{_total_exp:.1f}%</div>'
+                    f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">of portfolio</div></div>'
+                    f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                    f'border-radius:10px;padding:10px 18px;text-align:center">'
+                    f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">OPEN POSITIONS</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#e8ecf4">{_n_pos}</div>'
+                    f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">trades active</div></div>'
+                    f'<div style="background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.2);'
+                    f'border-radius:10px;padding:10px 18px;text-align:center">'
+                    f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">BUY EXPOSURE</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#00d4aa">{_buy_exp:.1f}%</div>'
+                    f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">long trades</div></div>'
+                    f'<div style="background:rgba(246,70,93,0.06);border:1px solid rgba(246,70,93,0.2);'
+                    f'border-radius:10px;padding:10px 18px;text-align:center">'
+                    f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">SELL EXPOSURE</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#f6465d">{_sell_exp:.1f}%</div>'
+                    f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">short trades</div></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.subheader("Open Positions")
+            if positions:
+                # ── Price resolution: WS first, scan fallback ──────────────────
+                _live_ticks  = _ws.get_all_prices() or {}  # APP-03/15: guard None return when WS not connected
+                _scan_prices = {
+                    r['pair']: r.get('price_usd')
+                    for r in st.session_state.get("scan_results", [])
+                    if r.get("price_usd")
+                }
+                _ws_ok = _ws.get_status().get("connected", False)
+                _price_src_label = "● LIVE (WebSocket)" if _ws_ok else "◎ Last Scan Price"
+                st.caption(f"Price source: {_price_src_label}  ·  {len(positions)} open position(s)")
+
+                for _pair, _pos in positions.items():
+                    _entry     = _pos.get('entry')
+                    _direction = _pos.get('direction', 'BUY')
+                    _target    = _pos.get('target')
+                    _stop      = _pos.get('stop')
+                    _size_pct  = _pos.get('size_pct')
+                    _entry_time = _pos.get('entry_time')
+
+                    # Current price
+                    _tick = _live_ticks.get(_pair)
+                    _cur  = float(_tick['price']) if _tick else (
+                        float(_scan_prices[_pair]) if _pair in _scan_prices else None
+                    )
+                    _src_tag = "● LIVE" if _tick else ("◎ scan" if _cur else "—")
+
+                    # Unrealized P&L
+                    if _cur is not None and _entry and float(_entry) > 0:
+                        _ef = float(_entry)
+                        if "BUY" in _direction:
+                            _pnl_pct = (_cur - _ef) / _ef * 100
+                        else:
+                            _pnl_pct = (_ef - _cur) / _ef * 100
+                    else:
+                        _pnl_pct = float(_pos.get('current_pnl_pct', 0))
+                        _cur = None
+
+                    # Distance to stop / target  (as % of entry)
+                    _stop_dist = _tgt_dist = None
+                    if _cur is not None and _entry and float(_entry) > 0:
+                        _ef = float(_entry)
+                        if _stop:
+                            _stop_dist = abs(_cur - float(_stop)) / _ef * 100
+                        if _target:
+                            _tgt_dist  = abs(float(_target) - _cur) / _ef * 100
+
+                    # Time in trade
+                    _dur_str = "—"
+                    if _entry_time:
+                        try:
+                            from datetime import timezone as _tz
+                            _et  = pd.to_datetime(_entry_time, utc=True)
+                            _dur = datetime.now(_tz.utc) - _et.to_pydatetime()
+                            _h, _rem = divmod(int(_dur.total_seconds()), 3600)
+                            _dur_str = f"{_h}h {_rem // 60}m"
+                        except Exception:
+                            pass
+
+                    # Render position card
+                    _pnl_sign  = "+" if _pnl_pct >= 0 else ""
+                    _dir_emoji = "🟢" if "BUY" in _direction else "🔴"
+                    _pnl_color = "#00d4aa" if _pnl_pct >= 0 else "#ff4b4b"
+
+                    st.markdown(
+                        f'<div style="background:#1a1f2e;border-radius:10px;padding:14px 18px;'
+                        f'margin-bottom:10px;border-left:4px solid {_pnl_color}">'
+                        f'<span style="font-size:15px;font-weight:700">{_dir_emoji} {_pair}</span>'
+                        f'&nbsp;&nbsp;<code style="font-size:12px">{_direction}</code>'
+                        f'&nbsp;&nbsp;<span style="color:#888;font-size:11px">{_src_tag}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
+                    _pc1.metric("Entry Price",   f"{float(_entry):,.5g}" if _entry else "—")
+                    _pc2.metric("Current Price", f"{_cur:,.5g}"          if _cur   else "—")
+                    _pc3.metric(
+                        "Unrealized P&L",
+                        f"{_pnl_sign}{_pnl_pct:.2f}%",
+                        delta=f"{_pnl_sign}{_pnl_pct:.2f}%",
+                        delta_color="normal",
+                    )
+                    _pc4.metric("Time In Trade", _dur_str)
+                    _pc5.metric("Size", f"{_size_pct}%" if _size_pct else "—")
+
+                    _dc1, _dc2, _dc3 = st.columns(3)
+                    _dc1.caption(
+                        f"Stop: {float(_stop):,.5g}  ({_stop_dist:.2f}% away)"
+                        if _stop and _stop_dist is not None
+                        else f"Stop: {float(_stop):,.5g}" if _stop else "Stop: —"
+                    )
+                    _dc2.caption(
+                        f"Target: {float(_target):,.5g}  ({_tgt_dist:.2f}% to go)"
+                        if _target and _tgt_dist is not None
+                        else f"Target: {float(_target):,.5g}" if _target else "Target: —"
+                    )
+                    _dc3.caption(f"Entry time: {_entry_time}" if _entry_time else "")
+                    st.markdown("")
+
+                # ── Actions ────────────────────────────────────────────────────
+                _btn_col, _auto_col, _ = st.columns([1.5, 1.5, 3])
+                with _btn_col:
+                    if st.button("Check Exits & Refresh", key="refresh_pos"):
+                        _all_prices = dict(_scan_prices)
+                        _all_prices.update({p: v['price'] for p, v in _live_ticks.items()})
+                        if _all_prices:
+                            _closed = model.update_positions(_all_prices)
+                            if _closed:
+                                st.success(f"Closed {len(_closed)} position(s) at stop/target.")
+                                try:
+                                    _send_exit_alerts(_closed)
+                                except Exception as _ae:
+                                    logging.warning("[App] Exit alert (manual) failed: %s", _ae)
+                            st.rerun()
+                        else:
+                            st.warning("Run a scan first to get current prices.")
+                with _auto_col:
+                    _auto_pos = st.toggle("Auto-update (5s)", key="pos_auto_refresh",
+                                          value=_ws_ok, help="Auto-refresh live P&L every 5 seconds")
+
+                # Auto-rerun every 5s when toggle is on
+                if _auto_pos:
+                    import time as _time_pos
+                    _pos_ts_key = "_pos_live_ts"
+                    _now_pos    = _time_pos.time()
+                    if _now_pos - st.session_state.setdefault(_pos_ts_key, _now_pos - 4.9) >= 5:  # APP-14: default near-now prevents immediate fire
+                        st.session_state[_pos_ts_key] = _now_pos
+                        _time_pos.sleep(0.1)
+                        st.rerun()
+            else:
+                st.info("No open positions.")
+
+            st.subheader("Closed Trades History")
+            if df_closed.empty:
+                st.info("No closed paper trades yet.")
+            else:
+                p1, p2, p3 = st.columns(3)
+                if 'pnl_pct' in df_closed.columns:
+                    df_closed['pnl_pct'] = pd.to_numeric(df_closed['pnl_pct'], errors='coerce')
+                    total_pnl = df_closed['pnl_pct'].sum()
+                    wins = (df_closed['pnl_pct'] > 0).sum()
+                    p1.metric("Total Trades", len(df_closed))
+                    p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "N/A")
+                    p3.metric("Cumulative PnL %", f"{total_pnl:.2f}%")
+
+                st.dataframe(df_closed, width="stretch", height=350)
+                st.download_button("⬇ Download Paper Trades", data=df_closed.to_csv(index=False),
+                                   file_name="paper_trades_log.csv", mime="text/csv",
+                                   key="dl_paper_trades")
+
+        # ── Tab 3: Feedback Log ──
+        with tab_feedback:
+            df_fb = _cached_feedback_df()
+            if df_fb.empty:
+                st.info("No feedback log data yet.")
+            else:
+                f1, f2 = st.columns(2)
+                f1.metric("Logged Signals", len(df_fb))
+                if 'confidence' in df_fb.columns:
+                    avg_fb_conf = pd.to_numeric(df_fb['confidence'], errors='coerce').mean()
+                    f2.metric("Avg Confidence Logged", f"{avg_fb_conf:.1f}%" if pd.notna(avg_fb_conf) else "N/A")
+
+                if 'confidence' in df_fb.columns and 'timestamp' in df_fb.columns:
+                    fig = px.scatter(df_fb, x='timestamp', y='confidence', color='direction',
+                                     labels={'confidence': 'Confidence (%)', 'timestamp': 'Time'})
+                    fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green")
+                    fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
+                    st.plotly_chart(fig, width="stretch")
+
+                st.dataframe(df_fb, width="stretch", height=350)
+                st.download_button("⬇ Download Feedback Log", data=df_fb.to_csv(index=False),
+                                   file_name="feedback_log.csv", mime="text/csv",
+                                   key="dl_feedback_log")
+
+        # ── Tab 4: Execution Log ──
+        with tab_exec:
+            _exec_st = _exec.get_status()
+            _mode_disp = "🔴 LIVE" if _exec_st.get("live_trading", False) else "📄 Paper"
+            ec1, ec2, ec3 = st.columns(3)
+            ec1.metric("Execution Mode", _mode_disp)
+            ec2.metric("Auto-Execute", "ON" if _exec_st.get("auto_execute", False) else "OFF")
+            ec3.metric("Keys Configured", "Yes" if _exec_st.get("keys_configured", False) else "No")
+            st.caption("Configure execution in Config Editor → Live Execution section.")
+            st.markdown("---")
+
+            df_exec_log = _cached_execution_log_df(limit=300)
+            if df_exec_log.empty:
+                st.info(
+                    "No execution records yet. "
+                    "Use the BUY/SELL buttons in the Dashboard to place orders."
+                )
+            else:
+                ex_m1, ex_m2, ex_m3 = st.columns(3)
+                ex_m1.metric("Total Orders", len(df_exec_log))
+                if "mode" in df_exec_log.columns:
+                    live_cnt  = (df_exec_log["mode"] == "live").sum()
+                    paper_cnt = (df_exec_log["mode"] == "paper").sum()
+                    ex_m2.metric("Live Orders", int(live_cnt))
+                    ex_m3.metric("Paper Orders", int(paper_cnt))
+
+                st.dataframe(df_exec_log, width="stretch", height=400)
+                st.download_button(
+                    "⬇ Download Execution Log",
+                    data=df_exec_log.to_csv(index=False),
+                    file_name=f"execution_log_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="dl_exec_log",
+                )
+
+        # ── Tab 5: Slippage Analytics ─────────────────────────────────────────────
+        with tab_slip:
+            st.subheader("Post-Trade Slippage Analytics")
+            st.caption("Tracks fill price vs. expected signal entry price. Lower slippage = better execution quality.")
+            df_slip = _cached_execution_log_df(limit=500)
+            if df_slip.empty or "slippage_pct" not in df_slip.columns:
+                st.info("No slippage data yet. Slippage is tracked after each order fill.")
+            else:
+                df_slip_valid = df_slip[df_slip["slippage_pct"].notna()].copy()
+                if df_slip_valid.empty:
+                    st.info("Orders recorded but no slippage data yet. Make sure expected_price is passed when placing orders.")
+                else:
+                    sm1, sm2, sm3, sm4 = st.columns(4)
+                    _avg_slip = df_slip_valid["slippage_pct"].mean()
+                    _max_slip = df_slip_valid["slippage_pct"].max()
+                    _med_slip = df_slip_valid["slippage_pct"].median()
+                    _orders_n = len(df_slip_valid)
+                    sm1.metric("Orders Tracked", _orders_n)
+                    sm2.metric("Avg Slippage", f"{_avg_slip:.4f}%")
+                    sm3.metric("Median Slippage", f"{_med_slip:.4f}%")
+                    sm4.metric("Max Slippage", f"{_max_slip:.4f}%")
+
+                    # Slippage distribution histogram
+                    fig_slip = px.histogram(
+                        df_slip_valid, x="slippage_pct", nbins=30,
+                        title="Slippage Distribution (%)",
+                        color_discrete_sequence=["#00d4aa"],
+                        labels={"slippage_pct": "Slippage (%)"},
+                    )
+                    fig_slip.update_layout(height=280, margin=dict(l=0, r=0, t=30, b=0))
+                    st.plotly_chart(fig_slip, width="stretch")
+
+                    # Slippage by pair
+                    if "pair" in df_slip_valid.columns:
+                        _slip_by_pair = (
+                            df_slip_valid.groupby("pair")["slippage_pct"]
+                            .agg(["mean", "max", "count"])
+                            .reset_index()
+                            .rename(columns={"mean": "Avg %", "max": "Max %", "count": "Orders"})
+                            .sort_values("Avg %", ascending=True)
+                        )
+                        st.dataframe(_slip_by_pair, hide_index=True, width="stretch")
+
+                    st.download_button(
+                        "⬇ Download Slippage Data",
+                        data=df_slip_valid.to_csv(index=False),
+                        file_name=f"slippage_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="dl_slippage",
+                    )
+
+
+    with _bt_t3:
+        if _bt_lv == 'beginner':
+            st.markdown(
+                '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
+                'border-radius:12px;padding:28px 24px;text-align:center;margin:20px 0">'
+                '<div style="font-size:32px;margin-bottom:10px">\U0001f52c</div>'
+                '<div style="font-size:18px;font-weight:700;color:#e8ecf4;margin-bottom:8px">'
+                'Advanced Analysis Tools</div>'
+                '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:380px;margin:0 auto">'
+                'Walk-Forward Validation, Deep Backtest, and Signal Calibration are available at '
+                '<strong style="color:#818cf8">Intermediate</strong> or '
+                '<strong style="color:#a78bfa">Advanced</strong> level.<br><br>'
+                'Switch your experience level in the sidebar to unlock these tools.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # Walk-forward out-of-sample validation
+            st.markdown("---")
+            _ui.section_header("Walk-Forward Validation",
+                               "Splits OHLCV into N windows · First 60% warm-up · Last 40% out-of-sample test · Checks signal predictiveness across regimes",
+                               icon="🔄")
+            wf_c1, wf_c2, wf_c3 = st.columns(3)
+            with wf_c1:
+                wf_splits = st.number_input("Windows", 2, 8, 4, step=1, key="wf_splits")
+            with wf_c2:
+                wf_pair = st.selectbox("Pair", model.PAIRS, index=0, key="wf_pair")
+            with wf_c3:
+                wf_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wf_tf")
+
+            if st.button("Run Walk-Forward Validation", type="secondary", width="stretch",
+                         key="btn_wf"):
+                with st.spinner(f"Running {int(wf_splits)}-split walk-forward on {wf_pair} {wf_tf}... (~2 min)", show_time=True):
+                    wf_res = model.run_walk_forward(n_splits=int(wf_splits), pair=wf_pair, tf=wf_tf)
+                st.session_state["wf_result"] = wf_res
+
+            wf_r = st.session_state.get("wf_result")
+            if wf_r:
+                if 'error' in wf_r:
+                    st.error(wf_r['error'])
+                else:
+                    wf_cols = st.columns(2)
+                    wf_cols[0].metric("Mean OOS Accuracy",
+                                      f"{wf_r['mean_accuracy']}%" if wf_r['mean_accuracy'] else "N/A",
+                                      help="Average directional accuracy across all out-of-sample test windows")
+                    wf_cols[1].metric("Std Dev",
+                                      f"±{wf_r['std_accuracy']}%" if wf_r['std_accuracy'] is not None else "N/A",
+                                      help="Lower = more consistent across market regimes")
+                    wf_df = pd.DataFrame(wf_r['windows'])
+                    wf_df['accuracy_pct'] = wf_df['accuracy_pct'].apply(
+                        lambda x: f"{x}%" if x is not None else "N/A"
+                    )
+                    st.dataframe(wf_df.rename(columns={
+                        'window': 'Window', 'period': 'Period',
+                        'test_signals': 'Test Signals', 'accuracy_pct': 'OOS Accuracy'
+                    }).set_index('Window'), width="stretch")
+
+
+            # Deep OHLCV-replay backtest
+            st.markdown("---")
+            _ui.section_header("Deep OHLCV-Replay Backtest",
+                               "True bar-by-bar simulation using paginated historical data · No lookahead bias · Proper entry/stop/target replay",
+                               icon="🔬")
+            db_c1, db_c2, db_c3, db_c4 = st.columns(4)
+            with db_c1:
+                db_pair = st.selectbox("Pair", model.PAIRS, index=0, key="db_pair")
+            with db_c2:
+                db_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="db_tf")
+            with db_c3:
+                db_years = st.number_input("Years of History", 0.5, 5.0, 2.0, step=0.5, key="db_years")
+            with db_c4:
+                db_pos = st.number_input("Position Size %", 2.0, 25.0, 10.0, step=1.0, key="db_pos")
+
+            if st.button("Run Deep Backtest", type="primary", width="stretch", key="btn_deep_bt"):
+                with st.spinner(f"Fetching {db_years}y of {db_pair} {db_tf} data and replaying bar-by-bar... (may take 1-3 min)", show_time=True):
+                    deep_r = model.run_deep_backtest(
+                        pair=db_pair, tf=db_tf, years=float(db_years), pos_pct=float(db_pos)
+                    )
+                st.session_state["deep_backtest_result"] = deep_r
+
+            deep_r = st.session_state.get("deep_backtest_result")
+            if deep_r:
+                if deep_r.get("error"):
+                    st.error(f"Deep Backtest: {deep_r['error']}")
+                else:
+                    m = deep_r.get("metrics", {})
+                    d_cols = st.columns(5)
+                    d_cols[0].metric("Total Trades",    str(m.get("total_trades", 0)))
+                    d_cols[1].metric("Win Rate",         f"{m.get('win_rate', 0)}%")
+                    d_cols[2].metric("Avg PnL/Trade",    f"{m.get('avg_pnl', 0)}%")
+                    d_cols[3].metric("Total Return",     f"{m.get('total_return', 0)}%")
+                    d_cols[4].metric("Sharpe Ratio",     str(m.get("sharpe", 0)))
+                    d_cols2 = st.columns(4)
+                    d_cols2[0].metric("Max Drawdown",    f"{m.get('max_drawdown', 0)}%")
+                    d_cols2[1].metric("Profit Factor",   str(m.get("profit_factor", 0)))
+                    d_cols2[2].metric("Final Equity",    f"${m.get('final_equity', 0):,.0f}")
+                    d_cols2[3].metric("Years Tested",    str(m.get("years_tested", 0)))
+
+                    df_dbt = deep_r.get("trades", pd.DataFrame())
+                    if not df_dbt.empty:
+                        # Equity curve chart
+                        fig_dbt = go.Figure()
+                        fig_dbt.add_trace(go.Scatter(
+                            x=df_dbt['timestamp'], y=df_dbt['equity'],
+                            mode='lines', name='Equity', line=dict(color='#00d4aa', width=2)
+                        ))
+                        fig_dbt.update_layout(
+                            template='plotly_dark', title=f"Deep Backtest Equity Curve — {db_pair} {db_tf}",
+                            height=350, showlegend=True,
+                            xaxis_title="Date", yaxis_title="Equity ($)",
+                        )
+                        st.plotly_chart(fig_dbt, width="stretch")
+
+                        # Trade log (first 100 rows)
+                        with st.expander(f"Trade Log ({len(df_dbt)} trades)", expanded=False):
+                            st.dataframe(
+                                df_dbt[['timestamp', 'direction', 'confidence', 'entry', 'exit',
+                                         'exit_reason', 'pnl_pct', 'pnl_usd']].head(100),
+                                width="stretch"
+                            )
+                            csv_dbt = df_dbt.to_csv(index=False)
+                            st.download_button("📥 Download Full Deep Backtest CSV", csv_dbt,
+                                               f"deep_backtest_{db_pair.replace('/','')}_{db_tf}.csv",
+                                               "text/csv", key="dl_deep_bt")
+
+            # ── Signal Calibration Analytics ────────────────────────────────────────
+            st.divider()
+            _ui.section_header(
+                "Signal Calibration",
+                "How well does predicted confidence match actual win rate? Perfect calibration = diagonal line.",
+                icon="🎯",
+            )
+            _cal_df = _cached_resolved_feedback_df(days=365)
+            _cal_has = (
+                not _cal_df.empty
+                and "confidence" in _cal_df.columns
+                and "was_correct" in _cal_df.columns
+                and _cal_df["was_correct"].notna().any()
+            )
+            if not _cal_has:
+                st.info(
+                    "No resolved feedback data yet. Run scans over time — outcomes are auto-resolved "
+                    "after the hold period and used to calibrate confidence scores."
+                )
+            else:
+                _cal_df = _cal_df.dropna(subset=["confidence", "was_correct"]).copy()
+                _cal_df["conf_bucket"] = ((_cal_df["confidence"] // 10) * 10).clip(0, 90).astype(int)
+                _cal_summary = (
+                    _cal_df.groupby("conf_bucket")
+                    .agg(count=("was_correct", "count"), win_rate=("was_correct", "mean"))
+                    .reset_index()
+                )
+                _cal_summary["win_rate_pct"] = (_cal_summary["win_rate"] * 100).round(1)
+                _cal_summary["label"] = _cal_summary["conf_bucket"].astype(str) + "–" + (_cal_summary["conf_bucket"] + 10).astype(str) + "%"
+
+                # Brier score = mean squared error between predicted prob and actual outcome
+                _brier = float(((_cal_df["confidence"] / 100 - _cal_df["was_correct"]) ** 2).mean())
+                # Expected Calibration Error (ECE) weighted by bucket size
+                _ece_rows = []
+                for _, _r in _cal_summary.iterrows():
+                    _mid = (_r["conf_bucket"] + 5) / 100
+                    _ece_rows.append(abs(_mid - _r["win_rate"]) * _r["count"])
+                _ece = sum(_ece_rows) / len(_cal_df) if len(_cal_df) > 0 else 0.0
+
+                _cm1, _cm2, _cm3, _cm4 = st.columns(4)
+                _cm1.metric("Signals Resolved", len(_cal_df))
+                _cm2.metric("Overall Win Rate", f"{_cal_df['was_correct'].mean() * 100:.1f}%")
+                _cm3.metric("Brier Score", f"{_brier:.4f}", help="Lower = better. 0 = perfect, 0.25 = random")
+                _cm4.metric("Calibration Error (ECE)", f"{_ece * 100:.1f}%", help="Mean absolute deviation between predicted and actual win rate")
+
+                # Calibration bar chart
+                _fig_cal = go.Figure()
+                _fig_cal.add_trace(go.Bar(
+                    x=_cal_summary["label"],
+                    y=_cal_summary["win_rate_pct"],
+                    name="Actual Win Rate",
+                    marker_color=[
+                        "#00d4aa" if float(r["win_rate_pct"]) >= float(r["conf_bucket"]) + 5 else "#ff4b4b"
+                        for _, r in _cal_summary.iterrows()
+                    ],
+                    text=_cal_summary.apply(lambda r: f"{r['win_rate_pct']:.0f}%<br>n={int(r['count'])}", axis=1),
+                    textposition="outside",
+                ))
+                # Perfect calibration diagonal
+                _diag_x = _cal_summary["label"].tolist()
+                _diag_y = [(_r["conf_bucket"] + 5) for _, _r in _cal_summary.iterrows()]
+                _fig_cal.add_trace(go.Scatter(
+                    x=_diag_x, y=_diag_y,
+                    mode="lines", name="Perfect Calibration",
+                    line=dict(color="#ffffff", width=1, dash="dot"),
+                ))
+                _fig_cal.update_layout(
+                    template="plotly_dark", height=340,
+                    title="Confidence Bucket vs Actual Win Rate (teal = over-performing, red = under-performing)",
+                    xaxis_title="Predicted Confidence", yaxis_title="Actual Win Rate (%)",
+                    yaxis=dict(range=[0, 110]),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(_fig_cal, width="stretch")
+
+                # Per-pair calibration breakdown
+                with st.expander("Per-Pair Calibration Breakdown", expanded=False):
+                    _pair_cal = (
+                        _cal_df.groupby("pair")
+                        .agg(signals=("was_correct", "count"), win_rate=("was_correct", "mean"),
+                             avg_conf=("confidence", "mean"))
+                        .reset_index()
+                    )
+                    _pair_cal["win_rate"] = (_pair_cal["win_rate"] * 100).round(1)
+                    _pair_cal["avg_conf"] = _pair_cal["avg_conf"].round(1)
+                    _pair_cal["diff"] = (_pair_cal["win_rate"] - _pair_cal["avg_conf"]).round(1)
+                    _pair_cal.columns = ["Pair", "Signals", "Win Rate %", "Avg Confidence %", "Conf − Win Rate"]
+                    st.dataframe(
+                        _pair_cal.sort_values("Win Rate %", ascending=False),
+                        width="stretch", hide_index=True,
+                    )
+
+            # ── Performance Attribution ────────────────────────────────────────────────
+            # ── IC & WFE Quick Card (DB-based, Batch 3 #36) ───────────────────────────
+            try:
+                st.divider()
+                _ui.section_header(
+                    "IC & WFE Metrics",
+                    "Information Coefficient (Spearman) and Walk-Forward Efficiency from resolved trade feedback",
+                    icon="🎯",
+                )
+                _ic_wfe_c1, _ic_wfe_c2 = st.columns(2)
+                with _ic_wfe_c1:
+                    st.markdown("**Information Coefficient (IC)**")
+                    if st.button("Compute IC from Feedback Log", key="btn_ic_db", width="stretch"):
+                        with st.spinner("Computing Spearman IC...", show_time=True):
+                            st.session_state["ic_db_result"] = _db.compute_and_save_ic(lookback_days=30)
+                    _ic_db = st.session_state.get("ic_db_result")
+                    if _ic_db:
+                        _ic_db_val = _ic_db.get("ic")
+                        _ic_db_note = _ic_db.get("ic_note")
+                        if _ic_db_val is not None:
+                            _ic_color = "#10b981" if _ic_db_val > 0.05 else ("#ef4444" if _ic_db_val < 0 else "#f59e0b")
+                            _ic_skill = _ic_db.get("skill", "WEAK")
+                            _ic_n     = _ic_db.get("n_samples", 0)
+                            _ic_p     = _ic_db.get("ic_pvalue")
+                            _ic_cols  = st.columns(3)
+                            _ic_cols[0].metric("IC (30d)", f"{_ic_db_val:+.4f}")
+                            _ic_cols[1].metric("Skill", _ic_skill)
+                            _ic_cols[2].metric("n", _ic_n)
+                            st.markdown(
+                                f"<div style='border:1px solid {_ic_color};border-radius:8px;"
+                                f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_ic_color};'>"
+                                f"IC = {_ic_db_val:+.4f} · <b>{_ic_skill}</b>"
+                                f"{' · p=' + f'{_ic_p:.4f}' if _ic_p is not None else ''}"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+                        elif _ic_db_note:
+                            st.caption(f"IC: {_ic_db_note}")
+                with _ic_wfe_c2:
+                    st.markdown("**Walk-Forward Efficiency (WFE)**")
+                    if st.button("Compute WFE from Backtest DB", key="btn_wfe_db", width="stretch"):
+                        with st.spinner("Computing WFE from backtest trades...", show_time=True):
+                            st.session_state["wfe_db_result"] = _db.compute_wfe()
+                    _wfe_db = st.session_state.get("wfe_db_result")
+                    if _wfe_db:
+                        _wfe_db_val = _wfe_db.get("wfe")
+                        _wfe_db_note = _wfe_db.get("note")
+                        if _wfe_db_val is not None:
+                            _wfe_grade = _wfe_db.get("grade", "POOR")
+                            _wfe_color = "#10b981" if _wfe_db_val > 0.9 else ("#f59e0b" if _wfe_db_val > 0.7 else ("#f59e0b" if _wfe_db_val > 0.5 else "#ef4444"))
+                            _wfe_cols2 = st.columns(3)
+                            _wfe_cols2[0].metric("WFE", f"{_wfe_db_val:.3f}")
+                            _wfe_cols2[1].metric("Grade", _wfe_grade)
+                            _wfe_is_sharpe  = _wfe_db.get("is_sharpe")  or 0.0
+                            _wfe_oos_sharpe = _wfe_db.get("oos_sharpe") or 0.0
+                            _wfe_cols2[2].metric("IS Sharpe", f"{_wfe_is_sharpe:.3f}")
+                            st.markdown(
+                                f"<div style='border:1px solid {_wfe_color};border-radius:8px;"
+                                f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_wfe_color};'>"
+                                f"WFE = {_wfe_db_val:.3f} · <b>{_wfe_grade}</b> · "
+                                f"OOS Sharpe {_wfe_oos_sharpe:.3f}"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+                        elif _wfe_db_note:
+                            st.caption(f"WFE: {_wfe_db_note}")
+            except Exception as _ic_wfe_err:
+                st.caption(f"IC & WFE card error: {_ic_wfe_err}")
+
+            # ── P&L Tracking Summary (Batch 8) ────────────────────────────────────────
+            try:
+                st.divider()
+                _ui.section_header(
+                    "Live P&L Tracking",
+                    "Real-time signal entry/exit P&L tracked across BUY/SELL signal pairs. "
+                    "Entries recorded on BUY signals; exits on matching SELL signals.",
+                    icon="💰",
+                )
+                _pnl_sum = _db.get_pnl_summary()
+                _pnl_n = _pnl_sum.get("total_trades", 0)
+                if _pnl_n == 0:
+                    st.info(
+                        "No closed P&L trades yet. P&L entries are recorded automatically when "
+                        "BUY signals are generated, and closed when matching SELL signals are detected."
+                    )
+                else:
+                    _pnl_c1, _pnl_c2, _pnl_c3, _pnl_c4 = st.columns(4)
+                    _pnl_c1.metric("Closed Trades", _pnl_n)
+                    _pnl_c2.metric(
+                        "Win Rate",
+                        f"{_pnl_sum.get('win_rate_pct', 0):.1f}%",
+                        help="% of closed trades with positive P&L",
+                    )
+                    _pnl_c3.metric(
+                        "Avg P&L / Trade",
+                        f"{_pnl_sum.get('avg_pnl_pct', 0):+.2f}%",
+                        help="Mean P&L per closed trade",
+                    )
+                    _pnl_c4.metric(
+                        "Est. Annualised Return",
+                        f"{_pnl_sum.get('annualized_return_pct', 0):+.1f}%",
+                        help="Rough CAGR-style estimate based on average holding period",
+                    )
+                    _pnl_c5, _pnl_c6, _pnl_c7 = st.columns(3)
+                    _pnl_c5.metric("Best Trade", f"{_pnl_sum.get('best_trade_pct', 0):+.2f}%")
+                    _pnl_c6.metric("Worst Trade", f"{_pnl_sum.get('worst_trade_pct', 0):+.2f}%")
+                    _pnl_c7.metric("Open Positions", _pnl_sum.get("open_positions", 0))
+
+                    with st.expander("P&L Trade Log", expanded=False):
+                        _pnl_df = _db.get_pnl_trades_df(limit=200)
+                        if not _pnl_df.empty:
+                            _pnl_df_disp = _pnl_df.rename(columns={
+                                "pair": "Pair", "entry_signal": "Entry Signal",
+                                "entry_price": "Entry $", "exit_price": "Exit $",
+                                "pnl_pct": "P&L %", "holding_hours": "Held (h)",
+                                "entry_time": "Entry Time", "exit_time": "Exit Time",
+                            })
+                            st.dataframe(
+                                _pnl_df_disp.style.format({
+                                    "P&L %": "{:+.2f}", "Held (h)": "{:.1f}",
+                                    "Entry $": "{:.4f}", "Exit $": "{:.4f}",
+                                }, na_rep="—"),
+                                width="stretch",
+                                hide_index=True,
+                            )
+                        else:
+                            st.caption("No closed P&L trades in log.")
+            except Exception as _pnl_err:
+                st.caption(f"P&L tracking card error: {_pnl_err}")
+
+            if not df_trades.empty and "exit_reason" in df_trades.columns:
+                st.divider()
+                _ui.section_header(
+                    "Performance Attribution",
+                    "Where do wins and losses actually come from? Breaks down results by exit type, direction, and coin.",
+                    icon="🔬",
+                )
+                _pat_col1, _pat_col2, _pat_col3 = st.columns(3)
+
+                # ── Exit reason breakdown ────────────────────────────────────────────
+                with _pat_col1:
+                    st.markdown("**How did trades exit?**")
+                    _exit_grp = (
+                        df_trades.groupby("exit_reason")
+                        .agg(
+                            Trades=("pnl_pct", "count"),
+                            WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
+                            AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
+                        )
+                        .reset_index()
+                        .sort_values("AvgPnL", ascending=False)
+                    )
+                    _exit_grp.columns = ["How It Exited", "# Trades", "Win Rate %", "Avg P&L %"]
+                    _exit_label_map = {
+                        "Target":       "✅ Hit Profit Target",
+                        "Stop":         "❌ Hit Stop Loss",
+                        "TrailingStop": "🔒 Trailing Stop",
+                        "Timeout":      "⏰ Time Expired",
+                    }
+                    _exit_grp["How It Exited"] = _exit_grp["How It Exited"].map(
+                        lambda v: _exit_label_map.get(v, v)
+                    )
+                    st.dataframe(_exit_grp, hide_index=True, width="stretch")
+                    st.caption("Target = profitable exit. Stop = loss. Trailing Stop = stop that moved with price. Timeout = held too long.")
+
+                # ── Buy vs Sell breakdown ───────────────────────────────────────────
+                with _pat_col2:
+                    st.markdown("**Buy signals vs Sell signals**")
+                    _df_dir = df_trades.copy()
+                    _df_dir["Signal Type"] = _df_dir["direction"].apply(
+                        lambda d: "📈 Buy / Long" if "BUY" in str(d).upper() else "📉 Sell / Short"
+                    )
+                    _dir_grp = (
+                        _df_dir.groupby("Signal Type")
+                        .agg(
+                            Trades=("pnl_pct", "count"),
+                            WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
+                            AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
+                            TotalPnL=("pnl_pct", lambda x: round(x.sum(), 1)),
+                        )
+                        .reset_index()
+                    )
+                    _dir_grp.columns = ["Signal Type", "# Trades", "Win Rate %", "Avg P&L %", "Total P&L %"]
+                    st.dataframe(_dir_grp, hide_index=True, width="stretch")
+                    st.caption("Shows whether the model performs better on buy or sell signals historically.")
+
+                # ── Per-coin breakdown ──────────────────────────────────────────────
+                with _pat_col3:
+                    st.markdown("**Which coins performed best?**")
+                    _coin_grp = (
+                        df_trades.groupby("pair")
+                        .agg(
+                            Trades=("pnl_pct", "count"),
+                            WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
+                            AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
+                        )
+                        .reset_index()
+                        .sort_values("AvgPnL", ascending=False)
+                    )
+                    _coin_grp.columns = ["Coin", "# Trades", "Win Rate %", "Avg P&L %"]
+                    st.dataframe(_coin_grp, hide_index=True, width="stretch", height=220)
+                    st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
+
+            # ── IC Score (Information Coefficient) ────────────────────────────────────
+            st.markdown("---")
+            _ui.section_header("Signal Quality — Information Coefficient (IC)",
+                               "Spearman rank correlation between signal confidence scores and actual future returns. "
+                               "IC > 0.05 = modest edge · IC > 0.10 = strong signal quality",
+                               icon="🎯")
+            _ic_c1, _ic_c2, _ic_c3 = st.columns(3)
+            with _ic_c1:
+                _ic_pair = st.selectbox("Pair", model.PAIRS, index=0, key="ic_pair")
+            with _ic_c2:
+                _ic_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="ic_tf")
+            with _ic_c3:
+                _ic_hold = st.number_input("Hold Bars", 1, 20, 5, step=1, key="ic_hold",
+                                           help="How many bars ahead to measure the return")
+            if st.button("Compute IC Score", type="secondary", width="stretch", key="btn_ic"):
+                with st.spinner(f"Computing IC on {_ic_pair} {_ic_tf}... (~1 min)", show_time=True):
+                    _ic_res = model.compute_ic_score(pair=_ic_pair, tf=_ic_tf, hold_bars=int(_ic_hold))
+                st.session_state["ic_result"] = _ic_res
+            _ic_r = st.session_state.get("ic_result")
+            if _ic_r:
+                if "error" in _ic_r and not _ic_r.get("ic"):
+                    st.error(f"IC error: {_ic_r['error']}")
+                else:
+                    _ic_val   = _ic_r.get("ic", 0) or 0
+                    _ic_label = _ic_r.get("ic_label", "N/A")
+                    _ic_n     = _ic_r.get("n_samples", 0)
+                    _ic_p     = _ic_r.get("p_value")
+                    _ic_color = "#10b981" if _ic_val > 0.05 else ("#ef4444" if _ic_val < 0 else "#f59e0b")
+                    _ic_cols  = st.columns(4)
+                    _ic_cols[0].metric("IC Score", f"{_ic_val:.4f}")
+                    _ic_cols[1].metric("Signal Quality", _ic_label)
+                    _ic_cols[2].metric("Samples", _ic_n)
+                    _ic_cols[3].metric("p-value", f"{_ic_p:.4f}" if _ic_p is not None else "N/A")
                     st.markdown(
                         f"<div style='border:1px solid {_ic_color};border-radius:8px;"
-                        f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_ic_color};'>"
-                        f"IC = {_ic_db_val:+.4f} · <b>{_ic_skill}</b>"
-                        f"{' · p=' + f'{_ic_p:.4f}' if _ic_p is not None else ''}"
-                        f"</div>",
+                        f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_ic_color};'>"
+                        f"<b>{_ic_label}</b> — IC = {_ic_val:+.4f} "
+                        f"({'p < 0.05 — statistically significant' if (_ic_p or 1) < 0.05 else 'not statistically significant'})</div>",
                         unsafe_allow_html=True,
                     )
-                elif _ic_db_note:
-                    st.caption(f"IC: {_ic_db_note}")
-        with _ic_wfe_c2:
-            st.markdown("**Walk-Forward Efficiency (WFE)**")
-            if st.button("Compute WFE from Backtest DB", key="btn_wfe_db", width="stretch"):
-                with st.spinner("Computing WFE from backtest trades...", show_time=True):
-                    st.session_state["wfe_db_result"] = _db.compute_wfe()
-            _wfe_db = st.session_state.get("wfe_db_result")
-            if _wfe_db:
-                _wfe_db_val = _wfe_db.get("wfe")
-                _wfe_db_note = _wfe_db.get("note")
-                if _wfe_db_val is not None:
-                    _wfe_grade = _wfe_db.get("grade", "POOR")
-                    _wfe_color = "#10b981" if _wfe_db_val > 0.9 else ("#f59e0b" if _wfe_db_val > 0.7 else ("#f59e0b" if _wfe_db_val > 0.5 else "#ef4444"))
-                    _wfe_cols2 = st.columns(3)
-                    _wfe_cols2[0].metric("WFE", f"{_wfe_db_val:.3f}")
-                    _wfe_cols2[1].metric("Grade", _wfe_grade)
-                    _wfe_is_sharpe  = _wfe_db.get("is_sharpe")  or 0.0
-                    _wfe_oos_sharpe = _wfe_db.get("oos_sharpe") or 0.0
-                    _wfe_cols2[2].metric("IS Sharpe", f"{_wfe_is_sharpe:.3f}")
+
+            # ── WFE Score (Walk Forward Efficiency) ───────────────────────────────────
+            st.markdown("---")
+            _ui.section_header("Signal Quality — Walk Forward Efficiency (WFE)",
+                               "OOS accuracy ÷ IS accuracy across N time windows. "
+                               "WFE > 0.8 = excellent generalisation · WFE < 0.5 = likely overfit",
+                               icon="🔄")
+            _wfe_c1, _wfe_c2, _wfe_c3 = st.columns(3)
+            with _wfe_c1:
+                _wfe_pair = st.selectbox("Pair", model.PAIRS, index=0, key="wfe_pair")
+            with _wfe_c2:
+                _wfe_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wfe_tf")
+            with _wfe_c3:
+                _wfe_splits = st.number_input("Splits", 2, 6, 4, step=1, key="wfe_splits",
+                                              help="Number of time windows to walk forward through")
+            if st.button("Compute WFE Score", type="secondary", width="stretch", key="btn_wfe"):
+                with st.spinner(f"Computing WFE on {_wfe_pair} {_wfe_tf} ({int(_wfe_splits)} splits)... (~2 min)", show_time=True):
+                    _wfe_res = model.compute_wfe_score(pair=_wfe_pair, tf=_wfe_tf, n_splits=int(_wfe_splits))
+                st.session_state["wfe_result"] = _wfe_res
+            _wfe_r = st.session_state.get("wfe_result")
+            if _wfe_r:
+                if "error" in _wfe_r and not _wfe_r.get("wfe"):
+                    st.error(f"WFE error: {_wfe_r['error']}")
+                else:
+                    _wfe_val   = _wfe_r.get("wfe", 0) or 0
+                    _wfe_label = _wfe_r.get("wfe_label", "N/A")
+                    _wfe_is    = _wfe_r.get("is_accuracy", 0)
+                    _wfe_oos   = _wfe_r.get("oos_accuracy", 0)
+                    _wfe_color = "#10b981" if _wfe_val >= 0.8 else ("#f59e0b" if _wfe_val >= 0.5 else "#ef4444")
+                    _wfe_cols  = st.columns(4)
+                    _wfe_cols[0].metric("WFE", f"{_wfe_val:.3f}")
+                    _wfe_cols[1].metric("Assessment", _wfe_label.replace("_", " "))
+                    _wfe_cols[2].metric("IS Accuracy", f"{_wfe_is:.1f}%")
+                    _wfe_cols[3].metric("OOS Accuracy", f"{_wfe_oos:.1f}%")
                     st.markdown(
                         f"<div style='border:1px solid {_wfe_color};border-radius:8px;"
-                        f"padding:8px 12px;margin-top:4px;font-size:12px;color:{_wfe_color};'>"
-                        f"WFE = {_wfe_db_val:.3f} · <b>{_wfe_grade}</b> · "
-                        f"OOS Sharpe {_wfe_oos_sharpe:.3f}"
+                        f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_wfe_color};'>"
+                        f"<b>{_wfe_label.replace('_',' ')}</b> — WFE = {_wfe_val:.3f} "
+                        f"(OOS {_wfe_oos:.1f}% / IS {_wfe_is:.1f}%) · "
+                        f"{'Model generalises well to unseen data.' if _wfe_val >= 0.8 else 'Acceptable generalisation.' if _wfe_val >= 0.5 else 'Potential overfit — reduce indicator complexity.'}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                elif _wfe_db_note:
-                    st.caption(f"WFE: {_wfe_db_note}")
-    except Exception as _ic_wfe_err:
-        st.caption(f"IC & WFE card error: {_ic_wfe_err}")
 
-    # ── P&L Tracking Summary (Batch 8) ────────────────────────────────────────
-    try:
-        st.divider()
-        _ui.section_header(
-            "Live P&L Tracking",
-            "Real-time signal entry/exit P&L tracked across BUY/SELL signal pairs. "
-            "Entries recorded on BUY signals; exits on matching SELL signals.",
-            icon="💰",
-        )
-        _pnl_sum = _db.get_pnl_summary()
-        _pnl_n = _pnl_sum.get("total_trades", 0)
-        if _pnl_n == 0:
-            st.info(
-                "No closed P&L trades yet. P&L entries are recorded automatically when "
-                "BUY signals are generated, and closed when matching SELL signals are detected."
+            # ── Walk-Forward Rolling Window Optimization (#51) ─────────────────────────
+            st.markdown("---")
+            _ui.section_header(
+                "Walk-Forward Rolling Window Optimization",
+                "Finds optimal BUY confidence threshold by testing 50–80% across rolling windows of resolved signals",
+                icon="⚙️",
             )
-        else:
-            _pnl_c1, _pnl_c2, _pnl_c3, _pnl_c4 = st.columns(4)
-            _pnl_c1.metric("Closed Trades", _pnl_n)
-            _pnl_c2.metric(
-                "Win Rate",
-                f"{_pnl_sum.get('win_rate_pct', 0):.1f}%",
-                help="% of closed trades with positive P&L",
-            )
-            _pnl_c3.metric(
-                "Avg P&L / Trade",
-                f"{_pnl_sum.get('avg_pnl_pct', 0):+.2f}%",
-                help="Mean P&L per closed trade",
-            )
-            _pnl_c4.metric(
-                "Est. Annualised Return",
-                f"{_pnl_sum.get('annualized_return_pct', 0):+.1f}%",
-                help="Rough CAGR-style estimate based on average holding period",
-            )
-            _pnl_c5, _pnl_c6, _pnl_c7 = st.columns(3)
-            _pnl_c5.metric("Best Trade", f"{_pnl_sum.get('best_trade_pct', 0):+.2f}%")
-            _pnl_c6.metric("Worst Trade", f"{_pnl_sum.get('worst_trade_pct', 0):+.2f}%")
-            _pnl_c7.metric("Open Positions", _pnl_sum.get("open_positions", 0))
-
-            with st.expander("P&L Trade Log", expanded=False):
-                _pnl_df = _db.get_pnl_trades_df(limit=200)
-                if not _pnl_df.empty:
-                    _pnl_df_disp = _pnl_df.rename(columns={
-                        "pair": "Pair", "entry_signal": "Entry Signal",
-                        "entry_price": "Entry $", "exit_price": "Exit $",
-                        "pnl_pct": "P&L %", "holding_hours": "Held (h)",
-                        "entry_time": "Entry Time", "exit_time": "Exit Time",
-                    })
-                    st.dataframe(
-                        _pnl_df_disp.style.format({
-                            "P&L %": "{:+.2f}", "Held (h)": "{:.1f}",
-                            "Entry $": "{:.4f}", "Exit $": "{:.4f}",
-                        }, na_rep="—"),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.caption("No closed P&L trades in log.")
-    except Exception as _pnl_err:
-        st.caption(f"P&L tracking card error: {_pnl_err}")
-
-    if not df_trades.empty and "exit_reason" in df_trades.columns:
-        st.divider()
-        _ui.section_header(
-            "Performance Attribution",
-            "Where do wins and losses actually come from? Breaks down results by exit type, direction, and coin.",
-            icon="🔬",
-        )
-        _pat_col1, _pat_col2, _pat_col3 = st.columns(3)
-
-        # ── Exit reason breakdown ────────────────────────────────────────────
-        with _pat_col1:
-            st.markdown("**How did trades exit?**")
-            _exit_grp = (
-                df_trades.groupby("exit_reason")
-                .agg(
-                    Trades=("pnl_pct", "count"),
-                    WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
-                    AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
-                )
-                .reset_index()
-                .sort_values("AvgPnL", ascending=False)
-            )
-            _exit_grp.columns = ["How It Exited", "# Trades", "Win Rate %", "Avg P&L %"]
-            _exit_label_map = {
-                "Target":       "✅ Hit Profit Target",
-                "Stop":         "❌ Hit Stop Loss",
-                "TrailingStop": "🔒 Trailing Stop",
-                "Timeout":      "⏰ Time Expired",
-            }
-            _exit_grp["How It Exited"] = _exit_grp["How It Exited"].map(
-                lambda v: _exit_label_map.get(v, v)
-            )
-            st.dataframe(_exit_grp, hide_index=True, width="stretch")
-            st.caption("Target = profitable exit. Stop = loss. Trailing Stop = stop that moved with price. Timeout = held too long.")
-
-        # ── Buy vs Sell breakdown ───────────────────────────────────────────
-        with _pat_col2:
-            st.markdown("**Buy signals vs Sell signals**")
-            _df_dir = df_trades.copy()
-            _df_dir["Signal Type"] = _df_dir["direction"].apply(
-                lambda d: "📈 Buy / Long" if "BUY" in str(d).upper() else "📉 Sell / Short"
-            )
-            _dir_grp = (
-                _df_dir.groupby("Signal Type")
-                .agg(
-                    Trades=("pnl_pct", "count"),
-                    WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
-                    AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
-                    TotalPnL=("pnl_pct", lambda x: round(x.sum(), 1)),
-                )
-                .reset_index()
-            )
-            _dir_grp.columns = ["Signal Type", "# Trades", "Win Rate %", "Avg P&L %", "Total P&L %"]
-            st.dataframe(_dir_grp, hide_index=True, width="stretch")
-            st.caption("Shows whether the model performs better on buy or sell signals historically.")
-
-        # ── Per-coin breakdown ──────────────────────────────────────────────
-        with _pat_col3:
-            st.markdown("**Which coins performed best?**")
-            _coin_grp = (
-                df_trades.groupby("pair")
-                .agg(
-                    Trades=("pnl_pct", "count"),
-                    WinRate=("pnl_pct", lambda x: round((x > 0).mean() * 100, 1)),
-                    AvgPnL=("pnl_pct", lambda x: round(x.mean(), 2)),
-                )
-                .reset_index()
-                .sort_values("AvgPnL", ascending=False)
-            )
-            _coin_grp.columns = ["Coin", "# Trades", "Win Rate %", "Avg P&L %"]
-            st.dataframe(_coin_grp, hide_index=True, width="stretch", height=220)
-            st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
-
-    # ── IC Score (Information Coefficient) ────────────────────────────────────
-    st.markdown("---")
-    _ui.section_header("Signal Quality — Information Coefficient (IC)",
-                       "Spearman rank correlation between signal confidence scores and actual future returns. "
-                       "IC > 0.05 = modest edge · IC > 0.10 = strong signal quality",
-                       icon="🎯")
-    _ic_c1, _ic_c2, _ic_c3 = st.columns(3)
-    with _ic_c1:
-        _ic_pair = st.selectbox("Pair", model.PAIRS, index=0, key="ic_pair")
-    with _ic_c2:
-        _ic_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="ic_tf")
-    with _ic_c3:
-        _ic_hold = st.number_input("Hold Bars", 1, 20, 5, step=1, key="ic_hold",
-                                   help="How many bars ahead to measure the return")
-    if st.button("Compute IC Score", type="secondary", width="stretch", key="btn_ic"):
-        with st.spinner(f"Computing IC on {_ic_pair} {_ic_tf}... (~1 min)", show_time=True):
-            _ic_res = model.compute_ic_score(pair=_ic_pair, tf=_ic_tf, hold_bars=int(_ic_hold))
-        st.session_state["ic_result"] = _ic_res
-    _ic_r = st.session_state.get("ic_result")
-    if _ic_r:
-        if "error" in _ic_r and not _ic_r.get("ic"):
-            st.error(f"IC error: {_ic_r['error']}")
-        else:
-            _ic_val   = _ic_r.get("ic", 0) or 0
-            _ic_label = _ic_r.get("ic_label", "N/A")
-            _ic_n     = _ic_r.get("n_samples", 0)
-            _ic_p     = _ic_r.get("p_value")
-            _ic_color = "#10b981" if _ic_val > 0.05 else ("#ef4444" if _ic_val < 0 else "#f59e0b")
-            _ic_cols  = st.columns(4)
-            _ic_cols[0].metric("IC Score", f"{_ic_val:.4f}")
-            _ic_cols[1].metric("Signal Quality", _ic_label)
-            _ic_cols[2].metric("Samples", _ic_n)
-            _ic_cols[3].metric("p-value", f"{_ic_p:.4f}" if _ic_p is not None else "N/A")
-            st.markdown(
-                f"<div style='border:1px solid {_ic_color};border-radius:8px;"
-                f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_ic_color};'>"
-                f"<b>{_ic_label}</b> — IC = {_ic_val:+.4f} "
-                f"({'p < 0.05 — statistically significant' if (_ic_p or 1) < 0.05 else 'not statistically significant'})</div>",
-                unsafe_allow_html=True,
-            )
-
-    # ── WFE Score (Walk Forward Efficiency) ───────────────────────────────────
-    st.markdown("---")
-    _ui.section_header("Signal Quality — Walk Forward Efficiency (WFE)",
-                       "OOS accuracy ÷ IS accuracy across N time windows. "
-                       "WFE > 0.8 = excellent generalisation · WFE < 0.5 = likely overfit",
-                       icon="🔄")
-    _wfe_c1, _wfe_c2, _wfe_c3 = st.columns(3)
-    with _wfe_c1:
-        _wfe_pair = st.selectbox("Pair", model.PAIRS, index=0, key="wfe_pair")
-    with _wfe_c2:
-        _wfe_tf = st.selectbox("Timeframe", model.TIMEFRAMES, index=0, key="wfe_tf")
-    with _wfe_c3:
-        _wfe_splits = st.number_input("Splits", 2, 6, 4, step=1, key="wfe_splits",
-                                      help="Number of time windows to walk forward through")
-    if st.button("Compute WFE Score", type="secondary", width="stretch", key="btn_wfe"):
-        with st.spinner(f"Computing WFE on {_wfe_pair} {_wfe_tf} ({int(_wfe_splits)} splits)... (~2 min)", show_time=True):
-            _wfe_res = model.compute_wfe_score(pair=_wfe_pair, tf=_wfe_tf, n_splits=int(_wfe_splits))
-        st.session_state["wfe_result"] = _wfe_res
-    _wfe_r = st.session_state.get("wfe_result")
-    if _wfe_r:
-        if "error" in _wfe_r and not _wfe_r.get("wfe"):
-            st.error(f"WFE error: {_wfe_r['error']}")
-        else:
-            _wfe_val   = _wfe_r.get("wfe", 0) or 0
-            _wfe_label = _wfe_r.get("wfe_label", "N/A")
-            _wfe_is    = _wfe_r.get("is_accuracy", 0)
-            _wfe_oos   = _wfe_r.get("oos_accuracy", 0)
-            _wfe_color = "#10b981" if _wfe_val >= 0.8 else ("#f59e0b" if _wfe_val >= 0.5 else "#ef4444")
-            _wfe_cols  = st.columns(4)
-            _wfe_cols[0].metric("WFE", f"{_wfe_val:.3f}")
-            _wfe_cols[1].metric("Assessment", _wfe_label.replace("_", " "))
-            _wfe_cols[2].metric("IS Accuracy", f"{_wfe_is:.1f}%")
-            _wfe_cols[3].metric("OOS Accuracy", f"{_wfe_oos:.1f}%")
-            st.markdown(
-                f"<div style='border:1px solid {_wfe_color};border-radius:8px;"
-                f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_wfe_color};'>"
-                f"<b>{_wfe_label.replace('_',' ')}</b> — WFE = {_wfe_val:.3f} "
-                f"(OOS {_wfe_oos:.1f}% / IS {_wfe_is:.1f}%) · "
-                f"{'Model generalises well to unseen data.' if _wfe_val >= 0.8 else 'Acceptable generalisation.' if _wfe_val >= 0.5 else 'Potential overfit — reduce indicator complexity.'}"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-    # ── Walk-Forward Rolling Window Optimization (#51) ─────────────────────────
-    st.markdown("---")
-    _ui.section_header(
-        "Walk-Forward Rolling Window Optimization",
-        "Finds optimal BUY confidence threshold by testing 50–80% across rolling windows of resolved signals",
-        icon="⚙️",
-    )
-    try:
-        _wfo_c1, _wfo_c2 = st.columns([1, 3])
-        with _wfo_c1:
-            _wfo_lb = st.number_input("Lookback Days", min_value=30, max_value=180,
-                                      value=90, step=10, key="wfo_lookback_days")
-            _wfo_nw = st.number_input("Windows", min_value=2, max_value=8,
-                                      value=4, step=1, key="wfo_n_windows")
-            if st.button("Run WFO", type="primary", width="stretch", key="btn_wfo_db"):
-                with st.spinner(f"Running {int(_wfo_nw)}-window WFO ({int(_wfo_lb)}d lookback)...", show_time=True):
-                    st.session_state["wfo_opt_result"] = _db.run_walkforward_optimization(
-                        lookback_days=int(_wfo_lb), n_windows=int(_wfo_nw)
-                    )
-        with _wfo_c2:
-            # Show cached result if available, or try to load from DB
-            _wfo_r = st.session_state.get("wfo_opt_result")
-            if _wfo_r is None:
-                _wfo_r = _db.get_latest_wfo_result()
-            if _wfo_r and not _wfo_r.get("error"):
-                _opt_t   = _wfo_r.get("optimal_threshold", 65.0)
-                _avg_oos = _wfo_r.get("avg_oos_win_rate")
-                _rec     = _wfo_r.get("recommendation", "")
-                _wfo_m1, _wfo_m2, _wfo_m3 = st.columns(3)
-                _wfo_m1.metric("Optimal BUY Threshold", f"{int(_opt_t)}%",
-                               help="Confidence threshold that maximized win rate in IS periods")
-                _wfo_m2.metric("Avg OOS Win Rate",
-                               f"{_avg_oos:.1f}%" if _avg_oos is not None else "N/A",
-                               help="Average win rate in out-of-sample test periods")
-                _wfo_m3.metric("Windows Used", _wfo_r.get("n_windows", "N/A"))
-                if _rec:
-                    st.info(_rec)
-                _wfo_wr_data = _wfo_r.get("window_results", [])
-                if _wfo_wr_data:
-                    _wfo_df = pd.DataFrame(_wfo_wr_data)
-                    _disp_cols = [c for c in ["window", "optimal_thresh", "is_win_rate", "oos_win_rate", "oos_buy_signals"] if c in _wfo_df.columns]
-                    if _disp_cols:
-                        st.dataframe(
-                            _wfo_df[_disp_cols].rename(columns={
-                                "window": "Window", "optimal_thresh": "IS Best Threshold (%)",
-                                "is_win_rate": "IS Win Rate (%)", "oos_win_rate": "OOS Win Rate (%)",
-                                "oos_buy_signals": "OOS BUY Signals",
-                            }),
-                            width="stretch", hide_index=True,
-                        )
-            elif _wfo_r and _wfo_r.get("error"):
-                st.caption(f"WFO: {_wfo_r.get('recommendation', _wfo_r.get('error', ''))}")
-            else:
-                st.caption("Click **Run WFO** to find the optimal confidence threshold for BUY signals.")
-    except Exception as _wfo_err:
-        st.caption(f"WFO card error: {_wfo_err}")
-
-    # ── Walk-Forward Validation Details (#90) ─────────────────────────────────
-    st.markdown("---")
-    with st.expander("Walk-Forward Validation Details", expanded=False):
-        try:
-            _wfv_c1, _wfv_c2 = st.columns([1, 3])
-            with _wfv_c1:
-                _wfv_nw = st.number_input(
-                    "Windows", min_value=4, max_value=12, value=8, step=1,
-                    key="wfv_n_windows",
-                    help="Number of rolling windows to divide backtest history into",
-                )
-                if st.button("Run WFE Validation", type="primary",
-                             width="stretch", key="btn_wfv"):
-                    with st.spinner("Computing WFE validation across windows...", show_time=True):
-                        st.session_state["wfv_result"] = _db.run_detailed_wfe_validation(
-                            n_windows=int(_wfv_nw)
-                        )
-            with _wfv_c2:
-                _wfv_r = st.session_state.get("wfv_result")
-                if _wfv_r is None:
-                    st.caption("Click **Run WFE Validation** to analyse model stability across rolling windows.")
-                elif _wfv_r.get("error"):
-                    st.caption(f"WFE Validation: {_wfv_r.get('recommendation', _wfv_r.get('error', ''))}")
-                else:
-                    # ── Summary badges ────────────────────────────────────────
-                    _wfv_grade   = _wfv_r.get("grade", "POOR")
-                    _wfv_avg_wfe = _wfv_r.get("avg_wfe")
-                    _wfv_stab    = _wfv_r.get("stability_score")
-                    _wfv_oos_sh  = _wfv_r.get("avg_oos_sharpe")
-                    _wfv_oos_wr  = _wfv_r.get("avg_oos_win_rate")
-                    _grade_color = {
-                        "EXCELLENT": "#10b981",
-                        "GOOD":      "#10b981",
-                        "FAIR":      "#f59e0b",
-                        "POOR":      "#ef4444",
-                    }.get(_wfv_grade, "#6b7280")
-
-                    _wfv_m1, _wfv_m2, _wfv_m3, _wfv_m4 = st.columns(4)
-                    _wfv_m1.metric("Avg WFE", f"{_wfv_avg_wfe:.3f}" if _wfv_avg_wfe is not None else "N/A",
-                                   help="Average Walk-Forward Efficiency across all windows. >0.7 = good.")
-                    _wfv_m2.metric("Grade", _wfv_grade,
-                                   help="EXCELLENT≥0.9 · GOOD≥0.7 · FAIR≥0.5 · POOR<0.5")
-                    _wfv_m3.metric("Stability Score", f"{_wfv_stab:.3f}" if _wfv_stab is not None else "N/A",
-                                   help="Std dev of WFE across windows. Lower = more consistent.")
-                    _wfv_m4.metric("Avg OOS Win Rate", f"{_wfv_oos_wr:.1f}%" if _wfv_oos_wr is not None else "N/A")
-
-                    # Recommendation banner
-                    _wfv_rec = _wfv_r.get("recommendation", "")
-                    if _wfv_rec:
-                        st.markdown(
-                            f"<div style='border:1px solid {_grade_color};border-radius:8px;"
-                            f"padding:10px 14px;margin:8px 0;font-size:13px;color:{_grade_color};'>"
-                            f"<b>{_wfv_grade}</b> — {_wfv_rec}"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-
-                    _wfv_windows = _wfv_r.get("windows", [])
-                    if _wfv_windows:
-                        _wfv_ids     = [w["window_id"]   for w in _wfv_windows]
-                        _wfv_is_sh   = [w["is_sharpe"]   for w in _wfv_windows]
-                        _wfv_oos_sh2 = [w["oos_sharpe"]  for w in _wfv_windows]
-                        _wfv_wfes    = [w["wfe"]         for w in _wfv_windows]
-
-                        # ── Line chart: IS Sharpe vs OOS Sharpe ──────────────
-                        _wfv_line = go.Figure()
-                        _wfv_line.add_trace(go.Scatter(
-                            x=_wfv_ids, y=_wfv_is_sh,
-                            name="IS Sharpe",
-                            mode="lines+markers",
-                            line=dict(color="#60a5fa", width=2),
-                            marker=dict(size=7),
-                        ))
-                        _wfv_line.add_trace(go.Scatter(
-                            x=_wfv_ids, y=_wfv_oos_sh2,
-                            name="OOS Sharpe",
-                            mode="lines+markers",
-                            line=dict(color="#34d399", width=2, dash="dot"),
-                            marker=dict(size=7),
-                        ))
-                        _wfv_line.update_layout(
-                            title="IS Sharpe vs OOS Sharpe per Window",
-                            height=240,
-                            margin=dict(l=10, r=10, t=36, b=10),
-                            paper_bgcolor="#0e1117",
-                            plot_bgcolor="#0e1117",
-                            font=dict(color="#fafafa", size=11),
-                            legend=dict(orientation="h", y=1.12, x=0),
-                            xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
-                            yaxis=dict(title="Sharpe", gridcolor="#1f2937"),
-                        )
-                        st.plotly_chart(_wfv_line, width="stretch",
-                                        config={"displayModeBar": False})
-
-                        # ── Bar chart: WFE ratio per window ──────────────────
-                        _wfv_bar_colors = [
-                            "#10b981" if w >= 0.7 else ("#f59e0b" if w >= 0.5 else "#ef4444")
-                            for w in _wfv_wfes
-                        ]
-                        _wfv_bar = go.Figure(go.Bar(
-                            x=_wfv_ids,
-                            y=_wfv_wfes,
-                            marker_color=_wfv_bar_colors,
-                            text=[f"{w:.2f}" for w in _wfv_wfes],
-                            textposition="outside",
-                        ))
-                        _wfv_bar.add_hline(y=0.7, line_dash="dot", line_color="#10b981",
-                                           annotation_text="Good (0.7)", annotation_position="right")
-                        _wfv_bar.add_hline(y=0.5, line_dash="dot", line_color="#f59e0b",
-                                           annotation_text="Fair (0.5)", annotation_position="right")
-                        _wfv_bar.update_layout(
-                            title="WFE Ratio per Window  (green ≥0.7 · yellow ≥0.5 · red <0.5)",
-                            height=220,
-                            margin=dict(l=10, r=80, t=36, b=10),
-                            paper_bgcolor="#0e1117",
-                            plot_bgcolor="#0e1117",
-                            font=dict(color="#fafafa", size=11),
-                            xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
-                            yaxis=dict(title="WFE", range=[0, max(max(_wfv_wfes) * 1.2, 1.1)],
-                                       gridcolor="#1f2937"),
-                            showlegend=False,
-                        )
-                        st.plotly_chart(_wfv_bar, width="stretch",
-                                        config={"displayModeBar": False})
-
-                        # ── Per-window detail table ───────────────────────────
-                        _wfv_tbl = pd.DataFrame([{
-                            "Window":       w["window_id"],
-                            "Start":        w["start_date"],
-                            "End":          w["end_date"],
-                            "IS Sharpe":    w["is_sharpe"],
-                            "OOS Sharpe":   w["oos_sharpe"],
-                            "WFE":          w["wfe"],
-                            "IS Win %":     w["is_win_rate"],
-                            "OOS Win %":    w["oos_win_rate"],
-                            "Opt Thresh %": int(w["optimal_threshold"]),
-                            "IS Trades":    w["n_trades_is"],
-                            "OOS Trades":   w["n_trades_oos"],
-                        } for w in _wfv_windows])
-                        st.dataframe(_wfv_tbl, hide_index=True, width="stretch")
-
-        except Exception as _wfv_err:
-            st.caption(f"WFE Validation error: {_wfv_err}")
-
-    # ── Stress Test ────────────────────────────────────────────────────────────
-    _render_stress_test()
-
-
-def _render_stress_test():
-    """Render the historical stress test section inside Backtest Viewer."""
-    if _stress_mod is None:
-        st.caption("stress_test.py not available")
-        return
-
-    st.markdown("---")
-    _ui.section_header("Historical Stress Test", "Replay actual crisis periods to estimate portfolio performance", icon="🔥")
-
-    _sc1, _sc2, _sc3 = st.columns([3, 2, 2])
-    with _sc1:
-        _scenario_opts = list(_stress_mod.STRESS_SCENARIOS.keys())
-        _scenario_labels = {k: v["label"] for k, v in _stress_mod.STRESS_SCENARIOS.items()}
-        _sel_scenario = st.selectbox(
-            "Select Scenario",
-            options=_scenario_opts,
-            format_func=lambda k: _scenario_labels[k],
-            key="stress_scenario_select",
-        )
-    with _sc2:
-        _stress_pos_pct = st.number_input(
-            "Position Size (%)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
-            key="stress_pos_pct",
-        )
-    with _sc3:
-        _stress_dir = st.selectbox("Assumed Direction", ["BUY", "SELL"], key="stress_dir")
-
-    _sc_meta = _stress_mod.STRESS_SCENARIOS.get(_sel_scenario, {})
-    st.caption(
-        f"**Period:** {_sc_meta.get('start','')} → {_sc_meta.get('end','')}  |  "
-        f"**Known BTC DD:** {_sc_meta.get('known_btc_drawdown',0):.1f}%  |  "
-        f"{_sc_meta.get('description','')}"
-    )
-
-    if st.button("▶ Run Stress Test", key="run_stress_btn", type="primary"):
-        with st.spinner("Fetching historical OHLCV and simulating...", show_time=True):
             try:
-                import crypto_model_core as _cm
-                _stress_res = _stress_mod.run_stress_test(
-                    pairs=_cm.PAIRS,
-                    scenario_key=_sel_scenario,
-                    position_pct=_stress_pos_pct,
-                    default_direction=_stress_dir,
+                _wfo_c1, _wfo_c2 = st.columns([1, 3])
+                with _wfo_c1:
+                    _wfo_lb = st.number_input("Lookback Days", min_value=30, max_value=180,
+                                              value=90, step=10, key="wfo_lookback_days")
+                    _wfo_nw = st.number_input("Windows", min_value=2, max_value=8,
+                                              value=4, step=1, key="wfo_n_windows")
+                    if st.button("Run WFO", type="primary", width="stretch", key="btn_wfo_db"):
+                        with st.spinner(f"Running {int(_wfo_nw)}-window WFO ({int(_wfo_lb)}d lookback)...", show_time=True):
+                            st.session_state["wfo_opt_result"] = _db.run_walkforward_optimization(
+                                lookback_days=int(_wfo_lb), n_windows=int(_wfo_nw)
+                            )
+                with _wfo_c2:
+                    # Show cached result if available, or try to load from DB
+                    _wfo_r = st.session_state.get("wfo_opt_result")
+                    if _wfo_r is None:
+                        _wfo_r = _db.get_latest_wfo_result()
+                    if _wfo_r and not _wfo_r.get("error"):
+                        _opt_t   = _wfo_r.get("optimal_threshold", 65.0)
+                        _avg_oos = _wfo_r.get("avg_oos_win_rate")
+                        _rec     = _wfo_r.get("recommendation", "")
+                        _wfo_m1, _wfo_m2, _wfo_m3 = st.columns(3)
+                        _wfo_m1.metric("Optimal BUY Threshold", f"{int(_opt_t)}%",
+                                       help="Confidence threshold that maximized win rate in IS periods")
+                        _wfo_m2.metric("Avg OOS Win Rate",
+                                       f"{_avg_oos:.1f}%" if _avg_oos is not None else "N/A",
+                                       help="Average win rate in out-of-sample test periods")
+                        _wfo_m3.metric("Windows Used", _wfo_r.get("n_windows", "N/A"))
+                        if _rec:
+                            st.info(_rec)
+                        _wfo_wr_data = _wfo_r.get("window_results", [])
+                        if _wfo_wr_data:
+                            _wfo_df = pd.DataFrame(_wfo_wr_data)
+                            _disp_cols = [c for c in ["window", "optimal_thresh", "is_win_rate", "oos_win_rate", "oos_buy_signals"] if c in _wfo_df.columns]
+                            if _disp_cols:
+                                st.dataframe(
+                                    _wfo_df[_disp_cols].rename(columns={
+                                        "window": "Window", "optimal_thresh": "IS Best Threshold (%)",
+                                        "is_win_rate": "IS Win Rate (%)", "oos_win_rate": "OOS Win Rate (%)",
+                                        "oos_buy_signals": "OOS BUY Signals",
+                                    }),
+                                    width="stretch", hide_index=True,
+                                )
+                    elif _wfo_r and _wfo_r.get("error"):
+                        st.caption(f"WFO: {_wfo_r.get('recommendation', _wfo_r.get('error', ''))}")
+                    else:
+                        st.caption("Click **Run WFO** to find the optimal confidence threshold for BUY signals.")
+            except Exception as _wfo_err:
+                st.caption(f"WFO card error: {_wfo_err}")
+
+            # ── Walk-Forward Validation Details (#90) ─────────────────────────────────
+            st.markdown("---")
+            with st.expander("Walk-Forward Validation Details", expanded=False):
+                try:
+                    _wfv_c1, _wfv_c2 = st.columns([1, 3])
+                    with _wfv_c1:
+                        _wfv_nw = st.number_input(
+                            "Windows", min_value=4, max_value=12, value=8, step=1,
+                            key="wfv_n_windows",
+                            help="Number of rolling windows to divide backtest history into",
+                        )
+                        if st.button("Run WFE Validation", type="primary",
+                                     width="stretch", key="btn_wfv"):
+                            with st.spinner("Computing WFE validation across windows...", show_time=True):
+                                st.session_state["wfv_result"] = _db.run_detailed_wfe_validation(
+                                    n_windows=int(_wfv_nw)
+                                )
+                    with _wfv_c2:
+                        _wfv_r = st.session_state.get("wfv_result")
+                        if _wfv_r is None:
+                            st.caption("Click **Run WFE Validation** to analyse model stability across rolling windows.")
+                        elif _wfv_r.get("error"):
+                            st.caption(f"WFE Validation: {_wfv_r.get('recommendation', _wfv_r.get('error', ''))}")
+                        else:
+                            # ── Summary badges ────────────────────────────────────────
+                            _wfv_grade   = _wfv_r.get("grade", "POOR")
+                            _wfv_avg_wfe = _wfv_r.get("avg_wfe")
+                            _wfv_stab    = _wfv_r.get("stability_score")
+                            _wfv_oos_sh  = _wfv_r.get("avg_oos_sharpe")
+                            _wfv_oos_wr  = _wfv_r.get("avg_oos_win_rate")
+                            _grade_color = {
+                                "EXCELLENT": "#10b981",
+                                "GOOD":      "#10b981",
+                                "FAIR":      "#f59e0b",
+                                "POOR":      "#ef4444",
+                            }.get(_wfv_grade, "#6b7280")
+
+                            _wfv_m1, _wfv_m2, _wfv_m3, _wfv_m4 = st.columns(4)
+                            _wfv_m1.metric("Avg WFE", f"{_wfv_avg_wfe:.3f}" if _wfv_avg_wfe is not None else "N/A",
+                                           help="Average Walk-Forward Efficiency across all windows. >0.7 = good.")
+                            _wfv_m2.metric("Grade", _wfv_grade,
+                                           help="EXCELLENT≥0.9 · GOOD≥0.7 · FAIR≥0.5 · POOR<0.5")
+                            _wfv_m3.metric("Stability Score", f"{_wfv_stab:.3f}" if _wfv_stab is not None else "N/A",
+                                           help="Std dev of WFE across windows. Lower = more consistent.")
+                            _wfv_m4.metric("Avg OOS Win Rate", f"{_wfv_oos_wr:.1f}%" if _wfv_oos_wr is not None else "N/A")
+
+                            # Recommendation banner
+                            _wfv_rec = _wfv_r.get("recommendation", "")
+                            if _wfv_rec:
+                                st.markdown(
+                                    f"<div style='border:1px solid {_grade_color};border-radius:8px;"
+                                    f"padding:10px 14px;margin:8px 0;font-size:13px;color:{_grade_color};'>"
+                                    f"<b>{_wfv_grade}</b> — {_wfv_rec}"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                            _wfv_windows = _wfv_r.get("windows", [])
+                            if _wfv_windows:
+                                _wfv_ids     = [w["window_id"]   for w in _wfv_windows]
+                                _wfv_is_sh   = [w["is_sharpe"]   for w in _wfv_windows]
+                                _wfv_oos_sh2 = [w["oos_sharpe"]  for w in _wfv_windows]
+                                _wfv_wfes    = [w["wfe"]         for w in _wfv_windows]
+
+                                # ── Line chart: IS Sharpe vs OOS Sharpe ──────────────
+                                _wfv_line = go.Figure()
+                                _wfv_line.add_trace(go.Scatter(
+                                    x=_wfv_ids, y=_wfv_is_sh,
+                                    name="IS Sharpe",
+                                    mode="lines+markers",
+                                    line=dict(color="#60a5fa", width=2),
+                                    marker=dict(size=7),
+                                ))
+                                _wfv_line.add_trace(go.Scatter(
+                                    x=_wfv_ids, y=_wfv_oos_sh2,
+                                    name="OOS Sharpe",
+                                    mode="lines+markers",
+                                    line=dict(color="#34d399", width=2, dash="dot"),
+                                    marker=dict(size=7),
+                                ))
+                                _wfv_line.update_layout(
+                                    title="IS Sharpe vs OOS Sharpe per Window",
+                                    height=240,
+                                    margin=dict(l=10, r=10, t=36, b=10),
+                                    paper_bgcolor="#0e1117",
+                                    plot_bgcolor="#0e1117",
+                                    font=dict(color="#fafafa", size=11),
+                                    legend=dict(orientation="h", y=1.12, x=0),
+                                    xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
+                                    yaxis=dict(title="Sharpe", gridcolor="#1f2937"),
+                                )
+                                st.plotly_chart(_wfv_line, width="stretch",
+                                                config={"displayModeBar": False})
+
+                                # ── Bar chart: WFE ratio per window ──────────────────
+                                _wfv_bar_colors = [
+                                    "#10b981" if w >= 0.7 else ("#f59e0b" if w >= 0.5 else "#ef4444")
+                                    for w in _wfv_wfes
+                                ]
+                                _wfv_bar = go.Figure(go.Bar(
+                                    x=_wfv_ids,
+                                    y=_wfv_wfes,
+                                    marker_color=_wfv_bar_colors,
+                                    text=[f"{w:.2f}" for w in _wfv_wfes],
+                                    textposition="outside",
+                                ))
+                                _wfv_bar.add_hline(y=0.7, line_dash="dot", line_color="#10b981",
+                                                   annotation_text="Good (0.7)", annotation_position="right")
+                                _wfv_bar.add_hline(y=0.5, line_dash="dot", line_color="#f59e0b",
+                                                   annotation_text="Fair (0.5)", annotation_position="right")
+                                _wfv_bar.update_layout(
+                                    title="WFE Ratio per Window  (green ≥0.7 · yellow ≥0.5 · red <0.5)",
+                                    height=220,
+                                    margin=dict(l=10, r=80, t=36, b=10),
+                                    paper_bgcolor="#0e1117",
+                                    plot_bgcolor="#0e1117",
+                                    font=dict(color="#fafafa", size=11),
+                                    xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
+                                    yaxis=dict(title="WFE", range=[0, max(max(_wfv_wfes) * 1.2, 1.1)],
+                                               gridcolor="#1f2937"),
+                                    showlegend=False,
+                                )
+                                st.plotly_chart(_wfv_bar, width="stretch",
+                                                config={"displayModeBar": False})
+
+                                # ── Per-window detail table ───────────────────────────
+                                _wfv_tbl = pd.DataFrame([{
+                                    "Window":       w["window_id"],
+                                    "Start":        w["start_date"],
+                                    "End":          w["end_date"],
+                                    "IS Sharpe":    w["is_sharpe"],
+                                    "OOS Sharpe":   w["oos_sharpe"],
+                                    "WFE":          w["wfe"],
+                                    "IS Win %":     w["is_win_rate"],
+                                    "OOS Win %":    w["oos_win_rate"],
+                                    "Opt Thresh %": int(w["optimal_threshold"]),
+                                    "IS Trades":    w["n_trades_is"],
+                                    "OOS Trades":   w["n_trades_oos"],
+                                } for w in _wfv_windows])
+                                st.dataframe(_wfv_tbl, hide_index=True, width="stretch")
+
+                except Exception as _wfv_err:
+                    st.caption(f"WFE Validation error: {_wfv_err}")
+
+            # ── Stress Test ────────────────────────────────────────────────────────────
+            _render_stress_test()
+
+
+        def _render_stress_test():
+            """Render the historical stress test section inside Backtest Viewer."""
+            if _stress_mod is None:
+                st.caption("stress_test.py not available")
+                return
+
+            st.markdown("---")
+            _ui.section_header("Historical Stress Test", "Replay actual crisis periods to estimate portfolio performance", icon="🔥")
+
+            _sc1, _sc2, _sc3 = st.columns([3, 2, 2])
+            with _sc1:
+                _scenario_opts = list(_stress_mod.STRESS_SCENARIOS.keys())
+                _scenario_labels = {k: v["label"] for k, v in _stress_mod.STRESS_SCENARIOS.items()}
+                _sel_scenario = st.selectbox(
+                    "Select Scenario",
+                    options=_scenario_opts,
+                    format_func=lambda k: _scenario_labels[k],
+                    key="stress_scenario_select",
                 )
-                st.session_state["stress_results"] = _stress_res
-            except Exception as _se:
-                st.error(f"Stress test failed: {_se}")
+            with _sc2:
+                _stress_pos_pct = st.number_input(
+                    "Position Size (%)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
+                    key="stress_pos_pct",
+                )
+            with _sc3:
+                _stress_dir = st.selectbox("Assumed Direction", ["BUY", "SELL"], key="stress_dir")
 
-    _stress_data = st.session_state.get("stress_results")
-    if _stress_data and isinstance(_stress_data, dict) and "portfolio" in _stress_data:
-        _p = _stress_data["portfolio"]
-        _s = _stress_data.get("scenario", {})
-        st.subheader(f"Results: {_s.get('label', _sel_scenario)}")
+            _sc_meta = _stress_mod.STRESS_SCENARIOS.get(_sel_scenario, {})
+            st.caption(
+                f"**Period:** {_sc_meta.get('start','')} → {_sc_meta.get('end','')}  |  "
+                f"**Known BTC DD:** {_sc_meta.get('known_btc_drawdown',0):.1f}%  |  "
+                f"{_sc_meta.get('description','')}"
+            )
 
-        _sp1, _sp2, _sp3, _sp4, _sp5 = st.columns(5)
-        _sp1.metric("Portfolio Return", f"{_p.get('portfolio_return', 0):+.2f}%")
-        _sp2.metric("Total P&L", f"${_p.get('total_pnl_usd', 0):+,.0f}")
-        _sp3.metric("Worst Drawdown", f"{_p.get('worst_drawdown_pct', 0):.2f}%")
-        _sp4.metric("Win Rate", f"{_p.get('win_rate', 0):.1f}%")
-        _sp5.metric("Pairs Tested", _p.get("total_pairs", 0))
+            if st.button("▶ Run Stress Test", key="run_stress_btn", type="primary"):
+                with st.spinner("Fetching historical OHLCV and simulating...", show_time=True):
+                    try:
+                        import crypto_model_core as _cm
+                        _stress_res = _stress_mod.run_stress_test(
+                            pairs=_cm.PAIRS,
+                            scenario_key=_sel_scenario,
+                            position_pct=_stress_pos_pct,
+                            default_direction=_stress_dir,
+                        )
+                        st.session_state["stress_results"] = _stress_res
+                    except Exception as _se:
+                        st.error(f"Stress test failed: {_se}")
 
-        # Per-pair results table
-        _pair_rows = []
-        for _pr, _metrics in _stress_data.get("results", {}).items():
-            if _metrics.get("error"):
-                _pair_rows.append({"Pair": _pr, "Return %": "N/A", "P&L $": "N/A",
-                                   "Max DD %": "N/A", "Vol Ann %": "N/A", "Status": "No data"})
-            else:
-                _pair_rows.append({
-                    "Pair": _pr,
-                    "Return %": round(_metrics.get("price_return_pct", 0), 2),
-                    "P&L $": round(_metrics.get("pnl_usd", 0), 2),
-                    "Max DD %": round(_metrics.get("max_drawdown_pct", 0), 2),
-                    "Vol Ann %": round(_metrics.get("vol_ann_pct", 0), 2),
-                    "Status": "OK",
-                })
-        if _pair_rows:
-            _stress_df = pd.DataFrame(_pair_rows)
-            st.dataframe(_stress_df, hide_index=True, width="stretch")
+            _stress_data = st.session_state.get("stress_results")
+            if _stress_data and isinstance(_stress_data, dict) and "portfolio" in _stress_data:
+                _p = _stress_data["portfolio"]
+                _s = _stress_data.get("scenario", {})
+                st.subheader(f"Results: {_s.get('label', _sel_scenario)}")
+
+                _sp1, _sp2, _sp3, _sp4, _sp5 = st.columns(5)
+                _sp1.metric("Portfolio Return", f"{_p.get('portfolio_return', 0):+.2f}%")
+                _sp2.metric("Total P&L", f"${_p.get('total_pnl_usd', 0):+,.0f}")
+                _sp3.metric("Worst Drawdown", f"{_p.get('worst_drawdown_pct', 0):.2f}%")
+                _sp4.metric("Win Rate", f"{_p.get('win_rate', 0):.1f}%")
+                _sp5.metric("Pairs Tested", _p.get("total_pairs", 0))
+
+                # Per-pair results table
+                _pair_rows = []
+                for _pr, _metrics in _stress_data.get("results", {}).items():
+                    if _metrics.get("error"):
+                        _pair_rows.append({"Pair": _pr, "Return %": "N/A", "P&L $": "N/A",
+                                           "Max DD %": "N/A", "Vol Ann %": "N/A", "Status": "No data"})
+                    else:
+                        _pair_rows.append({
+                            "Pair": _pr,
+                            "Return %": round(_metrics.get("price_return_pct", 0), 2),
+                            "P&L $": round(_metrics.get("pnl_usd", 0), 2),
+                            "Max DD %": round(_metrics.get("max_drawdown_pct", 0), 2),
+                            "Vol Ann %": round(_metrics.get("vol_ann_pct", 0), 2),
+                            "Status": "OK",
+                        })
+                if _pair_rows:
+                    _stress_df = pd.DataFrame(_pair_rows)
+                    st.dataframe(_stress_df, hide_index=True, width="stretch")
 
 
 def _run_backtest_thread():
@@ -5855,389 +6262,9 @@ def _start_backtest():
 # PAGE 4: TRADE LOG & HISTORY
 # ──────────────────────────────────────────────
 def page_trade_log():
-    st.markdown(
-        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">Trade Log & History</h1>',
-        unsafe_allow_html=True,
-    )
-
-    tab_master, tab_paper, tab_feedback, tab_exec, tab_slip = st.tabs([
-        "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log", "Slippage Analytics"
-    ])
-
-    # ── Tab 1: Master Log ──
-    with tab_master:
-        df = _cached_signals_df()
-        if df.empty:
-            st.info("No master log data yet. Run a scan first.")
-        else:
-            # Summary metrics
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Total Records", len(df))
-            if 'direction' in df.columns:
-                buys = df['direction'].str.contains("BUY", na=False).sum()
-                sells = df['direction'].str.contains("SELL", na=False).sum()
-                m2.metric("Total Buy Signals", int(buys))
-                m3.metric("Total Sell Signals", int(sells))
-            if 'confidence_avg_pct' in df.columns:
-                avg_conf = pd.to_numeric(df['confidence_avg_pct'], errors='coerce').mean()
-                m4.metric("Avg Confidence", f"{avg_conf:.1f}%" if pd.notna(avg_conf) else "N/A")
-
-            st.markdown("---")
-
-            # Confidence trend per pair
-            if 'scan_timestamp' in df.columns and 'confidence_avg_pct' in df.columns and 'pair' in df.columns:
-                st.subheader("Confidence Trend by Pair")
-                pair_filter = st.multiselect("Select pairs", options=df['pair'].unique().tolist(),
-                                              default=df['pair'].unique().tolist()[:3], key="master_pair_filter")
-                df_plot = df[df['pair'].isin(pair_filter)] if pair_filter else df
-                fig = px.line(df_plot, x='scan_timestamp', y='confidence_avg_pct',
-                              color='pair', markers=True,
-                              labels={'confidence_avg_pct': 'Confidence (%)', 'scan_timestamp': 'Scan Time'})
-                fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green",
-                              annotation_text=f"High-Conf ({model.HIGH_CONF_THRESHOLD}%)")
-                fig.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig, width="stretch")
-
-            # Searchable table
-            st.subheader("All Records")
-            search = st.text_input("Search (pair, direction...)", key="master_search")
-            if search:
-                _search_cols = [c for c in ['pair', 'direction', 'strategy_bias', 'regime'] if c in df.columns]
-                _mask = df[_search_cols].astype(str).apply(lambda r: r.str.contains(search, case=False, na=False)).any(axis=1)
-                display_df = df[_mask]
-            else:
-                display_df = df
-
-            # Rename columns to human-readable labels for display
-            col_labels = {
-                'scan_timestamp': 'Scan Time', 'pair': 'Pair', 'price_usd': 'Price (USD)',
-                'confidence_avg_pct': 'Confidence %', 'direction': 'Direction',
-                'strategy_bias': 'Strategy Bias', 'mtf_alignment': 'MTF Alignment',
-                'high_conf': 'High Conf', 'fng_value': 'Fear & Greed', 'fng_category': 'F&G Label',
-                'entry': 'Entry', 'exit': 'Target', 'stop_loss': 'Stop Loss',
-                'risk_pct': 'Risk %', 'position_size_usd': 'Position USD',
-                'position_size_pct': 'Position %', 'risk_mode': 'Risk Mode',
-                'corr_with_btc': 'BTC Corr', 'corr_adjusted_size_pct': 'Corr-Adj Size %',
-                'regime': 'Regime', 'sr_status': 'S/R Status',
-                'circuit_breaker_triggered': 'CB Triggered',
-                'circuit_breaker_drawdown_pct': 'CB Drawdown %', 'scan_sec': 'Scan Sec',
-            }
-            display_df = display_df.rename(columns={k: v for k, v in col_labels.items() if k in display_df.columns})
-            st.dataframe(display_df, width="stretch", height=400)
-            st.download_button("⬇ Download Master Log", data=df.to_csv(index=False),
-                               file_name="daily_signals_master.csv", mime="text/csv",
-                               key="dl_master_log")
-
-    # ── Tab 2: Paper Trades ──
-    with tab_paper:
-        df_closed = _cached_paper_trades_df()
-        try:
-            positions = model.load_positions()
-        except Exception as _e:
-            logging.warning(f"load_positions failed: {_e}")
-            positions = {}
-
-        # ── Portfolio Heat Strip ──────────────────────────────────────────────
-        if positions:
-            _total_exp  = sum(float(p.get("size_pct") or 0) for p in positions.values())  # APP-16: or 0 handles explicit None
-            _buy_exp    = sum(float(p.get("size_pct") or 0) for p in positions.values() if "BUY"  in str(p.get("direction", "")))
-            _sell_exp   = sum(float(p.get("size_pct") or 0) for p in positions.values() if "SELL" in str(p.get("direction", "")))
-            _n_pos      = len(positions)
-            # Heat color: green < 30%, amber 30–60%, red > 60%
-            _heat_color = "#00d4aa" if _total_exp < 30 else ("#f59e0b" if _total_exp < 60 else "#f6465d")
-            _heat_label = "Low" if _total_exp < 30 else ("Medium" if _total_exp < 60 else "High")
-            st.markdown(
-                f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-                f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
-                f'border-radius:10px;padding:10px 18px;text-align:center">'
-                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">PORTFOLIO HEAT</div>'
-                f'<div style="font-size:20px;font-weight:700;color:{_heat_color}">{_heat_label}</div>'
-                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">Total exposure</div></div>'
-                f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
-                f'border-radius:10px;padding:10px 18px;text-align:center">'
-                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">FUNDS IN TRADES</div>'
-                f'<div style="font-size:20px;font-weight:700;color:{_heat_color}">{_total_exp:.1f}%</div>'
-                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">of portfolio</div></div>'
-                f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
-                f'border-radius:10px;padding:10px 18px;text-align:center">'
-                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">OPEN POSITIONS</div>'
-                f'<div style="font-size:20px;font-weight:700;color:#e8ecf4">{_n_pos}</div>'
-                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">trades active</div></div>'
-                f'<div style="background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.2);'
-                f'border-radius:10px;padding:10px 18px;text-align:center">'
-                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">BUY EXPOSURE</div>'
-                f'<div style="font-size:20px;font-weight:700;color:#00d4aa">{_buy_exp:.1f}%</div>'
-                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">long trades</div></div>'
-                f'<div style="background:rgba(246,70,93,0.06);border:1px solid rgba(246,70,93,0.2);'
-                f'border-radius:10px;padding:10px 18px;text-align:center">'
-                f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">SELL EXPOSURE</div>'
-                f'<div style="font-size:20px;font-weight:700;color:#f6465d">{_sell_exp:.1f}%</div>'
-                f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">short trades</div></div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-        st.subheader("Open Positions")
-        if positions:
-            # ── Price resolution: WS first, scan fallback ──────────────────
-            _live_ticks  = _ws.get_all_prices() or {}  # APP-03/15: guard None return when WS not connected
-            _scan_prices = {
-                r['pair']: r.get('price_usd')
-                for r in st.session_state.get("scan_results", [])
-                if r.get("price_usd")
-            }
-            _ws_ok = _ws.get_status().get("connected", False)
-            _price_src_label = "● LIVE (WebSocket)" if _ws_ok else "◎ Last Scan Price"
-            st.caption(f"Price source: {_price_src_label}  ·  {len(positions)} open position(s)")
-
-            for _pair, _pos in positions.items():
-                _entry     = _pos.get('entry')
-                _direction = _pos.get('direction', 'BUY')
-                _target    = _pos.get('target')
-                _stop      = _pos.get('stop')
-                _size_pct  = _pos.get('size_pct')
-                _entry_time = _pos.get('entry_time')
-
-                # Current price
-                _tick = _live_ticks.get(_pair)
-                _cur  = float(_tick['price']) if _tick else (
-                    float(_scan_prices[_pair]) if _pair in _scan_prices else None
-                )
-                _src_tag = "● LIVE" if _tick else ("◎ scan" if _cur else "—")
-
-                # Unrealized P&L
-                if _cur is not None and _entry and float(_entry) > 0:
-                    _ef = float(_entry)
-                    if "BUY" in _direction:
-                        _pnl_pct = (_cur - _ef) / _ef * 100
-                    else:
-                        _pnl_pct = (_ef - _cur) / _ef * 100
-                else:
-                    _pnl_pct = float(_pos.get('current_pnl_pct', 0))
-                    _cur = None
-
-                # Distance to stop / target  (as % of entry)
-                _stop_dist = _tgt_dist = None
-                if _cur is not None and _entry and float(_entry) > 0:
-                    _ef = float(_entry)
-                    if _stop:
-                        _stop_dist = abs(_cur - float(_stop)) / _ef * 100
-                    if _target:
-                        _tgt_dist  = abs(float(_target) - _cur) / _ef * 100
-
-                # Time in trade
-                _dur_str = "—"
-                if _entry_time:
-                    try:
-                        from datetime import timezone as _tz
-                        _et  = pd.to_datetime(_entry_time, utc=True)
-                        _dur = datetime.now(_tz.utc) - _et.to_pydatetime()
-                        _h, _rem = divmod(int(_dur.total_seconds()), 3600)
-                        _dur_str = f"{_h}h {_rem // 60}m"
-                    except Exception:
-                        pass
-
-                # Render position card
-                _pnl_sign  = "+" if _pnl_pct >= 0 else ""
-                _dir_emoji = "🟢" if "BUY" in _direction else "🔴"
-                _pnl_color = "#00d4aa" if _pnl_pct >= 0 else "#ff4b4b"
-
-                st.markdown(
-                    f'<div style="background:#1a1f2e;border-radius:10px;padding:14px 18px;'
-                    f'margin-bottom:10px;border-left:4px solid {_pnl_color}">'
-                    f'<span style="font-size:15px;font-weight:700">{_dir_emoji} {_pair}</span>'
-                    f'&nbsp;&nbsp;<code style="font-size:12px">{_direction}</code>'
-                    f'&nbsp;&nbsp;<span style="color:#888;font-size:11px">{_src_tag}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-                _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
-                _pc1.metric("Entry Price",   f"{float(_entry):,.5g}" if _entry else "—")
-                _pc2.metric("Current Price", f"{_cur:,.5g}"          if _cur   else "—")
-                _pc3.metric(
-                    "Unrealized P&L",
-                    f"{_pnl_sign}{_pnl_pct:.2f}%",
-                    delta=f"{_pnl_sign}{_pnl_pct:.2f}%",
-                    delta_color="normal",
-                )
-                _pc4.metric("Time In Trade", _dur_str)
-                _pc5.metric("Size", f"{_size_pct}%" if _size_pct else "—")
-
-                _dc1, _dc2, _dc3 = st.columns(3)
-                _dc1.caption(
-                    f"Stop: {float(_stop):,.5g}  ({_stop_dist:.2f}% away)"
-                    if _stop and _stop_dist is not None
-                    else f"Stop: {float(_stop):,.5g}" if _stop else "Stop: —"
-                )
-                _dc2.caption(
-                    f"Target: {float(_target):,.5g}  ({_tgt_dist:.2f}% to go)"
-                    if _target and _tgt_dist is not None
-                    else f"Target: {float(_target):,.5g}" if _target else "Target: —"
-                )
-                _dc3.caption(f"Entry time: {_entry_time}" if _entry_time else "")
-                st.markdown("")
-
-            # ── Actions ────────────────────────────────────────────────────
-            _btn_col, _auto_col, _ = st.columns([1.5, 1.5, 3])
-            with _btn_col:
-                if st.button("Check Exits & Refresh", key="refresh_pos"):
-                    _all_prices = dict(_scan_prices)
-                    _all_prices.update({p: v['price'] for p, v in _live_ticks.items()})
-                    if _all_prices:
-                        _closed = model.update_positions(_all_prices)
-                        if _closed:
-                            st.success(f"Closed {len(_closed)} position(s) at stop/target.")
-                            try:
-                                _send_exit_alerts(_closed)
-                            except Exception as _ae:
-                                logging.warning("[App] Exit alert (manual) failed: %s", _ae)
-                        st.rerun()
-                    else:
-                        st.warning("Run a scan first to get current prices.")
-            with _auto_col:
-                _auto_pos = st.toggle("Auto-update (5s)", key="pos_auto_refresh",
-                                      value=_ws_ok, help="Auto-refresh live P&L every 5 seconds")
-
-            # Auto-rerun every 5s when toggle is on
-            if _auto_pos:
-                import time as _time_pos
-                _pos_ts_key = "_pos_live_ts"
-                _now_pos    = _time_pos.time()
-                if _now_pos - st.session_state.setdefault(_pos_ts_key, _now_pos - 4.9) >= 5:  # APP-14: default near-now prevents immediate fire
-                    st.session_state[_pos_ts_key] = _now_pos
-                    _time_pos.sleep(0.1)
-                    st.rerun()
-        else:
-            st.info("No open positions.")
-
-        st.subheader("Closed Trades History")
-        if df_closed.empty:
-            st.info("No closed paper trades yet.")
-        else:
-            p1, p2, p3 = st.columns(3)
-            if 'pnl_pct' in df_closed.columns:
-                df_closed['pnl_pct'] = pd.to_numeric(df_closed['pnl_pct'], errors='coerce')
-                total_pnl = df_closed['pnl_pct'].sum()
-                wins = (df_closed['pnl_pct'] > 0).sum()
-                p1.metric("Total Trades", len(df_closed))
-                p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "N/A")
-                p3.metric("Cumulative PnL %", f"{total_pnl:.2f}%")
-
-            st.dataframe(df_closed, width="stretch", height=350)
-            st.download_button("⬇ Download Paper Trades", data=df_closed.to_csv(index=False),
-                               file_name="paper_trades_log.csv", mime="text/csv",
-                               key="dl_paper_trades")
-
-    # ── Tab 3: Feedback Log ──
-    with tab_feedback:
-        df_fb = _cached_feedback_df()
-        if df_fb.empty:
-            st.info("No feedback log data yet.")
-        else:
-            f1, f2 = st.columns(2)
-            f1.metric("Logged Signals", len(df_fb))
-            if 'confidence' in df_fb.columns:
-                avg_fb_conf = pd.to_numeric(df_fb['confidence'], errors='coerce').mean()
-                f2.metric("Avg Confidence Logged", f"{avg_fb_conf:.1f}%" if pd.notna(avg_fb_conf) else "N/A")
-
-            if 'confidence' in df_fb.columns and 'timestamp' in df_fb.columns:
-                fig = px.scatter(df_fb, x='timestamp', y='confidence', color='direction',
-                                 labels={'confidence': 'Confidence (%)', 'timestamp': 'Time'})
-                fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green")
-                fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig, width="stretch")
-
-            st.dataframe(df_fb, width="stretch", height=350)
-            st.download_button("⬇ Download Feedback Log", data=df_fb.to_csv(index=False),
-                               file_name="feedback_log.csv", mime="text/csv",
-                               key="dl_feedback_log")
-
-    # ── Tab 4: Execution Log ──
-    with tab_exec:
-        _exec_st = _exec.get_status()
-        _mode_disp = "🔴 LIVE" if _exec_st.get("live_trading", False) else "📄 Paper"
-        ec1, ec2, ec3 = st.columns(3)
-        ec1.metric("Execution Mode", _mode_disp)
-        ec2.metric("Auto-Execute", "ON" if _exec_st.get("auto_execute", False) else "OFF")
-        ec3.metric("Keys Configured", "Yes" if _exec_st.get("keys_configured", False) else "No")
-        st.caption("Configure execution in Config Editor → Live Execution section.")
-        st.markdown("---")
-
-        df_exec_log = _cached_execution_log_df(limit=300)
-        if df_exec_log.empty:
-            st.info(
-                "No execution records yet. "
-                "Use the BUY/SELL buttons in the Dashboard to place orders."
-            )
-        else:
-            ex_m1, ex_m2, ex_m3 = st.columns(3)
-            ex_m1.metric("Total Orders", len(df_exec_log))
-            if "mode" in df_exec_log.columns:
-                live_cnt  = (df_exec_log["mode"] == "live").sum()
-                paper_cnt = (df_exec_log["mode"] == "paper").sum()
-                ex_m2.metric("Live Orders", int(live_cnt))
-                ex_m3.metric("Paper Orders", int(paper_cnt))
-
-            st.dataframe(df_exec_log, width="stretch", height=400)
-            st.download_button(
-                "⬇ Download Execution Log",
-                data=df_exec_log.to_csv(index=False),
-                file_name=f"execution_log_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                key="dl_exec_log",
-            )
-
-    # ── Tab 5: Slippage Analytics ─────────────────────────────────────────────
-    with tab_slip:
-        st.subheader("Post-Trade Slippage Analytics")
-        st.caption("Tracks fill price vs. expected signal entry price. Lower slippage = better execution quality.")
-        df_slip = _cached_execution_log_df(limit=500)
-        if df_slip.empty or "slippage_pct" not in df_slip.columns:
-            st.info("No slippage data yet. Slippage is tracked after each order fill.")
-        else:
-            df_slip_valid = df_slip[df_slip["slippage_pct"].notna()].copy()
-            if df_slip_valid.empty:
-                st.info("Orders recorded but no slippage data yet. Make sure expected_price is passed when placing orders.")
-            else:
-                sm1, sm2, sm3, sm4 = st.columns(4)
-                _avg_slip = df_slip_valid["slippage_pct"].mean()
-                _max_slip = df_slip_valid["slippage_pct"].max()
-                _med_slip = df_slip_valid["slippage_pct"].median()
-                _orders_n = len(df_slip_valid)
-                sm1.metric("Orders Tracked", _orders_n)
-                sm2.metric("Avg Slippage", f"{_avg_slip:.4f}%")
-                sm3.metric("Median Slippage", f"{_med_slip:.4f}%")
-                sm4.metric("Max Slippage", f"{_max_slip:.4f}%")
-
-                # Slippage distribution histogram
-                fig_slip = px.histogram(
-                    df_slip_valid, x="slippage_pct", nbins=30,
-                    title="Slippage Distribution (%)",
-                    color_discrete_sequence=["#00d4aa"],
-                    labels={"slippage_pct": "Slippage (%)"},
-                )
-                fig_slip.update_layout(height=280, margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig_slip, width="stretch")
-
-                # Slippage by pair
-                if "pair" in df_slip_valid.columns:
-                    _slip_by_pair = (
-                        df_slip_valid.groupby("pair")["slippage_pct"]
-                        .agg(["mean", "max", "count"])
-                        .reset_index()
-                        .rename(columns={"mean": "Avg %", "max": "Max %", "count": "Orders"})
-                        .sort_values("Avg %", ascending=True)
-                    )
-                    st.dataframe(_slip_by_pair, hide_index=True, width="stretch")
-
-                st.download_button(
-                    "⬇ Download Slippage Data",
-                    data=df_slip_valid.to_csv(index=False),
-                    file_name=f"slippage_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    key="dl_slippage",
-                )
+    """Merged into page_backtest() as the Trade History tab."""
+    st.session_state["_nav_target"] = "Backtest Viewer"
+    st.rerun()
 
 
 # ──────────────────────────────────────────────
@@ -6934,8 +6961,6 @@ elif page == "Config Editor":
     page_config()
 elif page == "Backtest Viewer":
     page_backtest()
-elif page == "Trade Log & History":
-    page_trade_log()
 elif page == "Arbitrage":
     page_arbitrage()
 elif page == "Agent":

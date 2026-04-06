@@ -17,7 +17,7 @@ import threading
 try:
     from config import CLAUDE_HAIKU_MODEL as _CLAUDE_HAIKU_MODEL
 except ImportError:
-    _CLAUDE_HAIKU_MODEL = "claude-haiku-4-5"
+    _CLAUDE_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 import time
 import xml.etree.ElementTree as ET
 from typing import Optional
