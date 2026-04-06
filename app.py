@@ -76,32 +76,38 @@ import data_feeds
 # already guards with "if _mod is not None" or a wrapping try/except.
 try:
     import pdf_export as _pdf
-except Exception:
+except Exception as _e:
+    logging.debug("[App] pdf_export unavailable: %s", _e)
     _pdf = None
 try:
     import llm_analysis as _llm
-except Exception as _llm_import_err:
-    logging.warning("[App] llm_analysis import failed: %s", _llm_import_err, exc_info=True)
+except Exception as _e:
+    logging.debug("[App] llm_analysis unavailable: %s", _e)
     _llm = None
 try:
     import news_sentiment as _news_mod
-except Exception:
+except Exception as _e:
+    logging.debug("[App] news_sentiment unavailable: %s", _e)
     _news_mod = None
 try:
     import whale_tracker as _whale_mod
-except Exception:
+except Exception as _e:
+    logging.debug("[App] whale_tracker unavailable: %s", _e)
     _whale_mod = None
 try:
     import ml_predictor as _ml_mod
-except Exception:
+except Exception as _e:
+    logging.debug("[App] ml_predictor unavailable: %s", _e)
     _ml_mod = None
 try:
     import stress_test as _stress_mod
-except Exception:
+except Exception as _e:
+    logging.debug("[App] stress_test unavailable: %s", _e)
     _stress_mod = None
 try:
     import agent as _agent
-except Exception:
+except Exception as _e:
+    logging.debug("[App] agent unavailable: %s", _e)
     _agent = None
 
 # ── Sentry error monitoring (optional — set SUPERGROK_SENTRY_DSN env var) ──
