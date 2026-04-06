@@ -2156,66 +2156,112 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
         return f'<div style="display:flex;gap:0;margin:6px 0 2px 0">{"".join(segs)}</div>'
 
     def _card(r: dict) -> str:
-        pair       = r.get("pair", "?")
-        sym        = pair.replace("/USDT", "")
-        conf       = float(r.get("confidence_avg_pct") or 0)
-        direction  = r.get("direction", "WAIT")
-        entry      = r.get("entry")
-        stop       = r.get("stop_loss")
-        is_hc      = r.get("high_conf", False)
-        score      = _score(conf)
-        label, color, bg, emoji = _action_style(direction)
+        pair      = r.get("pair", "?")
+        sym       = pair.replace("/USDT", "")
+        conf      = float(r.get("confidence_avg_pct") or 0)
+        direction = r.get("direction", "WAIT")
+        entry     = r.get("entry")
+        stop      = r.get("stop_loss")
+        tgt       = r.get("exit") or r.get("tp1")
+        is_hc     = r.get("high_conf", False)
+        score     = _score(conf)
+        label, color, _bg, _emoji = _action_style(direction)
 
-        # Live price from WebSocket
-        ws = ws_prices.get(pair, {})
-        if ws and ws.get("price"):
-            price_str = f"${ws['price']:,.4f}" if ws["price"] < 1 else f"${ws['price']:,.2f}"
-            chg       = ws.get("change_24h_pct", 0) or 0
-            chg_color = "#00d4aa" if chg >= 0 else "#f6465d"
-            chg_str   = f'<span style="color:{chg_color};font-size:11px;">{chg:+.2f}%</span>'
-            live_html = (
-                f'<div style="font-size:15px;font-weight:700;color:#e8ecf4;'
-                f'font-family:JetBrains Mono,monospace;line-height:1.2;">'
-                f'{price_str} {chg_str}</div>'
-            )
+        # Direction arrow + border color (matches top_picks_hero_html exactly)
+        d = direction.upper()
+        if "BUY" in d:
+            arrow, border_col = "▲", "rgba(0,212,170,0.35)"
+        elif "SELL" in d:
+            arrow, border_col = "▼", "rgba(246,70,93,0.35)"
         else:
-            p = r.get("price_usd")
-            live_html = (
-                f'<div style="font-size:15px;font-weight:700;color:#e8ecf4;'
-                f'font-family:JetBrains Mono,monospace;">'
-                f'{"$" + f"{p:,.4f}" if p and p < 1 else "$" + f"{p:,.2f}" if p else "—"}</div>'
-            )
+            arrow, border_col = "■", "rgba(245,158,11,0.30)"
 
+        # Donut gauge SVG (identical to top_picks_hero_html)
+        gauge_pct   = conf / 100
+        r_o, cx, cy, sw = 28, 34, 34, 9
+        circ        = 2 * 3.141592653589793 * (r_o - sw / 2)
+        dash_filled = circ * gauge_pct
+        dash_empty  = circ - dash_filled
+        gauge_svg = (
+            f'<svg width="68" height="68" viewBox="0 0 68 68">'
+            f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
+            f'stroke="rgba(255,255,255,0.07)" stroke-width="{sw}"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
+            f'stroke="{color}" stroke-width="{sw}" stroke-linecap="round" '
+            f'stroke-dasharray="{dash_filled:.1f} {dash_empty:.1f}" '
+            f'transform="rotate(-90 {cx} {cy})"/>'
+            f'<text x="{cx}" y="{cy+1}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-size="15" font-weight="800" fill="{color}">{score}</text>'
+            f'<text x="{cx}" y="{cy+14}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-size="7" fill="rgba(255,255,255,0.4)">/10</text>'
+            f'</svg>'
+        )
+
+        # TOP PICK badge
         hc_badge = (
-            '<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
-            'border:1px solid rgba(0,212,170,0.3);border-radius:99px;'
-            'font-size:9px;font-weight:800;padding:1px 7px;letter-spacing:0.5px;">'
-            '⚡ TOP PICK</span>'
+            f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
+            f'font-size:9px;font-weight:800;padding:2px 8px;margin-left:6px;'
+            f'letter-spacing:0.5px">⚡ TOP PICK</span>'
         ) if is_hc else ""
 
-        entry_str = f"${entry:,.4f}" if entry and entry < 1 else (f"${entry:,.2f}" if entry else "—")
-        stop_str  = f"${stop:,.4f}"  if stop  and stop  < 1 else (f"${stop:,.2f}"  if stop  else "—")
+        # Price formatting helper
+        def _fmt(p):
+            if p is None:
+                return "—"
+            return f"${p:,.4f}" if p < 1 else f"${p:,.2f}"
+
+        # Live price + 24h change
+        ws        = ws_prices.get(pair, {})
+        price     = ws.get("price") or r.get("price_usd")
+        chg       = ws.get("change_24h_pct", 0) or 0
+        chg_c     = "#00d4aa" if chg >= 0 else "#f6465d"
+        price_str = _fmt(price) if price else "—"
+        chg_str   = (
+            f'<span style="color:{chg_c};font-size:11px">{chg:+.2f}%</span>'
+            if ws else ""
+        )
+
+        # Plain-English one-liner (matches top_picks_hero_html)
+        if "BUY" in d:
+            plain = f"Model thinks <strong style='color:{color}'>{sym}</strong> price will go UP"
+        elif "SELL" in d:
+            plain = f"Model thinks <strong style='color:{color}'>{sym}</strong> price will go DOWN"
+        else:
+            plain = f"Model sees <strong style='color:{color}'>no clear direction</strong> yet"
 
         return f"""
 <div style="
-    background:linear-gradient(135deg,rgba(17,21,32,0.95),rgba(24,29,46,0.9));
-    border:1px solid {color}33;
+    background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));
+    border:1px solid {border_col};
+    border-top:3px solid {color};
     border-radius:16px;
-    padding:16px 18px;
+    padding:20px;
+    box-sizing:border-box;
     position:relative;
-    overflow:hidden;
-    box-shadow:0 4px 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.04);
-    transition:transform 0.15s ease,box-shadow 0.15s ease;
-    min-height:170px;
 ">
-  <div style="position:absolute;top:-20px;left:-20px;width:80px;height:80px;border-radius:50%;background:{color};opacity:0.06;filter:blur(20px);"></div>
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:18px;font-weight:900;color:#e8ecf4;font-family:JetBrains Mono,monospace;letter-spacing:-0.5px;">{sym}</span>{hc_badge}<span style="font-size:22px;background:{bg};border-radius:8px;padding:2px 8px;">{emoji}</span></div>
-
-  {live_html}
-  <div style="font-size:26px;font-weight:900;color:{color};letter-spacing:-0.5px;line-height:1;margin:6px 0 4px 0;text-shadow:0 0 20px {color}55;">{label}</div>
-  {_score_bar(score, color)}
-  <div style="font-size:11px;color:rgba(168,180,200,0.55);margin-bottom:8px;">Confidence: <span style="color:{color};font-weight:700;">{score}/10</span> &nbsp;·&nbsp; {conf:.0f}%</div>
-  <div style="display:flex;gap:12px;font-size:11px;"><div><div style="color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:0.8px;font-size:9px;font-weight:600;">Entry</div><div style="color:#e8ecf4;font-family:JetBrains Mono,monospace;font-weight:600;">{entry_str}</div></div><div><div style="color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:0.8px;font-size:9px;font-weight:600;">Stop Loss</div><div style="color:#f6465d;font-family:JetBrains Mono,monospace;font-weight:600;">{stop_str}</div></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <div style="font-size:22px;font-weight:800;color:#e8ecf4;letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
+    </div>
+    <div style="text-align:center">{gauge_svg}</div>
+  </div>
+  <div style="margin:12px 0 8px">
+    <span style="background:{color};color:#060f18;border-radius:999px;padding:5px 16px;
+                 font-size:14px;font-weight:800;letter-spacing:0.3px">{arrow} {label}</span>
+  </div>
+  <div style="font-size:12px;color:rgba(200,210,230,0.75);margin-bottom:10px;line-height:1.5">{plain}</div>
+  <div style="display:flex;gap:12px;font-size:11px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
+    <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
+         <span style="color:#e8ecf4;font-size:13px;font-weight:600">{price_str} {chg_str}</span></div>
+    <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
+         <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
+    <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
+         <span style="color:#f6465d;font-weight:600">{_fmt(stop)}</span></div>
+    <div><span style="color:rgba(168,180,200,0.45)">Target</span><br/>
+         <span style="color:#00d4aa;font-weight:600">{_fmt(tgt)}</span></div>
+  </div>
 </div>"""
 
     # Build 3-column grid
