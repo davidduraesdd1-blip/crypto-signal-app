@@ -118,6 +118,8 @@ def _parametric_var(
     """Gaussian parametric VaR (fallback when insufficient historical data)."""
     z_scores = {0.90: 1.282, 0.95: 1.645, 0.99: 2.326}
     z = z_scores.get(confidence, 1.645)
+    # Guard: confidence=1.0 makes (1-confidence)=0 → ZeroDivisionError in CVaR formula
+    confidence = min(confidence, 0.9999)
 
     var_pct  = max(0.0, -(mu - z * std))
     # CVaR for normal distribution: phi(z) / (1-c) * std - mu
@@ -227,7 +229,8 @@ def compute_var_summary(
         down_std = float(np.std(pnl[pnl < 0])) if (pnl < 0).any() else std
 
         sharpe  = round(mu / std, 3) if std > 0 else 0.0
-        sortino = round(mu / down_std, 3) if down_std > 0 else 0.0
+        # Sortino: when down_std==0 all returns are non-negative → perfect downside profile
+        sortino = round(mu / down_std, 3) if down_std > 0 else (999.9 if mu > 0 else 0.0)
 
         # Max drawdown: max cumulative loss in equity curve
         equity = np.cumprod(1 + pnl / 100)

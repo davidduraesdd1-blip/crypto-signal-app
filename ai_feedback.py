@@ -528,8 +528,8 @@ def kelly_position_size(
         finally:
             conn.close()
 
-        avg_win_pct  = float(wins  or 2.0)    # default 2% win
-        avg_loss_pct = float(losses or 1.5)   # default 1.5% loss
+        avg_win_pct  = float(wins)  if wins  is not None else 2.0   # default 2% win
+        avg_loss_pct = float(losses) if losses is not None else 1.5  # default 1.5% loss
 
     b = avg_win_pct / max(avg_loss_pct, 0.01)   # reward:risk ratio
     kelly = (w * b - (1 - w)) / b               # Kelly formula
