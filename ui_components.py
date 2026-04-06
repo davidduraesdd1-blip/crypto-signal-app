@@ -2176,14 +2176,14 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
         else:
             arrow, border_col = "■", "rgba(245,158,11,0.30)"
 
-        # Donut gauge SVG (identical to top_picks_hero_html)
+        # Donut gauge SVG — compact size (52px) for grid cards
         gauge_pct   = conf / 100
-        r_o, cx, cy, sw = 28, 34, 34, 9
+        r_o, cx, cy, sw = 21, 26, 26, 7
         circ        = 2 * 3.141592653589793 * (r_o - sw / 2)
         dash_filled = circ * gauge_pct
         dash_empty  = circ - dash_filled
         gauge_svg = (
-            f'<svg width="68" height="68" viewBox="0 0 68 68">'
+            f'<svg width="52" height="52" viewBox="0 0 52 52">'
             f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
             f'stroke="rgba(255,255,255,0.07)" stroke-width="{sw}"/>'
             f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
@@ -2191,9 +2191,9 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
             f'stroke-dasharray="{dash_filled:.1f} {dash_empty:.1f}" '
             f'transform="rotate(-90 {cx} {cy})"/>'
             f'<text x="{cx}" y="{cy+1}" text-anchor="middle" dominant-baseline="middle" '
-            f'font-size="15" font-weight="800" fill="{color}">{score}</text>'
-            f'<text x="{cx}" y="{cy+14}" text-anchor="middle" dominant-baseline="middle" '
-            f'font-size="7" fill="rgba(255,255,255,0.4)">/10</text>'
+            f'font-size="12" font-weight="800" fill="{color}">{score}</text>'
+            f'<text x="{cx}" y="{cy+11}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-size="6" fill="rgba(255,255,255,0.4)">/10</text>'
             f'</svg>'
         )
 
@@ -2235,26 +2235,26 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
     background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));
     border:1px solid {border_col};
     border-top:3px solid {color};
-    border-radius:16px;
-    padding:20px;
+    border-radius:12px;
+    padding:14px;
     box-sizing:border-box;
     position:relative;
 ">
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
-      <div style="font-size:22px;font-weight:800;color:#e8ecf4;letter-spacing:-0.5px">{sym}</div>
-      <div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
+      <div style="font-size:18px;font-weight:800;color:#e8ecf4;letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
-  <div style="margin:12px 0 8px">
-    <span style="background:{color};color:#060f18;border-radius:999px;padding:5px 16px;
-                 font-size:14px;font-weight:800;letter-spacing:0.3px">{arrow} {label}</span>
+  <div style="margin:8px 0 6px">
+    <span style="background:{color};color:#060f18;border-radius:999px;padding:4px 12px;
+                 font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {label}</span>
   </div>
-  <div style="font-size:12px;color:rgba(200,210,230,0.75);margin-bottom:10px;line-height:1.5">{plain}</div>
-  <div style="display:flex;gap:12px;font-size:11px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
+  <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
+  <div style="display:flex;gap:10px;font-size:10px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
-         <span style="color:#e8ecf4;font-size:13px;font-weight:600">{price_str} {chg_str}</span></div>
+         <span style="color:#e8ecf4;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
          <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
@@ -2264,14 +2264,14 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
   </div>
 </div>"""
 
-    # Build 3-column grid
+    # Build grid — tighter min-width for compact cards
     cards_html = "".join(_card(r) for r in results)
 
     return f"""
 <div style="
     display:grid;
-    grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
-    gap:14px;
+    grid-template-columns:repeat(auto-fill,minmax(210px,1fr));
+    gap:12px;
     margin:8px 0 24px 0;
 ">
   {cards_html}
