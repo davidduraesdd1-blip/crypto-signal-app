@@ -283,9 +283,12 @@ def _fetch_bnb_whales(price_usd: float) -> list[dict]:
             val_hex = tx.get("value") or "0x0"
             try:
                 val_bnb = int(val_hex, 16) / 1e18
-            except ValueError:
+            except (ValueError, TypeError):
                 # BSCScan occasionally returns decimal strings instead of hex
-                val_bnb = int(val_hex) / 1e18 if str(val_hex).lstrip("-").isdigit() else 0.0
+                try:
+                    val_bnb = int(val_hex) / 1e18
+                except (ValueError, TypeError):
+                    val_bnb = 0.0
             amount_usd = val_bnb * price_usd
             if amount_usd >= WHALE_THRESHOLD_USD:
                 direction = "distribution" if len(tx.get("input", "0x")) > 10 else "accumulation"

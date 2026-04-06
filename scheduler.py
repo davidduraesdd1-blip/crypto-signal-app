@@ -77,7 +77,8 @@ def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
         if s_m <= e_m:            # same-day window e.g. 09:00–17:00
             return s_m <= now_m < e_m
         return now_m >= s_m or now_m < e_m   # overnight e.g. 22:00–06:00
-    except Exception:
+    except Exception as _e:
+        logging.debug("[Scheduler] quiet_hours parse error: %s", _e)
         return False
 
 

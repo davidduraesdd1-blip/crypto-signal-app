@@ -116,7 +116,7 @@ class RateLimiter:
 _RateLimiter = RateLimiter
 
 _BINANCE_LIMITER   = RateLimiter(calls_per_second=5.0)   # Binance allows ~1200/min
-_COINGECKO_LIMITER = RateLimiter(calls_per_second=0.4)   # 25 req/min free
+_COINGECKO_LIMITER = RateLimiter(calls_per_second=0.4)   # ~24 req/min (conservative — free tier allows 30)
 _DERIBIT_LIMITER   = RateLimiter(calls_per_second=2.0)   # Deribit: generous
 _EXCHANGE_LIMITER  = RateLimiter(calls_per_second=1.0)   # Generic for other exchanges
 

@@ -2344,7 +2344,7 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
 
     # SVG circle progress ring
     r   = 28
-    circ = 2 * 3.14159 * r
+    circ = 2 * 3.141592653589793 * r
     dash = circ * pct / 100
 
     return f"""
@@ -2635,7 +2635,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
         # Donut gauge — pure SVG, no deps
         gauge_pct = conf / 100
         r_outer, cx, cy, sw = 28, 34, 34, 9
-        circ = 2 * 3.14159 * (r_outer - sw / 2)
+        circ = 2 * 3.141592653589793 * (r_outer - sw / 2)
         dash_filled = circ * gauge_pct
         dash_empty  = circ - dash_filled
         gauge_svg = (
@@ -2722,7 +2722,7 @@ def confidence_gauge_svg(score: int, color: str = "#00d4aa",
     r_o   = size // 2 - 6
     cx = cy = size // 2
     sw    = max(7, size // 10)
-    circ  = 2 * 3.14159 * (r_o - sw / 2)
+    circ  = 2 * 3.141592653589793 * (r_o - sw / 2)
     filled = circ * pct
     empty  = circ - filled
 
