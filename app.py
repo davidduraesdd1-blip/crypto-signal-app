@@ -667,22 +667,6 @@ if _demo_val:
     )
 _demo_mode = _demo_val
 
-# ── Tier 2 Pairs toggle (#88) ─────────────────────────────────────────────────
-_tier2_val = st.sidebar.checkbox(
-    "Include Tier 2 Pairs (20 pairs)",
-    key="include_tier2",
-    value=st.session_state.get("include_tier2", False),
-    help="Scans 20 additional mid-cap pairs (NEAR, APT, POL, OP, ARB, ATOM, FIL, INJ, PENDLE, WIF, etc.). "
-         "Adds ~30-60s to scan time. Lower liquidity — signals may be less reliable.",
-)
-if _tier2_val:
-    st.sidebar.markdown(
-        '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);'
-        'border-radius:6px;padding:6px 10px;font-size:11px;color:#f59e0b;margin-top:-6px">'
-        '⚠️ Tier 2 pairs have lower liquidity and may have less accurate signals</div>',
-        unsafe_allow_html=True,
-    )
-
 # ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
 st.sidebar.markdown("")
 _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
@@ -1197,10 +1181,8 @@ def _scan_progress():
         _prog      = _scan_state.get("progress") or _mem_prog or _st.get("progress", 0)
         _pair      = _scan_state.get("progress_pair") or _mem_pair or _st.get("pair", "")
         _running   = _scan_state["running"]
-    # Account for Tier 2 pairs when enabled
-    _t2_enabled = st.session_state.get("include_tier2", False)
     import config as _cfg
-    _total = len(model.PAIRS) + (len(_cfg.TIER2_BINANCE_PAIRS) if _t2_enabled else 0)
+    _total = len(model.PAIRS)
 
     # Engaging loading screen: SVG progress ring + rotating crypto fun facts
     _fact_idx = int(time.time() / 4) % 15
@@ -1366,16 +1348,8 @@ def page_dashboard():
             st.info("No scan results yet — click **Run Scan** in the sidebar to begin.")
         return  # A4: guard — always return on empty results, prevents results[0] IndexError
 
-    # Separate Tier 1 and Tier 2 results (#88)
-    tier1_results = [r for r in results if r.get("tier", 1) == 1]
-    tier2_results = [r for r in results if r.get("tier", 1) == 2]
-    # Use Tier 1 results for all main-section display logic
-    results = tier1_results if tier1_results else results
-
     if st.session_state.get("scan_timestamp"):
-        _t1_count = len(tier1_results) if tier1_results else len(results)
-        _t2_note = f" + {len(tier2_results)} Tier 2" if tier2_results else ""
-        st.success(f"Scan complete — {_t1_count}{_t2_note} pairs | {st.session_state['scan_timestamp']}")
+        st.success(f"Scan complete — {len(results)} pairs | {st.session_state['scan_timestamp']}")
 
     # ── Market stat bar (top strip with live market stats) ───────────────────
     _stat_bar_data = {}
@@ -2164,61 +2138,6 @@ def page_dashboard():
             _ui.render_threshold_alerts_panel(results, _sg_level_val)
         except Exception:
             pass
-
-        st.markdown("---")
-
-        # ── Tier 2 Pairs Results (#88) — collapsible section ──────────────────────
-        if tier2_results:
-            with st.expander(
-                f"📊 Tier 2 Pairs — {len(tier2_results)} mid-cap coins scanned",
-                expanded=False,
-            ):
-                st.markdown(
-                    '<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);'
-                    'border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#f59e0b">'
-                    '⚠️ <b>Tier 2 pairs have lower liquidity and may have less accurate signals.</b> '
-                    'Use these results as supplementary context only — verify before acting.'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-                # Summary metrics for Tier 2
-                _t2_hc = [r for r in tier2_results if r.get("high_conf")]
-                _t2_buy  = sum(1 for r in tier2_results if "BUY"  in r.get("direction", ""))
-                _t2_sell = sum(1 for r in tier2_results if "SELL" in r.get("direction", ""))
-                _t2_mc = st.columns(4)
-                _t2_mc[0].metric("Tier 2 Scanned", len(tier2_results))
-                _t2_mc[1].metric("Top Picks ⚡", len(_t2_hc))
-                _t2_mc[2].metric("Buy Signals", f"▲{_t2_buy}")
-                _t2_mc[3].metric("Sell Signals", f"▼{_t2_sell}")
-                # Coin cards for Tier 2
-                _t2_sorted = sorted(
-                    tier2_results,
-                    key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)),
-                    reverse=True,
-                )
-                _all_ws_t2 = _live_prices  # PERF-28: reuse single ws prices fetch
-                st.markdown(
-                    _ui.coin_cards_grid_html(_t2_sorted, ws_prices=_all_ws_t2,
-                                            squeeze_data=_squeeze_data),
-                    unsafe_allow_html=True,
-                )
-                # Summary table
-                _t2_rows = []
-                for _t2r in _t2_sorted:
-                    _t2_tp = _t2r.get("tp1")
-                    _t2_rows.append({
-                        "Coin":       _t2r.get("pair", "N/A"),
-                        "Signal":     _t2r.get("direction", "N/A"),
-                        "Strength":   f"{_t2r.get('confidence_avg_pct', 0)}%",
-                        "Entry":      f"${_t2r['entry']:,.4f}"   if _t2r.get("entry")    else "N/A",
-                        "Take Profit":f"${_t2_tp:,.4f}"          if _t2_tp              else "N/A",
-                        "Stop Loss":  f"${_t2r['stop_loss']:,.4f}" if _t2r.get("stop_loss") else "N/A",
-                        "Top Pick":   "⚡ Yes" if _t2r.get("high_conf") else "—",
-                    })
-                if _t2_rows:
-                    st.dataframe(pd.DataFrame(_t2_rows).set_index("Coin"), width="stretch")
-        elif st.session_state.get("include_tier2"):
-            st.info("Tier 2 scan is enabled — run a new scan to include Tier 2 pairs.")
 
         st.markdown("---")
         # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
@@ -3506,11 +3425,7 @@ def _run_scan_thread():
     try:
         # st.session_state is only available in the Streamlit request context;
         # background threads (APScheduler) have no session — use safe fallback.
-        try:
-            _include_t2 = st.session_state.get("include_tier2", False)
-        except Exception:
-            _include_t2 = False
-        results = model.run_scan(progress_callback=_progress_cb, include_tier2=_include_t2)
+        results = model.run_scan(progress_callback=_progress_cb, include_tier2=False)
         model.append_to_master(results)
         # F1/F2/F4/F6/F7: resolve past outcomes, update weights, check drift
         try:
