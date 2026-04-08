@@ -54,9 +54,10 @@ def compute_accuracy(pair: str = None, window_days: int = None) -> dict:
         window_days:        which window was used (G3 dual-window display)
     """
     days = window_days if window_days is not None else _LOOKBACK_DAYS
-    conn = db._get_conn()
+    conn = None
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
+        conn = db._get_conn()
         if pair:
             rows = conn.execute(
                 """
@@ -83,7 +84,8 @@ def compute_accuracy(pair: str = None, window_days: int = None) -> dict:
         logger.error(f"compute_accuracy DB read failed: {e}")
         return _empty_result(pair)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     if len(rows) < _MIN_SAMPLES:
         return {

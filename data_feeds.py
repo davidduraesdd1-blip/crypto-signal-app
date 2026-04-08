@@ -1668,7 +1668,7 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
     """
     keys = _load_api_keys()
     api_key = (
-        os.environ.get("LUNARCRUSH_API_KEY", "").strip()
+        _os.environ.get("LUNARCRUSH_API_KEY", "").strip()
         or keys.get("lunarcrush_key", "").strip()
     )
     if not api_key:
