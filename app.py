@@ -1161,7 +1161,7 @@ def _auto_refresh_fragment():
 # stable across rerenders. Defining @st.fragment inside a conditional block causes
 # Streamlit's _check_serializable to throw KeyError($$ID-...-None) on the rerender
 # where the condition is False, because the key was registered in the previous run.
-@st.fragment(run_every=1)
+@st.fragment(run_every=3)
 def _scan_progress():
     # Early-return when not scanning — keeps fragment registered without rendering anything.
     if not st.session_state.get("scan_running", False) and not _SCAN_STATUS.get("running", False):
@@ -1181,7 +1181,6 @@ def _scan_progress():
         _prog      = _scan_state.get("progress") or _mem_prog or _st.get("progress", 0)
         _pair      = _scan_state.get("progress_pair") or _mem_pair or _st.get("pair", "")
         _running   = _scan_state["running"]
-    import config as _cfg
     _total = len(model.PAIRS)
 
     # Engaging loading screen: SVG progress ring + rotating crypto fun facts
@@ -1191,22 +1190,16 @@ def _scan_progress():
         unsafe_allow_html=True,
     )
 
-    # Progressive card grid — real cards for completed pairs + skeletons for pending
-    _partial = model.get_partial_scan_results()
-    _n_done  = len(_partial)
-    _n_wait  = _total - _n_done
+    # Simple text progress counter — avoids regenerating full card HTML every 3s
+    # which would flood the server with megabytes of markup during a 10-minute scan.
+    _n_done = _prog
     if _n_done > 0:
         st.markdown(
             f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
             f'font-weight:600;margin:4px 0 8px 0;">'
-            f'⚡ {_n_done} of {_total} coins ready — more arriving...</div>',
+            f'⚡ {_n_done} of {_total} coins scanned — results will appear when complete</div>',
             unsafe_allow_html=True,
         )
-    st.markdown(
-        _ui.coin_cards_grid_html(_partial, ws_prices=_ws.get_all_prices())
-        + (_ui.skeleton_cards_html(_n_wait) if _n_wait > 0 else ""),
-        unsafe_allow_html=True,
-    )
 
     # Detect completion → trigger full-page rerun to show final results
     if not _st.get("running", False) and not _running:
