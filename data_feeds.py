@@ -2043,9 +2043,10 @@ def get_defillama_tvl(pair: str) -> dict:
             return result
 
         current_tvl = float(history[-1].get('tvl') or 0.0)
-        # Find the data point closest to 7 days ago
+        # Find the data point closest to 7 days ago — exclude entries with missing 'date'
         target_ts = now - 7 * 86400
-        week_ago = min(history, key=lambda x: abs((x.get('date') or 0) - target_ts))
+        _dated_history = [h for h in history if h.get('date')]
+        week_ago = min(_dated_history, key=lambda x: abs(x['date'] - target_ts)) if _dated_history else history[-1]
         tvl_7d_ago = float(week_ago.get('tvl') or 0.0)
         change_7d = ((current_tvl - tvl_7d_ago) / tvl_7d_ago * 100) if tvl_7d_ago > 0 else 0.0
 
@@ -3198,7 +3199,7 @@ def get_fear_greed() -> dict:
             return {"value": 50, "label": "Neutral", "bias": 0.0, "signal": "NEUTRAL",
                     "error": "Empty data from alternative.me"}
         data  = _fng_items[0]
-        value = int(data.get("value", 50))
+        value = max(0, min(100, int(data.get("value", 50))))  # clamp to valid 0-100 range
         label = data.get("value_classification", "Neutral")
 
         # Contrarian bias calculation
@@ -7015,7 +7016,9 @@ def fetch_wallet_holdings(address: str) -> dict:
                 for tok in (data.get("result") or []):
                     decimals = int(tok.get("tokenDecimal") or 18)
                     raw_bal = int(tok.get("balance") or 0)
-                    bal = raw_bal / (10 ** decimals) if decimals else raw_bal
+                    # Use decimals directly; or 18 ensures 0-decimal tokens (extremely rare) don't
+                    # skip scaling — raw_bal unscaled would be a huge integer not a real balance
+                    bal = raw_bal / (10 ** (decimals or 18))
                     tokens.append({
                         "symbol":       tok.get("tokenSymbol") or "",
                         "balance":      bal,

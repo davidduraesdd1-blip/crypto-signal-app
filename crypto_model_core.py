@@ -1309,7 +1309,14 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
         with _weights_lock:
             agent_accuracy = _agent_acc_cache["value"] if _agent_acc_cache["valid"] else None
         if agent_accuracy is None:
-            agent_accuracy = _db.get_agent_accuracy_weights(days=30)
+            try:
+                agent_accuracy = _db.get_agent_accuracy_weights(days=30)
+            except Exception as _acc_err:
+                logging.warning("[core] agent_accuracy DB read failed: %s", _acc_err)
+                agent_accuracy = {}
+        # Guard: ensure it's always a dict so .get() never raises AttributeError
+        if not isinstance(agent_accuracy, dict):
+            agent_accuracy = {}
 
         named_agents = [
             ('trend',     agent_vote_trend,     (adx, supertrend_up, macd_line, macd_sig)),
