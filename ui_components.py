@@ -4127,67 +4127,64 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
         _st.info("Run a scan to generate liquidation cluster data.")
         return
 
-    # Plotly heatmap — per-coin stacked bar (long liq red, short liq green, current blue)
+    # Plotly chart — % distance from current price (normalised so BTC/XRP coexist on same axis)
+    # Long liq is BELOW price → shown as negative %; Short liq is ABOVE → positive %
     _fig = _go.Figure()
     _table_rows = []
+    _syms, _long_pcts, _short_pcts, _cascade_colors = [], [], [], []
 
     for _pair, _ld in list(liq_data.items())[:8]:
         _sym   = _pair.replace("/USDT", "")
         _price = _ld["price"]
         _tll   = _ld["top_long_liq"]
         _tsl   = _ld["top_short_liq"]
-        _cs    = _ld["cascade_score"]
         _css   = _ld["cascade_signal"]
         _oi_bn = _ld["oi_usd"] / 1e9
 
-        # Current price bar
-        _fig.add_trace(_go.Bar(
-            name=_sym, x=[_sym], y=[_price],
-            marker_color="rgba(59,130,246,0.7)",
-            showlegend=False,
-            hovertemplate=f"<b>{_sym}</b><br>Price: ${_price:,.4f}<extra></extra>",
-        ))
-        # Long liquidation cluster marker
-        if _tll:
-            _fig.add_scatter(
-                x=[_sym], y=[_tll],
-                mode="markers+text",
-                marker=dict(symbol="triangle-down", size=14, color="#ef4444"),
-                text=[f"${_tll:,.2f}"], textposition="bottom center",
-                textfont=dict(size=8, color="#ef4444"),
-                name=f"Long Liq {_sym}", showlegend=False,
-                hovertemplate=f"Long liq cluster: ${_tll:,.4f}<extra>{_sym}</extra>",
-            )
-        # Short liquidation cluster marker
-        if _tsl:
-            _fig.add_scatter(
-                x=[_sym], y=[_tsl],
-                mode="markers+text",
-                marker=dict(symbol="triangle-up", size=14, color="#22c55e"),
-                text=[f"${_tsl:,.2f}"], textposition="top center",
-                textfont=dict(size=8, color="#22c55e"),
-                name=f"Short Liq {_sym}", showlegend=False,
-                hovertemplate=f"Short liq cluster: ${_tsl:,.4f}<extra>{_sym}</extra>",
-            )
+        _long_pct  = round((_tll - _price) / _price * 100, 2) if _tll else None   # negative
+        _short_pct = round((_tsl - _price) / _price * 100, 2) if _tsl else None   # positive
 
+        _syms.append(_sym)
+        _long_pcts.append(_long_pct if _long_pct is not None else 0)
+        _short_pcts.append(_short_pct if _short_pct is not None else 0)
         _cs_color = {"EXTREME": "#ef4444", "HIGH": "#f59e0b",
                      "MODERATE": "#f59e0b", "LOW": "#22c55e"}.get(_css, "#6b7280")
+        _cascade_colors.append(_cs_color)
+
         _table_rows.append({
-            "Coin":       _sym,
-            "Price":      f"${_price:,.4f}" if _price < 10 else f"${_price:,.2f}",
-            "Long Liq ▼": f"${_tll:,.4f}" if _tll and _tll < 10 else (f"${_tll:,.2f}" if _tll else "—"),
-            "Short Liq ▲":f"${_tsl:,.4f}" if _tsl and _tsl < 10 else (f"${_tsl:,.2f}" if _tsl else "—"),
-            "OI ($B)":    f"${_oi_bn:.2f}B",
-            "Risk":       _css,
+            "Coin":        _sym,
+            "Price":       f"${_price:,.4f}" if _price < 10 else f"${_price:,.2f}",
+            "Long Liq ▼":  (f"{_long_pct:+.1f}%" if _long_pct is not None else "—"),
+            "Short Liq ▲": (f"{_short_pct:+.1f}%" if _short_pct is not None else "—"),
+            "OI ($B)":     f"${_oi_bn:.2f}B",
+            "Risk":        _css,
         })
+
+    # Long liq bars (red, below zero)
+    _fig.add_trace(_go.Bar(
+        name="Long Liq ▼", x=_syms, y=_long_pcts,
+        marker_color="rgba(239,68,68,0.65)",
+        hovertemplate="<b>%{x}</b><br>Long liq: %{y:.1f}% from price<extra></extra>",
+    ))
+    # Short liq bars (green, above zero)
+    _fig.add_trace(_go.Bar(
+        name="Short Liq ▲", x=_syms, y=_short_pcts,
+        marker_color="rgba(34,197,94,0.65)",
+        hovertemplate="<b>%{x}</b><br>Short liq: %{y:.1f}% from price<extra></extra>",
+    ))
+    # Zero line = current price reference
+    _fig.add_hline(y=0, line_color="rgba(148,163,184,0.4)", line_width=1)
 
     _fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
         font_color="#94a3b8",
-        yaxis=dict(title="Price (USD)", gridcolor="rgba(148,163,184,0.08)"),
+        yaxis=dict(title="% from current price", gridcolor="rgba(148,163,184,0.08)",
+                   tickformat=".1f", ticksuffix="%"),
         xaxis=dict(gridcolor="rgba(0,0,0,0)"),
-        height=300, margin=dict(l=40, r=20, t=10, b=20),
-        barmode="overlay",
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=9),
+                    bgcolor="rgba(0,0,0,0)"),
+        height=280, margin=dict(l=50, r=20, t=10, b=20),
+        barmode="group",
     )
     _st.plotly_chart(_fig, width="stretch", config={"displayModeBar": False})
 
@@ -4196,8 +4193,9 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
         _st.dataframe(_pd.DataFrame(_table_rows), width="stretch", hide_index=True)
 
     _st.caption(
-        "▼ Red = estimated long liquidation cluster (price falls → longs force-closed). "
-        "▲ Green = estimated short liquidation cluster (price rises → shorts force-closed). "
+        "Red bars = % below current price where long liquidations cluster (price falls → longs force-closed). "
+        "Green bars = % above current price where short liquidations cluster (price rises → shorts force-closed). "
+        "Normalised to % so BTC and small-caps are comparable on one chart. "
         "Risk score based on OI size × leverage proximity. "
         "Model uses 5×/10×/20×/50×/100× leverage distribution — same methodology as Coinglass free tier."
     )
