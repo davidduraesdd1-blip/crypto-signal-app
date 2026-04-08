@@ -2104,7 +2104,8 @@ def price_ticker_strip_html(prices: list[dict]) -> str:
 
 # ─── Coin Card Grid (teen-friendly overview of all coins) ───────────────────
 
-def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
+def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
+                         squeeze_data: dict | None = None) -> str:
     """
     Render a 2- or 3-column grid of coin signal cards for quick at-a-glance view.
     Designed to be immediately understandable by a 13-year-old:
@@ -2205,6 +2206,15 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
         ) if is_hc else ""
 
+        # Cascade risk badge (shown when squeeze_data says HIGH_RISK)
+        _sq_sig = (squeeze_data or {}).get(pair, "NORMAL")
+        liq_badge = (
+            '<span style="background:rgba(239,68,68,0.15);color:#ef4444;'
+            'border:1px solid rgba(239,68,68,0.35);border-radius:99px;'
+            'font-size:9px;font-weight:800;padding:2px 7px;margin-left:4px;'
+            'letter-spacing:0.4px">⚠ LIQ RISK</span>'
+        ) if _sq_sig in ("HIGH_RISK", "EXTREME") else ""
+
         # Price formatting helper
         def _fmt(p):
             if p is None:
@@ -2243,7 +2253,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None) -> str:
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
       <div style="font-size:18px;font-weight:800;color:#e8ecf4;letter-spacing:-0.5px">{sym}</div>
-      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
+      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}{liq_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
@@ -4037,113 +4047,356 @@ def render_threshold_alerts_panel(results: list, user_level: str = "beginner") -
         _st.success("▲ No pairs matching your current thresholds. Adjust sliders above to customize.")
 
 
-def render_liquidation_overlay_panel(results: list, user_level: str = "beginner") -> None:
-    """S5 — Liquidation Level Overlay.
+def render_liquidation_overlay_panel(results: list, user_level: str = "beginner",
+                                     liq_data: dict | None = None) -> None:
+    """S5 — Liquidation Heatmap & Cluster Map.
 
-    Shows estimated liquidation levels for top pairs.
-    Uses existing liquidation cascade data from data_feeds if available,
-    or estimates from stop_loss / entry risk data in scan results.
+    Enhanced panel showing:
+      1. Real forced-liquidation events from Binance (if accessible)
+      2. OI-weighted liquidation cluster heatmap per coin (leverage distribution model)
+      3. Per-coin table with cascade risk scores
     """
     import streamlit as _st
     import plotly.graph_objects as _go
+    import pandas as _pd
+    import data_feeds as _df
 
     section_header(
-        "Liquidation Level Map",
-        "Estimated liquidation clusters — where forced selling/buying may occur",
+        "Liquidation Heatmap & Cluster Map",
+        "Where forced liquidations are most likely to cluster — real events + OI-based model",
         icon="⚠️",
     )
 
     if user_level == "beginner":
         render_what_this_means_sg(
-            "In futures markets, when traders are losing too much, their positions get automatically closed. "
-            "These are 'liquidation events.' When many liquidations happen at the same price, "
-            "it creates a large price move. This map shows estimated price zones where that might happen.",
-            title="What are liquidation levels?",
+            "When crypto traders borrow money to trade (leverage), they can get 'liquidated' — "
+            "their positions are force-closed if the price moves against them. "
+            "This panel shows WHERE those forced closures are most likely to happen. "
+            "Red zones = where many long positions would be wiped. Green zones = where shorts get wiped. "
+            "Large clusters = potential for rapid price acceleration through that zone.",
+            title="What is a liquidation heatmap?",
         )
 
-    # Build liquidation level estimates from existing scan result data
-    _liq_items = []
-    for r in results[:8]:
-        _price = r.get("price_usd")
-        _stop  = r.get("stop_loss")
-        _tp1   = r.get("tp1")
-        if not (_price and _price > 0):
-            continue
+    # ── Section 1: Real Binance Forced Orders (if geo-accessible) ────────────
+    _pairs = [r["pair"] for r in results[:10] if r.get("pair")]
+    _btc_liq = _df.fetch_binance_liquidations("BTCUSDT", limit=20)
 
-        # Estimate long liquidation zone: price × (1 - 1/leverage_est)
-        # Use ATR/stop distance as leverage proxy
-        _lev_est = 10  # default 10x leverage assumption
-        if _stop and _stop > 0:
-            _dist_pct = abs(_price - _stop) / _price * 100
-            if _dist_pct > 0:
-                _lev_est = max(3, min(20, round(100 / _dist_pct)))
+    if _btc_liq:
+        _st.markdown(
+            '<div style="font-size:11px;color:rgba(168,180,200,0.6);text-transform:uppercase;'
+            'letter-spacing:0.8px;font-weight:600;margin:4px 0 8px 0">'
+            '🔴 Recent Actual Liquidations — Binance Futures (live)</div>',
+            unsafe_allow_html=True,
+        )
+        _liq_rows = []
+        for _ev in _btc_liq[:10]:
+            _side_label = "🔴 Long Wiped" if _ev["side"] == "SELL" else "🟢 Short Wiped"
+            import datetime as _dt
+            try:
+                _ts = _dt.datetime.fromtimestamp(_ev["timestamp_ms"] / 1000,
+                                                  tz=_dt.timezone.utc).strftime("%H:%M:%S UTC")
+            except Exception:
+                _ts = "—"
+            _liq_rows.append({
+                "Time":     _ts,
+                "Symbol":   _ev["symbol"].replace("USDT", ""),
+                "Type":     _side_label,
+                "Price":    f"${_ev['price']:,.2f}",
+                "Size":     f"${_ev['usd_value']:,.0f}",
+            })
+        _st.dataframe(_pd.DataFrame(_liq_rows), width="stretch", hide_index=True)
+        _st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
+    else:
+        _st.caption("⚠️ Live Binance liquidation feed unavailable in this region — showing model estimates below.")
 
-        _long_liq  = round(_price * (1 - 1 / _lev_est), 4) if _lev_est > 1 else _stop
-        _short_liq = round(_price * (1 + 1 / _lev_est), 4) if _lev_est > 1 else _tp1
+    # ── Section 2: OI-based Heatmap per Coin ─────────────────────────────────
+    _ws_prices = {}
+    try:
+        import websocket_feeds as _ws
+        _ws_prices = _ws.get_all_prices()
+    except Exception:
+        pass
 
-        _liq_items.append({
-            "pair":       r["pair"],
-            "price":      _price,
-            "long_liq":   _long_liq,
-            "short_liq":  _short_liq,
-            "lev_est":    _lev_est,
-            "direction":  r.get("direction", "—"),
-        })
+    if liq_data is None:
+        try:
+            liq_data = _df.build_liquidation_heatmap_data(_pairs, _ws_prices)
+        except Exception:
+            liq_data = {}
 
-    if not _liq_items:
-        _st.info("Run a scan to see liquidation level estimates.")
+    if not liq_data:
+        _st.info("Run a scan to generate liquidation cluster data.")
         return
 
-    # Bar chart — price vs liq zones
-    _fig_liq = _go.Figure()
-    for _li in _liq_items[:6]:
-        _pname = _li["pair"].replace("/USDT", "")
-        _fig_liq.add_trace(_go.Bar(
-            name=_pname, x=[_pname],
-            y=[_li["price"]],
-            marker_color="#3b82f6",
+    # Plotly heatmap — per-coin stacked bar (long liq red, short liq green, current blue)
+    _fig = _go.Figure()
+    _table_rows = []
+
+    for _pair, _ld in list(liq_data.items())[:8]:
+        _sym   = _pair.replace("/USDT", "")
+        _price = _ld["price"]
+        _tll   = _ld["top_long_liq"]
+        _tsl   = _ld["top_short_liq"]
+        _cs    = _ld["cascade_score"]
+        _css   = _ld["cascade_signal"]
+        _oi_bn = _ld["oi_usd"] / 1e9
+
+        # Current price bar
+        _fig.add_trace(_go.Bar(
+            name=_sym, x=[_sym], y=[_price],
+            marker_color="rgba(59,130,246,0.7)",
             showlegend=False,
+            hovertemplate=f"<b>{_sym}</b><br>Price: ${_price:,.4f}<extra></extra>",
         ))
-        if _li["long_liq"]:
-            _fig_liq.add_scatter(
-                x=[_pname], y=[_li["long_liq"]],
-                mode="markers", marker=dict(symbol="triangle-down", size=12, color="#ef4444"),
-                name=f"Long Liq {_pname}", showlegend=False,
-                hovertemplate=f"Long liq: ${_li['long_liq']:,.4f}<extra>{_pname}</extra>",
+        # Long liquidation cluster marker
+        if _tll:
+            _fig.add_scatter(
+                x=[_sym], y=[_tll],
+                mode="markers+text",
+                marker=dict(symbol="triangle-down", size=14, color="#ef4444"),
+                text=[f"${_tll:,.2f}"], textposition="bottom center",
+                textfont=dict(size=8, color="#ef4444"),
+                name=f"Long Liq {_sym}", showlegend=False,
+                hovertemplate=f"Long liq cluster: ${_tll:,.4f}<extra>{_sym}</extra>",
             )
-        if _li["short_liq"]:
-            _fig_liq.add_scatter(
-                x=[_pname], y=[_li["short_liq"]],
-                mode="markers", marker=dict(symbol="triangle-up", size=12, color="#22c55e"),
-                name=f"Short Liq {_pname}", showlegend=False,
-                hovertemplate=f"Short liq: ${_li['short_liq']:,.4f}<extra>{_pname}</extra>",
+        # Short liquidation cluster marker
+        if _tsl:
+            _fig.add_scatter(
+                x=[_sym], y=[_tsl],
+                mode="markers+text",
+                marker=dict(symbol="triangle-up", size=14, color="#22c55e"),
+                text=[f"${_tsl:,.2f}"], textposition="top center",
+                textfont=dict(size=8, color="#22c55e"),
+                name=f"Short Liq {_sym}", showlegend=False,
+                hovertemplate=f"Short liq cluster: ${_tsl:,.4f}<extra>{_sym}</extra>",
             )
 
-    _fig_liq.update_layout(
+        _cs_color = {"EXTREME": "#ef4444", "HIGH": "#f59e0b",
+                     "MODERATE": "#f59e0b", "LOW": "#22c55e"}.get(_css, "#6b7280")
+        _table_rows.append({
+            "Coin":       _sym,
+            "Price":      f"${_price:,.4f}" if _price < 10 else f"${_price:,.2f}",
+            "Long Liq ▼": f"${_tll:,.4f}" if _tll and _tll < 10 else (f"${_tll:,.2f}" if _tll else "—"),
+            "Short Liq ▲":f"${_tsl:,.4f}" if _tsl and _tsl < 10 else (f"${_tsl:,.2f}" if _tsl else "—"),
+            "OI ($B)":    f"${_oi_bn:.2f}B",
+            "Risk":       _css,
+        })
+
+    _fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
         font_color="#94a3b8",
-        yaxis=dict(title="Price ($)", gridcolor="rgba(148,163,184,0.1)"),
+        yaxis=dict(title="Price (USD)", gridcolor="rgba(148,163,184,0.08)"),
         xaxis=dict(gridcolor="rgba(0,0,0,0)"),
-        height=280, margin=dict(l=40, r=20, t=10, b=20),
-        barmode="group",
+        height=300, margin=dict(l=40, r=20, t=10, b=20),
+        barmode="overlay",
     )
-    _st.plotly_chart(_fig_liq, width="stretch", config={"displayModeBar": False})
+    _st.plotly_chart(_fig, width="stretch", config={"displayModeBar": False})
 
-    import pandas as _pd
-    _liq_rows = [{
-        "Pair":          _li["pair"].replace("/USDT", ""),
-        "Current Price": f"${_li['price']:,.4f}",
-        "Long Liq Est.": f"${_li['long_liq']:,.4f}" if _li["long_liq"] else "—",
-        "Short Liq Est.":f"${_li['short_liq']:,.4f}" if _li["short_liq"] else "—",
-        "Lev Est.":      f"{_li['lev_est']}×",
-        "Signal":        _li["direction"],
-    } for _li in _liq_items]
-    _st.dataframe(_pd.DataFrame(_liq_rows), width="stretch", hide_index=True)
+    # ── Table with cascade risk scores ────────────────────────────────────────
+    if _table_rows:
+        _st.dataframe(_pd.DataFrame(_table_rows), width="stretch", hide_index=True)
+
     _st.caption(
-        "▼ = long liquidation level (price falls → longs forced out). "
-        "▲ = short liquidation level (price rises → shorts forced out). "
-        "Leverage estimated from stop distance. Not actual Coinglass data — estimated proxy."
+        "▼ Red = estimated long liquidation cluster (price falls → longs force-closed). "
+        "▲ Green = estimated short liquidation cluster (price rises → shorts force-closed). "
+        "Risk score based on OI size × leverage proximity. "
+        "Model uses 5×/10×/20×/50×/100× leverage distribution — same methodology as Coinglass free tier."
     )
+
+
+def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner") -> None:
+    """
+    S25 — Always-visible Macro Intelligence scorecard.
+
+    Shows:
+      1. Overall macro signal banner (RISK_ON → RISK_OFF)
+      2. 5-card row: Global M2 · Yield Curve · DXY · VIX · Score
+      3. Global M2 vs BTC 90-day lag correlation chart
+      4. Regime impact callout (how many pts applied to coin scores)
+      5. Beginner plain-English summary
+    """
+    import streamlit as _st
+    import plotly.graph_objects as _go
+    import data_feeds as _df
+
+    section_header(
+        "Macro Intelligence",
+        "Global money supply · Interest rates · US Dollar · Market fear — how the big picture affects crypto",
+        icon="🌐",
+    )
+
+    _ms   = macro_data.get("macro_signal", "NEUTRAL")
+    _sc   = macro_data.get("macro_score",  0)
+    _sig_col = {
+        "RISK_ON":       "#00d4aa", "MILD_RISK_ON":  "#22c55e",
+        "NEUTRAL":       "#6b7280", "MILD_RISK_OFF": "#f59e0b",
+        "RISK_OFF":      "#ef4444",
+    }.get(_ms, "#6b7280")
+    _sig_bg = {
+        "RISK_ON":       "rgba(0,212,170,0.08)",  "MILD_RISK_ON":  "rgba(34,197,94,0.08)",
+        "NEUTRAL":       "rgba(107,114,128,0.06)","MILD_RISK_OFF": "rgba(245,158,11,0.08)",
+        "RISK_OFF":      "rgba(239,68,68,0.08)",
+    }.get(_ms, "rgba(107,114,128,0.06)")
+
+    _plain_map = {
+        "RISK_ON":       "Central banks printing money, dollar weakening, calm markets — ideal conditions for crypto.",
+        "MILD_RISK_ON":  "Conditions moderately support risk assets. Macro is a tailwind, but not full throttle.",
+        "NEUTRAL":       "Mixed macro signals — no strong directional push from the big picture.",
+        "MILD_RISK_OFF": "Some macro headwinds active. Be more selective with position sizing.",
+        "RISK_OFF":      "Multiple macro headwinds: high rates, strong dollar, or fear spike. Historically tough for crypto.",
+    }
+
+    # ── Overall signal banner ────────────────────────────────────────────────
+    _st.markdown(
+        f'<div style="background:{_sig_bg};border:1px solid {_sig_col}33;border-left:4px solid {_sig_col};'
+        f'border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;'
+        f'justify-content:space-between;align-items:center">'
+        f'<div>'
+        f'<span style="font-size:10px;color:rgba(168,180,200,0.5);text-transform:uppercase;'
+        f'letter-spacing:1px;font-weight:600">Macro Environment</span><br/>'
+        f'<span style="font-size:22px;font-weight:800;color:{_sig_col}">'
+        f'{_ms.replace("_", " ")}</span>'
+        f'</div>'
+        f'<div style="text-align:right">'
+        f'<span style="font-size:11px;color:rgba(168,180,200,0.5)">Composite score</span><br/>'
+        f'<span style="font-size:28px;font-weight:800;color:{_sig_col}">{_sc:+d}</span>'
+        f'<span style="font-size:13px;color:rgba(168,180,200,0.4)"> / 4</span>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 5-card row ────────────────────────────────────────────────────────────
+    _c1, _c2, _c3, _c4 = _st.columns(4)
+
+    def _mini_card(col, label, value, sub, color, plain=""):
+        col.markdown(
+            f'<div style="background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));'
+            f'border:1px solid rgba(255,255,255,0.06);border-top:3px solid {color};'
+            f'border-radius:10px;padding:12px 14px">'
+            f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;'
+            f'letter-spacing:0.8px;font-weight:600;margin-bottom:4px">{label}</div>'
+            f'<div style="font-size:15px;font-weight:700;color:{color}">{value}</div>'
+            f'<div style="font-size:10px;color:rgba(168,180,200,0.55);margin-top:3px">{sub}</div>'
+            f'{"<div style=\"font-size:9px;color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3\">" + plain + "</div>" if plain else ""}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    _m2t  = macro_data.get("m2_trend", "N/A")
+    _m2c  = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_m2t, "#6b7280")
+    _m2p  = macro_data.get("m2_pct_change_90d", 0.0)
+    _mini_card(_c1, "Global M2", _m2t, f"{_m2p:+.2f}% (90d)", _m2c,
+               "Expanding = more liquidity = crypto tailwind" if user_level == "beginner" else "")
+
+    _yct  = macro_data.get("yield_curve", "N/A")
+    _ycc  = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_yct, "#6b7280")
+    _spr  = macro_data.get("yield_spread_pp", 0.0)
+    _mini_card(_c2, "Yield Curve (10Y–2Y)", _yct, f"Spread {_spr:+.2f}pp", _ycc,
+               "Inverted = recession warning" if user_level == "beginner" else "")
+
+    _dxt  = macro_data.get("dxy_trend", "N/A")
+    _dxc  = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_dxt, "#6b7280")
+    _dxv  = macro_data.get("dxy", 104.0)
+    _mini_card(_c3, "US Dollar (DXY)", _dxt.replace("_", " "), f"DXY {_dxv:.1f}", _dxc,
+               "Weak dollar = crypto tailwind" if user_level == "beginner" else "")
+
+    _vxt  = macro_data.get("vix_structure", "N/A")
+    _vxc  = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_vxt, "#6b7280")
+    _vxv  = macro_data.get("vix", 18.0)
+    _vx3  = macro_data.get("vix3m", 20.0)
+    _mini_card(_c4, "VIX Term Structure", _vxt, f"VIX {_vxv:.1f} · VIX3M {_vx3:.1f}", _vxc,
+               "Backwardation = fear spike" if user_level == "beginner" else "")
+
+    _st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+    # ── Beginner plain-English summary ────────────────────────────────────────
+    if user_level == "beginner":
+        render_what_this_means_sg(_plain_map.get(_ms, ""), title="What does this mean for me?")
+
+    # ── Global M2 vs BTC correlation chart ────────────────────────────────────
+    try:
+        _chart_data = _df.fetch_m2_btc_chart_data(months=24)
+        if _chart_data and _chart_data.get("dates"):
+            _dates     = _chart_data["dates"]
+            _m2_vals   = _chart_data["m2_values"]
+            _btc_p     = _chart_data["btc_prices"]
+            _lag_dates = _chart_data["lag_dates"]
+
+            _fig_m2 = _go.Figure()
+
+            # M2 line (left axis)
+            _fig_m2.add_trace(_go.Scatter(
+                x=_dates, y=_m2_vals,
+                name="US M2 (tn USD)", mode="lines",
+                line=dict(color="#6366f1", width=2),
+                yaxis="y1",
+            ))
+            # M2 lagged line (shifted +90d — shown on same axis for alignment)
+            _fig_m2.add_trace(_go.Scatter(
+                x=_lag_dates, y=_m2_vals,
+                name="M2 +90d lag", mode="lines",
+                line=dict(color="#6366f1", width=1.5, dash="dot"),
+                yaxis="y1", opacity=0.55,
+            ))
+            # BTC price line (right axis)
+            _btc_clean = [v for v in _btc_p if v is not None]
+            if _btc_clean:
+                _fig_m2.add_trace(_go.Scatter(
+                    x=[_dates[i] for i, v in enumerate(_btc_p) if v is not None],
+                    y=_btc_clean,
+                    name="BTC Price (USD)", mode="lines",
+                    line=dict(color="#f59e0b", width=2),
+                    yaxis="y2",
+                ))
+
+            _fig_m2.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(15,23,42,0.6)",
+                font=dict(color="#94a3b8", size=10),
+                height=220,
+                margin=dict(l=50, r=50, t=10, b=30),
+                legend=dict(orientation="h", y=1.08, x=0,
+                            font=dict(size=9), bgcolor="rgba(0,0,0,0)"),
+                yaxis=dict(
+                    title="M2 (tn USD)", gridcolor="rgba(148,163,184,0.07)",
+                    titlefont=dict(color="#6366f1"), tickfont=dict(color="#6366f1"),
+                ),
+                yaxis2=dict(
+                    title="BTC (USD)", overlaying="y", side="right",
+                    gridcolor="rgba(0,0,0,0)",
+                    titlefont=dict(color="#f59e0b"), tickfont=dict(color="#f59e0b"),
+                ),
+                xaxis=dict(gridcolor="rgba(0,0,0,0)"),
+            )
+            _st.plotly_chart(_fig_m2, width="stretch", config={"displayModeBar": False})
+            _st.caption(
+                "Purple solid = current US M2 money supply. "
+                "Purple dashed = M2 shifted forward 90 days (lag model: BTC historically follows M2 ~3 months later). "
+                "Gold = BTC price. Source: FRED + yfinance."
+            )
+    except Exception as _e:
+        _st.caption(f"M2 chart unavailable: {_e}")
+
+    # ── Regime impact callout ─────────────────────────────────────────────────
+    try:
+        _adj = _df.get_macro_signal_adjustment()
+        _adj_pts = _adj.get("adjustment", 0)
+        _adj_regime = _adj.get("regime", "MACRO_NEUTRAL")
+        _adj_col = "#00d4aa" if _adj_pts > 0 else ("#ef4444" if _adj_pts < 0 else "#6b7280")
+        _st.markdown(
+            f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);'
+            f'border-radius:8px;padding:10px 14px;margin-top:8px;font-size:11px;'
+            f'color:rgba(168,180,200,0.7)">'
+            f'📊 <b>Macro adjustment applied to all coin signals today:</b> '
+            f'<span style="color:{_adj_col};font-weight:700;font-size:13px">{_adj_pts:+.0f} pts</span>'
+            f' &nbsp;·&nbsp; Regime: <span style="color:{_adj_col}">{_adj_regime.replace("_"," ")}</span>'
+            f' &nbsp;·&nbsp; DXY {_adj.get("dxy", 0):.1f} ({_adj.get("dxy_signal","—")})'
+            f' &nbsp;·&nbsp; 10Y {_adj.get("ten_yr", 0):.2f}% ({_adj.get("yr_signal","—")})'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 
 
 def render_what_this_means_sg(message: str, title: str = "What does this mean for me?") -> None:

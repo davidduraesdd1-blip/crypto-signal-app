@@ -889,6 +889,159 @@ def get_liquidation_pressure(pairs: list) -> list:
     return sorted(results, key=lambda x: x["squeeze_score"], reverse=True)
 
 
+# ─── Binance Actual Forced Liquidation Events ─────────────────────────────────
+# Public endpoint — no API key — may be geo-blocked; returns [] on failure.
+# SELL side = long position liquidated; BUY side = short position liquidated.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LIQ_EVENTS_CACHE: dict = {}
+_LIQ_EVENTS_LOCK  = threading.Lock()
+_LIQ_EVENTS_TTL   = 300  # 5-minute cache
+
+
+def fetch_binance_liquidations(symbol: str = "BTCUSDT", limit: int = 100) -> list:
+    """
+    Fetch real forced-liquidation events from Binance Futures public API.
+    No API key required. Returns [] if geo-blocked or on any error.
+
+    Returns list of dicts sorted most-recent first:
+      [{symbol, side, qty, price, usd_value, timestamp_ms}, ...]
+    """
+    cache_key = f"binance_liq_{symbol}"
+    now = time.time()
+    with _LIQ_EVENTS_LOCK:
+        cached = _LIQ_EVENTS_CACHE.get(cache_key)
+        if cached and now - cached["ts"] < _LIQ_EVENTS_TTL:
+            return cached["data"]
+
+    url = f"https://fapi.binance.com/fapi/v1/allForceOrders?symbol={symbol}&limit={limit}"
+    try:
+        if not _ssrf_check(url):
+            return []
+        resp = _SESSION.get(url, timeout=6)
+        if resp.status_code != 200:
+            return []
+        out = []
+        for o in resp.json():
+            try:
+                qty   = float(o.get("origQty", 0))
+                price = float(o.get("price", 0))
+                out.append({
+                    "symbol":       o.get("symbol", symbol),
+                    "side":         o.get("side", ""),
+                    "qty":          round(qty, 4),
+                    "price":        price,
+                    "usd_value":    round(qty * price, 2),
+                    "timestamp_ms": int(o.get("time", 0)),
+                })
+            except Exception:
+                continue
+        out.sort(key=lambda x: x["timestamp_ms"], reverse=True)
+        with _LIQ_EVENTS_LOCK:
+            _LIQ_EVENTS_CACHE[cache_key] = {"ts": now, "data": out}
+        return out
+    except Exception as e:
+        logging.debug("[BinanceLiq] %s failed: %s", symbol, e)
+        return []
+
+
+def fetch_binance_liquidations_multi(pairs: list) -> dict:
+    """Fetch Binance liquidation events for multiple pairs in parallel.
+    Returns {pair: [events_list]}."""
+    from concurrent.futures import ThreadPoolExecutor as _TE
+
+    def _sym(pair):
+        return pair.replace("/", "").replace("-", "")
+
+    result: dict = {}
+    with _TE(max_workers=min(len(pairs), 6)) as ex:
+        futures = {pair: ex.submit(fetch_binance_liquidations, _sym(pair), 50)
+                   for pair in pairs}
+        for pair, f in futures.items():
+            try:
+                result[pair] = f.result()
+            except Exception:
+                result[pair] = []
+    return result
+
+
+def build_liquidation_heatmap_data(pairs: list, ws_prices: dict) -> dict:
+    """
+    Build OI-weighted liquidation cluster data for a list of pairs.
+
+    Methodology (same approach as Coinglass free-tier heatmap):
+      Leverage distribution (retail approximate):
+        5×: 30% of OI,  10×: 35%,  20×: 25%,  50×: 8%,  100×: 2%
+      Long  liquidation at leverage L: price × (1 − 1/L)
+      Short liquidation at leverage L: price × (1 + 1/L)
+      Volume per level = OI_USD × weight × 0.5  (50/50 long/short split)
+
+    Returns:
+      {pair: {price, oi_usd,
+              levels: [(price_level, vol_usd, "LONG"|"SHORT"), ...],
+              top_long_liq, top_short_liq,
+              cascade_score (0-100), cascade_signal}}
+    """
+    import math as _math
+
+    lev_dist = [(5, 0.30), (10, 0.35), (20, 0.25), (50, 0.08), (100, 0.02)]
+    oi_batch = get_open_interest_batch(pairs)
+    result: dict = {}
+
+    for pair in pairs:
+        ws    = (ws_prices or {}).get(pair, {})
+        price = ws.get("price") if ws else None
+        if not price or price <= 0:
+            continue
+        oi_usd = float((oi_batch.get(pair) or {}).get("oi_usd", 0) or 0)
+
+        levels = []
+        for lev, weight in lev_dist:
+            vol       = oi_usd * weight * 0.5
+            long_liq  = round(price * (1 - 1 / lev), 8)
+            short_liq = round(price * (1 + 1 / lev), 8)
+            if long_liq > 0:
+                levels.append((long_liq, round(vol, 0), "LONG"))
+            if short_liq > 0:
+                levels.append((short_liq, round(vol, 0), "SHORT"))
+
+        long_lvls  = [(p, v) for p, v, s in levels if s == "LONG"]
+        short_lvls = [(p, v) for p, v, s in levels if s == "SHORT"]
+        # Closest to price = highest leverage bucket.
+        # Long liq = price*(1-1/L): larger value = higher L = closer → max()
+        # Short liq = price*(1+1/L): smaller value = higher L = closer → min()
+        top_long  = max(long_lvls,  key=lambda x: x[0])[0] if long_lvls  else None
+        top_short = min(short_lvls, key=lambda x: x[0])[0] if short_lvls else None
+
+        # Cascade score — how dangerous is the current setup?
+        near_pct = 1.0
+        if top_long and top_short:
+            near_pct = min(
+                abs(price - top_long)  / price,
+                abs(top_short - price) / price,
+            )
+        raw = _math.log1p(oi_usd / 1e9) * (1 / max(near_pct, 0.01)) * 10
+        cascade_score  = round(min(100.0, raw), 1)
+        cascade_signal = (
+            "EXTREME"  if cascade_score >= 75 else
+            "HIGH"     if cascade_score >= 50 else
+            "MODERATE" if cascade_score >= 25 else
+            "LOW"
+        )
+
+        result[pair] = {
+            "price":          price,
+            "oi_usd":         oi_usd,
+            "levels":         levels,
+            "top_long_liq":   top_long,
+            "top_short_liq":  top_short,
+            "cascade_score":  cascade_score,
+            "cascade_signal": cascade_signal,
+        }
+
+    return result
+
+
 # ──────────────────────────────────────────────
 # DERIBIT OPTIONS IV (DVOL — 30-day implied vol index)
 # Free public API — no key required — BTC + ETH only
@@ -3967,6 +4120,101 @@ def fetch_global_m2_composite(lag_days: int = 90) -> dict:
         "source":            "fallback",
         "timestamp":         __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
     }
+
+
+# ─── Global M2 + BTC Monthly History for Correlation Chart ───────────────────
+
+_M2_CHART_CACHE: dict = {}
+_M2_CHART_LOCK  = threading.Lock()
+_M2_CHART_TTL   = 3600 * 12  # 12-hour cache (monthly data rarely changes intraday)
+
+
+def fetch_m2_btc_chart_data(months: int = 24) -> dict:
+    """
+    Fetch US M2 monthly history from FRED + BTC monthly closes from yfinance.
+    Used to render the Global M2 vs BTC 90-day lag correlation chart.
+
+    Returns:
+      dates      — list of 'YYYY-MM' strings (last `months` months)
+      m2_values  — US M2 in trillions USD  (aligned with dates)
+      btc_prices — BTC monthly close in USD (None where unavailable)
+      lag_dates  — dates shifted +90 days (≈3 months) for lagged M2 overlay
+    """
+    import datetime as _dt
+
+    now = time.time()
+    with _M2_CHART_LOCK:
+        cached = _M2_CHART_CACHE.get("data")
+        if cached and now - _M2_CHART_CACHE.get("ts", 0) < _M2_CHART_TTL:
+            return cached
+
+    try:
+        # ── US M2 from FRED CSV (no key, full history) ────────────────────────
+        url  = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=M2SL"
+        resp = _FRED_SESSION.get(url, timeout=8)
+        if resp.status_code != 200:
+            return {}
+
+        m2_series: dict = {}
+        for line in resp.text.strip().split("\n")[1:]:
+            parts = line.split(",")
+            if len(parts) == 2 and parts[1].strip() not in (".", ""):
+                try:
+                    m2_series[parts[0].strip()[:7]] = float(parts[1].strip()) / 1000  # bn→tn
+                except ValueError:
+                    pass
+
+        sorted_dates = sorted(m2_series.keys())[-months:]
+        m2_vals      = [m2_series[d] for d in sorted_dates]
+
+        # ── BTC monthly closes from yfinance ──────────────────────────────────
+        btc_prices: list = [None] * len(sorted_dates)
+        try:
+            import yfinance as _yf
+            _df = _yf.download("BTC-USD", period="3y", interval="1mo",
+                               progress=False, auto_adjust=True)
+            if not _df.empty:
+                for i, d in enumerate(sorted_dates):
+                    for idx in _df.index:
+                        if str(idx)[:7] == d:
+                            try:
+                                cv = _df.loc[idx, "Close"]
+                                btc_prices[i] = round(
+                                    float(cv.iloc[0]) if hasattr(cv, "iloc") else float(cv), 0
+                                )
+                            except Exception:
+                                pass
+                            break
+        except Exception as _e:
+            logging.debug("[M2Chart] BTC history failed: %s", _e)
+
+        # ── Compute +90-day lag dates (≈3 calendar months forward) ───────────
+        lag_dates: list = []
+        for d in sorted_dates:
+            try:
+                y, m = int(d[:4]), int(d[5:7])
+                m += 3
+                if m > 12:
+                    m -= 12
+                    y += 1
+                lag_dates.append(f"{y:04d}-{m:02d}")
+            except Exception:
+                lag_dates.append(d)
+
+        data = {
+            "dates":      sorted_dates,
+            "m2_values":  m2_vals,
+            "btc_prices": btc_prices,
+            "lag_dates":  lag_dates,
+        }
+        with _M2_CHART_LOCK:
+            _M2_CHART_CACHE["ts"]   = now
+            _M2_CHART_CACHE["data"] = data
+        return data
+
+    except Exception as e:
+        logging.debug("[M2Chart] fetch failed: %s", e)
+        return {}
 
 
 def fetch_yfinance_macro() -> dict:
