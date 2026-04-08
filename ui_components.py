@@ -4127,64 +4127,70 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
         _st.info("Run a scan to generate liquidation cluster data.")
         return
 
-    # Plotly chart — % distance from current price (normalised so BTC/XRP coexist on same axis)
-    # Long liq is BELOW price → shown as negative %; Short liq is ABOVE → positive %
+    # Cascade risk score chart — the meaningful per-coin differentiation.
+    # The ±% distances to liquidation levels are fixed by the leverage model (always ±1%/2%/5%/10%/20%).
+    # What VARIES per coin is the cascade score: driven by OI size × proximity.
+    # BTC with $2B OI scores very differently from XRP with $80M OI — this is what matters.
     _fig = _go.Figure()
     _table_rows = []
-    _syms, _long_pcts, _short_pcts, _cascade_colors = [], [], [], []
+    _syms, _scores, _bar_colors, _oi_labels = [], [], [], []
+
+    _color_map = {
+        "EXTREME":  "rgba(239,68,68,0.80)",
+        "HIGH":     "rgba(245,158,11,0.80)",
+        "MODERATE": "rgba(245,158,11,0.50)",
+        "LOW":      "rgba(34,197,94,0.65)",
+    }
+    _risk_thresh = {"EXTREME": 75, "HIGH": 50, "MODERATE": 25, "LOW": 0}
 
     for _pair, _ld in list(liq_data.items())[:8]:
         _sym   = _pair.replace("/USDT", "")
         _price = _ld["price"]
-        _tll   = _ld["top_long_liq"]
-        _tsl   = _ld["top_short_liq"]
+        _cs    = _ld["cascade_score"]
         _css   = _ld["cascade_signal"]
         _oi_bn = _ld["oi_usd"] / 1e9
 
-        _long_pct  = round((_tll - _price) / _price * 100, 2) if _tll else None   # negative
-        _short_pct = round((_tsl - _price) / _price * 100, 2) if _tsl else None   # positive
-
         _syms.append(_sym)
-        _long_pcts.append(_long_pct if _long_pct is not None else 0)
-        _short_pcts.append(_short_pct if _short_pct is not None else 0)
-        _cs_color = {"EXTREME": "#ef4444", "HIGH": "#f59e0b",
-                     "MODERATE": "#f59e0b", "LOW": "#22c55e"}.get(_css, "#6b7280")
-        _cascade_colors.append(_cs_color)
+        _scores.append(_cs)
+        _bar_colors.append(_color_map.get(_css, "rgba(107,114,128,0.5)"))
+        _oi_labels.append(f"${_oi_bn:.2f}B OI")
 
         _table_rows.append({
-            "Coin":        _sym,
-            "Price":       f"${_price:,.4f}" if _price < 10 else f"${_price:,.2f}",
-            "Long Liq ▼":  (f"{_long_pct:+.1f}%" if _long_pct is not None else "—"),
-            "Short Liq ▲": (f"{_short_pct:+.1f}%" if _short_pct is not None else "—"),
-            "OI ($B)":     f"${_oi_bn:.2f}B",
-            "Risk":        _css,
+            "Coin":          _sym,
+            "Price":         f"${_price:,.4f}" if _price < 10 else f"${_price:,.2f}",
+            "OI ($B)":       f"${_oi_bn:.2f}B",
+            "Cascade Score": f"{_cs:.0f} / 100",
+            "Risk":          _css,
         })
 
-    # Long liq bars (red, below zero)
     _fig.add_trace(_go.Bar(
-        name="Long Liq ▼", x=_syms, y=_long_pcts,
-        marker_color="rgba(239,68,68,0.65)",
-        hovertemplate="<b>%{x}</b><br>Long liq: %{y:.1f}% from price<extra></extra>",
+        x=_syms, y=_scores,
+        marker_color=_bar_colors,
+        text=_oi_labels,
+        textposition="outside",
+        textfont=dict(size=9, color="#94a3b8"),
+        hovertemplate="<b>%{x}</b><br>Cascade score: %{y:.0f}<br>%{text}<extra></extra>",
+        name="Cascade Risk Score",
     ))
-    # Short liq bars (green, above zero)
-    _fig.add_trace(_go.Bar(
-        name="Short Liq ▲", x=_syms, y=_short_pcts,
-        marker_color="rgba(34,197,94,0.65)",
-        hovertemplate="<b>%{x}</b><br>Short liq: %{y:.1f}% from price<extra></extra>",
-    ))
-    # Zero line = current price reference
-    _fig.add_hline(y=0, line_color="rgba(148,163,184,0.4)", line_width=1)
+
+    # Risk threshold reference lines
+    for _label, _thresh in [("EXTREME (75)", 75), ("HIGH (50)", 50), ("MODERATE (25)", 25)]:
+        _fig.add_hline(
+            y=_thresh,
+            line=dict(color="rgba(148,163,184,0.2)", dash="dot", width=1),
+            annotation_text=_label,
+            annotation_font=dict(size=8, color="rgba(148,163,184,0.4)"),
+            annotation_position="right",
+        )
 
     _fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
         font_color="#94a3b8",
-        yaxis=dict(title="% from current price", gridcolor="rgba(148,163,184,0.08)",
-                   tickformat=".1f", ticksuffix="%"),
+        yaxis=dict(title="Cascade Risk Score (0–100)",
+                   gridcolor="rgba(148,163,184,0.06)", range=[0, 110]),
         xaxis=dict(gridcolor="rgba(0,0,0,0)"),
-        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=9),
-                    bgcolor="rgba(0,0,0,0)"),
-        height=280, margin=dict(l=50, r=20, t=10, b=20),
-        barmode="group",
+        height=280, margin=dict(l=50, r=90, t=10, b=20),
+        showlegend=False,
     )
     _st.plotly_chart(_fig, width="stretch", config={"displayModeBar": False})
 
@@ -4193,10 +4199,10 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
         _st.dataframe(_pd.DataFrame(_table_rows), width="stretch", hide_index=True)
 
     _st.caption(
-        "Red bars = % below current price where long liquidations cluster (price falls → longs force-closed). "
-        "Green bars = % above current price where short liquidations cluster (price rises → shorts force-closed). "
-        "Normalised to % so BTC and small-caps are comparable on one chart. "
-        "Risk score based on OI size × leverage proximity. "
+        "Cascade Risk Score = how dangerous the current setup is. "
+        "Higher score = more leveraged money close to current price = bigger risk of a cascade move. "
+        "Driven by: OI size (how much money) × leverage proximity (how close to getting wiped). "
+        "EXTREME ≥75, HIGH ≥50, MODERATE ≥25, LOW <25. "
         "Model uses 5×/10×/20×/50×/100× leverage distribution — same methodology as Coinglass free tier."
     )
 
