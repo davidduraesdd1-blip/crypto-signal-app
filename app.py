@@ -901,26 +901,6 @@ if st.sidebar.button("⚙️ Configure Alerts", key="sb_cfg_alerts_btn", width="
     st.session_state["_settings_tab"] = "Alerts"
     st.rerun()
 
-# ──────────────────────────────────────────────
-# SIDEBAR: AUTO-REFRESH (compact inline)
-# ──────────────────────────────────────────────
-_ar_enabled = st.sidebar.toggle(
-    "🔄 Live Refresh",
-    value=st.session_state.get("auto_refresh_enabled", False),
-    key="auto_refresh_toggle",
-    help="Automatically reload the dashboard at the selected interval.",
-)
-st.session_state["auto_refresh_enabled"] = _ar_enabled
-if _ar_enabled:
-    _ar_options = {"30s": 30, "1m": 60, "5m": 300}
-    _ar_label = st.sidebar.selectbox(
-        "Interval",
-        options=list(_ar_options.keys()),
-        index=1,
-        key="auto_refresh_interval_label",
-        label_visibility="collapsed",
-    )
-    st.session_state["auto_refresh_interval"] = _ar_options[_ar_label]
 
 
 # ──────────────────────────────────────────────
