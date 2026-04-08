@@ -2685,6 +2685,10 @@ def page_dashboard():
             except Exception:
                 pass
 
+        # APP-30: sanitise pair for widget keys — '/' in key crashes Streamlit's
+        # session-state serialiser (_check_serializable KeyError on FLR/USDT etc.)
+        _pk = pair.replace("/", "_")
+
         # ── AI Analysis — st.dialog renders in modal overlay, outside page diff cycle ──
         ai_key = f"ai_explanation_{pair}"
 
@@ -2702,7 +2706,7 @@ def page_dashboard():
                 st.session_state[ai_key] = explanation
                 st.info(explanation)
 
-        if st.button("🤖 AI Analysis", key=f"btn_ai_{pair}", width="stretch"):
+        if st.button("🤖 AI Analysis", key=f"btn_ai_{_pk}", width="stretch"):
             _show_ai_dialog()
 
         # ── Order Execution ────────────────────────────────────────────────────────
@@ -2721,7 +2725,7 @@ def page_dashboard():
                 st.caption(f"Mode: {_mode_label}")
                 st.caption(f"Order size: ${_exec_size:,.0f}")
             with ex_c1:
-                if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{pair}",
+                if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{_pk}",
                              type="primary" if "BUY" in direction else "secondary",
                              width="stretch"):
                     _res = _exec.place_order(pair, "BUY", _exec_size, current_price=_cur_price)
@@ -2730,7 +2734,7 @@ def page_dashboard():
                     else:
                         st.error(f"Order failed: {_res['error']}")
             with ex_c2:
-                if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{pair}",
+                if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{_pk}",
                              type="primary" if "SELL" in direction else "secondary",
                              width="stretch"):
                     _res = _exec.place_order(pair, "SELL", _exec_size, current_price=_cur_price)
@@ -2742,7 +2746,7 @@ def page_dashboard():
                 _open_pos = _db.load_positions()
                 if pair in _open_pos:
                     _pos_dir = _open_pos[pair].get("direction", "BUY")
-                    if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{pair}",
+                    if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{_pk}",
                                  width="stretch"):
                         _res = _exec.close_position(pair, _pos_dir, _exec_size, current_price=_cur_price)
                         if _res["ok"]:
@@ -2757,10 +2761,10 @@ def page_dashboard():
                 _adv_c1, _adv_c2 = st.columns(2)
                 with _adv_c1:
                     st.caption("**TWAP** — split into equal time slices")
-                    _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"twap_dir_{pair}")
-                    _twap_slices = st.number_input("Slices", 2, 20, 5, key=f"twap_slices_{pair}")
-                    _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key=f"twap_int_{pair}")
-                    if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{pair}", width="stretch"):
+                    _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"twap_dir_{_pk}")
+                    _twap_slices = st.number_input("Slices", 2, 20, 5, key=f"twap_slices_{_pk}")
+                    _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key=f"twap_int_{_pk}")
+                    if st.button(f"▶ TWAP {pair.split('/')[0]}", key=f"twap_btn_{_pk}", width="stretch"):
                         _tr = _exec.place_twap_order(
                             pair, _twap_dir, _exec_size,
                             n_slices=int(_twap_slices),
@@ -2774,12 +2778,12 @@ def page_dashboard():
                             st.error(f"TWAP failed: {_tr.get('error', 'unknown error')}")
                 with _adv_c2:
                     st.caption("**Iceberg** — hide order size in OB")
-                    _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"ice_dir_{pair}")
-                    _ice_vis  = st.slider("Visible %", 10, 50, 20, step=5, key=f"ice_vis_{pair}") / 100.0
+                    _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key=f"ice_dir_{_pk}")
+                    _ice_vis  = st.slider("Visible %", 10, 50, 20, step=5, key=f"ice_vis_{_pk}") / 100.0
                     _ice_limit = st.number_input("Limit Price (0=market)", 0.0, 1e9,
                                                  float(r.get("entry") or 0), step=0.01, format="%.4f",
-                                                 key=f"ice_lim_{pair}")
-                    if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{pair}", width="stretch"):
+                                                 key=f"ice_lim_{_pk}")
+                    if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key=f"ice_btn_{_pk}", width="stretch"):
                         _ir = _exec.place_iceberg_order(
                             pair, _ice_dir, _exec_size,
                             visible_pct=_ice_vis,
@@ -2836,7 +2840,7 @@ def page_dashboard():
                         xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
                         showlegend=False,
                     )
-                    st.plotly_chart(_ch_fig, width="stretch", key=f"conf_hist_{pair}")
+                    st.plotly_chart(_ch_fig, width="stretch", key=f"conf_hist_{_pk}")
             except Exception:
                 pass
 

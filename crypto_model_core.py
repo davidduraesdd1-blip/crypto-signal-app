@@ -4837,8 +4837,23 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         except Exception:
             pass
 
+    # PERF-HC: hard 45-second wall-clock timeout on the OHLCV prefetch phase.
+    # Without this, slow API responses can block the Streamlit process for
+    # minutes → Streamlit Cloud health-check returns 503 and may restart the app.
+    # Pairs not fetched in time simply fall through to the per-pair cache hit/miss;
+    # this is safe because _scan_pair() already handles empty DataFrames.
+    _ohlcv_deadline = time.time() + 45
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as _ohlcv_ex:
-        list(_ohlcv_ex.map(_prefetch_ohlcv, _ohlcv_tasks))
+        _ohlcv_futures = [_ohlcv_ex.submit(_prefetch_ohlcv, t) for t in _ohlcv_tasks]
+        for _f in concurrent.futures.as_completed(_ohlcv_futures,
+                                                   timeout=max(1, _ohlcv_deadline - time.time())):
+            try:
+                _f.result()
+            except Exception:
+                pass
+        # Cancel any remaining futures that didn't complete within the deadline
+        for _f in _ohlcv_futures:
+            _f.cancel()
 
     # ── Parallel analysis phase — all OHLCV already cached above ─────────────
     completed = [0]
