@@ -2767,47 +2767,6 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
 </div>"""
 
 
-def confidence_gauge_svg(score: int, color: str = "#00d4aa",
-                          size: int = 80) -> str:
-    """
-    Item 5 — Circular SVG confidence gauge. Returns inline SVG string.
-    score: 1-10
-    """
-    score = max(1, min(10, score))
-    pct   = score / 10
-    r_o   = size // 2 - 6
-    cx = cy = size // 2
-    sw    = max(7, size // 10)
-    circ  = 2 * 3.141592653589793 * (r_o - sw / 2)
-    filled = circ * pct
-    empty  = circ - filled
-
-    if score <= 4:
-        zone_color = "#f6465d"
-        zone_label = "Avoid"
-    elif score <= 6:
-        zone_color = "#f59e0b"
-        zone_label = "Watch"
-    else:
-        zone_color = "#00d4aa"
-        zone_label = "Act"
-
-    return (
-        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
-        f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
-        f'stroke="rgba(255,255,255,0.07)" stroke-width="{sw}"/>'
-        f'<circle cx="{cx}" cy="{cy}" r="{r_o - sw/2}" fill="none" '
-        f'stroke="{zone_color}" stroke-width="{sw}" stroke-linecap="round" '
-        f'stroke-dasharray="{filled:.1f} {empty:.1f}" '
-        f'transform="rotate(-90 {cx} {cy})"/>'
-        f'<text x="{cx}" y="{cy - 4}" text-anchor="middle" dominant-baseline="middle" '
-        f'font-size="{size//5}" font-weight="800" fill="{zone_color}">{score}</text>'
-        f'<text x="{cx}" y="{cy + size//8}" text-anchor="middle" dominant-baseline="middle" '
-        f'font-size="{size//9}" fill="rgba(255,255,255,0.35)">{zone_label}</text>'
-        f'</svg>'
-    )
-
-
 def how_it_works_html(win_rate: float = 0, n_months: int = 0,
                        n_indicators: int = 24) -> str:
     """
@@ -4414,42 +4373,4 @@ def render_what_this_means_sg(message: str, title: str = "What does this mean fo
     _st.info(f"ℹ️ **{title}** — {message}")
 
 
-def render_sparkline(prices: list, width: int = 120, height: int = 40):
-    """
-    #60 — Render a minimal Plotly sparkline figure.
-
-    Parameters
-    ----------
-    prices : list of float close prices (7 daily closes or hourly bars)
-    width  : figure pixel width (default 120)
-    height : figure pixel height (default 40)
-
-    Returns plotly.graph_objects.Figure — render with st.plotly_chart(fig, ...).
-    Green line if last price >= first price; red if declining.
-    """
-    try:
-        import plotly.graph_objects as _go
-    except ImportError:
-        return None
-
-    if not prices or len(prices) < 2:
-        return None
-
-    line_color = "#34D399" if prices[-1] >= prices[0] else "#F6465D"
-    fig = _go.Figure()
-    fig.add_trace(_go.Scatter(
-        y=prices, mode="lines",
-        line=dict(color=line_color, width=1.5),
-        showlegend=False,
-    ))
-    fig.update_layout(
-        width=width, height=height,
-        margin=dict(l=0, r=0, t=0, b=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        showlegend=False,
-    )
-    return fig
 

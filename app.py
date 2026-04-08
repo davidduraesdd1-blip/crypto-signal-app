@@ -322,9 +322,10 @@ def _cached_db_stats() -> dict:
 
 
 # ── PERF: Single cached read for alerts config — replaces 16+ disk reads per rerun ──
-@st.cache_data(ttl=2, show_spinner=False, max_entries=1)
+@st.cache_data(ttl=30, show_spinner=False, max_entries=1)
 def _cached_alerts_config() -> dict:
-    """Cache alerts_config.json — 2s TTL prevents 15 redundant disk reads per page render."""
+    """Cache alerts_config.json — 30s TTL (was 2s). Alerts rarely change mid-session;
+    _save_alerts_config_and_clear() always calls .clear() on write so freshness is maintained."""
     return _alerts.load_alerts_config()
 
 
@@ -1067,26 +1068,6 @@ def _ws_health_fragment():
         st.caption(f"Last tick: {age:.0f}s ago")
 
 
-@st.fragment(run_every=1)
-def _auto_refresh_fragment():
-    """
-    Fragment-based auto-refresh countdown — runs every 1s as a fragment so only
-    this tiny widget re-renders each second. The main page only gets a full rerun
-    when the actual interval expires. This replaces the old time.sleep(1)+st.rerun()
-    pattern that caused a full page reload every second (constant price flickering).
-    """
-    if not st.session_state.get("auto_refresh_enabled"):
-        return
-    interval = st.session_state.get("auto_refresh_interval", 30)
-    _ar_key = "auto_refresh_last_run"
-    _last = st.session_state.get(_ar_key, 0.0)
-    _now = time.time()
-    _elapsed = _now - _last
-    _remaining = max(0, interval - int(_elapsed))
-    st.caption(f"Auto-refresh in {_remaining}s  |  toggle off in sidebar to pause")
-    if _elapsed >= interval:
-        st.session_state[_ar_key] = _now
-        st.rerun()   # full page rerun only when the interval actually expires
 
 
 # ── Scan progress fragment — defined at module level so its session-state key is ──
@@ -3258,11 +3239,6 @@ def page_dashboard():
                             st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
 
 
-    # ── Auto-refresh trigger (fragment-based, non-blocking) ──
-    # Uses a 1s fragment for the countdown so the main page only reruns at the real interval,
-    # not every second (which caused constant full-page reruns and price flickering).
-    if st.session_state.get("auto_refresh_enabled"):
-        _auto_refresh_fragment()
 
 
 def _progress_cb(done, total, pair_name):
@@ -3359,6 +3335,7 @@ def _run_scan_thread():
             logging.warning(f"Feedback loop error: {_fb_err}")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
+        audit("scan_complete", pairs=len(results), timestamp=ts)
         # PERF-30: mark in-memory status as done; SQLite write happens here (completion only)
         _SCAN_STATUS["running"] = False
         _write_scan_status(running=False, timestamp=ts, error=None)
@@ -3420,6 +3397,7 @@ def _run_scan_thread():
         except Exception as _e:
             logging.warning("[App] Watchlist alert check failed: %s", _e)
     except Exception as e:
+        audit("scan_error", error=str(e))
         # Don't overwrite good prior results — only update status with error
         _SCAN_STATUS["running"] = False  # PERF-30: mark in-memory as done on error
         _write_scan_status(running=False, error=str(e))
@@ -3449,8 +3427,10 @@ def _start_scan():
             return
         _scan_state["running"] = True
     st.session_state["scan_running"] = True
+    st.session_state["scan_run"] = True   # mark that at least one scan has been triggered
     st.session_state["scan_error"] = None
     st.session_state["scan_results"] = []
+    audit("scan_start", pairs=len(model.PAIRS))
     # Clear old cache so stale results don't show during new scan
     _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
     try:
@@ -6039,12 +6019,6 @@ def _start_backtest():
 # ──────────────────────────────────────────────
 # PAGE 4: TRADE LOG & HISTORY
 # ──────────────────────────────────────────────
-def page_trade_log():
-    """Merged into page_backtest() as the Trade History tab."""
-    st.session_state["_nav_target"] = "Backtest Viewer"
-    st.rerun()
-
-
 # ──────────────────────────────────────────────
 # PAGE: ARBITRAGE
 # ──────────────────────────────────────────────
@@ -6733,6 +6707,7 @@ def page_agent():
 # ──────────────────────────────────────────────
 # ROUTER
 # ──────────────────────────────────────────────
+audit("page_view", page=page, level=st.session_state.get("user_level", "beginner"))
 if page == "Dashboard":
     page_dashboard()
 elif page == "Config Editor":
