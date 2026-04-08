@@ -922,54 +922,6 @@ if _ar_enabled:
     )
     st.session_state["auto_refresh_interval"] = _ar_options[_ar_label]
 
-# ──────────────────────────────────────────────
-# SIDEBAR: LIVE PRICE FEED STATUS
-# ──────────────────────────────────────────────
-with st.sidebar.expander("📡 Live Prices", expanded=False):
-    _ws_status = _ws.get_status()
-    if not _ws_status.get("available", True):
-        st.warning("websocket-client not installed.\nRun: pip install websocket-client")
-    else:
-        _ws_conn  = _ws_status.get("connected", False)
-        _ws_last  = _ws_status.get("last_message_at")
-        _ws_rc    = _ws_status.get("reconnects", 0)
-        _ws_err   = _ws_status.get("error")
-
-        if _ws_conn:
-            st.markdown(
-                f'{_ui.live_dot_html()} <span style="color:#00d4aa;font-size:13px;font-weight:600">Connected — OKX live tickers</span>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.error("Disconnected" + (f": {_ws_err}" if _ws_err else ""))
-        if _ws_rc > 0:
-            st.caption(f"Reconnects: {_ws_rc}")
-        if _ws_last:
-            age = time.time() - _ws_last
-            st.caption(f"Last tick: {age:.0f}s ago")
-
-        # Live price mini-table
-        _live_all = _ws.get_all_prices()
-        if _live_all:
-            _live_rows = []
-            for _p in model.PAIRS:
-                _tick = _live_all.get(_p)
-                if _tick:
-                    _chg = _tick["change_24h_pct"]
-                    _arrow = "▲" if _chg >= 0 else "▼"
-                    _live_rows.append({
-                        "Pair": _p.replace("/USDT", ""),
-                        "Price": f"${_tick['price']:,.4f}",
-                        "24h": f"{_arrow} {abs(_chg):.2f}%",
-                    })
-            if _live_rows:
-                st.dataframe(
-                    pd.DataFrame(_live_rows).set_index("Pair"),
-                    width="stretch",
-                    hide_index=False,
-                )
-        else:
-            st.caption("Awaiting first tick...")
 
 # ──────────────────────────────────────────────
 # SIDEBAR: API HEALTH CHECK (#17 security hardening)
