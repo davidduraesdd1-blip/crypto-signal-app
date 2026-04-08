@@ -76,6 +76,16 @@ PAIRS = [
 TIMEFRAMES = ['1h', '4h', '1d', '1w']
 OHLCV_LIMIT      = 500  # Ichimoku (10/30/45) needs 45-bar warmup; 500 gives 455 usable bars on 1h (~18.9 days)
 SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need < 150 bars; ~40% faster OHLCV fetch
+# PERF-A4: per-timeframe OHLCV limits — longer TFs have fewer useful bars; reduces payload further
+# 1h: 150 bars (6.25 days) — all indicators converge well within 150 1h bars
+# 4h: 100 bars (16.7 days) — Ichimoku / Supertrend need ~50; 100 gives comfortable headroom
+# 1d: 100 bars (3.3 months) — daily indicators saturate by bar 60
+# 1w: 52 bars (1 year)     — weekly only needs ~26 for Ichimoku kijun (26-period)
+_TF_OHLCV_LIMIT: dict = {'1h': 150, '4h': 100, '1d': 100, '1w': 52}
+
+# PERF-A5: delta scan cache — stores last result + price per pair so unchanged pairs
+# can be skipped on repeat scan presses (60-80% faster on manual re-presses)
+_delta_cache: dict = {}  # {pair: {'result': dict, 'price': float, 'ts': float}}
 
 # ─── OHLCV short-term cache ─────────────────────────────────────────────────
 # Historical candles never change; only the last bar updates. Safe to cache
@@ -4196,7 +4206,7 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
                funding_map, oi_map, iv_map, ob_map,
                master_df, circuit_breaker, start_time,
                trending_coins=None, global_mkt=None, btc_df=None, cvd_map=None, tvl_map=None,
-               pi_cycle_data=None, macro_adj=None):
+               pi_cycle_data=None, macro_adj=None, onchain_map=None):
     """Process one pair across all timeframes. Called from ThreadPoolExecutor workers."""
     if trending_coins is None:
         trending_coins = []
@@ -4206,7 +4216,8 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         pi_cycle_data = {}
     if macro_adj is None:
         macro_adj = {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
-    onchain_data = fetch_onchain_metrics(pair)
+    # PERF-A1: use pre-fetched onchain_map (batch-fetched in pre-scan); fall back to live call only if missing
+    onchain_data = (onchain_map or {}).get(pair) or fetch_onchain_metrics(pair)
     # DefiLlama TVL — pre-fetched by run_scan() parallel batch (PERF-09); fall back to live call
     tvl_data = (tvl_map or {}).get(pair)
     if not tvl_data:
@@ -4226,18 +4237,15 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     current_price = None
     signal_agent_votes = {}  # F4: per-agent votes from primary TF (1h preferred)
 
-    # PERF-10: fetch all TF OHLCV frames in parallel instead of sequentially
-    # Each fetch is ~300ms; 4 sequential = ~1.2s → parallel = ~300ms per pair
-    # PERF-SCAN: use SCAN_OHLCV_LIMIT (200) — all indicators need < 150 bars; halves fetch payload
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _tf_ex:  # 2 workers per pair — OHLCV is cached; serialise to save CPU
-        _tf_futures = {tf: _tf_ex.submit(robust_fetch_ohlcv, ta_ex, pair, tf, SCAN_OHLCV_LIMIT) for tf in TIMEFRAMES}
+    # PERF-A3: OHLCV already in module cache from pre-fetch phase — direct call, no thread overhead.
+    # PERF-A4: use per-TF limit (_TF_OHLCV_LIMIT) — cache keys must match pre-fetch exactly.
     _ohlcv_frames = {}
-    for _tf_key, _tf_fut in _tf_futures.items():
+    for _tf in TIMEFRAMES:
         try:
-            _ohlcv_frames[_tf_key] = _tf_fut.result()
+            _ohlcv_frames[_tf] = robust_fetch_ohlcv(ta_ex, pair, _tf, _TF_OHLCV_LIMIT.get(_tf, SCAN_OHLCV_LIMIT))
         except Exception as _tf_err:
-            logging.debug("[scan_pair] %s %s OHLCV fetch failed: %s", pair, _tf_key, _tf_err)
-            _ohlcv_frames[_tf_key] = pd.DataFrame()
+            logging.debug("[scan_pair] %s %s OHLCV fetch failed: %s", pair, _tf, _tf_err)
+            _ohlcv_frames[_tf] = pd.DataFrame()
 
     for tf in TIMEFRAMES:
         df = _ohlcv_frames[tf]
@@ -4777,6 +4785,20 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
                     result[p] = {}
         return result
 
+    # PERF-A1: batch-fetch onchain metrics for all pairs in pre-scan phase (was per-pair inside _scan_pair)
+    def _onchain_batch():
+        _res = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _oc_ex:
+            _oc_futs = {_oc_ex.submit(fetch_onchain_metrics, p): p for p in _scan_pairs}
+            for _f in concurrent.futures.as_completed(_oc_futs, timeout=20):
+                p = _oc_futs[_f]
+                try:
+                    _res[p] = _f.result()
+                except Exception:
+                    _res[p] = {'sopr': 1.0, 'mvrv_z': 0.0, 'net_flow': 0.0,
+                               'whale_activity': False, 'source': 'fallback'}
+        return _res
+
     _pre_scan_tasks = {
         "funding":  (lambda: _safe(_data_feeds.get_funding_rates_batch,  _scan_pairs, default={}, label="Funding rates")),
         "oi":       (lambda: _safe(_data_feeds.get_open_interest_batch,   _scan_pairs, default={}, label="Open interest")),
@@ -4790,10 +4812,12 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         "pi_cycle": (lambda: _safe(_data_feeds.fetch_pi_cycle_top,               default={}, label="Pi Cycle Top")),
         # A5: macro adjustment fetched once here — eliminates 6× per-pair FRED calls
         "macro_adj": (lambda: _safe(_data_feeds.get_macro_signal_adjustment,     default={"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}, label="Macro adj")),
+        # PERF-A1: onchain metrics batch — eliminates 29 serial HTTP calls from _scan_pair
+        "onchain":  (lambda: _safe(_onchain_batch, default={}, label="Onchain metrics")),
     }
 
     _pre_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _pre_ex:  # capped — prevents CPU starvation on Streamlit Cloud
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as _pre_ex:  # PERF-A10: raised 4→6 — 11 tasks now, more headroom
         _pre_futures = {_pre_ex.submit(fn): key for key, fn in _pre_scan_tasks.items()}
         for _f in concurrent.futures.as_completed(_pre_futures):
             _pre_results[_pre_futures[_f]] = _f.result()
@@ -4810,6 +4834,8 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     pi_cycle_data  = _pre_results.get("pi_cycle", {}) or {}
     # A5: macro adjustment pre-fetched once — shared across all pairs (no per-pair FRED calls)
     macro_adj_prescan = _pre_results.get("macro_adj") or {"adjustment": 0.0, "regime": "MACRO_NEUTRAL"}
+    # PERF-A1: onchain metrics — pre-fetched in batch; _scan_pair uses map instead of 29 live calls
+    onchain_map       = _pre_results.get("onchain", {}) or {}
 
     # PERF-02: limit to recent 200 rows — only used for BTC correlation; full table scan is wasteful
     master_df = _db.get_signals_df(limit=200)
@@ -4823,17 +4849,18 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         logging.debug(f"StatArb BTC/USDT pre-fetch failed: {_e}")
 
     # A6: OHLCV pre-fetch phase — pure I/O, no analysis yet.
-    # Fetches all pair × timeframe combinations in parallel so the per-pair
-    # analysis phase (HMM, indicators) hits the cache and does no network I/O.
-    # Cap at 3 workers — prevents CPU starvation / 503 health-check failures on Streamlit Cloud.
-    # Each worker makes 4-5 HTTP calls (one per timeframe); 3 concurrent = 12-15 requests in flight max.
-    max_workers = min(len(_scan_pairs), 3)
+    # PERF-A2: raised to 8 I/O workers (was 3) — OHLCV fetch is network-bound, not CPU-bound.
+    #   Each worker: 1 HTTP call per task; 8 concurrent = 8 requests in flight.
+    #   Analysis phase uses separate _analysis_workers (3) to stay CPU-safe on Streamlit Cloud.
+    # PERF-A4: per-TF limits (_TF_OHLCV_LIMIT) — cache keys must match _scan_pair exactly.
+    _ohlcv_workers    = min(len(_scan_pairs) * len(TIMEFRAMES), 8)  # I/O bound — safe to scale up
+    _analysis_workers = min(len(_scan_pairs), 3)                    # CPU bound — keep low
     _ohlcv_tasks = [(p, tf) for p in _scan_pairs for tf in TIMEFRAMES]
 
     def _prefetch_ohlcv(args):
         _p, _tf = args
         try:
-            robust_fetch_ohlcv(ta_ex, _p, _tf, limit=SCAN_OHLCV_LIMIT)
+            robust_fetch_ohlcv(ta_ex, _p, _tf, limit=_TF_OHLCV_LIMIT.get(_tf, SCAN_OHLCV_LIMIT))
         except Exception:
             pass
 
@@ -4843,7 +4870,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     # Pairs not fetched in time simply fall through to the per-pair cache hit/miss;
     # this is safe because _scan_pair() already handles empty DataFrames.
     _ohlcv_deadline = time.time() + 45
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as _ohlcv_ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_ohlcv_workers) as _ohlcv_ex:
         _ohlcv_futures = [_ohlcv_ex.submit(_prefetch_ohlcv, t) for t in _ohlcv_tasks]
         for _f in concurrent.futures.as_completed(_ohlcv_futures,
                                                    timeout=max(1, _ohlcv_deadline - time.time())):
@@ -4859,7 +4886,40 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     completed = [0]
     result_lock = threading.Lock()
 
+    # PERF-A5: delta scan — snapshot live WS prices once before analysis phase.
+    # Pairs whose price hasn't moved >0.3% since last scan and whose cached result
+    # is <3 min old are returned immediately without re-running _scan_pair.
+    _now_ts = time.time()
+    _ws_px_map: dict = {}
+    try:
+        import websocket_feeds as _ws_snap
+        _ws_px_map = _ws_snap.get_all_prices() or {}
+    except Exception:
+        pass
+
+    def _check_delta_skip(pair) -> dict | None:
+        cached = _delta_cache.get(pair)
+        if not cached:
+            return None
+        if _now_ts - cached['ts'] > 180:  # older than 3 min — must re-scan
+            return None
+        live_px = (_ws_px_map.get(pair) or {}).get('price', 0)
+        old_px  = cached.get('price', 0)
+        if live_px and old_px and abs(live_px - old_px) / old_px > 0.003:
+            return None  # price moved >0.3% — must re-scan
+        return cached['result']
+
     def _scan_with_progress(pair):
+        # PERF-A5: return cached result if pair is price-stable and result is fresh
+        _cached_r = _check_delta_skip(pair)
+        if _cached_r is not None:
+            with result_lock:
+                completed[0] += 1
+                with _partial_scan_lock:
+                    _partial_scan_results.append(_cached_r)
+                if progress_callback:
+                    progress_callback(completed[0], len(_scan_pairs), pair)
+            return _cached_r
         result = _scan_pair(
             pair, ta_ex, fng_value, fng_category,
             funding_map, oi_map, iv_map, ob_map,
@@ -4867,6 +4927,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
             trending_coins=trending_coins, global_mkt=global_mkt,
             btc_df=btc_df_for_scan, cvd_map=cvd_map, tvl_map=tvl_map,
             pi_cycle_data=pi_cycle_data, macro_adj=macro_adj_prescan,
+            onchain_map=onchain_map,
         )
         with result_lock:
             completed[0] += 1
@@ -4875,12 +4936,15 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
                 # without waiting for all pairs to complete
                 with _partial_scan_lock:
                     _partial_scan_results.append(result)
+                # Update delta cache for this pair
+                _live_px = (_ws_px_map.get(pair) or {}).get('price') or result.get('price_usd', 0)
+                _delta_cache[pair] = {'result': result, 'price': _live_px or 0, 'ts': time.time()}
             if progress_callback:
                 progress_callback(completed[0], len(_scan_pairs), pair)
         return result
 
     pair_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_analysis_workers) as executor:
         futures = {executor.submit(_scan_with_progress, pair): pair for pair in _scan_pairs}
         for future in concurrent.futures.as_completed(futures):
             pair = futures[future]

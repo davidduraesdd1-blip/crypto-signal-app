@@ -605,6 +605,30 @@ init_state()
 # Start WebSocket live price feed (idempotent — safe on every Streamlit rerun)
 _ws.start(model.PAIRS)
 
+# PERF-A7: Pre-warm OHLCV cache in background on first process start.
+# Runs once per Streamlit worker process (module-level flag, not session_state).
+# When user clicks "Run Scan", all 116 pair×TF OHLCV calls hit the warm cache
+# instead of making live API requests — saves ~12-15s on the first scan.
+if not globals().get("_OHLCV_PREWARM_STARTED"):
+    globals()["_OHLCV_PREWARM_STARTED"] = True
+    def _ohlcv_prewarm():
+        try:
+            _pw_ex = model.get_exchange_instance(model.TA_EXCHANGE)
+            if not _pw_ex:
+                return
+            for _pw_pair in model.PAIRS:
+                for _pw_tf in model.TIMEFRAMES:
+                    try:
+                        model.robust_fetch_ohlcv(
+                            _pw_ex, _pw_pair, _pw_tf,
+                            limit=model._TF_OHLCV_LIMIT.get(_pw_tf, model.SCAN_OHLCV_LIMIT),
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    threading.Thread(target=_ohlcv_prewarm, daemon=True, name="ohlcv-prewarm").start()
+
 # Auto-start autonomous agent if enabled in config (idempotent)
 if _agent is not None:
     _agent_cfg_boot = _cached_alerts_config()
@@ -1125,16 +1149,43 @@ def _scan_progress():
         unsafe_allow_html=True,
     )
 
-    # Simple text progress counter — avoids regenerating full card HTML every 3s
-    # which would flood the server with megabytes of markup during a 10-minute scan.
+    # Simple text progress counter + PERF-A6: live partial results preview
     _n_done = _prog
     if _n_done > 0:
         st.markdown(
             f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
             f'font-weight:600;margin:4px 0 8px 0;">'
-            f'⚡ {_n_done} of {_total} coins scanned — results will appear when complete</div>',
+            f'⚡ {_n_done} of {_total} coins scanned</div>',
             unsafe_allow_html=True,
         )
+        # PERF-A6: Progressive scan — show top BUY signals found so far
+        _partial = model.get_partial_scan_results()
+        if _partial:
+            _buys = sorted(
+                [r for r in _partial if "BUY" in r.get("direction", "")],
+                key=lambda x: x.get("confidence_avg_pct", 0), reverse=True,
+            )
+            if _buys:
+                _rows = []
+                for _pr in _buys[:5]:
+                    _sym  = _pr.get("pair", "").replace("/USDT", "")
+                    _dir  = _pr.get("direction", "")
+                    _conf = _pr.get("confidence_avg_pct", 0)
+                    _px   = _pr.get("price_usd", 0)
+                    _rows.append(
+                        f'<span style="color:#00d4aa;font-weight:700">{_sym}</span> '
+                        f'<span style="color:#22c55e">▲ {_dir}</span> '
+                        f'<span style="color:rgba(255,255,255,0.5)">{_conf:.0f}%</span>'
+                        + (f' <span style="color:rgba(255,255,255,0.35);font-size:11px">${_px:,.4g}</span>' if _px else "")
+                    )
+                st.markdown(
+                    '<div style="background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.2);'
+                    'border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:13px;line-height:1.9">'
+                    '<span style="font-size:11px;color:rgba(0,212,170,0.6);text-transform:uppercase;'
+                    'letter-spacing:0.6px;font-weight:600">Top BUY signals so far</span><br>'
+                    + "<br>".join(_rows) + "</div>",
+                    unsafe_allow_html=True,
+                )
 
     # Detect completion → trigger full-page rerun to show final results
     if not _st.get("running", False) and not _running:
@@ -1275,6 +1326,15 @@ def page_dashboard():
         else:
             st.info("No scan results yet — click **Run Scan** in the sidebar to begin.")
         return  # A4: guard — always return on empty results, prevents results[0] IndexError
+
+    # PERF-A8: Inject live WebSocket prices into scan results before rendering.
+    # Scan results may be minutes old; WS prices are real-time → always show the
+    # freshest price without re-running the scan.
+    if _live_prices:
+        for _r in results:
+            _ws_tick = _live_prices.get(_r.get("pair", ""))
+            if _ws_tick and _ws_tick.get("price"):
+                _r["price_usd"] = _ws_tick["price"]
 
     if st.session_state.get("scan_timestamp"):
         st.success(f"Scan complete — {len(results)} pairs | {st.session_state['scan_timestamp']}")
