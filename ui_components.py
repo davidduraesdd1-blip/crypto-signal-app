@@ -4269,6 +4269,10 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
     _c1, _c2, _c3, _c4 = _st.columns(4)
 
     def _mini_card(col, label, value, sub, color, plain=""):
+        _plain_div = (
+            '<div style="font-size:9px;color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3">'
+            + plain + '</div>'
+        ) if plain else ""
         col.markdown(
             f'<div style="background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));'
             f'border:1px solid rgba(255,255,255,0.06);border-top:3px solid {color};'
@@ -4277,7 +4281,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
             f'letter-spacing:0.8px;font-weight:600;margin-bottom:4px">{label}</div>'
             f'<div style="font-size:15px;font-weight:700;color:{color}">{value}</div>'
             f'<div style="font-size:10px;color:rgba(168,180,200,0.55);margin-top:3px">{sub}</div>'
-            f'{"<div style=\"font-size:9px;color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3\">" + plain + "</div>" if plain else ""}'
+            f'{_plain_div}'
             f'</div>',
             unsafe_allow_html=True,
         )
