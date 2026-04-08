@@ -113,8 +113,30 @@ except Exception as _e:
 # ── Sentry error monitoring (optional — set SUPERGROK_SENTRY_DSN env var) ──
 
 def _scrub_sentry_event(event, hint):
-    """Remove PII and API keys from Sentry events before sending."""
-    # Scrub request data
+    """Remove PII, API keys, and expected-noise events from Sentry before sending."""
+    # Drop known-noisy non-actionable events
+    _msg = str(event.get("message", "") or "")
+    _exc_values = (event.get("exception") or {}).get("values") or []
+    _exc_msgs = " ".join(
+        str((v.get("value") or "")) for v in _exc_values
+    )
+    _combined = (_msg + " " + _exc_msgs).lower()
+
+    # OKX WebSocket periodic close frames — "goodbye" is the server's normal
+    # session expiry close frame. The reconnect loop handles this automatically.
+    if "connection to remote host was lost" in _combined or "goodbye" in _combined:
+        return None
+
+    # Anthropic credit exhaustion — already handled in code via _llm_credits_exhausted
+    # flag; subsequent calls are suppressed. First occurrence is logged to files.
+    if "credit balance" in _combined and "anthropic" in _combined:
+        return None
+
+    # Streamlit media file cache misses — happen on app restart, not actionable
+    if "mediafilestorагеerror" in _combined or "mediafilestoragerror" in _combined:
+        return None
+
+    # Scrub request data (PII)
     if "request" in event:
         event["request"].pop("cookies", None)
         event["request"].pop("headers", None)

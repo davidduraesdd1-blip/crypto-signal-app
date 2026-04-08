@@ -494,7 +494,7 @@ def _node_enrich_signals(state: AgentState) -> AgentState:
             f"Signal: {sig.get('direction','?')} conf={sig.get('confidence_avg_pct',0):.1f}%"
         )
     except Exception as exc:
-        logger.error("[agent] enrich_signals %s: %s", state["pair"], exc)
+        logger.error("[agent] enrich_signals %s: %s", state["pair"], exc, exc_info=True)
         state["error"]         = str(exc)
         state["signal_result"] = {}
     return state
