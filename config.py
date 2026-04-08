@@ -13,6 +13,12 @@ COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 ETHERSCAN_API_KEY: str | None = os.environ.get("ETHERSCAN_API_KEY", "")
 ZERION_API_KEY: str | None = os.environ.get("ZERION_API_KEY", "")
 
+# ─── Anthropic / AI master switch ────────────────────────────────────────────
+# Set to True when Anthropic credits are funded and AI features should be active.
+# False = all Claude API calls are skipped; apps show graceful fallback text.
+# To enable: change False → True here (one line, all AI features restore instantly).
+ANTHROPIC_ENABLED: bool = False
+
 # ─── LLM Model Constants ──────────────────────────────────────────────────────
 # Centralised model names — update here to change everywhere.
 CLAUDE_MODEL: str = "claude-sonnet-4-6"           # primary signal explanation model

@@ -17,18 +17,20 @@ import logging
 import threading
 
 try:
-    from config import CLAUDE_MODEL, CLAUDE_HAIKU_MODEL
+    from config import CLAUDE_MODEL, CLAUDE_HAIKU_MODEL, ANTHROPIC_ENABLED
 except ImportError:
     CLAUDE_MODEL = "claude-sonnet-4-6"
     CLAUDE_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+    ANTHROPIC_ENABLED = False
 
 logger = logging.getLogger(__name__)
 
 # ── Credit exhaustion circuit breaker ────────────────────────────────────────
-# Set to True when a 400 "credit balance" error is received from Anthropic.
-# All subsequent Claude calls are skipped until the process restarts.
-# Mirrors the same pattern used in news_sentiment.py.
-_llm_credits_exhausted: bool = False
+# Initialised from ANTHROPIC_ENABLED config flag.
+# Set True  → all Claude calls return graceful fallback text (no API calls made).
+# Set False → normal operation.
+# To re-enable AI: set ANTHROPIC_ENABLED = True in config.py.
+_llm_credits_exhausted: bool = not ANTHROPIC_ENABLED
 _llm_credits_lock = threading.Lock()
 
 _CACHE: dict = {}

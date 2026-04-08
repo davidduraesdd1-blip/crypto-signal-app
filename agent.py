@@ -33,9 +33,10 @@ import alerts as _alerts
 import execution as _exec
 
 try:
-    from config import CLAUDE_MODEL as _CLAUDE_MODEL
+    from config import CLAUDE_MODEL as _CLAUDE_MODEL, ANTHROPIC_ENABLED as _ANTHROPIC_ENABLED
 except ImportError:
     _CLAUDE_MODEL = "claude-sonnet-4-6"
+    _ANTHROPIC_ENABLED = False
 
 logger = logging.getLogger(__name__)
 
@@ -699,6 +700,11 @@ def _node_claude_reason(state: AgentState) -> AgentState:
     if not _ANTHROPIC_AVAILABLE:
         state["claude_decision"]  = "reject"
         state["claude_rationale"] = "anthropic SDK not installed"
+        return state
+
+    if not _ANTHROPIC_ENABLED:
+        state["claude_decision"]  = "reject"
+        state["claude_rationale"] = "AI agent paused — set ANTHROPIC_ENABLED = True in config.py to activate"
         return state
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
