@@ -201,22 +201,22 @@ def _write_scan_status(running, timestamp=None, error=None, progress=0, pair="")
 def _read_scan_status():
     try:
         return _db.read_scan_status()
-    except Exception:
-        pass
+    except Exception as _e:
+        logging.warning("[App] scan_status DB read failed: %s", _e)
     return {"running": False, "timestamp": None, "error": None, "progress": 0, "pair": ""}
 
 def _write_scan_results(results):
     try:
         _db.write_scan_results(results)
-    except Exception:
-        pass
+    except Exception as _e:
+        logging.warning("[App] scan_results DB write failed: %s", _e)
 
 def _read_scan_results():
     try:
         results = _db.read_scan_results()
         return results if results else None
-    except Exception:
-        pass
+    except Exception as _e:
+        logging.warning("[App] scan_results DB read failed: %s", _e)
     return None
 
 
@@ -1433,8 +1433,8 @@ def page_dashboard():
                 ),
                 unsafe_allow_html=True,
             )
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel] regime_banner failed: %s", _e)
 
         # ── Top Movers bento card (3 gainers / 3 losers from CoinGecko) ──────────
         # PERF-20: route through cached wrapper (2-min TTL) instead of direct API call
@@ -1444,8 +1444,8 @@ def page_dashboard():
             _losers  = _movers.get("losers", [])
             if _gainers or _losers:
                 st.markdown(_ui.top_movers_card_html(_gainers, _losers), unsafe_allow_html=True)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel] top_movers failed: %s", _e)
 
         st.markdown("---")
 
@@ -1697,8 +1697,8 @@ def page_dashboard():
             try:
                 if _agent is not None and not _agent.supervisor.is_running():
                     _agent.supervisor.start()
-            except Exception:
-                pass
+            except Exception as _e:
+                logging.warning("[Agent] supervisor start failed: %s", _e)
             st.markdown("---")
             _ui.section_header("Autonomous Agent", "24/7 AI trading agent status", icon="🤖")
             try:
@@ -1774,8 +1774,8 @@ def page_dashboard():
             try:
                 if _agent is not None and _agent.supervisor.is_running():
                     _agent.supervisor.stop()
-            except Exception:
-                pass
+            except Exception as _e:
+                logging.warning("[Agent] supervisor stop failed: %s", _e)
 
         # ── Connected Wallet Panel (#110 / #111) ──────────────────────────────────
         _wh = st.session_state.get("wallet_holdings")
@@ -1910,8 +1910,8 @@ def page_dashboard():
         try:
             _sq_list = data_feeds.get_liquidation_pressure([r["pair"] for r in _grid_results[:15]])
             _squeeze_data = {s["pair"]: s.get("squeeze_signal", "NORMAL") for s in _sq_list}
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel] liquidation_pressure fetch failed: %s", _e)
         st.markdown(
             _ui.coin_cards_grid_html(_grid_results, ws_prices=_all_ws_prices,
                                      squeeze_data=_squeeze_data),
@@ -1985,32 +1985,32 @@ def page_dashboard():
         # S10 — Market Regime Banner (BULL / BEAR / SIDEWAYS from buy/sell majority + F&G)
         try:
             _ui.render_market_regime_banner(results, _fng_val, _s_macro_regime, _s_altcoin)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S10] market_regime_banner failed: %s", _e)
 
         # S1 — TTM Squeeze Momentum Panel
         try:
             _ui.render_ttm_squeeze_panel(_spk_results, results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S1] ttm_squeeze failed: %s", _e)
 
         # S2 — Hurst Exponent Panel
         try:
             _ui.render_hurst_exponent_panel(_spk_results, results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S2] hurst_exponent failed: %s", _e)
 
         # S3 — RSI / MACD Divergence Panel
         try:
             _ui.render_rsi_macd_divergence_panel(results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S3] rsi_macd_divergence failed: %s", _e)
 
         # S4 — Funding Rate Arbitrage Panel
         try:
             _ui.render_funding_rate_arb_panel(results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S4] funding_rate_arb failed: %s", _e)
 
         # S5 — Liquidation Heatmap Panel (real Binance events + OI cluster model)
         try:
@@ -2018,32 +2018,32 @@ def page_dashboard():
                 [r["pair"] for r in results[:12]], _live_prices
             )
             _ui.render_liquidation_overlay_panel(results, _sg_level_val, liq_data=_liq_hm_data)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S5] liquidation_overlay failed: %s", _e)
 
         # S6 — Social Momentum Panel
         try:
             _ui.render_social_momentum_panel(results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S6] social_momentum failed: %s", _e)
 
         # S7 — GitHub Developer Activity Panel
         try:
             _ui.render_github_dev_activity_panel(_sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S7] github_dev_activity failed: %s", _e)
 
         # S8 — Trader vs Investor Split Panel
         try:
             _ui.render_trader_investor_split(results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S8] trader_investor_split failed: %s", _e)
 
         # S9 — Threshold Alerts Panel
         try:
             _ui.render_threshold_alerts_panel(results, _sg_level_val)
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.debug("[Panel S9] threshold_alerts failed: %s", _e)
 
         st.markdown("---")
         # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
