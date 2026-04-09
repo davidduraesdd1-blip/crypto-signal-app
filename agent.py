@@ -60,6 +60,13 @@ except ImportError:
     _ANTHROPIC_AVAILABLE = False
     logger.warning("[agent] anthropic SDK not installed — run: pip install anthropic")
 
+# ─── Credit exhaustion circuit breaker ───────────────────────────────────────
+# Once credits are exhausted (HTTP 400 "credit balance") all Claude calls in
+# _node_claude_reason() return "reject" immediately — no API round-trip.
+# Mirrors the same pattern in llm_analysis.py.  Cleared on next app restart.
+_claude_credits_exhausted: bool = not _ANTHROPIC_ENABLED
+_claude_credits_lock = threading.Lock()
+
 
 # ─── Crypto model core (lazy import avoids circular deps at module load) ──────
 _model = None
@@ -738,6 +745,14 @@ def _node_claude_reason(state: AgentState) -> AgentState:
         state["claude_rationale"] = "AI agent paused — set ANTHROPIC_ENABLED = True in config.py to activate"
         return state
 
+    # Credit exhaustion circuit breaker — skip API call if credits are gone
+    global _claude_credits_exhausted
+    with _claude_credits_lock:
+        if _claude_credits_exhausted:
+            state["claude_decision"]  = "reject"
+            state["claude_rationale"] = "Claude API credit balance exhausted — fund credits and restart"
+            return state
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         state["claude_decision"]  = "reject"
@@ -772,47 +787,65 @@ def _node_claude_reason(state: AgentState) -> AgentState:
     reflection    = _get_reflection_memory(state["pair"])
     bull_bear_blk = _build_bull_bear_section(sig)
 
-    prompt = f"""You are an autonomous crypto trading agent. Review this signal and decide whether to trade.
+    # ── System prompt (static — cached by Anthropic across repeated calls) ────────
+    # Caching the stable agent rules saves ~70% of prompt tokens when many pairs
+    # are processed in a single cycle.  Dynamic market data goes in the user message.
+    _AGENT_SYSTEM_PROMPT = [
+        {
+            "type": "text",
+            "text": (
+                "You are an autonomous crypto trading agent operating a multi-timeframe "
+                "technical analysis system. Your job: review trading signals and decide "
+                "whether to enter, skip, or reject each trade.\n\n"
+                "DECISION FRAMEWORK:\n"
+                "- approve_trade: signal is clear, indicators align, risk is acceptable\n"
+                "- reject_trade: indicators conflict, momentum is weak, or risk is too high\n\n"
+                "RISK RULES (never violate these):\n"
+                "1. Never approve if confidence < minimum threshold\n"
+                "2. Never approve if max concurrent positions already reached\n"
+                "3. Never approve if daily loss limit is hit\n"
+                "4. SELL signals require the same bar of evidence as BUY signals\n"
+                "5. When in doubt, reject — capital preservation > missed opportunity\n\n"
+                "EXTENDED REASONING REQUIREMENTS (G10):\n"
+                "In your rationale/reason field always include:\n"
+                "1. The PRIMARY factor driving this decision (cite exact indicator value)\n"
+                "2. The main ALTERNATIVE you considered and why you rejected it\n"
+                "3. The single condition that would FLIP this decision\n\n"
+                "You MUST call exactly one tool: approve_trade OR reject_trade. No other output."
+            ),
+            "cache_control": {"type": "ephemeral"},  # cache static rules across pair cycles
+        }
+    ]
 
-## Signal: {_sanitize(sig.get("pair", state["pair"]))}
-- Direction: {_sanitize(sig.get("direction", "?"))}
-- Avg Confidence: {_sanitize(sig.get("confidence_avg_pct", 0))}%
-- MTF Alignment: {_sanitize(sig.get("mtf_alignment", "?"))}%
-- Risk Mode: {_sanitize(sig.get("risk_mode", "?"))}
-- Entry: {_sanitize(sig.get("entry", "?"))} | Stop: {_sanitize(sig.get("stop_loss", "?"))} | Target: {_sanitize(sig.get("exit", "?"))}
-- Kelly Position Size: {_sanitize(sig.get("position_size_pct", "?"))}%
-
-## Timeframe Breakdown
-{chr(10).join(tf_lines) if tf_lines else "  No valid timeframe data"}
-
-## Market Context
-- On-Chain: {_sanitize(first_td.get("onchain", "N/A"))}
-- Options IV: {_sanitize(first_td.get("options_iv", "N/A"))}
-- Order Book: {_sanitize(first_td.get("ob_depth", "N/A"))}
-- Funding: {_sanitize(first_td.get("funding", "N/A"))}
-- TVL: {_sanitize(first_td.get("tvl", "N/A"))}
-{bull_bear_blk}
-## Recent Trade History (Reflection Memory)
-{reflection}
-
-## System Performance Context
-- Recent signal quality: {sharpe_label} (Sharpe-based multiplier: {sharpe_mult:.2f})
-- Note: weight your conviction accordingly.
-
-## Current Portfolio (authoritative — do not assume from memory)
-- Open Positions: {_sanitize(pf["open_count"])} / {_sanitize(cfg["max_concurrent_positions"])}
-- Portfolio Equity: ${_sanitize(pf["equity_usd"])}
-- Today's PnL: {_sanitize(pf["daily_pnl_pct"])}%
-
-## Extended Reasoning Requirements (G10)
-Before calling a tool, in your rationale/reason field include:
-1. What the PRIMARY factor driving this decision is (cite specific indicator value)
-2. What ALTERNATIVES you considered — e.g., "considered waiting for lower RSI but SuperTrend is firmly bullish"
-3. What single condition would FLIP this decision to the opposite
-
-Call approve_trade if the signal is clear and risk is acceptable.
-Call reject_trade if indicators conflict, momentum is weak, or risk is too high.
-You MUST call exactly one tool."""
+    # ── User message (dynamic — changes every cycle with live market data) ───────
+    prompt = (
+        f"Review this trading signal and call approve_trade or reject_trade.\n\n"
+        f"## Signal: {_sanitize(sig.get('pair', state['pair']))}\n"
+        f"- Direction: {_sanitize(sig.get('direction', '?'))}\n"
+        f"- Avg Confidence: {_sanitize(sig.get('confidence_avg_pct', 0))}%\n"
+        f"- MTF Alignment: {_sanitize(sig.get('mtf_alignment', '?'))}%\n"
+        f"- Risk Mode: {_sanitize(sig.get('risk_mode', '?'))}\n"
+        f"- Entry: {_sanitize(sig.get('entry', '?'))} | Stop: {_sanitize(sig.get('stop_loss', '?'))} | Target: {_sanitize(sig.get('exit', '?'))}\n"
+        f"- Kelly Position Size: {_sanitize(sig.get('position_size_pct', '?'))}%\n\n"
+        f"## Timeframe Breakdown\n"
+        f"{chr(10).join(tf_lines) if tf_lines else '  No valid timeframe data'}\n\n"
+        f"## Market Context\n"
+        f"- On-Chain: {_sanitize(first_td.get('onchain', 'N/A'))}\n"
+        f"- Options IV: {_sanitize(first_td.get('options_iv', 'N/A'))}\n"
+        f"- Order Book: {_sanitize(first_td.get('ob_depth', 'N/A'))}\n"
+        f"- Funding: {_sanitize(first_td.get('funding', 'N/A'))}\n"
+        f"- TVL: {_sanitize(first_td.get('tvl', 'N/A'))}\n"
+        f"{bull_bear_blk}\n"
+        f"## Recent Trade History (Reflection Memory)\n"
+        f"{reflection}\n\n"
+        f"## System Performance Context\n"
+        f"- Recent signal quality: {sharpe_label} (Sharpe-based multiplier: {sharpe_mult:.2f})\n"
+        f"- Note: weight your conviction accordingly.\n\n"
+        f"## Current Portfolio (authoritative — do not assume from memory)\n"
+        f"- Open Positions: {_sanitize(pf['open_count'])} / {_sanitize(cfg['max_concurrent_positions'])}\n"
+        f"- Portfolio Equity: ${_sanitize(pf['equity_usd'])}\n"
+        f"- Today's PnL: {_sanitize(pf['daily_pnl_pct'])}%"
+    )
 
     try:
         # AG-14: add timeout to prevent a hung API call from stalling the agent
@@ -824,6 +857,7 @@ You MUST call exactly one tool."""
         response = client.messages.create(
             model      = _CLAUDE_MODEL,
             max_tokens = 512,
+            system     = _AGENT_SYSTEM_PROMPT,   # cached static rules
             tools      = _CLAUDE_TOOLS,
             messages   = [{"role": "user", "content": prompt}],
         )
@@ -859,9 +893,19 @@ You MUST call exactly one tool."""
         )
 
     except Exception as exc:
-        logger.error("[agent] Claude API error %s: %s", state["pair"], exc)
-        state["claude_decision"]  = "reject"
-        state["claude_rationale"] = f"API error: {str(exc)[:200]}"
+        err_str = str(exc)
+        # Detect credit exhaustion — activate circuit breaker for future calls
+        if "credit" in err_str.lower() and ("400" in err_str or "balance" in err_str.lower()):
+            global _claude_credits_exhausted
+            with _claude_credits_lock:
+                _claude_credits_exhausted = True
+            logger.info("[agent] Claude credit balance exhausted — disabling AI calls")
+            state["claude_decision"]  = "reject"
+            state["claude_rationale"] = "Claude API credit balance exhausted — fund credits and restart"
+        else:
+            logger.error("[agent] Claude API error %s: %s", state["pair"], exc)
+            state["claude_decision"]  = "reject"
+            state["claude_rationale"] = f"API error: {err_str[:200]}"
 
     return state
 

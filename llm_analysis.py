@@ -435,7 +435,11 @@ def generate_signal_story(
     if not api_key:
         try:
             import streamlit as st
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "").strip()
+            # #18: honour per-session runtime key override before falling back to secrets
+            api_key = (
+                st.session_state.get("runtime_anthropic_key", "").strip()
+                or st.secrets.get("ANTHROPIC_API_KEY", "").strip()
+            )
         except Exception:
             pass
 
