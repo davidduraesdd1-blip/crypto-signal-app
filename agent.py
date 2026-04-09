@@ -110,7 +110,9 @@ def _get_composite_gate_result() -> dict:
         }
         onchain_data = {
             "sopr":              oc.get("sopr"),
+            "sopr_7d_ema":       oc.get("sopr_7d_ema"),         # A2: aSOPR proxy
             "mvrv_z":            oc.get("mvrv_z"),
+            "mvrv_ratio":        oc.get("mvrv_ratio"),          # A4: needed for realized_price
             "hash_ribbon_signal": oc.get("hash_ribbon_signal"),
             "puell_multiple":    oc.get("puell_multiple"),
         }

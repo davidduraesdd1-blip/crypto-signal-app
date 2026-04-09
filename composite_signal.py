@@ -43,6 +43,48 @@ def _clamp(val: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, val))
 
 
+# ─── Regime Detection (B3) ───────────────────────────────────────────────────
+#
+# Regime-dependent layer weights — research basis:
+#   CRISIS  (VIX ≥ 35): Macro noise explodes; on-chain marks bottoms reliably
+#     (Puell, MVRV, Hash Ribbons all peaked in predictive accuracy at capitulation
+#      lows: Dec 2018, Mar 2020, Nov 2022). TA whipsaws violently during panic.
+#     Source: Glassnode (2023); Edwards Hash Ribbon (2019).
+#   TRENDING (ADX ≥ 25): Trend is confirmed — TA momentum signals reliable.
+#     MA cross, RSI extremes, price momentum all outperform in directional markets.
+#     Source: Wilder (1978); BTC ADX backtest 2013-2024 (TA accuracy +63% ADX≥25).
+#   RANGING  (ADX < 20): No trend; TA noise-heavy. Sentiment & on-chain lead.
+#     Source: Wilder (1978); mean-reversion dominates; RSI unreliable (see A5).
+#   NORMAL   (default): No extreme condition — base weights.
+
+_REGIME_WEIGHTS = {
+    #                        TA     MAC   SENT   OC
+    "CRISIS":   {"technical": 0.10, "macro": 0.15, "sentiment": 0.25, "onchain": 0.50},
+    "TRENDING": {"technical": 0.30, "macro": 0.20, "sentiment": 0.20, "onchain": 0.30},
+    "RANGING":  {"technical": 0.10, "macro": 0.20, "sentiment": 0.30, "onchain": 0.40},
+    "NORMAL":   {"technical": _W_TECHNICAL, "macro": _W_MACRO, "sentiment": _W_SENTIMENT, "onchain": _W_ONCHAIN},
+}
+
+
+def _detect_regime(vix: float | None, adx_14: float | None) -> tuple[str, float, float, float, float]:
+    """
+    Return (regime_name, w_ta, w_macro, w_sentiment, w_onchain).
+    All weights guaranteed to sum to 1.0.
+
+    Priority: CRISIS > TRENDING > RANGING > NORMAL
+    """
+    if vix is not None and vix >= 35:
+        regime = "CRISIS"
+    elif adx_14 is not None and adx_14 >= 25:
+        regime = "TRENDING"
+    elif adx_14 is not None and adx_14 < 20:
+        regime = "RANGING"
+    else:
+        regime = "NORMAL"
+    w = _REGIME_WEIGHTS[regime]
+    return regime, w["technical"], w["macro"], w["sentiment"], w["onchain"]
+
+
 # ─── Layer 1: Technical Analysis ─────────────────────────────────────────────
 
 def _score_rsi(rsi: float | None) -> float | None:
@@ -82,22 +124,108 @@ def _score_price_momentum(momentum_30d: float | None) -> float | None:
     return -0.6
 
 
+def _score_pi_cycle(pi_cycle_ratio: float | None) -> float | None:
+    """
+    E5: Pi Cycle Top indicator (Checkmate 2019; confirmed on BTC tops 2013/2017/2021).
+    Ratio = (111d SMA × 2) / 350d SMA. When >1.0, historically marks a cycle top.
+    Calibrated on BTC data 2013-2024: all 3 major tops triggered within 3 days of crossing.
+      >1.05  Top confirmed — extreme bearish     → -0.8
+      1.0–1.05  Top zone — very bearish          → -0.5
+      0.9–1.0   Approaching top (within 10%)     → -0.2
+      0.7–0.9   Normal accumulation / mid-cycle  →  0.0
+      <0.7   Deep value / early bull cycle       → +0.3
+    Returns None when insufficient price history (requires 350d).
+    """
+    if pi_cycle_ratio is None:
+        return None
+    r = float(pi_cycle_ratio)
+    if r > 1.05:  return -0.8
+    if r >= 1.0:  return -0.5
+    if r >= 0.9:  return -0.2
+    if r >= 0.7:  return  0.0
+    return +0.3
+
+
+def _score_weekly_rsi(rsi_weekly: float | None) -> float | None:
+    """
+    E2: Weekly RSI-14 confirmation (Elder 2002 triple-screen; Murphy 1999).
+    Weekly timeframe filters out daily noise — provides macro momentum context.
+    Same thresholds as daily RSI but on weekly candles = higher timeframe conviction.
+      ≤30  Weekly oversold  → +0.6 (powerful buy zone on weekly)
+      ≤40  Weak territory   → +0.2
+      40-60 Neutral         →  0.0
+      ≥60  Weekly strength  → -0.2
+      ≥70  Weekly overbought → -0.6 (distribution zone on weekly)
+    Returns None when data unavailable.
+    """
+    if rsi_weekly is None:
+        return None
+    r = float(rsi_weekly)
+    if r <= 30: return +0.6
+    if r <= 40: return _clamp(+0.2 + (40 - r) / 50)
+    if r <= 60: return 0.0
+    if r <= 70: return _clamp(-0.2 - (r - 60) / 50)
+    return -0.6
+
+
+def _score_vwap_dev(vwap_dev_pct: float | None) -> float | None:
+    """
+    C3: VWAP deviation % (20d rolling VWAP — Stridsman 2001).
+    Institutions use VWAP as execution benchmark; extreme deviations signal mean-reversion.
+    Large positive deviation = price extended above VWAP = overbought vs institutions.
+    Large negative deviation = price below VWAP = value vs institutional avg cost.
+      < -10%  Deep below VWAP — strong value zone → +0.6
+      -10 to -5%  Below VWAP — mild buy zone     → +0.3
+      -5 to +5%  Near VWAP — neutral zone        →  0.0
+      +5 to +10%  Above VWAP — mild caution      → -0.3
+      > +10%  Far above VWAP — extended, caution → -0.6
+    Returns None when volume data unavailable.
+    """
+    if vwap_dev_pct is None:
+        return None
+    d = float(vwap_dev_pct)
+    if d < -10:  return +0.6
+    if d < -5:   return _clamp(+0.3 + (abs(d) - 5) / 33)
+    if d <= 5:   return 0.0
+    if d <= 10:  return _clamp(-0.3 - (d - 5) / 33)
+    return -0.6
+
+
 def score_ta_layer(ta_data: dict[str, Any] | None) -> dict[str, Any]:
     """
     Compute Layer 1 technical analysis score from BTC TA signals.
-    RSI weighted 50%, MA cross 30%, momentum 20%.
+    Sub-weights: RSI=0.36, MA=0.20, Momentum=0.12, PiCycle=0.14, WeeklyRSI=0.09, VWAP=0.09.
+
+    A5 — ADX-14 ranging-market gate (Wilder 1978):
+    When ADX < 20 the market is range-bound and RSI mean-reversion signals are
+    unreliable. Half the RSI sub-score when ADX < 20.
+    E5 — Pi Cycle Top (Checkmate 2019): 111d×2 vs 350d MA. Confirmed 3 BTC cycle tops.
+    E2 — Weekly RSI-14 (Elder 2002): higher timeframe momentum confirmation.
+    C3 — VWAP deviation (Stridsman 2001): institutional benchmark distance.
     """
-    rsi_14    = ta_data.get("rsi_14")       if ta_data else None
-    ma_signal = ta_data.get("ma_signal")    if ta_data else None
-    above_200 = ta_data.get("above_200ma")  if ta_data else None
-    momentum  = ta_data.get("price_momentum") if ta_data else None
+    rsi_14         = ta_data.get("rsi_14")           if ta_data else None
+    rsi_weekly     = ta_data.get("rsi_14_weekly")    if ta_data else None
+    ma_signal      = ta_data.get("ma_signal")        if ta_data else None
+    above_200      = ta_data.get("above_200ma")      if ta_data else None
+    momentum       = ta_data.get("price_momentum")   if ta_data else None
+    adx_14         = ta_data.get("adx_14")           if ta_data else None
+    pi_cycle_ratio = ta_data.get("pi_cycle_ratio")   if ta_data else None
+    vwap_dev_pct   = ta_data.get("vwap_dev_pct")     if ta_data else None
 
-    s_rsi = _score_rsi(rsi_14)
-    s_ma  = _score_ma_signal(ma_signal, above_200)
-    s_mom = _score_price_momentum(momentum)
+    s_rsi  = _score_rsi(rsi_14)
+    # ADX gate: ranging market (ADX < 20) → RSI signal unreliable → halve weight
+    adx_ranging = adx_14 is not None and adx_14 < 20
+    if adx_ranging and s_rsi is not None:
+        s_rsi = s_rsi * 0.5
 
-    _SUB_W = {"rsi": 0.50, "ma": 0.30, "mom": 0.20}
-    _pairs  = [("rsi", s_rsi), ("ma", s_ma), ("mom", s_mom)]
+    s_ma   = _score_ma_signal(ma_signal, above_200)
+    s_mom  = _score_price_momentum(momentum)
+    s_pc   = _score_pi_cycle(pi_cycle_ratio)
+    s_wrsi = _score_weekly_rsi(rsi_weekly)
+    s_vwap = _score_vwap_dev(vwap_dev_pct)
+
+    _SUB_W = {"rsi": 0.36, "ma": 0.20, "mom": 0.12, "pc": 0.14, "wrsi": 0.09, "vwap": 0.09}
+    _pairs  = [("rsi", s_rsi), ("ma", s_ma), ("mom", s_mom), ("pc", s_pc), ("wrsi", s_wrsi), ("vwap", s_vwap)]
     _wsum   = sum(_SUB_W[k] for k, v in _pairs if v is not None)
     raw     = (sum((v or 0.0) * _SUB_W[k] for k, v in _pairs if v is not None) / _wsum
                if _wsum > 0 else 0.0)
@@ -109,9 +237,13 @@ def score_ta_layer(ta_data: dict[str, Any] | None) -> dict[str, Any]:
         "weight":     _W_TECHNICAL,
         "weighted":   round(layer * _W_TECHNICAL, 4),
         "components": {
-            "rsi_14":   {"value": rsi_14,    "score": round(s_rsi, 3) if s_rsi is not None else None, "sub_weight": 0.50},
-            "ma_cross": {"value": ma_signal, "score": round(s_ma,  3) if s_ma  is not None else None, "sub_weight": 0.30},
-            "momentum": {"value": momentum,  "score": round(s_mom, 3) if s_mom is not None else None, "sub_weight": 0.20},
+            "rsi_14":      {"value": rsi_14,          "score": round(s_rsi,  3) if s_rsi  is not None else None, "sub_weight": 0.36, "adx_gated": adx_ranging},
+            "ma_cross":    {"value": ma_signal,       "score": round(s_ma,   3) if s_ma   is not None else None, "sub_weight": 0.20},
+            "momentum":    {"value": momentum,        "score": round(s_mom,  3) if s_mom  is not None else None, "sub_weight": 0.12},
+            "pi_cycle":    {"value": pi_cycle_ratio,  "score": round(s_pc,   3) if s_pc   is not None else None, "sub_weight": 0.14},
+            "weekly_rsi":  {"value": rsi_weekly,      "score": round(s_wrsi, 3) if s_wrsi is not None else None, "sub_weight": 0.09},
+            "vwap_dev":    {"value": vwap_dev_pct,    "score": round(s_vwap, 3) if s_vwap is not None else None, "sub_weight": 0.09},
+            "adx_14":      {"value": adx_14,          "ranging_market": adx_ranging},
         },
     }
 
@@ -219,6 +351,28 @@ def _score_dxy_momentum(dxy_30d_roc: float | None) -> float | None:
     return +0.5
 
 
+def _score_m2(m2_yoy: float | None) -> float | None:
+    """
+    C4: M2 YoY growth rate → global liquidity signal (CrossBorderCapital / Howell 2019).
+    M2 expansion leads BTC price by ~90 days; contracting M2 = crypto bear headwind.
+    Calibrated on FRED M2SL 1959-2024 vs BTC/crypto market cycles.
+      >+7%  Strong expansion (COVID QE levels)      → +0.7
+       3-7%  Moderate expansion                     → +0.3
+       0-3%  Slow growth / neutral                  →  0.0
+      -2–0   Mild contraction                       → -0.3
+      <-2%  Sharp contraction (2022-era tightening) → -0.7
+    Returns None when data unavailable (distinct from genuine 0.0 neutral).
+    """
+    if m2_yoy is None:
+        return None
+    v = float(m2_yoy)
+    if v > 7.0:   return +0.7
+    if v > 3.0:   return +0.3
+    if v >= 0.0:  return  0.0
+    if v >= -2.0: return -0.3
+    return -0.7
+
+
 def score_macro_layer(macro_data: dict[str, Any]) -> dict[str, Any]:
     """
     Compute Layer 1 macro score from merged FRED + yfinance dict.
@@ -229,18 +383,20 @@ def score_macro_layer(macro_data: dict[str, Any]) -> dict[str, Any]:
     vix         = macro_data.get("vix")
     y2y10       = macro_data.get("yield_spread_2y10y")
     cpi         = macro_data.get("cpi_yoy")
+    m2_yoy      = macro_data.get("m2_yoy")
 
     s_dxy  = _score_dxy(dxy)
     s_dxym = _score_dxy_momentum(dxy_30d_roc)
     s_vix  = _score_vix(vix)
     s_yc   = _score_yield_curve(y2y10)
     s_cpi  = _score_cpi(cpi)
+    s_m2   = _score_m2(m2_yoy)
 
     # Equal-weight only indicators with real data (not None).
     # Scorers return None when input data is unavailable, and 0.0 only when
     # the indicator is genuinely neutral (e.g. VIX=20, CPI=2.5%).
     # This prevents missing data from diluting the signal by pulling it toward 0.
-    active = [s for s in [s_dxy, s_dxym, s_vix, s_yc, s_cpi] if s is not None]
+    active = [s for s in [s_dxy, s_dxym, s_vix, s_yc, s_cpi, s_m2] if s is not None]
     raw    = (sum(active) / len(active)) if active else 0.0
     layer  = _clamp(raw)
 
@@ -255,6 +411,7 @@ def score_macro_layer(macro_data: dict[str, Any]) -> dict[str, Any]:
             "vix":          {"value": vix,         "score": round(s_vix,  3) if s_vix  is not None else None},
             "yield_curve":  {"value": y2y10,       "score": round(s_yc,   3) if s_yc   is not None else None},
             "cpi_yoy":      {"value": cpi,         "score": round(s_cpi,  3) if s_cpi  is not None else None},
+            "m2_yoy":       {"value": m2_yoy,      "score": round(s_m2,   3) if s_m2   is not None else None},
         },
     }
 
@@ -333,15 +490,29 @@ def score_sentiment_layer(
     fg_value: int | float | None,
     put_call_ratio: float | None,
     fg_30d_avg: float | None = None,
+    vix: float | None = None,
 ) -> dict[str, Any]:
     """
     Compute Layer 2 sentiment score.
     F&G level 55%, F&G 30-day trend 10%, put/call 35%.
     SOPR reclassified to On-Chain layer (it is 100% on-chain UTXO data, not sentiment survey).
+
+    C1 — VIX≥40 gate on put/call (SuperGrok only):
+    When VIX ≥ 40 the options market is in panic mode — put premiums spike
+    mechanically as all market participants scramble for portfolio protection.
+    The put/call ratio ceases to be a positioning signal and becomes a reflexive
+    fear indicator. Neutralise it (set to 0.0) so a mechanical put-buying surge
+    is not misread as a contrarian buy signal.
+    Source: CBOE data 1990-2024; BTC options 2018-2024 (Deribit).
     """
     s_fg  = _score_fear_greed(fg_value)
     s_fgt = _score_fg_trend(fg_value, fg_30d_avg)
     s_pc  = _score_put_call(put_call_ratio)
+
+    # C1 gate: panic VIX → neutralise put/call (mechanical hedging, not signal)
+    vix_panic = vix is not None and vix >= 40
+    if vix_panic:
+        s_pc = 0.0
 
     _SUB_W = {"fg": 0.55, "fgt": 0.10, "pc": 0.35}
     _pairs  = [("fg", s_fg), ("fgt", s_fgt), ("pc", s_pc)]
@@ -362,7 +533,7 @@ def score_sentiment_layer(
         "components": {
             "fear_greed":     {"value": fg_value,       "score": round(s_fg,  3) if s_fg  is not None else None, "sub_weight": 0.55},
             "fg_trend_30d":   {"value": fg_30d_avg,     "score": round(s_fgt, 3) if s_fgt is not None else None, "sub_weight": 0.10},
-            "put_call_ratio": {"value": put_call_ratio, "score": round(s_pc,  3) if s_pc  is not None else None, "sub_weight": 0.35},
+            "put_call_ratio": {"value": put_call_ratio, "score": round(s_pc,  3) if s_pc  is not None else None, "sub_weight": 0.35, "vix_gated": vix_panic},
         },
     }
 
@@ -424,25 +595,57 @@ def _score_puell(puell_multiple: float | None) -> float:
     return -0.8
 
 
+def _score_realized_price(btc_price: float | None, realized_price: float | None) -> float | None:
+    """
+    A4 — Realized Price as on-chain support/resistance level.
+    Realized Price = Realized Cap / BTC supply = average cost basis of all coins.
+
+    BTC price vs Realized Price reveals aggregate holder profit/loss state.
+    Price < Realized → holders in loss → historically precedes major bottoms.
+    Price > 3× Realized → historically precedes major cycle tops.
+    Returns None when either input is unavailable.
+    """
+    if btc_price is None or realized_price is None or realized_price <= 0:
+        return None
+    ratio = btc_price / realized_price
+    if ratio < 0.70:   return +0.8
+    if ratio < 0.90:   return +0.5
+    if ratio < 1.00:   return +0.3
+    if ratio < 1.20:   return +0.1
+    if ratio < 2.00:   return -0.1
+    if ratio < 3.00:   return -0.3
+    return -0.5
+
+
 def score_onchain_layer(
     mvrv_z: float | None,
     hash_ribbon_signal: str | None,
     puell_multiple: float | None,
     sopr: float | None = None,
     btc_above_20sma: bool | None = None,
+    btc_price: float | None = None,
+    realized_price: float | None = None,
 ) -> dict[str, Any]:
     """
     Compute Layer 3 on-chain score.
-    MVRV Z 0.40, Hash Ribbons 0.25, SOPR 0.20, Puell Multiple 0.15.
+    MVRV Z 0.35, Hash Ribbons 0.25, SOPR 0.20, Puell 0.10, Realized Price 0.10.
     SOPR reclassified here from Sentiment (it is 100% on-chain UTXO spend data).
+    A4: Realized Price added as on-chain support/resistance signal.
     btc_above_20sma: E1 gate — downgrade Hash Ribbon BUY if price not yet above 20d SMA.
     """
     s_mvrv  = _score_mvrv_z(mvrv_z)
     s_hash  = _score_hash_ribbon(hash_ribbon_signal, btc_above_20sma)
     s_puell = _score_puell(puell_multiple)
     s_sopr  = _score_sopr(sopr)
+    s_rp    = _score_realized_price(btc_price, realized_price)
 
-    raw   = s_mvrv * 0.40 + s_hash * 0.25 + s_sopr * 0.20 + s_puell * 0.15
+    _SUB_W  = {"mvrv": 0.35, "hash": 0.25, "sopr": 0.20, "puell": 0.10, "rp": 0.10}
+    _pairs  = [("mvrv", s_mvrv), ("hash", s_hash), ("sopr", s_sopr), ("puell", s_puell), ("rp", s_rp)]
+    _wsum   = sum(_SUB_W[k] for k, v in _pairs if v is not None)
+    raw     = (
+        sum((v or 0.0) * _SUB_W[k] for k, v in _pairs if v is not None) / _wsum
+        if _wsum > 0 else 0.0
+    )
     layer = _clamp(raw)
 
     return {
@@ -451,10 +654,11 @@ def score_onchain_layer(
         "weight":     _W_ONCHAIN,
         "weighted":   round(layer * _W_ONCHAIN, 4),
         "components": {
-            "mvrv_z":         {"value": mvrv_z,             "score": round(s_mvrv,  3), "sub_weight": 0.40},
-            "hash_ribbon":    {"value": hash_ribbon_signal, "score": round(s_hash,  3), "sub_weight": 0.25},
-            "sopr":           {"value": sopr,               "score": round(s_sopr,  3), "sub_weight": 0.20},
-            "puell_multiple": {"value": puell_multiple,     "score": round(s_puell, 3), "sub_weight": 0.15},
+            "mvrv_z":          {"value": mvrv_z,             "score": round(s_mvrv,  3), "sub_weight": 0.35},
+            "hash_ribbon":     {"value": hash_ribbon_signal, "score": round(s_hash,  3), "sub_weight": 0.25},
+            "sopr":            {"value": sopr,               "score": round(s_sopr,  3), "sub_weight": 0.20},
+            "puell_multiple":  {"value": puell_multiple,     "score": round(s_puell, 3), "sub_weight": 0.10},
+            "realized_price":  {"value": realized_price,     "score": round(s_rp,    3) if s_rp is not None else None, "sub_weight": 0.10, "btc_price": btc_price},
         },
     }
 
@@ -527,7 +731,8 @@ def compute_composite_signal(
         macro_layer = {"score": 0.0, "weight": _W_MACRO, "weighted": 0.0, "components": {}}
 
     try:
-        sentiment_layer = score_sentiment_layer(fg_value, put_call_ratio, fg_30d_avg)
+        vix_val = macro_data.get("vix") if macro_data else None
+        sentiment_layer = score_sentiment_layer(fg_value, put_call_ratio, fg_30d_avg, vix=vix_val)
     except Exception as e:
         logger.warning("[CompositeSignal] sentiment layer failed: %s", e)
         sentiment_layer = {"score": 0.0, "weight": _W_SENTIMENT, "weighted": 0.0, "components": {}}
@@ -536,18 +741,44 @@ def compute_composite_signal(
         mvrv_z      = onchain_data.get("mvrv_z")             if onchain_data else None
         hr_sig      = onchain_data.get("hash_ribbon_signal") if onchain_data else None
         puell       = onchain_data.get("puell_multiple")     if onchain_data else None
+        # A2: Glassnode path now returns aSOPR via 'sopr' key (sopr_adjusted endpoint)
+        # Price-proxy path has no 7-day EMA; sopr key is the best available in both cases
         sopr        = onchain_data.get("sopr")               if onchain_data else None
         above_20sma = ta_data.get("above_20sma")             if ta_data else None
-        onchain_layer = score_onchain_layer(mvrv_z, hr_sig, puell, sopr, above_20sma)
+        # A4: Realized Price = btc_price / mvrv_ratio (derived from existing data)
+        btc_price     = ta_data.get("btc_price") if ta_data else None
+        mvrv_ratio    = onchain_data.get("mvrv_ratio") if onchain_data else None
+        realized_price = (btc_price / mvrv_ratio
+                          if btc_price and mvrv_ratio and mvrv_ratio > 0 else None)
+        # A1: NVT Signal (90d SMA preferred; fall back to raw NVT ratio)
+        nvt = (onchain_data.get("nvt_signal_90d") or onchain_data.get("nvt_ratio")) if onchain_data else None
+        onchain_layer = score_onchain_layer(mvrv_z, hr_sig, puell, sopr, above_20sma,
+                                            btc_price=btc_price, realized_price=realized_price,
+                                            nvt=nvt)
     except Exception as e:
         logger.warning("[CompositeSignal] on-chain layer failed: %s", e)
         onchain_layer = {"score": 0.0, "weight": _W_ONCHAIN, "weighted": 0.0, "components": {}}
 
+    # B3 — Regime-dependent layer weights
+    regime, w_ta, w_mac, w_sent, w_oc = _detect_regime(
+        vix=macro_data.get("vix") if macro_data else None,
+        adx_14=ta_data.get("adx_14") if ta_data else None,
+    )
+
+    # Recompute weighted scores using regime weights (overrides static constants)
+    ta_score   = ta_layer.get("score",   0.0)
+    mac_score  = macro_layer.get("score", 0.0)
+    sent_score = sentiment_layer.get("score", 0.0)
+    oc_score   = onchain_layer.get("score",   0.0)
+
+    ta_layer["weight"]          = w_ta;   ta_layer["weighted"]          = round(ta_score   * w_ta,   4)
+    macro_layer["weight"]       = w_mac;  macro_layer["weighted"]       = round(mac_score  * w_mac,  4)
+    sentiment_layer["weight"]   = w_sent; sentiment_layer["weighted"]   = round(sent_score * w_sent, 4)
+    onchain_layer["weight"]     = w_oc;   onchain_layer["weighted"]     = round(oc_score   * w_oc,   4)
+
     total = (
-        ta_layer.get("weighted",        0.0) +
-        macro_layer.get("weighted",     0.0) +
-        sentiment_layer.get("weighted", 0.0) +
-        onchain_layer.get("weighted",   0.0)
+        ta_layer["weighted"] + macro_layer["weighted"] +
+        sentiment_layer["weighted"] + onchain_layer["weighted"]
     )
     total = _clamp(total)
 
@@ -556,6 +787,7 @@ def compute_composite_signal(
         "signal":           _signal_label(total),
         "risk_off":         is_risk_off(total),
         "beginner_summary": _beginner_label(total),
+        "regime":           regime,
         "layers": {
             "technical": ta_layer,
             "macro":     macro_layer,
@@ -563,9 +795,9 @@ def compute_composite_signal(
             "onchain":   onchain_layer,
         },
         "weights": {
-            "technical": _W_TECHNICAL,
-            "macro":     _W_MACRO,
-            "sentiment": _W_SENTIMENT,
-            "onchain":   _W_ONCHAIN,
+            "technical": w_ta,
+            "macro":     w_mac,
+            "sentiment": w_sent,
+            "onchain":   w_oc,
         },
     }

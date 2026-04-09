@@ -108,23 +108,65 @@ def compute_historical_var(
             mu  = 0.0
             std = 5.0   # default 5% position volatility
 
-        return _parametric_var(pair, confidence, mu, std, position_usd, len(pnl_returns))
+        # E3: pass pnl_returns so CF can use empirical skew/kurtosis when available
+        return _parametric_var(pair, confidence, mu, std, position_usd, len(pnl_returns),
+                               pnl_data=pnl_returns if len(pnl_returns) >= 5 else None)
+
+
+def _cornish_fisher_z(z_g: float, skewness: float, excess_kurtosis: float) -> float:
+    """
+    Cornish-Fisher expansion to adjust Gaussian z-score for skewness and kurtosis.
+
+    z_CF = z + (z²-1)/6·S + (z³-3z)/24·K - (2z³-5z)/36·S²
+
+    Source: Cornish & Fisher (1937); Hull & White (1998); Favre & Galeano (2002).
+    Used by institutional risk systems to produce more accurate VaR for fat-tailed
+    distributions. For crypto returns (empirical kurtosis 4-10, left skew -0.3 to -1.0)
+    Gaussian VaR understates tail losses by 20-40% at the 99% confidence level.
+    """
+    S, K = skewness, excess_kurtosis
+    return z_g + (z_g**2 - 1) / 6 * S + (z_g**3 - 3*z_g) / 24 * K - (2*z_g**3 - 5*z_g) / 36 * S**2
 
 
 def _parametric_var(
     pair, confidence: float, mu: float, std: float,
     position_usd: float, n_samples: int,
+    pnl_data: "np.ndarray | None" = None,
 ) -> dict:
-    """Gaussian parametric VaR (fallback when insufficient historical data)."""
+    """
+    E3 — Cornish-Fisher parametric VaR (upgraded from pure Gaussian).
+
+    When pnl_data is supplied (≥5 samples), compute empirical skewness and excess
+    kurtosis and apply the Cornish-Fisher expansion to the z-score.  This captures
+    the fat tails and left-skew of crypto return distributions without needing a
+    full 20-sample historical simulation window.
+
+    When pnl_data is None or < 5 samples, falls back to Gaussian (conservative
+    default: skewness=0, excess_kurtosis=1.0 — slight tail inflation).
+    """
     z_scores = {0.90: 1.282, 0.95: 1.645, 0.99: 2.326}
-    z = z_scores.get(confidence, 1.645)
+    z_g = z_scores.get(confidence, 1.645)
     # Guard: confidence=1.0 makes (1-confidence)=0 → ZeroDivisionError in CVaR formula
     confidence = min(confidence, 0.9999)
 
-    var_pct  = max(0.0, -(mu - z * std))
-    # CVaR for normal distribution: phi(z) / (1-c) * std - mu
+    # E3 — Cornish-Fisher z-score adjustment
+    if pnl_data is not None and len(pnl_data) >= 5:
+        from scipy import stats as _sp_stats
+        skew = float(_sp_stats.skew(pnl_data))
+        kurt = float(_sp_stats.kurtosis(pnl_data))  # excess kurtosis (Fisher def)
+        skew = max(-3.0, min(3.0, skew))            # clamp to prevent wild CF extrapolation
+        kurt = max(-3.0, min(10.0, kurt))
+        z_cf = _cornish_fisher_z(z_g, skew, kurt)
+        method = "cornish_fisher"
+    else:
+        # Conservative default: slight tail inflation even without empirical data
+        z_cf = _cornish_fisher_z(z_g, skewness=0.0, excess_kurtosis=1.0)
+        method = "parametric_fallback_cf"
+
+    var_pct  = max(0.0, -(mu - z_cf * std))
+    # CVaR for normal distribution: phi(z) / (1-c) * std - mu  (using CF z)
     from math import exp, pi, sqrt
-    phi_z    = exp(-z**2 / 2) / sqrt(2 * pi)
+    phi_z    = exp(-z_cf**2 / 2) / sqrt(2 * pi)
     cvar_pct = max(0.0, -(mu - phi_z / (1 - confidence) * std))
 
     return {
@@ -135,7 +177,7 @@ def _parametric_var(
         "var_usd":       round(var_pct / 100 * position_usd, 2),
         "cvar_usd":      round(cvar_pct / 100 * position_usd, 2),
         "n_samples":     n_samples,
-        "method":        "parametric_fallback",
+        "method":        method,
         "position_usd":  round(position_usd, 2),
     }
 
@@ -215,7 +257,9 @@ def compute_var_summary(
             else:
                 mu  = 0.0
                 std = 5.0
-            return _parametric_var(pair, confidence, mu, std, position_usd, len(pnl_returns))
+            # E3: pass pnl_returns for CF skew/kurtosis correction
+            return _parametric_var(pair, confidence, mu, std, position_usd, len(pnl_returns),
+                                   pnl_data=pnl_returns if len(pnl_returns) >= 5 else None)
 
     var_90 = _var_from_data(0.90)
     var_95 = _var_from_data(0.95)
@@ -239,8 +283,22 @@ def compute_var_summary(
         safe_roll_max = np.where(roll_max == 0, np.nan, roll_max)
         drawdowns = (roll_max - equity) / safe_roll_max * 100
         max_dd = float(np.nanmax(drawdowns)) if len(drawdowns) > 0 else 0.0
+
+        # D1 — Calmar Ratio (Young, 1991): annualized return / maximum drawdown.
+        # Annualized return = ((terminal_equity ^ (365/lookback_days)) - 1) * 100
+        # Interpretation: Calmar > 1.0 = return compensates for drawdown taken.
+        # Sharpe penalises upside volatility; Calmar targets the actual worst-case
+        # loss experienced — more relevant for trend-following and crypto strategies.
+        # Research: Young (1991); documented in AQR Factor Zoo (2020); widely used
+        # by institutional traders for CTA / trend-following fund evaluation.
+        terminal  = float(equity[-1]) if len(equity) > 0 else 1.0
+        ann_return = ((terminal ** (365.0 / _LOOKBACK_DAYS)) - 1) * 100
+        if max_dd > 0:
+            calmar = round(ann_return / max_dd, 3)
+        else:
+            calmar = 999.9 if ann_return > 0 else 0.0
     else:
-        sharpe = sortino = max_dd = 0.0
+        sharpe = sortino = max_dd = calmar = 0.0
 
     return {
         "pair":             pair or "all",
@@ -249,6 +307,7 @@ def compute_var_summary(
         "var_99":           var_99,
         "sharpe_ratio":     sharpe,
         "sortino_ratio":    sortino,
+        "calmar_ratio":     calmar,
         "max_drawdown_pct": round(max_dd, 2),
         "n_samples":        len(pnl),
         "lookback_days":    _LOOKBACK_DAYS,
