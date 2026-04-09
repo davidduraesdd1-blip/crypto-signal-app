@@ -127,7 +127,17 @@ def _get_composite_gate_result() -> dict:
         except Exception:
             pass
 
+        # Layer 3: Deribit put/call ratio (35% of sentiment sub-weight)
+        put_call_ratio = None
+        try:
+            _deribit = _df.fetch_deribit_options_chain()
+            if not _deribit.get("error"):
+                put_call_ratio = _deribit.get("put_call_ratio")
+        except Exception:
+            pass
+
         result = _cs.compute_composite_signal(macro_data, onchain_data, fg_value,
+                                              put_call_ratio=put_call_ratio,
                                               ta_data=ta_data, fg_30d_avg=fg_30d)
         _COMPOSITE_GATE_CACHE["result"] = result
         _COMPOSITE_GATE_CACHE["ts"]     = now
