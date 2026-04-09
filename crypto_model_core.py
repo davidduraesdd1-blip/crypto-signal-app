@@ -2710,9 +2710,9 @@ def _compute_kelly_fraction() -> float | None:
     """
     Compute Half-Kelly fraction from backtest history with volatility scaling.
 
-    Half-Kelly (50% of optimal) captures ~75% of the geometric growth of full Kelly
-    while delivering ~50% less drawdown than full Kelly. Research consensus (2025):
-    most professional algo traders use half to quarter Kelly.
+    Quarter-Kelly (25% of optimal) captures ~56% of geometric growth with only ~25%
+    of the variance of full Kelly. Research consensus (2025): most professional algo
+    traders use half to quarter Kelly; quarter-Kelly is used here for extra safety margin.
 
     Volatility scaling: when current 20-bar vol > 90-bar historical avg, the Kelly
     fraction is scaled down proportionally (high vol = smaller bets). This acts as
@@ -5455,6 +5455,8 @@ def run_optuna_weight_optimization(n_trials: int = 50, pair: str = 'BTC/USDT',
         for idx in range(60, train_end - hold_bars, stride):
             p_now = close_a[idx]
             rsi   = rsi_a[idx]
+            h     = mhist_a[idx]   # MACD histogram (current bar)
+            ph    = mhist_a[idx - 1] if idx > 0 else 0.0  # MACD histogram (previous bar)
             ml    = macd_a[idx];  ms = msig_a[idx]
             h     = mhist_a[idx]; ph = mhist_a[idx - 1] if idx > 0 else h
             bbu   = bbu_a[idx];   bbl = bbl_a[idx]
