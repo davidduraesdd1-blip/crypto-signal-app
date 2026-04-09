@@ -15,6 +15,8 @@ import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+logger = logging.getLogger(__name__)
+
 # PERF: reuse TCP connections for Telegram webhook calls
 _SESSION = requests.Session()
 _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
@@ -133,7 +135,8 @@ def send_telegram(token: str, chat_id: str, message: str) -> tuple[bool, str | N
             return True, None
         return False, data.get("description", "Unknown Telegram error")
     except Exception as e:
-        return False, str(e)
+        logger.warning("[alerts] send_telegram failed: %s", e)
+        return False, "Connection failed — check your bot token and network, then try again."
 
 
 def _fmt_price(val) -> str:
@@ -310,7 +313,8 @@ def send_email_alert(
     except smtplib.SMTPAuthenticationError:
         return False, "Authentication failed — check your Gmail App Password"
     except Exception as e:
-        return False, str(e)
+        logger.warning("[alerts] send_email_alert failed: %s", e)
+        return False, "Send failed — check your email settings and network, then try again."
 
 
 def format_email_body(results: list, min_confidence: float = 70) -> str | None:
@@ -418,9 +422,10 @@ def send_discord(webhook_url: str, message: str) -> tuple[bool, str | None]:
         )
         if resp.status_code in (200, 204):
             return True, None
-        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        return False, f"HTTP {resp.status_code} — check your webhook URL is correct."
     except Exception as e:
-        return False, str(e)
+        logger.warning("[alerts] send_discord failed: %s", e)
+        return False, "Connection failed — check your webhook URL and network, then try again."
 
 
 def format_discord_message(results: list, min_confidence: float = 70) -> str | None:

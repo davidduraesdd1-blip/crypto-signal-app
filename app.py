@@ -3118,7 +3118,8 @@ def page_dashboard():
                             pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
                         )
                     if err:
-                        st.error(f"Correlation error: {err}")
+                        logger.warning("[app] correlation fetch error: %s", err)
+                        st.error("Correlation data unavailable — could not fetch price data. Try again in a moment.")
                         st.session_state["corr_matrix_data"] = None
                         st.session_state["corr_error"] = err
                     else:
@@ -3643,7 +3644,8 @@ def page_config():
                         _json.dump(_existing, _f, indent=2)
                     st.success("✅ Settings saved! They'll apply on the next scan.")
                 except Exception as _e:
-                    st.error(f"Couldn't save settings — {_e}")
+                    logger.warning("[app] settings save error: %s", _e)
+                    st.error("Settings could not be saved — check file permissions and try again.")
 
         with st.expander("🔧 Advanced Settings (for experienced users)", expanded=False):
             st.info("These are technical settings. Leave them as-is unless you know what you're doing.")
@@ -3685,7 +3687,7 @@ def page_config():
                 if st.button("Test", key="cfg_tg_test", width="stretch", disabled=not tg_enabled):
                     ok, err = _alerts.send_telegram(tg_token.strip(), tg_chat_id.strip(),
                                                     "\u2705 Telegram test — connection successful!")
-                    st.success("Message sent!") if ok else st.error(f"Failed: {err}")
+                    st.success("Message sent!") if ok else st.error(err or "Test failed — check your bot token and chat ID.")
             st.caption("Get bot token from @BotFather · Chat ID from @userinfobot")
 
         with st.expander("📧 Email Alerts", expanded=_at_cfg.get("email_enabled", False)):
@@ -3712,7 +3714,7 @@ def page_config():
                     ok, err = _alerts.send_email_alert(em_from.strip(), em_pass, em_to.strip(),
                                                        "Crypto Signal Model — Test Alert",
                                                        "\u2705 Email alert test successful.")
-                    st.success("Email sent!") if ok else st.error(f"Failed: {err}")
+                    st.success("Email sent!") if ok else st.error(err or "Test failed — check your Gmail App Password and email settings.")
             st.caption("Use a Gmail App Password (Settings → Security → 2FA → App passwords)")
 
         with st.expander("💬 Discord Alerts", expanded=_at_cfg.get("discord_enabled", False)):
@@ -3734,7 +3736,7 @@ def page_config():
                 if st.button("Test", key="cfg_dc_test", width="stretch", disabled=not dc_on):
                     ok, err = _alerts.send_discord(dc_wh.strip(),
                                                    "\u2705 **Crypto Signal Model** — Discord test!")
-                    st.success("Message sent!") if ok else st.error(f"Failed: {err}")
+                    st.success("Message sent!") if ok else st.error(err or "Test failed — check your webhook URL and try again.")
             st.caption("Create webhook: Channel → Edit → Integrations → Webhooks → New")
 
     # ── Tab 1: Trading Parameters

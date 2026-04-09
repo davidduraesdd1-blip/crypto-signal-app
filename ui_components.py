@@ -3,8 +3,10 @@ ui_components.py — Premium UI design system for Crypto Signal Dashboard
 Glass-morphism, gradient borders, fluid typography, animated backgrounds.
 Inspired by KOI, Flare Network, dYdX, and Uniswap visual design systems.
 """
+import logging
 import streamlit as st
 
+logger = logging.getLogger(__name__)
 
 # ── Full CSS design system ─────────────────────────────────────────────────────
 
@@ -4342,7 +4344,8 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
                 "Gold = BTC price. Source: FRED + yfinance."
             )
     except Exception as _e:
-        _st.caption(f"M2 chart unavailable: {_e}")
+        logger.warning("[ui_components] M2 chart error: %s", _e)
+        _st.caption("M2 chart temporarily unavailable.")
 
     # ── Regime impact callout ─────────────────────────────────────────────────
     try:
