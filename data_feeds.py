@@ -2710,7 +2710,7 @@ def get_fear_greed_index(days: int = 7) -> dict:
 
     try:
         resp = _SESSION.get(
-            f"https://api.alternative.me/fng/?limit={max(days, 7)}",
+            f"https://api.alternative.me/fng/?limit={max(days, 30)}",
             timeout=8,
             headers={"Accept": "application/json"},
         )
@@ -2739,12 +2739,17 @@ def get_fear_greed_index(days: int = 7) -> dict:
                     for d in data_list[:7]
                 ]
 
+                # 30-day average for F&G trend signal (A3)
+                vals_30  = [int(d.get("value", 50)) for d in data_list[:30]]
+                avg_30d  = round(sum(vals_30) / len(vals_30), 1) if vals_30 else None
+
                 result = {
                     "value":          value,
                     "classification": classif,
                     "signal":         signal,
                     "score_bias":     bias,
                     "history_7d":     history,
+                    "avg_30d":        avg_30d,
                     "source":         "alternative.me",
                     "error":          None,
                 }
@@ -4245,9 +4250,17 @@ def fetch_yfinance_macro() -> dict:
             }
             for key, symbol in _MAP.items():
                 try:
-                    hist = yf.Ticker(symbol).history(period="5d")
+                    # E4: DXY needs 35 days to compute 30d rate-of-change
+                    period = "35d" if key == "dxy" else "5d"
+                    hist = yf.Ticker(symbol).history(period=period)
                     if not hist.empty:
-                        result[key] = round(float(hist["Close"].iloc[-1]), 2)
+                        closes = hist["Close"]
+                        result[key] = round(float(closes.iloc[-1]), 2)
+                        # E4: compute 30d ROC for DXY momentum
+                        if key == "dxy" and len(closes) >= 30:
+                            cur  = float(closes.iloc[-1])
+                            past = float(closes.iloc[-30])
+                            result["dxy_30d_roc"] = round((cur - past) / past * 100, 2) if past else None
                 except Exception as e:
                     logging.debug("[yfinance] %s failed: %s", symbol, e)
         except ImportError:
@@ -4690,8 +4703,11 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
     """
     import datetime as _dt
     import statistics as _stats
-    start     = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
-    cache_key = f"cm_onchain_{days}"
+    # MVRV Z-Score requires all-time normalization (Mahmudov & Puell, 2018 / Glassnode reference).
+    # Fetch from BTC genesis — `days` parameter still controls display history window.
+    _MVRV_START = "2010-07-17"
+    start     = _MVRV_START
+    cache_key = "cm_onchain_alltime"
 
     def _fetch():
         try:
@@ -4701,7 +4717,7 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "metrics":    "CapMrktCurUSD,CapRealUSD,SoprNtv,AdrActCnt,HashRate,RevUSD",
                 "start_time": start,
                 "frequency":  "1d",
-                "page_size":  days + 10,
+                "page_size":  6000,  # All-time BTC data (~5400 days 2010–present)
             }
             # _NO_RETRY_SESSION: CoinMetrics Community API returns 403 from US-AWS cloud
             # IPs (IP-based blocking). Fail fast — no point retrying a 403 3 times.
@@ -4760,16 +4776,14 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             if not mvrv_vals:
                 return {"error": "no MVRV data", "source": "coinmetrics"}
 
-            window   = min(365, len(mvrv_vals))
-            trailing = mvrv_vals[-window:]
-            mean_mv  = _stats.mean(trailing)
-            std_mv   = _stats.stdev(trailing) if len(trailing) > 1 else 1.0
+            # All-time normalization per Glassnode reference implementation.
+            # Using all-time std dev matches the published Z-score thresholds
+            # (Dec 2017 top ≈ Z=9.5, Apr 2021 top ≈ Z=8.0, computed against full history).
+            mean_mv  = _stats.mean(mvrv_vals)
+            std_mv   = _stats.stdev(mvrv_vals) if len(mvrv_vals) > 1 else 1.0
             cur_mvrv = mvrv_vals[-1]
             mvrv_z   = round((cur_mvrv - mean_mv) / max(std_mv, 1e-6), 2)
 
-            # MVRV Z-Score thresholds calibrated to historically-validated cycle levels:
-            # MVRV ratio below 365d mean (z < 0) = market below fair value = UNDERVALUED.
-            # At cycle tops MVRV ratios 3-4× above 365d mean → z ≈ 3+ = EXTREME_HEAT.
             if mvrv_z < 0.0:   mvrv_signal = "UNDERVALUED"
             elif mvrv_z < 1.5: mvrv_signal = "FAIR_VALUE"
             elif mvrv_z < 3.0: mvrv_signal = "OVERVALUED"
@@ -4833,8 +4847,8 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "hash_ribbon_signal":  hash_ribbon_signal,
                 "puell_multiple":      puell_multiple,
                 "puell_signal":        puell_signal,
-                "mvrv_history":        {mvrv_dates[i]: round(mvrv_vals[i], 3) for i in range(len(mvrv_dates))},
-                "sopr_history":        {sopr_dates[i]: round(sopr_vals[i], 4) for i in range(len(sopr_dates))},
+                "mvrv_history":        {mvrv_dates[i]: round(mvrv_vals[i], 3) for i in range(max(0, len(mvrv_dates) - days), len(mvrv_dates))},
+                "sopr_history":        {sopr_dates[i]: round(sopr_vals[i], 4) for i in range(max(0, len(sopr_dates) - days), len(sopr_dates))},
                 "source":              "coinmetrics_community",
                 "timestamp":           _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 "error":               None,
@@ -7401,11 +7415,18 @@ def fetch_btc_ta_signals() -> dict:
     if len(closes) >= 31:
         price_momentum = round((closes[-1] - closes[-31]) / closes[-31] * 100, 2)
 
+    # ── E1: 20d SMA for Hash Ribbon price confirmation gate ───────────────────
+    above_20sma = None
+    if len(closes) >= 20:
+        ma20 = sum(closes[-20:]) / 20
+        above_20sma = closes[-1] > ma20
+
     result = {
         "rsi_14":          rsi_14,
         "ma_signal":       ma_signal,
         "price_momentum":  price_momentum,
         "above_200ma":     above_200ma,
+        "above_20sma":     above_20sma,
         "btc_price":       round(closes[-1], 2) if closes else None,
         "source":          "yfinance",
     }

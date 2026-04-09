@@ -99,9 +99,11 @@ def _get_composite_gate_result() -> dict:
         fred   = _df.fetch_fred_macro()
         oc     = _df.get_onchain_metrics("BTC/USDT")
         fg     = _df.get_fear_greed()
+        fg_idx = _df.get_fear_greed_index(days=30)  # for 30d avg (A3 trend signal)
 
         macro_data = {
             "dxy":               yf_mac.get("dxy"),
+            "dxy_30d_roc":       yf_mac.get("dxy_30d_roc"),         # E4: DXY 30d momentum
             "vix":               yf_mac.get("vix"),
             "yield_spread_2y10y": fred.get("yield_spread_2y10y"),  # C2: live 10Y-2Y spread
             "cpi_yoy":           fred.get("cpi_yoy"),              # C2: live CPI YoY%
@@ -112,7 +114,8 @@ def _get_composite_gate_result() -> dict:
             "hash_ribbon_signal": oc.get("hash_ribbon_signal"),
             "puell_multiple":    oc.get("puell_multiple"),
         }
-        fg_value = fg.get("value") if isinstance(fg, dict) else None
+        fg_value  = fg.get("value")    if isinstance(fg,    dict) else None
+        fg_30d    = fg_idx.get("avg_30d") if isinstance(fg_idx, dict) else None
 
         # Layer 1: BTC TA signals (RSI-14, MA cross, 30d momentum) — 4-layer model
         ta_data = None
@@ -122,7 +125,7 @@ def _get_composite_gate_result() -> dict:
             pass
 
         result = _cs.compute_composite_signal(macro_data, onchain_data, fg_value,
-                                              ta_data=ta_data)
+                                              ta_data=ta_data, fg_30d_avg=fg_30d)
         _COMPOSITE_GATE_CACHE["result"] = result
         _COMPOSITE_GATE_CACHE["ts"]     = now
         return result
