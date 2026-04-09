@@ -1617,6 +1617,56 @@ def page_dashboard():
             logger.warning("[App] macro panel failed: %s", _me_err)
             st.caption("Macro panel temporarily unavailable — try refreshing.")
 
+        # ── 4-Layer Composite Market Environment Signal ─────────────────────────
+        try:
+            import agent as _sg_agent
+            _csig_sg = _sg_agent.get_composite_signal()
+            if _csig_sg and _csig_sg.get("score", 0) != 0.0:
+                _sg_score  = _csig_sg.get("score", 0.0)
+                _sg_signal = _csig_sg.get("signal", "NEUTRAL").replace("_", " ")
+                _sg_layers = _csig_sg.get("layers", {})
+                _sg_risk   = _csig_sg.get("risk_off", False)
+
+                if _sg_score >= 0.3:   _sg_c, _sg_bg = "#22c55e", "rgba(34,197,94,0.07)"
+                elif _sg_score >= 0.1: _sg_c, _sg_bg = "#00d4aa", "rgba(0,212,170,0.07)"
+                elif _sg_score >= -0.1: _sg_c, _sg_bg = "#f59e0b", "rgba(245,158,11,0.07)"
+                elif _sg_score >= -0.3: _sg_c, _sg_bg = "#f97316", "rgba(249,115,22,0.07)"
+                else:                  _sg_c, _sg_bg = "#ef4444", "rgba(239,68,68,0.07)"
+
+                def _sgf(v): return f"+{v:.2f}" if v >= 0 else f"{v:.2f}"
+
+                if _sg_level_val == "beginner":
+                    _sg_summary = _csig_sg.get("beginner_summary", "")
+                    st.html(
+                        f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
+                        f"border-left:4px solid {_sg_c};border-radius:8px;padding:10px 16px;margin:8px 0;'>"
+                        f"<span style='color:{_sg_c};font-weight:700;'>■ Market Environment</span>"
+                        f"<span style='color:#94a3b8;font-size:0.85rem;margin-left:12px;'>{_sg_summary}</span>"
+                        f"</div>"
+                    )
+                else:
+                    _ta_s   = _sg_layers.get("technical", {}).get("score", 0)
+                    _mac_s  = _sg_layers.get("macro",     {}).get("score", 0)
+                    _sent_s = _sg_layers.get("sentiment", {}).get("score", 0)
+                    _oc_s   = _sg_layers.get("onchain",   {}).get("score", 0)
+                    _gate_t = " · ⚠️ Risk Gate Active" if _sg_risk else ""
+                    st.html(
+                        f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
+                        f"border-left:4px solid {_sg_c};border-radius:8px;padding:8px 16px;margin:8px 0;"
+                        f"display:flex;align-items:center;gap:20px;flex-wrap:wrap;'>"
+                        f"<div><span style='color:#64748b;font-size:0.72rem;text-transform:uppercase;'>Composite Signal</span>"
+                        f"<div style='color:{_sg_c};font-weight:800;font-size:0.95rem;'>{_sg_signal}{_gate_t}</div>"
+                        f"<div style='color:#64748b;font-size:0.75rem;'>Score {_sgf(_sg_score)}</div></div>"
+                        f"<div style='color:#475569;font-size:0.78rem;border-left:1px solid #1e293b;padding-left:16px;'>"
+                        f"<div>TA <span style='color:{'#22c55e' if _ta_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_ta_s)}</span>"
+                        f" · Macro <span style='color:{'#22c55e' if _mac_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_mac_s)}</span>"
+                        f" · Sentiment <span style='color:{'#22c55e' if _sent_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_sent_s)}</span>"
+                        f" · On-Chain <span style='color:{'#22c55e' if _oc_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_oc_s)}</span></div>"
+                        f"</div></div>"
+                    )
+        except Exception as _sg_cs_err:
+            logger.debug("[App] composite signal banner skipped: %s", _sg_cs_err)
+
         st.markdown("---")
 
         # ── Wyckoff Phase Summary (item 23) ─────────────────────────────────────────

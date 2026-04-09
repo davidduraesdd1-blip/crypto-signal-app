@@ -132,6 +132,13 @@ def _get_composite_gate_result() -> dict:
         return {"score": 0.0, "signal": "NEUTRAL", "risk_off": False}
 
 
+def get_composite_signal() -> dict:
+    """Public accessor for the 4-layer composite market signal — callable from app.py UI.
+    Returns the same cached result as the internal gate check.
+    """
+    return _get_composite_gate_result()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
