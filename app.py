@@ -1612,7 +1612,8 @@ def page_dashboard():
             _me = data_feeds.get_macro_enrichment()
             _ui.render_macro_scorecard_panel(_me, _sg_level_val)
         except Exception as _me_err:
-            st.caption(f"Macro panel unavailable: {_me_err}")
+            logger.warning("[App] macro panel failed: %s", _me_err)
+            st.caption("Macro panel temporarily unavailable — try refreshing.")
 
         st.markdown("---")
 
@@ -3015,7 +3016,8 @@ def page_dashboard():
                     else:
                         st.caption("PDF unavailable")
                 except Exception as _pdf_err:
-                    st.caption(f"PDF generation failed: {_pdf_err}")
+                    logger.warning("[App] PDF generation failed: %s", _pdf_err)
+                    st.caption("PDF generation failed — please try again.")
 
 
     with _dash_tab5:
@@ -3199,7 +3201,8 @@ def page_dashboard():
                         )
                 elif _vol_data is not None and len(_vol_data) == 0:
                     _vol_err = st.session_state.get("vol_rank_err")
-                    st.warning(f"No volatility data returned — {_vol_err}" if _vol_err else "No volatility data returned — check exchange connectivity.")
+                    logger.warning("[App] volatility data failed: %s", _vol_err)
+                    st.warning("No volatility data returned — check exchange connectivity and try again.")
 
 
                 st.markdown("---")
@@ -3230,7 +3233,8 @@ def page_dashboard():
                             pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
                         )
                     if _coint_err:
-                        st.error(f"Scan error: {_coint_err}")
+                        logger.warning("[App] cointegration scan error: %s", _coint_err)
+                        st.error("Scan encountered an issue — try again or reduce the number of pairs.")
                         st.session_state["coint_results"] = None
                     else:
                         st.session_state["coint_results"] = _coint_results
@@ -3927,7 +3931,8 @@ def page_config():
                             )
                             st.plotly_chart(_bw_fig, width="stretch")
         except Exception as _bay_err:
-            st.caption(f"Bayesian weights card error: {_bay_err}")
+            logger.warning("[App] Bayesian weights card error: %s", _bay_err)
+            st.caption("Bayesian weights temporarily unavailable.")
 
         # ── ML Weight Optimizer ──
         _ui.section_header("ML Weight Optimizer", "Bayesian optimization finds indicator weights that maximize directional accuracy on historical data", icon="🤖")
@@ -4843,7 +4848,8 @@ def page_backtest():
                             key="dl_backtest_pdf",
                         )
                     except Exception as _bt_pdf_err:
-                        st.caption(f"PDF generation failed: {_bt_pdf_err}")
+                        logger.warning("[App] backtest PDF failed: %s", _bt_pdf_err)
+                        st.caption("PDF generation failed — please try again.")
                 else:
                     st.caption("PDF export unavailable")
 
@@ -5572,7 +5578,8 @@ def page_backtest():
                         elif _wfe_db_note:
                             st.caption(f"WFE: {_wfe_db_note}")
             except Exception as _ic_wfe_err:
-                st.caption(f"IC & WFE card error: {_ic_wfe_err}")
+                logger.warning("[App] IC/WFE card error: %s", _ic_wfe_err)
+                st.caption("IC & WFE metrics temporarily unavailable.")
 
             # ── P&L Tracking Summary (Batch 8) ────────────────────────────────────────
             try:
@@ -5633,7 +5640,8 @@ def page_backtest():
                         else:
                             st.caption("No closed P&L trades in log.")
             except Exception as _pnl_err:
-                st.caption(f"P&L tracking card error: {_pnl_err}")
+                logger.warning("[App] P&L card error: %s", _pnl_err)
+                st.caption("P&L tracking temporarily unavailable.")
 
             if not df_trades.empty and "exit_reason" in df_trades.columns:
                 st.divider()
@@ -5847,7 +5855,8 @@ def page_backtest():
                     else:
                         st.caption("Click **Run WFO** to find the optimal confidence threshold for BUY signals.")
             except Exception as _wfo_err:
-                st.caption(f"WFO card error: {_wfo_err}")
+                logger.warning("[App] WFO card error: %s", _wfo_err)
+                st.caption("Walk-Forward Optimization temporarily unavailable.")
 
             # ── Walk-Forward Validation Details (#90) ─────────────────────────────────
             st.markdown("---")
@@ -5991,7 +6000,8 @@ def page_backtest():
                                 st.dataframe(_wfv_tbl, hide_index=True, width="stretch")
 
                 except Exception as _wfv_err:
-                    st.caption(f"WFE Validation error: {_wfv_err}")
+                    logger.warning("[App] WFE validation error: %s", _wfv_err)
+                    st.caption("WFE validation temporarily unavailable.")
 
             # ── Stress Test ────────────────────────────────────────────────────────────
             _render_stress_test()
