@@ -736,9 +736,15 @@ def get_onchain_bias(sopr: float, mvrv_z: float, net_flow: float,
     if net_flow < -150: bias += 15
     if whale_activity: bias += 20
     if mvrv_z > 7 or net_flow > 500: bias -= 25
-    # Hash Ribbons (87.5% accuracy): RECOVERY = miner capitulation ending → bullish
-    if hash_ribbon_signal == "RECOVERY":    bias += 15
-    elif hash_ribbon_signal == "CAPITULATION": bias -= 10
+    # Hash Ribbons (C. Edwards 2019, 87.5% accuracy on BTC cycle turns):
+    # BUY = 30d hash rate just crossed back above 60d after capitulation → strongest signal
+    # RECOVERY = 30d is rising AND above 60d (bullish continuation)
+    # CAPITULATION_START = 30d just crossed below 60d (early warning)
+    # CAPITULATION = 30d below 60d (miners selling, bearish)
+    if hash_ribbon_signal == "BUY":              bias += 25
+    elif hash_ribbon_signal == "RECOVERY":       bias += 15
+    elif hash_ribbon_signal == "CAPITULATION_START": bias -= 5
+    elif hash_ribbon_signal == "CAPITULATION":   bias -= 10
     # Puell Multiple: miner revenue vs 365d MA — near-perfect cycle top/bottom signal
     if puell_multiple > 0:
         if puell_multiple < 0.5:  bias += 20   # miners deeply underpaid = historical bottom
@@ -1381,8 +1387,9 @@ def compute_rsi(series, period=14):
     if len(series) < period:
         return 50.0
     delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    # Wilder (1978): EWM with alpha=1/period (recurrence smoothing, not SMA rolling mean)
+    gain = delta.where(delta > 0, 0).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
     rs = gain / loss.replace(0, 1e-10)
     rsi = 100 - (100 / (1 + rs))
     return float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0

@@ -51,7 +51,7 @@ def _score_rsi(rsi: float | None) -> float | None:
         return None
     if rsi <= 20:   return +1.0
     if rsi <= 30:   return _clamp(+0.6 + (30 - rsi) / 25)
-    if rsi <= 40:   return _clamp(+0.2 + (40 - rsi) / 50)
+    if rsi <= 40:   return _clamp(+0.2 + (40 - rsi) / 25)
     if rsi <= 60:   return 0.0
     if rsi <= 70:   return _clamp(-0.2 - (rsi - 60) / 33)
     if rsi <= 80:   return _clamp(-0.5 - (rsi - 70) / 33)
@@ -118,7 +118,7 @@ def score_ta_layer(ta_data: dict[str, Any] | None) -> dict[str, Any]:
 
 # ─── Layer 2: Macro ──────────────────────────────────────────────────────────
 
-def _score_dxy(dxy: float | None) -> float:
+def _score_dxy(dxy: float | None) -> float | None:
     """
     DXY → crypto headwind/tailwind signal.
     Calibrated on DXY data 1971-2024 vs BTC/crypto market cycles.
@@ -127,9 +127,10 @@ def _score_dxy(dxy: float | None) -> float:
       102   →  0.0 (neutral)
       98    → +0.5
       <94   → +1.0 (strong tailwind)
+    Returns None when data is unavailable (distinct from genuine 0.0 neutral).
     """
     if dxy is None:
-        return 0.0
+        return None
     if dxy >= 108:  return -1.0
     if dxy >= 105:  return _clamp(-0.5 - (dxy - 105) / 6)
     if dxy >= 102:  return _clamp((102 - dxy) / 6)
@@ -137,19 +138,20 @@ def _score_dxy(dxy: float | None) -> float:
     return _clamp(0.5 + (98 - dxy) / 8)
 
 
-def _score_vix(vix: float | None) -> float:
+def _score_vix(vix: float | None) -> float | None:
     """
     VIX → market fear signal. Counter-intuitive for crypto:
     Very high VIX (>35) often precedes relief rallies. Low VIX = complacency.
     Calibrated on CBOE data 1990-2024.
       <12   → -0.5 (extreme complacency, likely before correction)
       12-15 → -0.2
-      15-25 →  0.0 (normal range)
+      15-25 →  0.0 (normal range — genuine neutral)
       25-35 → +0.3 (elevated fear = opportunity zone)
       >35   → +0.6 (crisis spike = V-reversal historically)
+    Returns None when data is unavailable (distinct from genuine 0.0 neutral).
     """
     if vix is None:
-        return 0.0
+        return None
     if vix >= 35:  return +0.6
     if vix >= 25:  return _clamp(0.3 + (vix - 25) / 33)
     if vix >= 15:  return 0.0
@@ -157,7 +159,7 @@ def _score_vix(vix: float | None) -> float:
     return -0.5
 
 
-def _score_yield_curve(spread_2y10y: float | None) -> float:
+def _score_yield_curve(spread_2y10y: float | None) -> float | None:
     """
     2Y10Y yield spread → recession risk signal.
     FRED T10Y2Y historical data 1976-2024.
@@ -165,27 +167,29 @@ def _score_yield_curve(spread_2y10y: float | None) -> float:
       0-0.5 → +0.0 to +0.3 (flattening, watch)
       -0.5-0→ -0.2 to 0.0 (inverted, caution)
       <-0.5 → -0.5 (deep inversion, recession risk in 12-18mo)
+    Returns None when data is unavailable (distinct from genuine 0.0 neutral).
     """
     if spread_2y10y is None:
-        return 0.0
+        return None
     if spread_2y10y >= 0.5:   return +0.3
     if spread_2y10y >= 0.0:   return _clamp(spread_2y10y * 0.6)
     if spread_2y10y >= -0.5:  return _clamp(spread_2y10y * 0.4)
     return _clamp(-0.2 + (spread_2y10y + 0.5) * 0.6)
 
 
-def _score_cpi(cpi_yoy: float | None) -> float:
+def _score_cpi(cpi_yoy: float | None) -> float | None:
     """
     CPI YoY % → monetary policy tightening risk.
     BLS/FRED data 1913-2024.
       <1.5%  → -0.2 (deflationary risk, also negative)
       1.5-2% → +0.2 (goldilocks zone)
-      2-4%   → 0.0 (manageable, Fed neutral)
+      2-4%   → 0.0 (manageable, Fed neutral — genuine neutral)
       4-7%   → -0.3 (tightening cycle risk)
       >7%    → -0.6 (extreme tightening, highly risk-off)
+    Returns None when data is unavailable (distinct from genuine 0.0 neutral).
     """
     if cpi_yoy is None:
-        return 0.0
+        return None
     if cpi_yoy >= 7.0:   return -0.6
     if cpi_yoy >= 4.0:   return _clamp(-0.3 - (cpi_yoy - 4) / 10)
     if cpi_yoy >= 2.0:   return 0.0
@@ -208,8 +212,11 @@ def score_macro_layer(macro_data: dict[str, Any]) -> dict[str, Any]:
     s_yc   = _score_yield_curve(y2y10)
     s_cpi  = _score_cpi(cpi)
 
-    # Equal-weight only the active (non-zero) macro sub-indicators.
-    active = [s for s in [s_dxy, s_vix, s_yc, s_cpi] if s != 0.0]
+    # Equal-weight only indicators with real data (not None).
+    # Scorers return None when input data is unavailable, and 0.0 only when
+    # the indicator is genuinely neutral (e.g. VIX=20, CPI=2.5%).
+    # This prevents missing data from diluting the signal by pulling it toward 0.
+    active = [s for s in [s_dxy, s_vix, s_yc, s_cpi] if s is not None]
     raw    = (sum(active) / len(active)) if active else 0.0
     layer  = _clamp(raw)
 
@@ -219,10 +226,10 @@ def score_macro_layer(macro_data: dict[str, Any]) -> dict[str, Any]:
         "weight":     _W_MACRO,
         "weighted":   round(layer * _W_MACRO, 4),
         "components": {
-            "dxy":         {"value": dxy,   "score": round(s_dxy, 3)},
-            "vix":         {"value": vix,   "score": round(s_vix, 3)},
-            "yield_curve": {"value": y2y10, "score": round(s_yc,  3)},
-            "cpi_yoy":     {"value": cpi,   "score": round(s_cpi, 3)},
+            "dxy":         {"value": dxy,   "score": round(s_dxy, 3) if s_dxy is not None else None},
+            "vix":         {"value": vix,   "score": round(s_vix, 3) if s_vix is not None else None},
+            "yield_curve": {"value": y2y10, "score": round(s_yc,  3) if s_yc  is not None else None},
+            "cpi_yoy":     {"value": cpi,   "score": round(s_cpi, 3) if s_cpi is not None else None},
         },
     }
 
