@@ -371,13 +371,15 @@ def init_db():
                 ('vote_risk',      'REAL'),
                 ('vote_lgbm',      'REAL'),
                 # F-SNAP: indicator snapshots for LightGBM retraining
-                ('snap_rsi',       'REAL'),
-                ('snap_macd_hist', 'REAL'),
-                ('snap_bb_pos',    'REAL'),
-                ('snap_adx',       'REAL'),
-                ('snap_stoch_k',   'REAL'),
-                ('snap_volume_ok', 'INTEGER'),
-                ('snap_regime',    'TEXT'),
+                ('snap_rsi',        'REAL'),
+                ('snap_macd_hist',  'REAL'),
+                ('snap_bb_pos',     'REAL'),
+                ('snap_adx',        'REAL'),
+                ('snap_stoch_k',    'REAL'),
+                ('snap_volume_ok',  'INTEGER'),
+                ('snap_regime',     'TEXT'),
+                # P8: price at signal time — enables accurate retro-evaluation months later
+                ('price_at_signal', 'REAL'),
             ]:
                 _add_col('feedback_log', col, dfn)
 
@@ -2925,6 +2927,160 @@ def get_confidence_history(pair: str, days: int = 30) -> list:
     finally:
         if conn is not None:
             conn.close()
+
+
+# ──────────────────────────────────────────────
+# PERSISTENT FEEDBACK CHECKPOINT (Proposals 4 / 8)
+# ──────────────────────────────────────────────
+
+_CHECKPOINT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "feedback_checkpoint.json")
+
+
+def export_feedback_checkpoint() -> bool:
+    """Export compact feedback metrics to a git-tracked JSON file (Proposal 4).
+
+    Written after every feedback resolution cycle so the accumulated model
+    intelligence survives fresh deploys, Streamlit resets, and idle shutdowns.
+    """
+    import json as _json
+    try:
+        conn = _get_conn()
+        # Overall resolved metrics
+        try:
+            stats = conn.execute(
+                """SELECT COUNT(*), AVG(actual_pnl_pct),
+                          SUM(CASE WHEN was_correct=1 THEN 1 ELSE 0 END)
+                   FROM feedback_log WHERE resolved_at IS NOT NULL"""
+            ).fetchone()
+            total_resolved  = int(stats[0] or 0)
+            avg_pnl         = round(float(stats[1] or 0), 4)
+            total_wins      = int(stats[2] or 0)
+            win_rate_overall = round(total_wins / total_resolved * 100, 1) if total_resolved > 0 else None
+        finally:
+            conn.close()
+
+        # Recent resolved signals (last 30)
+        conn2 = _get_conn()
+        try:
+            rows = conn2.execute(
+                """SELECT pair, direction, timestamp, actual_pnl_pct, outcome, resolved_at
+                   FROM feedback_log
+                   WHERE resolved_at IS NOT NULL
+                   ORDER BY resolved_at DESC LIMIT 30"""
+            ).fetchall()
+            recent_signals = [
+                {"pair": r[0], "direction": r[1], "timestamp": r[2],
+                 "actual_pnl_pct": r[3], "outcome": r[4], "resolved_at": r[5]}
+                for r in rows
+            ]
+        finally:
+            conn2.close()
+
+        # Open paper positions
+        conn3 = _get_conn()
+        try:
+            pos_rows = conn3.execute(
+                "SELECT pair, direction, entry, entry_time FROM positions"
+            ).fetchall()
+            open_positions = [
+                {"pair": r[0], "direction": r[1], "entry": r[2], "entry_time": r[3]}
+                for r in pos_rows
+            ]
+        finally:
+            conn3.close()
+
+        checkpoint = {
+            "version":        2,
+            "app":            "supergrok",
+            "last_updated":   datetime.now(timezone.utc).isoformat(),
+            "total_resolved": total_resolved,
+            "win_rate_pct":   win_rate_overall,
+            "avg_pnl_pct":    avg_pnl,
+            "total_wins":     total_wins,
+            "open_positions": len(open_positions),
+            "recent_signals": recent_signals,
+            "open_pos_list":  open_positions,
+        }
+
+        os.makedirs(os.path.dirname(_CHECKPOINT_FILE), exist_ok=True)
+        with open(_CHECKPOINT_FILE, "w", encoding="utf-8") as _cf:
+            _json.dump(checkpoint, _cf, indent=2, default=str)
+
+        logger.info("[DB] Feedback checkpoint exported — %d resolved, %.1f%% win rate",
+                    total_resolved, win_rate_overall or 0)
+        return True
+    except Exception as e:
+        logger.warning("[DB] Feedback checkpoint export failed (non-critical): %s", e)
+        return False
+
+
+def auto_close_stale_positions(current_prices: dict, hold_days: int = 14) -> int:
+    """Retroactively close paper positions older than hold_days using current prices (Proposal 6).
+
+    Any open position in the `positions` table older than hold_days days is
+    closed at the current price, logged to `paper_trades`, and removed from `positions`.
+
+    Args:
+        current_prices: {pair: float} — current market prices from the last scan.
+        hold_days:      Maximum age before auto-close (default 14 days).
+
+    Returns:
+        Number of positions auto-closed.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=hold_days)).isoformat()
+    conn = _get_conn()
+    try:
+        stale = [dict(r) for r in conn.execute(
+            "SELECT pair, direction, entry, entry_time, target, stop, size_pct "
+            "FROM positions WHERE entry_time < ?",
+            (cutoff,),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    if not stale:
+        return 0
+
+    closed = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for pos in stale:
+        pair = pos["pair"]
+        current_price = current_prices.get(pair)
+        if current_price is None:
+            continue
+        try:
+            entry     = float(pos["entry"] or 0)
+            direction = str(pos["direction"] or "")
+            if entry <= 0:
+                continue
+            if "BUY" in direction.upper():
+                pnl_pct = (current_price - entry) / entry * 100
+            elif "SELL" in direction.upper():
+                pnl_pct = (entry - current_price) / entry * 100
+            else:
+                continue
+
+            with _write_lock:
+                conn2 = _get_conn()
+                try:
+                    conn2.execute(
+                        """INSERT INTO paper_trades
+                           (pair, entry_time, close_time, direction, entry, exit, pnl_pct, size_pct, reason)
+                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (pair, pos["entry_time"], now_iso, direction,
+                         entry, current_price, round(pnl_pct, 4),
+                         pos.get("size_pct", 0), "auto_close_stale"),
+                    )
+                    conn2.execute("DELETE FROM positions WHERE pair = ?", (pair,))
+                    conn2.commit()
+                finally:
+                    conn2.close()
+            closed += 1
+            logger.info("[DB] Auto-closed stale position %s %s: pnl=%.2f%%", direction, pair, pnl_pct)
+        except Exception as e:
+            logger.warning("[DB] auto_close_stale_positions failed for %s: %s", pair, e)
+
+    return closed
 
 
 # ──────────────────────────────────────────────

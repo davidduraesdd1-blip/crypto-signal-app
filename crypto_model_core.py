@@ -3325,6 +3325,12 @@ def run_feedback_loop():
     except Exception as drift_e:
         logging.warning(f"Drift detection failed: {drift_e}")
 
+    # P4: Export git checkpoint after every feedback cycle so intelligence persists across restarts
+    try:
+        _db.export_feedback_checkpoint()
+    except Exception as _cpe:
+        logging.debug(f"Feedback checkpoint export failed (non-critical): {_cpe}")
+
 
 def check_concept_drift(df_90d=None) -> dict:
     """F6/F7: ADWIN-style concept drift detector.

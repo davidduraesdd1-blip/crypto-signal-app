@@ -468,6 +468,16 @@ def _get_scheduler() -> BackgroundScheduler:
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
+        # P1: Startup catch-up — resolve any pending feedback outcomes immediately
+        # so intelligence is never lost after a Streamlit restart/idle shutdown.
+        def _startup_feedback_catchup():
+            try:
+                model.run_feedback_loop()
+                logging.info("[Startup] Feedback catch-up complete")
+            except Exception as _e:
+                logging.debug(f"[Startup] Feedback catch-up (non-critical): {_e}")
+        import threading as _t
+        _t.Thread(target=_startup_feedback_catchup, name="StartupFeedbackCatchup", daemon=True).start()
     return _scheduler
 
 

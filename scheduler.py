@@ -138,6 +138,10 @@ def run_scan_job() -> None:
             prices = {r["pair"]: r.get("price_usd", 0) for r in results if r.get("price_usd")}
             if prices:
                 model.update_positions(prices)
+                # P6: Auto-close any paper positions older than 14 days at current prices
+                closed = _db.auto_close_stale_positions(prices, hold_days=14)
+                if closed:
+                    logger.info("[Scheduler] Auto-closed %d stale paper position(s)", closed)
         except Exception as _pe:
             logger.warning("[Scheduler] Position update error (non-critical): %s", _pe)
 
@@ -200,6 +204,13 @@ def _resume_from_db() -> None:
             logger.info("[Scheduler] No saved model weights — will build from scratch.")
     except Exception as e:
         logger.warning("[Scheduler] Resume check failed (non-critical): %s", e)
+
+    # P1: Startup catch-up — resolve any pending feedback outcomes right away
+    try:
+        model.run_feedback_loop()
+        logger.info("[Scheduler] Startup feedback catch-up complete")
+    except Exception as e:
+        logger.debug("[Scheduler] Startup feedback catch-up (non-critical): %s", e)
 
 
 # ── Scheduler entry point ─────────────────────────────────────────────────────

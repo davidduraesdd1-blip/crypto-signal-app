@@ -1,0 +1,60 @@
+name: Feedback Evaluator — Daily (SuperGrok)
+
+# Runs every 6 hours to resolve pending feedback_log outcomes and export checkpoint.
+# Works even when the Streamlit app is completely idle.
+# On success, commits the updated feedback_checkpoint.json back to the repo
+# so accumulated model intelligence is never lost.
+
+on:
+  schedule:
+    - cron: "15 */6 * * *"  # every 6 hours UTC (offset 15min from DeFi to avoid parallel runs)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install anthropic requests numpy ccxt python-dotenv 2>/dev/null || true
+          pip install -r requirements.txt 2>/dev/null || true
+
+      - name: Run headless evaluator
+        run: python evaluate_headless.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        continue-on-error: true
+
+      - name: Commit feedback checkpoint
+        run: |
+          git config user.name  "GitHub Actions — Feedback Evaluator"
+          git config user.email "actions@github.com"
+          if git diff --quiet data/feedback_checkpoint.json 2>/dev/null; then
+            echo "No checkpoint changes — nothing to commit"
+          else
+            git add data/feedback_checkpoint.json data/headless_evaluator.log 2>/dev/null || true
+            git commit -m "ci: feedback checkpoint update $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+            Automated evaluation via GitHub Actions.
+            Resolves pending feedback_log outcomes, updates dynamic weights,
+            auto-retrains LightGBM if 50+ samples available.
+            Checkpoint loaded on next app startup to restore accumulated intelligence."
+            git push
+          fi
