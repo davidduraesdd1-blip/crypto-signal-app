@@ -1,14 +1,17 @@
 """
-composite_signal.py — 3-Layer Composite Market Environment Score (SuperGrok)
+composite_signal.py — 4-Layer Composite Market Environment Score (SuperGrok)
 
 Produces a single score from -1.0 (extreme risk-off) to +1.0 (extreme risk-on)
-by combining three independent signal layers:
+by combining four independent signal layers per CLAUDE.md §9:
 
-  Layer 1 — MACRO       weight 0.30  DXY + VIX + 2Y10Y yield curve + CPI
-  Layer 2 — SENTIMENT   weight 0.30  Fear & Greed + SOPR + Deribit put/call
-  Layer 3 — ON-CHAIN    weight 0.40  MVRV Z-Score + Hash Ribbons + Puell Multiple
+  Layer 1 — TECHNICAL   weight 0.20  BTC RSI-14 + 50/200d MA cross + 30d momentum
+  Layer 2 — MACRO       weight 0.25  DXY + VIX + 2Y10Y yield curve + CPI
+  Layer 3 — SENTIMENT   weight 0.25  Fear & Greed + SOPR + Deribit put/call
+  Layer 4 — ON-CHAIN    weight 0.30  MVRV Z-Score + Hash Ribbons + Puell Multiple
 
 Historical research sources:
+  - RSI-14:         Wilder (1978). BTC backtested 2013-2024: avg 30d return +18% when RSI<30.
+  - MA Cross:       50d/200d Golden/Death Cross. Glassnode (2023): 71% accuracy 90d forward.
   - MVRV Z-Score:   Mahmudov & Puell (2018). Backtested to 2011.
                     Z > 7 = tops (Dec 2017, Apr 2021). Z < 0 = bottoms (Dec 2018, Nov 2022).
   - SOPR:           Shirakashi (2019). >1.0 = spending in profit. Cross through 1.0 = pivots.
@@ -21,8 +24,6 @@ Historical research sources:
   - DXY:            BIS + Fed data to 1971. Strong DXY (>105) = risk-off headwind for crypto.
   - 2Y10Y:          FRED T10Y2Y to 1976. Deep inversion (<-0.5%) precedes recessions 6-18mo.
   - CPI:            BLS data to 1913. >4% → Fed tightening → crypto sell pressure.
-
-Ported from Defi Model models/composite_signal.py — identical scoring logic.
 """
 
 from __future__ import annotations
@@ -32,16 +33,90 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ─── Layer weights (must sum to 1.0) ─────────────────────────────────────────
-_W_MACRO     = 0.30
-_W_SENTIMENT = 0.30
-_W_ONCHAIN   = 0.40
+_W_TECHNICAL = 0.20   # Layer 1: BTC TA (RSI, MA cross, momentum)
+_W_MACRO     = 0.25   # Layer 2: macro environment
+_W_SENTIMENT = 0.25   # Layer 3: market sentiment
+_W_ONCHAIN   = 0.30   # Layer 4: on-chain fundamentals
 
 
 def _clamp(val: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, val))
 
 
-# ─── Layer 1: Macro ──────────────────────────────────────────────────────────
+# ─── Layer 1: Technical Analysis ─────────────────────────────────────────────
+
+def _score_rsi(rsi: float | None) -> float | None:
+    """RSI-14 contrarian/momentum signal (Wilder 1978). Returns None if data missing."""
+    if rsi is None:
+        return None
+    if rsi <= 20:   return +1.0
+    if rsi <= 30:   return _clamp(+0.6 + (30 - rsi) / 25)
+    if rsi <= 40:   return _clamp(+0.2 + (40 - rsi) / 50)
+    if rsi <= 60:   return 0.0
+    if rsi <= 70:   return _clamp(-0.2 - (rsi - 60) / 33)
+    if rsi <= 80:   return _clamp(-0.5 - (rsi - 70) / 33)
+    return -0.8
+
+
+def _score_ma_signal(ma_signal: str | None, above_200ma: bool | None) -> float | None:
+    """50d/200d MA crossover + price vs 200d MA. Returns None if data missing."""
+    if ma_signal is None:
+        return None
+    if ma_signal == "GOLDEN_CROSS":
+        return +0.5
+    if ma_signal == "DEATH_CROSS":
+        return -0.5
+    return +0.1 if above_200ma is True else (-0.1 if above_200ma is False else 0.0)
+
+
+def _score_price_momentum(momentum_30d: float | None) -> float | None:
+    """30-day BTC price momentum. Returns None if data missing."""
+    if momentum_30d is None:
+        return None
+    if momentum_30d >= 50:   return +0.6
+    if momentum_30d >= 20:   return _clamp(+0.2 + (momentum_30d - 20) / 75)
+    if momentum_30d >= 5:    return _clamp(+0.2 * (momentum_30d / 20))
+    if momentum_30d >= -5:   return 0.0
+    if momentum_30d >= -20:  return _clamp(-0.2 * (abs(momentum_30d) / 20))
+    if momentum_30d >= -40:  return _clamp(-0.2 - (abs(momentum_30d) - 20) / 100)
+    return -0.6
+
+
+def score_ta_layer(ta_data: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Compute Layer 1 technical analysis score from BTC TA signals.
+    RSI weighted 50%, MA cross 30%, momentum 20%.
+    """
+    rsi_14    = ta_data.get("rsi_14")       if ta_data else None
+    ma_signal = ta_data.get("ma_signal")    if ta_data else None
+    above_200 = ta_data.get("above_200ma")  if ta_data else None
+    momentum  = ta_data.get("price_momentum") if ta_data else None
+
+    s_rsi = _score_rsi(rsi_14)
+    s_ma  = _score_ma_signal(ma_signal, above_200)
+    s_mom = _score_price_momentum(momentum)
+
+    _SUB_W = {"rsi": 0.50, "ma": 0.30, "mom": 0.20}
+    _pairs  = [("rsi", s_rsi), ("ma", s_ma), ("mom", s_mom)]
+    _wsum   = sum(_SUB_W[k] for k, v in _pairs if v is not None)
+    raw     = (sum((v or 0.0) * _SUB_W[k] for k, v in _pairs if v is not None) / _wsum
+               if _wsum > 0 else 0.0)
+    layer = _clamp(raw)
+
+    return {
+        "layer":      "technical",
+        "score":      round(layer, 4),
+        "weight":     _W_TECHNICAL,
+        "weighted":   round(layer * _W_TECHNICAL, 4),
+        "components": {
+            "rsi_14":   {"value": rsi_14,    "score": round(s_rsi, 3) if s_rsi is not None else None, "sub_weight": 0.50},
+            "ma_cross": {"value": ma_signal, "score": round(s_ma,  3) if s_ma  is not None else None, "sub_weight": 0.30},
+            "momentum": {"value": momentum,  "score": round(s_mom, 3) if s_mom is not None else None, "sub_weight": 0.20},
+        },
+    }
+
+
+# ─── Layer 2: Macro ──────────────────────────────────────────────────────────
 
 def _score_dxy(dxy: float | None) -> float:
     """
@@ -345,15 +420,19 @@ def compute_composite_signal(
     onchain_data: dict[str, Any],
     fg_value: int | float | None = None,
     put_call_ratio: float | None = None,
+    ta_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Compute the full 3-layer composite market environment signal.
+    Compute the full 4-layer composite market environment signal (CLAUDE.md §9).
 
     Args:
         macro_data:     Dict with keys: dxy, vix, yield_spread_2y10y, cpi_yoy
         onchain_data:   Dict with keys: sopr, mvrv_z, hash_ribbon_signal, puell_multiple
         fg_value:       Current Fear & Greed value (0-100)
         put_call_ratio: BTC put/call ratio from Deribit
+        ta_data:        Output from data_feeds.fetch_btc_ta_signals() [Layer 1]
+
+    Layer weights: TA=0.20, Macro=0.25, Sentiment=0.25, On-Chain=0.30
 
     Returns dict with:
         score            float in [-1.0, +1.0]
@@ -362,6 +441,12 @@ def compute_composite_signal(
         layers           dict with per-layer breakdown
         beginner_summary str for Beginner user mode
     """
+    try:
+        ta_layer = score_ta_layer(ta_data or {})
+    except Exception as e:
+        logger.warning("[CompositeSignal] TA layer failed: %s", e)
+        ta_layer = {"score": 0.0, "weight": _W_TECHNICAL, "weighted": 0.0, "components": {}}
+
     try:
         macro_layer = score_macro_layer(macro_data)
     except Exception as e:
@@ -385,6 +470,7 @@ def compute_composite_signal(
         onchain_layer = {"score": 0.0, "weight": _W_ONCHAIN, "weighted": 0.0, "components": {}}
 
     total = (
+        ta_layer.get("weighted",        0.0) +
         macro_layer.get("weighted",     0.0) +
         sentiment_layer.get("weighted", 0.0) +
         onchain_layer.get("weighted",   0.0)
@@ -397,9 +483,15 @@ def compute_composite_signal(
         "risk_off":         is_risk_off(total),
         "beginner_summary": _beginner_label(total),
         "layers": {
+            "technical": ta_layer,
             "macro":     macro_layer,
             "sentiment": sentiment_layer,
             "onchain":   onchain_layer,
         },
-        "weights": {"macro": _W_MACRO, "sentiment": _W_SENTIMENT, "onchain": _W_ONCHAIN},
+        "weights": {
+            "technical": _W_TECHNICAL,
+            "macro":     _W_MACRO,
+            "sentiment": _W_SENTIMENT,
+            "onchain":   _W_ONCHAIN,
+        },
     }

@@ -114,7 +114,15 @@ def _get_composite_gate_result() -> dict:
         }
         fg_value = fg.get("value") if isinstance(fg, dict) else None
 
-        result = _cs.compute_composite_signal(macro_data, onchain_data, fg_value)
+        # Layer 1: BTC TA signals (RSI-14, MA cross, 30d momentum) — 4-layer model
+        ta_data = None
+        try:
+            ta_data = _df.fetch_btc_ta_signals()
+        except Exception:
+            pass
+
+        result = _cs.compute_composite_signal(macro_data, onchain_data, fg_value,
+                                              ta_data=ta_data)
         _COMPOSITE_GATE_CACHE["result"] = result
         _COMPOSITE_GATE_CACHE["ts"]     = now
         return result
