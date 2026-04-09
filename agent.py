@@ -107,6 +107,7 @@ def _get_composite_gate_result() -> dict:
             "vix":               yf_mac.get("vix"),
             "yield_spread_2y10y": fred.get("yield_spread_2y10y"),  # C2: live 10Y-2Y spread
             "cpi_yoy":           fred.get("cpi_yoy"),              # C2: live CPI YoY%
+            "m2_yoy":            fred.get("m2_yoy"),               # C4: M2 YoY growth rate
         }
         onchain_data = {
             "sopr":              oc.get("sopr"),

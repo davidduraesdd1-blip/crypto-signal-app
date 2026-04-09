@@ -5,9 +5,9 @@ Produces a single score from -1.0 (extreme risk-off) to +1.0 (extreme risk-on)
 by combining four independent signal layers per CLAUDE.md §9:
 
   Layer 1 — TECHNICAL   weight 0.20  BTC RSI-14 + 50/200d MA cross + 30d momentum
-  Layer 2 — MACRO       weight 0.25  DXY + VIX + 2Y10Y yield curve + CPI
-  Layer 3 — SENTIMENT   weight 0.25  Fear & Greed + SOPR + Deribit put/call
-  Layer 4 — ON-CHAIN    weight 0.30  MVRV Z-Score + Hash Ribbons + Puell Multiple
+  Layer 2 — MACRO       weight 0.20  DXY + VIX + 2Y10Y yield curve + CPI + M2 YoY
+  Layer 3 — SENTIMENT   weight 0.25  Fear & Greed + F&G trend + Deribit put/call
+  Layer 4 — ON-CHAIN    weight 0.35  MVRV Z-Score + Hash Ribbons + SOPR + Puell + Realized Price + NVT
 
 Historical research sources:
   - RSI-14:         Wilder (1978). BTC backtested 2013-2024: avg 30d return +18% when RSI<30.
@@ -184,10 +184,10 @@ def _score_vwap_dev(vwap_dev_pct: float | None) -> float | None:
     if vwap_dev_pct is None:
         return None
     d = float(vwap_dev_pct)
-    if d < -10:  return +0.6
-    if d < -5:   return _clamp(+0.3 + (abs(d) - 5) / 33)
-    if d <= 5:   return 0.0
-    if d <= 10:  return _clamp(-0.3 - (d - 5) / 33)
+    if d <= -10:  return +0.6
+    if d < -5:    return _clamp(+0.3 + (abs(d) - 5) * 0.06)
+    if d <= 5:    return 0.0
+    if d < 10:    return _clamp(-0.3 - (d - 5) * 0.06)
     return -0.6
 
 
@@ -418,7 +418,7 @@ def score_macro_layer(macro_data: dict[str, Any]) -> dict[str, Any]:
 
 # ─── Layer 2: Sentiment ───────────────────────────────────────────────────────
 
-def _score_fear_greed(fg_value: int | float | None) -> float:
+def _score_fear_greed(fg_value: int | float | None) -> float | None:
     """
     Fear & Greed → contrarian signal (extreme fear = buy opportunity).
     CNN/Alternative.me data 2018-2024.
@@ -427,9 +427,10 @@ def _score_fear_greed(fg_value: int | float | None) -> float:
       31-55 Neutral       → 0.0
       56-75 Greed         → -0.4
       76-100 Extreme Greed → -0.8
+    Returns None when data unavailable (prevents dilution toward 0).
     """
     if fg_value is None:
-        return 0.0
+        return None
     v = float(fg_value)
     if v <= 15:   return +0.8
     if v <= 30:   return _clamp(+0.4 + (30 - v) / 37.5)
@@ -438,14 +439,15 @@ def _score_fear_greed(fg_value: int | float | None) -> float:
     return -0.8
 
 
-def _score_sopr(sopr: float | None) -> float:
+def _score_sopr(sopr: float | None) -> float | None:
     """
     SOPR (Shirakashi 2019) — on-chain profitability of spent outputs.
     <0.99 = holders spending at a loss = capitulation = buy signal
     >1.02 = profit-taking = distribution = caution
+    Returns None when data unavailable (prevents dilution toward 0).
     """
     if sopr is None:
-        return 0.0
+        return None
     if sopr < 0.99:   return +0.7
     if sopr < 1.00:   return +0.3
     if sopr < 1.02:   return 0.0
@@ -453,14 +455,16 @@ def _score_sopr(sopr: float | None) -> float:
     return -0.5
 
 
-def _score_put_call(put_call_ratio: float | None) -> float:
+def _score_put_call(put_call_ratio: float | None) -> float | None:
     """
     Put/call ratio from Deribit options market.
     >1.5 = extreme bearish hedging = contrarian buy
     <0.6 = extreme call buying = crowded longs = caution
+    Returns None when data unavailable (prevents dilution toward 0).
+    Note: C1 gate may set this to 0.0 explicitly when VIX≥40 (intentional neutralisation).
     """
     if put_call_ratio is None:
-        return 0.0
+        return None
     if put_call_ratio >= 1.5:   return +0.6
     if put_call_ratio >= 1.1:   return +0.2
     if put_call_ratio >= 0.9:   return 0.0
@@ -540,14 +544,15 @@ def score_sentiment_layer(
 
 # ─── Layer 3: On-Chain ────────────────────────────────────────────────────────
 
-def _score_mvrv_z(mvrv_z: float | None) -> float:
+def _score_mvrv_z(mvrv_z: float | None) -> float | None:
     """
     MVRV Z-Score (Mahmudov & Puell, 2018). Backtested on BTC 2011-2024.
     Historical cycle extremes: tops at Z>7 (Dec 2017 ~9.5, Jan 2021 ~8.0)
     Historical cycle bottoms: Z<0 (Dec 2018 ~-0.5, Nov 2022 ~-0.3)
+    Returns None when data unavailable (prevents dilution toward 0).
     """
     if mvrv_z is None:
-        return 0.0
+        return None
     if mvrv_z >= 7.0:    return -1.0
     if mvrv_z >= 4.0:    return _clamp(-0.5 - (mvrv_z - 4) / 6)
     if mvrv_z >= 1.5:    return _clamp(-0.2 - (mvrv_z - 1.5) / 12.5)
@@ -558,15 +563,16 @@ def _score_mvrv_z(mvrv_z: float | None) -> float:
 def _score_hash_ribbon(
     signal: str | None,
     btc_above_20sma: bool | None = None,
-) -> float:
+) -> float | None:
     """
     Hash Ribbon signal (C. Edwards, 2019) with E1 price momentum gate.
     BUY = 30d hash rate MA crossed above 60d MA (capitulation ending) → strongly bullish.
     E1 gate: BUY is downgraded to +0.4 if BTC price is still below 20d SMA.
     Research: Edwards (2019) — hash ribbon BUY with price confirmation = 94% accuracy.
+    Returns None when data unavailable (prevents dilution toward 0).
     """
     if signal is None:
-        return 0.0
+        return None
     base = {
         "BUY":                +0.8,
         "RECOVERY":           +0.3,
@@ -578,20 +584,47 @@ def _score_hash_ribbon(
     return base
 
 
-def _score_puell(puell_multiple: float | None) -> float:
+def _score_puell(puell_multiple: float | None) -> float | None:
     """
     Puell Multiple (D. Puell, 2019). BTC miner revenue relative to 1-year MA.
     Historical data 2013-2024:
     <0.5: Dec 2018 bottom (0.35), Nov 2022 bottom (0.41) — extreme buy zone
     >3.0: threshold lowered from 4.0 — 2021 cycle peak was PM=3.53 (not 4.0+).
           Dec 2017: PM=7.17. Apr 2021: PM=3.53. Cycle amplitude is declining each cycle.
+    Returns None when data unavailable (prevents dilution toward 0).
     """
     if puell_multiple is None:
-        return 0.0
+        return None
     if puell_multiple <= 0.5:   return +0.9
     if puell_multiple <= 1.0:   return +0.4
     if puell_multiple <= 2.0:   return 0.0
     if puell_multiple <= 3.0:   return _clamp(-0.3 - (puell_multiple - 2) / 3.3)
+    return -0.8
+
+
+def _score_nvt(nvt: float | None) -> float | None:
+    """
+    A1 — NVT Signal (Network Value to Transactions, Willy Woo 2017; Kalichkin 2018).
+    NVT = Market Cap / Daily Adjusted On-Chain Transfer Volume (USD).
+    High NVT = market cap disconnected from network utility = overvalued.
+    Low NVT = high relative utility = undervalued.
+
+    Uses NVT Signal (90-day SMA of daily NVT) per Kalichkin for smoother cycle signal.
+    Thresholds calibrated on BTC cycles 2011-2024:
+      >150: overvalued (Dec 2017: ~250, Apr 2021: ~180)
+      >100: elevated risk
+      45-100: normal operating range
+      <45: undervalued (Dec 2018: ~30, Nov 2022: ~35, Mar 2020: ~25)
+    Returns None when data unavailable (prevents dilution toward 0).
+    """
+    if nvt is None:
+        return None
+    if nvt < 30:    return +0.8
+    if nvt < 45:    return +0.5
+    if nvt < 70:    return +0.2
+    if nvt < 100:   return 0.0
+    if nvt < 130:   return -0.3
+    if nvt < 150:   return -0.5
     return -0.8
 
 
@@ -625,12 +658,14 @@ def score_onchain_layer(
     btc_above_20sma: bool | None = None,
     btc_price: float | None = None,
     realized_price: float | None = None,
+    nvt: float | None = None,
 ) -> dict[str, Any]:
     """
     Compute Layer 3 on-chain score.
-    MVRV Z 0.35, Hash Ribbons 0.25, SOPR 0.20, Puell 0.10, Realized Price 0.10.
+    MVRV Z 0.35, Hash Ribbons 0.25, SOPR 0.20, Puell 0.08, Realized Price 0.07, NVT 0.05.
     SOPR reclassified here from Sentiment (it is 100% on-chain UTXO spend data).
     A4: Realized Price added as on-chain support/resistance signal.
+    A1: NVT Signal added (Willy Woo 2017; Kalichkin 2018).
     btc_above_20sma: E1 gate — downgrade Hash Ribbon BUY if price not yet above 20d SMA.
     """
     s_mvrv  = _score_mvrv_z(mvrv_z)
@@ -638,9 +673,11 @@ def score_onchain_layer(
     s_puell = _score_puell(puell_multiple)
     s_sopr  = _score_sopr(sopr)
     s_rp    = _score_realized_price(btc_price, realized_price)
+    s_nvt   = _score_nvt(nvt)
 
-    _SUB_W  = {"mvrv": 0.35, "hash": 0.25, "sopr": 0.20, "puell": 0.10, "rp": 0.10}
-    _pairs  = [("mvrv", s_mvrv), ("hash", s_hash), ("sopr", s_sopr), ("puell", s_puell), ("rp", s_rp)]
+    _SUB_W  = {"mvrv": 0.35, "hash": 0.25, "sopr": 0.20, "puell": 0.08, "rp": 0.07, "nvt": 0.05}
+    _pairs  = [("mvrv", s_mvrv), ("hash", s_hash), ("sopr", s_sopr), ("puell", s_puell),
+               ("rp", s_rp), ("nvt", s_nvt)]
     _wsum   = sum(_SUB_W[k] for k, v in _pairs if v is not None)
     raw     = (
         sum((v or 0.0) * _SUB_W[k] for k, v in _pairs if v is not None) / _wsum
@@ -654,11 +691,12 @@ def score_onchain_layer(
         "weight":     _W_ONCHAIN,
         "weighted":   round(layer * _W_ONCHAIN, 4),
         "components": {
-            "mvrv_z":          {"value": mvrv_z,             "score": round(s_mvrv,  3), "sub_weight": 0.35},
-            "hash_ribbon":     {"value": hash_ribbon_signal, "score": round(s_hash,  3), "sub_weight": 0.25},
-            "sopr":            {"value": sopr,               "score": round(s_sopr,  3), "sub_weight": 0.20},
-            "puell_multiple":  {"value": puell_multiple,     "score": round(s_puell, 3), "sub_weight": 0.10},
-            "realized_price":  {"value": realized_price,     "score": round(s_rp,    3) if s_rp is not None else None, "sub_weight": 0.10, "btc_price": btc_price},
+            "mvrv_z":          {"value": mvrv_z,             "score": round(s_mvrv,  3) if s_mvrv  is not None else None, "sub_weight": 0.35},
+            "hash_ribbon":     {"value": hash_ribbon_signal, "score": round(s_hash,  3) if s_hash  is not None else None, "sub_weight": 0.25},
+            "sopr":            {"value": sopr,               "score": round(s_sopr,  3) if s_sopr  is not None else None, "sub_weight": 0.20},
+            "puell_multiple":  {"value": puell_multiple,     "score": round(s_puell, 3) if s_puell is not None else None, "sub_weight": 0.08},
+            "realized_price":  {"value": realized_price,     "score": round(s_rp,    3) if s_rp    is not None else None, "sub_weight": 0.07, "btc_price": btc_price},
+            "nvt_signal":      {"value": nvt,                "score": round(s_nvt,   3) if s_nvt   is not None else None, "sub_weight": 0.05},
         },
     }
 
