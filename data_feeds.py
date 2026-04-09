@@ -839,7 +839,7 @@ def get_liquidation_pressure(pairs: list) -> list:
     fr_data: dict = {}
     def _get_fr(p):
         try:
-            fr = get_binance_funding_rate(p)
+            fr = get_funding_rate(p)
             return p, fr
         except Exception:
             return p, {}
@@ -7351,6 +7351,8 @@ def fetch_github_dev_activity(symbols: list = None, max_repos: int = 8) -> dict:
 
     with _GITHUB_CACHE_LOCK:
         _GITHUB_CACHE[cache_key] = {**result, "_ts": now}
+
+    return result
 
 
 # ─── BTC Technical Analysis Signals (Layer 1 — 4-layer composite model) ──────
