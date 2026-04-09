@@ -30,14 +30,21 @@ def _compute_rsi(time_close, period=14):
     avg_g = sum(gains[:period]) / period
     avg_l = sum(losses[:period]) / period
 
+    def _calc_rsi(g: float, l: float) -> float:
+        # Wilder (1978): avg_l==0 and avg_g>0 → RSI=100 (all gains, no losses)
+        # avg_g==0 and avg_l==0 → flat market → neutral RSI=50
+        if l == 0:
+            return 100.0 if g > 0 else 50.0
+        return 100.0 - (100.0 / (1.0 + g / l))
+
     result = []
-    _rsi = 100.0 if avg_l == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_l))
+    _rsi = _calc_rsi(avg_g, avg_l)
     result.append({"time": times[period], "value": round(_rsi, 2)})
 
     for i in range(period, len(diffs)):
         avg_g = (avg_g * (period - 1) + gains[i]) / period
         avg_l = (avg_l * (period - 1) + losses[i]) / period
-        _rsi = 100.0 if avg_l == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_l))
+        _rsi = _calc_rsi(avg_g, avg_l)
         result.append({"time": times[i + 1], "value": round(_rsi, 2)})
 
     return result
