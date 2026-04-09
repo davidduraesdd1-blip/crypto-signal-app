@@ -47,6 +47,8 @@ _audit_log.addHandler(_audit_handler)
 _audit_log.setLevel(logging.INFO)
 _audit_log.propagate = False
 
+logger = logging.getLogger(__name__)
+
 # Suppress "Connection pool is full" warnings from urllib3 — these come from CCXT's
 # internal HTTP sessions during concurrent agent scans and are benign (connections are
 # discarded, not failed). Raising to ERROR hides noise without masking real failures.
