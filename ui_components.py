@@ -4012,7 +4012,9 @@ def render_github_dev_activity_panel(user_level: str = "beginner") -> None:
         with _st.spinner("Fetching GitHub activity…"):
             _gh = _df_sg.fetch_github_dev_activity()
     except Exception as _ghe:
-        _st.warning(f"GitHub data unavailable: {_ghe}")
+        import logging as _lg_gh
+        _lg_gh.getLogger(__name__).warning("[GitHub] fetch error: %s", _ghe)
+        _st.warning("GitHub activity data temporarily unavailable — try refreshing.")
         return
 
     _items = [(k, v) for k, v in _gh.items() if k not in ("timestamp", "error") and isinstance(v, dict)]

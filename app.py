@@ -1036,7 +1036,8 @@ with st.sidebar.expander("🔗 Wallet Import (Beta)", expanded=False):
                     else:
                         st.warning("No holdings found or fetch failed.")
                 except Exception as _we:
-                    st.error(f"Wallet import error: {_we}")
+                    logger.warning("[Wallet] import error: %s", _we)
+                    st.error("Could not import wallet data — check the address is valid and try again.")
         # Also offer full Zerion portfolio
         if st.button("Full Portfolio (Zerion)", key="btn_zerion_portfolio"):
             with st.spinner("Fetching full portfolio..."):
@@ -1048,7 +1049,8 @@ with st.sidebar.expander("🔗 Wallet Import (Beta)", expanded=False):
                     else:
                         st.warning("No portfolio data found.")
                 except Exception as _ze:
-                    st.error(f"Zerion fetch error: {_ze}")
+                    logger.warning("[Zerion] fetch error: %s", _ze)
+                    st.error("Portfolio data temporarily unavailable — try again in a moment.")
     elif _wallet_addr:
         st.error("Invalid Ethereum address format")
 
@@ -1347,7 +1349,8 @@ def page_dashboard():
 
     # Show scan error if one occurred
     if st.session_state.get("scan_error"):
-        st.error(f"Scan failed: {st.session_state['scan_error']}")
+        logger.warning("[Scan] error shown to user: %s", st.session_state["scan_error"])
+        st.error("Scan encountered an error — market data may be temporarily unavailable. Try running another scan or refreshing the page.")
 
     # Demo mode (#67) — inject synthetic results so no real API needed
     if st.session_state.get("demo_mode"):
@@ -1951,7 +1954,8 @@ def page_dashboard():
                             _seen_pairs = sorted(_ag_log_df["pair"].dropna().unique().tolist())
                             st.caption(f"Pairs with decisions logged: {', '.join(_seen_pairs)}")
                 except Exception as _ae:
-                    st.caption(f"Agent log unavailable: {_ae}")
+                    logger.warning("[Agent] log display error: %s", _ae)
+                    st.caption("Agent activity log temporarily unavailable.")
         else:
             # Config was disabled — stop the running supervisor if active
             try:
@@ -2673,7 +2677,7 @@ def page_dashboard():
                     _align_text  = f"▼ {_n_bear} of {_n_tot} timeframes BEARISH ({', '.join(_bear_tfs)})"
                 elif _n_bull > _n_bear:
                     _align_color = "#00d4aa"
-                    _align_text  = f"▲ Leaning bullish — {_n_bull} buy, {_n_bear} sell ({', '.join(_hold_tfs or ['no hold'])} neutral)"
+                    _align_text  = f"▲ Leaning bullish — {_n_bull} buy, {_n_bear} sell" + (f" ({', '.join(_hold_tfs)} neutral)" if _hold_tfs else "")
                 elif _n_bear > _n_bull:
                     _align_color = "#f97316"
                     _align_text  = f"▽ Leaning bearish — {_n_bear} sell, {_n_bull} buy"
@@ -2792,7 +2796,7 @@ def page_dashboard():
 
                     if _tf_rows:
                         _tf_df = pd.DataFrame(_tf_rows).set_index("Timeframe")
-                        st.dataframe(_tf_df, use_container_width=True)
+                        st.dataframe(_tf_df, width='stretch')
 
         # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
         try:
@@ -2828,7 +2832,8 @@ def page_dashboard():
                         st.caption(f"Key theme: {_theme}")
                     st.caption(f"Source: {_news.get('source','—')} · {_news.get('articles_analyzed',0)} articles analyzed")
             except Exception as _ne:
-                st.caption(f"News fetch unavailable: {_ne}")
+                logger.debug("[News] display error: %s", _ne)
+                st.caption("News sentiment temporarily unavailable — try refreshing in 30 seconds.")
 
         # ── Whale Tracker ───────────────────────────────────────────────────────────
         if _whale_mod is not None:
@@ -4392,7 +4397,8 @@ def page_config():
             with st.expander("All table counts"):
                 st.json({k: v for k, v in stats.items() if k != 'db_size_kb'})
         except Exception as e:
-            st.warning(f"DB stats unavailable: {e}")
+            logger.warning("[Settings] DB stats error: %s", e)
+            st.warning("Database statistics temporarily unavailable.")
 
         # ── FastAPI REST Server ────────────────────────────────────────────────────
         st.markdown("---")
@@ -4771,7 +4777,8 @@ def page_config():
             _ws.start(model.PAIRS)
             st.success("Config saved. Changes applied to next scan.")
         except Exception as e:
-            st.error(f"Save failed: {e}")
+            logger.error("[Config] save failed: %s", e)
+            st.error("Could not save config — check file permissions and try again.")
 
 
     def _reset_config():
@@ -4785,7 +4792,8 @@ def page_config():
             model.weights = model.DEFAULT_WEIGHTS.copy()
             st.success("Config reset to defaults.")
         except Exception as e:
-            st.error(f"Reset failed: {e}")
+            logger.error("[Config] reset failed: %s", e)
+            st.error("Could not reset config — check file permissions and try again.")
 
 
 # ── Backtest progress fragment — module level to keep session-state key stable ──
@@ -4839,7 +4847,8 @@ def page_backtest():
 
     with _bt_t1:
         if st.session_state.get("backtest_error"):
-            st.error(f"Backtest failed: {st.session_state['backtest_error']}")
+            logger.warning("[Backtest] error: %s", st.session_state["backtest_error"])
+            st.error("Backtest could not complete — try running the scan first to generate signal history.")
 
         # Show existing results — from session state (fresh run) or DB (prior run)
         bt_res = st.session_state.get("backtest_results")
@@ -6379,7 +6388,8 @@ def page_backtest():
                             )
                             st.session_state["stress_results"] = _stress_res
                         except Exception as _se:
-                            st.error(f"Stress test failed: {_se}")
+                            logger.warning("[Stress] test failed: %s", _se)
+                            st.error("Stress test could not complete — try a different scenario or refresh the page.")
 
                 _stress_data = st.session_state.get("stress_results")
                 if _stress_data and isinstance(_stress_data, dict) and "portfolio" in _stress_data:
@@ -7115,7 +7125,8 @@ def page_agent():
                 f"A {_trend} trend means recent accuracy is {'better' if _trend == 'improving' else ('worse' if _trend == 'degrading' else 'similar')} than the baseline."
             )
     except Exception as _g3e:
-        st.caption(f"Accuracy data unavailable: {_g3e}")
+        logger.debug("[Accuracy] display error: %s", _g3e)
+        st.caption("Accuracy metrics not yet available — run a scan to generate signal history.")
 
     # F1 — Rolling 7-day win rate chart (30-day lookback)
     try:
