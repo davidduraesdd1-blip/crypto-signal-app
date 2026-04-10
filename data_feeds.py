@@ -83,6 +83,65 @@ def _build_no_retry_session() -> requests.Session:
 
 _NO_RETRY_SESSION = _build_no_retry_session()
 
+# ─── yfinance timeout wrapper ─────────────────────────────────────────────────
+# yfinance has no native timeout parameter on .history()/.download(); a slow or
+# unresponsive Yahoo Finance server blocks the calling thread indefinitely.
+# Observed impact: 60-second Streamlit health-check failures (503) when 6
+# sequential .history() calls each hang for ~10s on Yahoo's CDN.
+# Fix: run every yfinance call in a 1-worker thread pool with a hard timeout.
+import concurrent.futures as _cf_yf
+import pandas as _pd_empty
+
+def _yf_history(ticker_sym: str, *, timeout_s: float = 8.0, **kwargs) -> "import pandas; pandas.DataFrame":
+    """
+    Call yf.Ticker(ticker_sym).history(**kwargs) with a hard wall-clock timeout.
+    Returns an empty DataFrame on timeout or any error.
+    """
+    try:
+        import yfinance as _yf
+        import pandas as _pd
+    except ImportError:
+        import pandas as _pd
+        return _pd.DataFrame()
+    try:
+        with _cf_yf.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(_yf.Ticker(ticker_sym).history, **kwargs)
+            return _fut.result(timeout=timeout_s)
+    except _cf_yf.TimeoutError:
+        logging.debug("[yfinance] %s .history() timed out after %ss", ticker_sym, timeout_s)
+        import pandas as _pd
+        return _pd.DataFrame()
+    except Exception as _e:
+        logging.debug("[yfinance] %s .history() error: %s", ticker_sym, _e)
+        import pandas as _pd
+        return _pd.DataFrame()
+
+
+def _yf_download(symbol: str, *, timeout_s: float = 12.0, **kwargs) -> "import pandas; pandas.DataFrame":
+    """
+    Call yf.download(symbol, **kwargs) with a hard wall-clock timeout.
+    Returns an empty DataFrame on timeout or any error.
+    """
+    try:
+        import yfinance as _yf
+        import pandas as _pd
+    except ImportError:
+        import pandas as _pd
+        return _pd.DataFrame()
+    try:
+        with _cf_yf.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(_yf.download, symbol, **kwargs)
+            return _fut.result(timeout=timeout_s)
+    except _cf_yf.TimeoutError:
+        logging.debug("[yfinance] download(%s) timed out after %ss", symbol, timeout_s)
+        import pandas as _pd
+        return _pd.DataFrame()
+    except Exception as _e:
+        logging.debug("[yfinance] download(%s) error: %s", symbol, _e)
+        import pandas as _pd
+        return _pd.DataFrame()
+
+
 # ─── Rate Limiter (token bucket — #11 security hardening) ────────────────────
 class RateLimiter:
     """Token bucket rate limiter for API calls."""
@@ -4200,7 +4259,7 @@ def fetch_m2_btc_chart_data(months: int = 24) -> dict:
         btc_prices: list = [None] * len(sorted_dates)
         try:
             import yfinance as _yf
-            _df = _yf.download("BTC-USD", period="3y", interval="1mo",
+            _df = _yf_download("BTC-USD", period="3y", interval="1mo",
                                progress=False, auto_adjust=True)
             if not _df.empty:
                 for i, d in enumerate(sorted_dates):
@@ -4275,7 +4334,7 @@ def fetch_yfinance_macro() -> dict:
                 try:
                     # E4: DXY needs 35 days to compute 30d rate-of-change
                     period = "35d" if key == "dxy" else "5d"
-                    hist = yf.Ticker(symbol).history(period=period)
+                    hist = _yf_history(symbol, period=period)
                     if not hist.empty:
                         closes = hist["Close"]
                         result[key] = round(float(closes.iloc[-1]), 2)
@@ -4338,7 +4397,7 @@ def fetch_macro_timeseries(days: int = 90) -> dict:
         result = {}
         for key, symbol in _SYMBOLS.items():
             try:
-                hist = yf.Ticker(symbol).history(period=f"{days}d")
+                hist = _yf_history(symbol, period=f"{days}d")
                 if not hist.empty:
                     result[key] = {
                         str(dt)[:10]: round(float(v), 4)
@@ -7395,7 +7454,7 @@ def fetch_btc_ta_signals() -> dict:
 
     try:
         # E5: Pi Cycle Top needs 350d history; fetch 400d to have enough buffer
-        hist = yf.Ticker("BTC-USD").history(period="400d")
+        hist = _yf_history("BTC-USD", period="400d", timeout_s=12.0)
         if hist.empty or len(hist) < 30:
             return _fallback
         closes  = hist["Close"].dropna().values.tolist()
@@ -7535,7 +7594,7 @@ def fetch_btc_ta_signals() -> dict:
     # overbought/oversold zones lose reliability (Murphy 1999, Elder 2002).
     rsi_14_weekly = None
     try:
-        hist_w = yf.Ticker("BTC-USD").history(period="2y", interval="1wk")
+        hist_w = _yf_history("BTC-USD", period="2y", interval="1wk", timeout_s=12.0)
         if hist_w is not None and len(hist_w) >= 16:
             w_closes = hist_w["Close"].dropna().values.tolist()
             if len(w_closes) >= 16:
