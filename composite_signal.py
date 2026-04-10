@@ -943,7 +943,7 @@ def compute_composite_signal(
             "sentiment": sentiment_layer,
             "onchain":   onchain_layer,
         },
-        "weights": {
+        "weights_applied": {
             "technical": w_ta,
             "macro":     w_mac,
             "sentiment": w_sent,

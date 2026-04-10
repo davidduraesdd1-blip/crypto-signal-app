@@ -1875,7 +1875,7 @@ def page_dashboard():
 
                 st.dataframe(
                     _liq_df.style.map(_color_sq, subset=["Squeeze Risk"]),
-                    width="stretch", hide_index=True,
+                    use_container_width=True, hide_index=True,
                 )
 
                 # Bar chart of squeeze scores
@@ -1896,7 +1896,7 @@ def page_dashboard():
                         xaxis_title="", yaxis_title="Squeeze Score",
                         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(_liq_fig, width='stretch')
+                    st.plotly_chart(_liq_fig, use_container_width=True)
                     st.caption(
                         "Score = √(OI/1B) × |funding %| × 100. "
                         "🔴 High Risk: large OI + extreme funding → cascade risk if price moves against dominant side."
@@ -1985,7 +1985,7 @@ def page_dashboard():
                         _disp_df = _ag_log_df[_show_cols]
                         if "logged_at" in _disp_df.columns:
                             _disp_df = _disp_df.sort_values("logged_at", ascending=False)
-                        st.dataframe(_disp_df, width='stretch', hide_index=True)
+                        st.dataframe(_disp_df, use_container_width=True, hide_index=True)
                         # Show unique pairs covered this session
                         if "pair" in _ag_log_df.columns:
                             _seen_pairs = sorted(_ag_log_df["pair"].dropna().unique().tolist())
@@ -2033,7 +2033,7 @@ def page_dashboard():
                             "Chain":      _tok.get("chain") or "Ethereum",
                         })
                     if _tok_rows:
-                        st.dataframe(pd.DataFrame(_tok_rows), width='stretch', hide_index=True)
+                        st.dataframe(pd.DataFrame(_tok_rows), use_container_width=True, hide_index=True)
 
             # Chain breakdown (Zerion full portfolio)
             if _zp and _zp.get("chains"):
@@ -2041,7 +2041,7 @@ def page_dashboard():
                     _chain_data = _zp["chains"]
                     _chain_rows = [{"Chain": c, "Value USD": f"${v:,.2f}"} for c, v in _chain_data.items()]
                     if _chain_rows:
-                        st.dataframe(pd.DataFrame(_chain_rows), width='stretch', hide_index=True)
+                        st.dataframe(pd.DataFrame(_chain_rows), use_container_width=True, hide_index=True)
 
 
     with _dash_tab2:
@@ -2115,7 +2115,7 @@ def page_dashboard():
                 xaxis=dict(side="top", tickfont=dict(size=9)),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
             )
-            st.plotly_chart(_hm_fig, width='stretch',
+            st.plotly_chart(_hm_fig, use_container_width=True,
                             config={"displayModeBar": False, "staticPlot": True})
             st.markdown("---")
 
@@ -2161,7 +2161,7 @@ def page_dashboard():
                     "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
                     "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
                 })
-            st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), width='stretch')
+            st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), use_container_width=True)
         st.markdown("---")
 
 
@@ -2833,7 +2833,7 @@ def page_dashboard():
 
                     if _tf_rows:
                         _tf_df = pd.DataFrame(_tf_rows).set_index("Timeframe")
-                        st.dataframe(_tf_df, width='stretch')
+                        st.dataframe(_tf_df, use_container_width=True)
 
         # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
         try:
@@ -3186,7 +3186,7 @@ def page_dashboard():
                         xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
                         showlegend=False,
                     )
-                    st.plotly_chart(_ch_fig, width='stretch', key=f"conf_hist_{_pk}")
+                    st.plotly_chart(_ch_fig, use_container_width=True, key=f"conf_hist_{_pk}")
             except Exception:
                 pass
 
@@ -3381,7 +3381,7 @@ def page_dashboard():
                         paper_bgcolor="rgba(0,0,0,0)",
                         plot_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(fig_corr, width='stretch',
+                    st.plotly_chart(fig_corr, use_container_width=True,
                                     config={"displayModeBar": False, "staticPlot": True})
 
                     # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
@@ -3399,7 +3399,7 @@ def page_dashboard():
                     except Exception:
                         pass
                     if high_corr_rows:
-                        st.dataframe(pd.DataFrame(high_corr_rows), width='stretch', hide_index=True)
+                        st.dataframe(pd.DataFrame(high_corr_rows), use_container_width=True, hide_index=True)
                     else:
                         st.info("No pairs exceed the 0.75 correlation threshold for this period.")
                 elif st.session_state.get("corr_error"):
@@ -3479,7 +3479,7 @@ def page_dashboard():
                     with st.expander("Full volatility table"):
                         st.dataframe(
                             _vol_df,
-                            width="stretch", hide_index=True,
+                            use_container_width=True, hide_index=True,
                             column_config={
                                 "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
                                 "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
@@ -4203,7 +4203,7 @@ def page_config():
                         _bw_df = _bw_df.rename(columns={"indicator": "Indicator", "weight": "Weight", "wins": "Wins", "losses": "Losses"})
                         if "Weight" in _bw_df.columns:
                             _bw_df["Weight %"] = (_bw_df["Weight"].astype(float) * 100).round(1).astype(str) + "%"
-                        st.dataframe(_bw_df, width='stretch', hide_index=True)
+                        st.dataframe(_bw_df, use_container_width=True, hide_index=True)
                         # Horizontal bar chart of weights
                         if _display_bw and "weight" in _display_bw[0]:
                             _bw_fig = go.Figure(go.Bar(
@@ -4216,7 +4216,7 @@ def page_config():
                                 height=220, margin=dict(l=0, r=0, t=10, b=0),
                                 xaxis_title="Weight (%)",
                             )
-                            st.plotly_chart(_bw_fig, width='stretch')
+                            st.plotly_chart(_bw_fig, use_container_width=True)
         except Exception as _bay_err:
             logger.warning("[App] Bayesian weights card error: %s", _bay_err)
             st.caption("Bayesian weights temporarily unavailable.")
@@ -5121,7 +5121,7 @@ def page_backtest():
             _efig.update_xaxes(title_text="Trade #", row=2, col=1,
                                gridcolor="#222")
             _efig.update_xaxes(gridcolor="#222", row=1, col=1)
-            st.plotly_chart(_efig, width='stretch')
+            st.plotly_chart(_efig, use_container_width=True)
         elif os.path.exists("backtest_equity_curve.png"):
             st.image("backtest_equity_curve.png", caption="Equity Curve (static)")
 
@@ -5154,7 +5154,7 @@ def page_backtest():
 
             st.dataframe(
                 filtered,
-                width="stretch", height=400,
+                use_container_width=True, height=400,
                 column_config={
                     "pnl_pct": st.column_config.NumberColumn("PNL %", format="%.2f%%"),
                     "pnl_usd": st.column_config.NumberColumn("PNL $", format="$%.2f"),
@@ -5201,7 +5201,7 @@ def page_backtest():
                                     labels={'pnl_pct': 'PnL %'})
                 fig2.add_vline(x=0, line_dash="dash", line_color="red")
                 fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig2, width='stretch')
+                st.plotly_chart(fig2, use_container_width=True)
 
             # Monte Carlo simulation — advanced only (Item 12)
             if _bt_lv != "beginner" and 'pnl_pct' in df_trades.columns and len(df_trades) >= 5:
@@ -5249,7 +5249,7 @@ def page_backtest():
                         yaxis_title="Frequency",
                         height=300, margin=dict(l=0, r=0, t=10, b=0),
                     )
-                    st.plotly_chart(fig_mc, width='stretch')
+                    st.plotly_chart(fig_mc, use_container_width=True)
                 elif mc_r and 'error' in mc_r:
                     st.warning(mc_r['error'])
 
@@ -5291,7 +5291,7 @@ def page_backtest():
                     fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green",
                                   annotation_text=f"High-Conf ({model.HIGH_CONF_THRESHOLD}%)")
                     fig.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
 
                 # Searchable table
                 st.subheader("All Records")
@@ -5318,7 +5318,7 @@ def page_backtest():
                     'circuit_breaker_drawdown_pct': 'CB Drawdown %', 'scan_sec': 'Scan Sec',
                 }
                 display_df = display_df.rename(columns={k: v for k, v in col_labels.items() if k in display_df.columns})
-                st.dataframe(display_df, width='stretch', height=400)
+                st.dataframe(display_df, use_container_width=True, height=400)
                 st.download_button("⬇ Download Master Log", data=df.to_csv(index=False),
                                    file_name="daily_signals_master.csv", mime="text/csv",
                                    key="dl_master_log")
@@ -5518,7 +5518,7 @@ def page_backtest():
                     p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "N/A")
                     p3.metric("Cumulative PnL %", f"{total_pnl:.2f}%")
 
-                st.dataframe(df_closed, width='stretch', height=350)
+                st.dataframe(df_closed, use_container_width=True, height=350)
                 st.download_button("⬇ Download Paper Trades", data=df_closed.to_csv(index=False),
                                    file_name="paper_trades_log.csv", mime="text/csv",
                                    key="dl_paper_trades")
@@ -5540,9 +5540,9 @@ def page_backtest():
                                      labels={'confidence': 'Confidence (%)', 'timestamp': 'Time'})
                     fig.add_hline(y=model.HIGH_CONF_THRESHOLD, line_dash="dash", line_color="green")
                     fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
 
-                st.dataframe(df_fb, width='stretch', height=350)
+                st.dataframe(df_fb, use_container_width=True, height=350)
                 st.download_button("⬇ Download Feedback Log", data=df_fb.to_csv(index=False),
                                    file_name="feedback_log.csv", mime="text/csv",
                                    key="dl_feedback_log")
@@ -5573,7 +5573,7 @@ def page_backtest():
                     ex_m2.metric("Live Orders", int(live_cnt))
                     ex_m3.metric("Paper Orders", int(paper_cnt))
 
-                st.dataframe(df_exec_log, width='stretch', height=400)
+                st.dataframe(df_exec_log, use_container_width=True, height=400)
                 st.download_button(
                     "⬇ Download Execution Log",
                     data=df_exec_log.to_csv(index=False),
@@ -5612,7 +5612,7 @@ def page_backtest():
                         labels={"slippage_pct": "Slippage (%)"},
                     )
                     fig_slip.update_layout(height=280, margin=dict(l=0, r=0, t=30, b=0))
-                    st.plotly_chart(fig_slip, width='stretch')
+                    st.plotly_chart(fig_slip, use_container_width=True)
 
                     # Slippage by pair
                     if "pair" in df_slip_valid.columns:
@@ -5623,7 +5623,7 @@ def page_backtest():
                             .rename(columns={"mean": "Avg %", "max": "Max %", "count": "Orders"})
                             .sort_values("Avg %", ascending=True)
                         )
-                        st.dataframe(_slip_by_pair, hide_index=True, width='stretch')
+                        st.dataframe(_slip_by_pair, hide_index=True, use_container_width=True)
 
                     st.download_button(
                         "⬇ Download Slippage Data",
@@ -5788,7 +5788,7 @@ def page_backtest():
                             height=350, showlegend=True,
                             xaxis_title="Date", yaxis_title="Equity ($)",
                         )
-                        st.plotly_chart(fig_dbt, width='stretch')
+                        st.plotly_chart(fig_dbt, use_container_width=True)
 
                         # Trade log (first 100 rows)
                         with st.expander(f"Trade Log ({len(df_dbt)} trades)", expanded=False):
@@ -5875,7 +5875,7 @@ def page_backtest():
                     yaxis=dict(range=[0, 110]),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                st.plotly_chart(_fig_cal, width='stretch')
+                st.plotly_chart(_fig_cal, use_container_width=True)
 
                 # Per-pair calibration breakdown
                 with st.expander("Per-Pair Calibration Breakdown", expanded=False):
@@ -6058,7 +6058,7 @@ def page_backtest():
                     _exit_grp["How It Exited"] = _exit_grp["How It Exited"].map(
                         lambda v: _exit_label_map.get(v, v)
                     )
-                    st.dataframe(_exit_grp, hide_index=True, width='stretch')
+                    st.dataframe(_exit_grp, hide_index=True, use_container_width=True)
                     st.caption("Target = profitable exit. Stop = loss. Trailing Stop = stop that moved with price. Timeout = held too long.")
 
                 # ── Buy vs Sell breakdown ───────────────────────────────────────────
@@ -6079,7 +6079,7 @@ def page_backtest():
                         .reset_index()
                     )
                     _dir_grp.columns = ["Signal Type", "# Trades", "Win Rate %", "Avg P&L %", "Total P&L %"]
-                    st.dataframe(_dir_grp, hide_index=True, width='stretch')
+                    st.dataframe(_dir_grp, hide_index=True, use_container_width=True)
                     st.caption("Shows whether the model performs better on buy or sell signals historically.")
 
                 # ── Per-coin breakdown ──────────────────────────────────────────────
@@ -6096,7 +6096,7 @@ def page_backtest():
                         .sort_values("AvgPnL", ascending=False)
                     )
                     _coin_grp.columns = ["Coin", "# Trades", "Win Rate %", "Avg P&L %"]
-                    st.dataframe(_coin_grp, hide_index=True, width='stretch', height=220)
+                    st.dataframe(_coin_grp, hide_index=True, use_container_width=True, height=220)
                     st.caption("Sorted by average P&L per trade. Top = best historical performers for this model.")
 
             # ── IC Score (Information Coefficient) ────────────────────────────────────
@@ -6334,7 +6334,7 @@ def page_backtest():
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
                                     yaxis=dict(title="Sharpe", gridcolor="#1f2937"),
                                 )
-                                st.plotly_chart(_wfv_line, width='stretch',
+                                st.plotly_chart(_wfv_line, use_container_width=True,
                                                 config={"displayModeBar": False})
 
                                 # ── Bar chart: WFE ratio per window ──────────────────
@@ -6365,7 +6365,7 @@ def page_backtest():
                                                gridcolor="#1f2937"),
                                     showlegend=False,
                                 )
-                                st.plotly_chart(_wfv_bar, width='stretch',
+                                st.plotly_chart(_wfv_bar, use_container_width=True,
                                                 config={"displayModeBar": False})
 
                                 # ── Per-window detail table ───────────────────────────
@@ -6382,7 +6382,7 @@ def page_backtest():
                                     "IS Trades":    w["n_trades_is"],
                                     "OOS Trades":   w["n_trades_oos"],
                                 } for w in _wfv_windows])
-                                st.dataframe(_wfv_tbl, hide_index=True, width='stretch')
+                                st.dataframe(_wfv_tbl, hide_index=True, use_container_width=True)
 
                 except Exception as _wfv_err:
                     logger.warning("[App] WFE validation error: %s", _wfv_err)
@@ -6469,7 +6469,7 @@ def page_backtest():
                             })
                     if _pair_rows:
                         _stress_df = pd.DataFrame(_pair_rows)
-                        st.dataframe(_stress_df, hide_index=True, width='stretch')
+                        st.dataframe(_stress_df, hide_index=True, use_container_width=True)
 
                     # ── "What does this mean?" panel (all levels) ─────────────
                     _st_ret  = float(_p.get('portfolio_return', 0))
@@ -6594,7 +6594,7 @@ def page_arbitrage():
         hist_df = _cached_arb_opportunities_df(limit=50)
         if not hist_df.empty:
             st.subheader("Recent Opportunities (DB)")
-            st.dataframe(hist_df, width='stretch', hide_index=True)
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
         return
 
     # ── Spot Arbitrage ──
@@ -6714,7 +6714,7 @@ def page_arbitrage():
             })
         f_df = pd.DataFrame(f_rows)
 
-        st.dataframe(f_df, width='stretch', hide_index=True)
+        st.dataframe(f_df, use_container_width=True, hide_index=True)
         _csv_button(f_df, "arb_funding_carry.csv", key="csv_arb_funding")
         st.caption(
             "**Strategy**: Collect funding payments by holding opposite spot + perp positions. "
@@ -6731,7 +6731,7 @@ def page_arbitrage():
     with st.expander("📋 Historical Arbitrage Log (DB)", expanded=False):
         hist_df = _cached_arb_opportunities_df(limit=100)
         if not hist_df.empty:
-            st.dataframe(hist_df, width='stretch', hide_index=True)
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
             csv_data = hist_df.to_csv(index=False)
             st.download_button(
                 "⬇ Download CSV",
@@ -7204,7 +7204,7 @@ def page_agent():
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             )
             _ui.section_header("Rolling Win Rate", "7-day rolling window over past 30 days")
-            st.plotly_chart(_wr_fig, width='stretch')
+            st.plotly_chart(_wr_fig, use_container_width=True)
     except Exception:
         pass
 
@@ -7214,7 +7214,7 @@ def page_agent():
     if _log_df.empty:
         st.info("No decisions recorded yet. Start the agent to begin logging.")
     else:
-        st.dataframe(_log_df, width='stretch', hide_index=True)
+        st.dataframe(_log_df, use_container_width=True, hide_index=True)
         st.download_button(
             "⬇ Download Agent Log CSV",
             data=_log_df.to_csv(index=False),
