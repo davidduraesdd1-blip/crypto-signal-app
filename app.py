@@ -733,7 +733,7 @@ _sg_level_val = st.sidebar.radio(
     "User Level",
     options=_LEVEL_OPTIONS,
     format_func=lambda lv: _LEVEL_LABELS[lv],
-    index=_LEVEL_OPTIONS.index(_cur_sg_level),
+    index=_LEVEL_OPTIONS.index(_cur_sg_level) if _cur_sg_level in _LEVEL_OPTIONS else 0,
     key="sg_user_level_radio",
     label_visibility="collapsed",
     help=(
