@@ -3036,7 +3036,8 @@ def page_dashboard():
                     if _res["ok"]:
                         st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} BUY placed — ID: {_res['order_id']}")
                     else:
-                        st.error(f"Order failed: {_res['error']}")
+                        logger.warning("[Execution] BUY order failed for %s: %s", pair, _res['error'])
+                        st.error("Order failed — check your API keys and connection, then try again.")
             with ex_c2:
                 if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{_pk}",
                              type="primary" if "SELL" in direction else "secondary",
@@ -3045,7 +3046,8 @@ def page_dashboard():
                     if _res["ok"]:
                         st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} SELL placed — ID: {_res['order_id']}")
                     else:
-                        st.error(f"Order failed: {_res['error']}")
+                        logger.warning("[Execution] SELL order failed for %s: %s", pair, _res['error'])
+                        st.error("Order failed — check your API keys and connection, then try again.")
             with ex_c3:
                 _open_pos = _db.load_positions()
                 if pair in _open_pos:
@@ -3056,7 +3058,8 @@ def page_dashboard():
                         if _res["ok"]:
                             st.success(f"Position closed — ID: {_res['order_id']}")
                         else:
-                            st.error(f"Close failed: {_res['error']}")
+                            logger.warning("[Execution] Close position failed for %s: %s", pair, _res['error'])
+                            st.error("Close failed — check your API keys and connection, then try again.")
                 else:
                     st.caption("No open position")
 
@@ -3079,7 +3082,8 @@ def page_dashboard():
                         if _tr.get("ok"):  # APP-24: mirror iceberg pattern — check ok before accessing keys
                             st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
                         else:
-                            st.error(f"TWAP failed: {_tr.get('error', 'unknown error')}")
+                            logger.warning("[Execution] TWAP failed for %s: %s", pair, _tr.get('error'))
+                            st.error("TWAP order failed — check your API keys and connection, then try again.")
                 with _adv_c2:
                     st.caption("**Iceberg** — hide order size in OB")
                     _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key="adv_ice_dir")
@@ -3098,7 +3102,8 @@ def page_dashboard():
                         if _ir["ok"]:
                             st.success(f"Iceberg placed — ID: {_ir['order_id']}")
                         else:
-                            st.error(f"Iceberg failed: {_ir['error']}")
+                            logger.warning("[Execution] Iceberg failed for %s: %s", pair, _ir['error'])
+                            st.error("Iceberg order failed — check your API keys and connection, then try again.")
 
         # ── Confidence History (Pro Mode only) ─────────────────────────────────
         if not st.session_state.get("beginner_mode", True):
@@ -3361,7 +3366,7 @@ def page_dashboard():
                     else:
                         st.info("No pairs exceed the 0.75 correlation threshold for this period.")
                 elif st.session_state.get("corr_error"):
-                    st.error(f"Correlation error: {st.session_state['corr_error']}")
+                    st.error("Correlation data unavailable — could not fetch price data. Try again in a moment.")
 
 
                 st.markdown("---")
@@ -4204,7 +4209,8 @@ def page_config():
                     n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
                 )
             if 'error' in result:
-                st.error(f"Optimization failed: {result['error']}")
+                logger.warning("[Optuna] Optimization failed: %s", result['error'])
+                st.error("Optimization failed — exchange data unavailable or insufficient history. Try a different pair or timeframe.")
             else:
                 st.success(
                     f"Optimization complete — Best Sharpe score: **{result['best_score']}** "
@@ -4234,7 +4240,8 @@ def page_config():
             if lgbm_r.get("success"):
                 st.success(lgbm_r["message"])
             else:
-                st.warning(f"Retrain skipped: {lgbm_r.get('message', 'Unknown error')}")
+                logger.warning("[LightGBM] Retrain skipped: %s", lgbm_r.get('message'))
+                st.warning("Model retrain skipped — insufficient resolved trade data. Complete more trades to generate feedback.")
 
 
 
@@ -4548,7 +4555,8 @@ def page_config():
                 if _conn["ok"]:
                     st.success(f"Connected! USDT Balance: ${_conn['balance_usdt']:,.2f}")
                 else:
-                    st.error(f"Connection failed: {_conn['error']}")
+                    logger.warning("[Execution] OKX connection failed: %s", _conn['error'])
+                    st.error("Connection failed — check your OKX API key, secret, and passphrase in Settings.")
 
         # ── Autonomous Agent Settings ──────────────────────────────────────────────
         st.markdown("---")
@@ -5714,7 +5722,8 @@ def page_backtest():
             deep_r = st.session_state.get("deep_backtest_result")
             if deep_r:
                 if deep_r.get("error"):
-                    st.error(f"Deep Backtest: {deep_r['error']}")
+                    logger.warning("[Backtest] Deep backtest failed: %s", deep_r['error'])
+                    st.error("Backtest failed — exchange data unavailable or insufficient history. Try a different pair, timeframe, or shorter history.")
                 else:
                     m = deep_r.get("metrics", {})
                     d_cols = st.columns(5)
@@ -6074,7 +6083,8 @@ def page_backtest():
             _ic_r = st.session_state.get("ic_result")
             if _ic_r:
                 if "error" in _ic_r and not _ic_r.get("ic"):
-                    st.error(f"IC error: {_ic_r['error']}")
+                    logger.warning("[IC] IC score failed: %s", _ic_r['error'])
+                    st.error("IC computation failed — insufficient data or exchange unavailable. Try a different pair or timeframe.")
                 else:
                     _ic_val   = _ic_r.get("ic", 0) or 0
                     _ic_label = _ic_r.get("ic_label", "N/A")
@@ -6115,7 +6125,8 @@ def page_backtest():
             _wfe_r = st.session_state.get("wfe_result")
             if _wfe_r:
                 if "error" in _wfe_r and not _wfe_r.get("wfe"):
-                    st.error(f"WFE error: {_wfe_r['error']}")
+                    logger.warning("[WFE] WFE score failed: %s", _wfe_r['error'])
+                    st.error("Walk-forward efficiency computation failed — insufficient data or exchange unavailable. Try a different pair or timeframe.")
                 else:
                     _wfe_val   = _wfe_r.get("wfe", 0) or 0
                     _wfe_label = _wfe_r.get("wfe_label", "N/A")
