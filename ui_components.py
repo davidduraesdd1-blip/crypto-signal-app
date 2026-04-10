@@ -3572,7 +3572,7 @@ def render_hurst_exponent_panel(sparkline_data: dict, results: list,
 
     if _hurst_rows:
         import pandas as _pd
-        _st.dataframe(_pd.DataFrame(_hurst_rows), use_container_width=True, hide_index=True)
+        _st.dataframe(_pd.DataFrame(_hurst_rows), width='stretch', hide_index=True)
         _st.caption("Computed via R/S analysis on 24h sparkline closes. H=0.5 = random walk baseline.")
 
 
@@ -3769,7 +3769,7 @@ def render_social_momentum_panel(results: list, user_level: str = "beginner") ->
 
     import pandas as _pd
     if _social_rows:
-        _st.dataframe(_pd.DataFrame(_social_rows[:12]), use_container_width=True, hide_index=True)
+        _st.dataframe(_pd.DataFrame(_social_rows[:12]), width='stretch', hide_index=True)
         _hot = [r for r in _social_rows if "HOT" in r["Momentum"]]
         _fomo = [r for r in _social_rows if "FOMO" in r["Momentum"]]
         if _hot:
@@ -3836,7 +3836,7 @@ def render_github_dev_activity_panel(user_level: str = "beginner") -> None:
         })
 
     import pandas as _pd
-    _st.dataframe(_pd.DataFrame(_gh_rows), use_container_width=True, hide_index=True)
+    _st.dataframe(_pd.DataFrame(_gh_rows), width='stretch', hide_index=True)
     _stalled = [r["Symbol"] for r in _gh_rows if r["Activity"] == "STALLED"]
     if _stalled:
         _st.warning(f"⚠️ Low/stalled dev activity: {', '.join(_stalled)}")
@@ -3913,7 +3913,7 @@ def render_trader_investor_split(results: list, user_level: str = "beginner") ->
 
     if _split_rows:
         import pandas as _pd
-        _st.dataframe(_pd.DataFrame(_split_rows), use_container_width=True, hide_index=True)
+        _st.dataframe(_pd.DataFrame(_split_rows), width='stretch', hide_index=True)
         _aligned = sum(1 for r in _split_rows if "ALIGNED" in r["Alignment"])
         _st.caption(
             f"{_aligned}/{len(_split_rows)} pairs aligned across both horizons. "
@@ -4065,7 +4065,7 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
                 "Price":    f"${_ev['price']:,.2f}",
                 "Size":     f"${_ev['usd_value']:,.0f}",
             })
-        _st.dataframe(_pd.DataFrame(_liq_rows), use_container_width=True, hide_index=True)
+        _st.dataframe(_pd.DataFrame(_liq_rows), width='stretch', hide_index=True)
         _st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
     else:
         _st.caption("⚠️ Live Binance liquidation feed unavailable in this region — showing model estimates below.")
@@ -4153,11 +4153,11 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
         height=280, margin=dict(l=50, r=90, t=10, b=20),
         showlegend=False,
     )
-    _st.plotly_chart(_fig, use_container_width=True, config={"displayModeBar": False})
+    _st.plotly_chart(_fig, width='stretch', config={"displayModeBar": False})
 
     # ── Table with cascade risk scores ────────────────────────────────────────
     if _table_rows:
-        _st.dataframe(_pd.DataFrame(_table_rows), use_container_width=True, hide_index=True)
+        _st.dataframe(_pd.DataFrame(_table_rows), width='stretch', hide_index=True)
 
     _st.caption(
         "Cascade Risk Score = how dangerous the current setup is. "
@@ -4337,7 +4337,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
                 ),
                 xaxis=dict(gridcolor="rgba(0,0,0,0)"),
             )
-            _st.plotly_chart(_fig_m2, use_container_width=True, config={"displayModeBar": False})
+            _st.plotly_chart(_fig_m2, width='stretch', config={"displayModeBar": False})
             _st.caption(
                 "Purple solid = current US M2 money supply. "
                 "Purple dashed = M2 shifted forward 90 days (lag model: BTC historically follows M2 ~3 months later). "
