@@ -5689,7 +5689,7 @@ def page_backtest():
                     st.dataframe(wf_df.rename(columns={
                         'window': 'Window', 'period': 'Period',
                         'test_signals': 'Test Signals', 'accuracy_pct': 'OOS Accuracy'
-                    }).set_index('Window'), width="stretch")
+                    }).set_index('Window'), use_container_width=True)
 
                     # ── "What does this mean?" panel ───────────────────────
                     _wf_acc = wf_r.get('mean_accuracy') or 0.0
@@ -5795,7 +5795,7 @@ def page_backtest():
                             st.dataframe(
                                 df_dbt[['timestamp', 'direction', 'confidence', 'entry', 'exit',
                                          'exit_reason', 'pnl_pct', 'pnl_usd']].head(100),
-                                width="stretch"
+                                use_container_width=True
                             )
                             csv_dbt = df_dbt.to_csv(index=False)
                             st.download_button("📥 Download Full Deep Backtest CSV", csv_dbt,
@@ -5891,7 +5891,7 @@ def page_backtest():
                     _pair_cal.columns = ["Pair", "Signals", "Win Rate %", "Avg Confidence %", "Conf − Win Rate"]
                     st.dataframe(
                         _pair_cal.sort_values("Win Rate %", ascending=False),
-                        width="stretch", hide_index=True,
+                        use_container_width=True, hide_index=True,
                     )
 
             # ── Performance Attribution ────────────────────────────────────────────────
@@ -6017,7 +6017,7 @@ def page_backtest():
                                     "P&L %": "{:+.2f}", "Held (h)": "{:.1f}",
                                     "Entry $": "{:.4f}", "Exit $": "{:.4f}",
                                 }, na_rep="—"),
-                                width="stretch",
+                                use_container_width=True,
                                 hide_index=True,
                             )
                         else:
@@ -6233,7 +6233,7 @@ def page_backtest():
                                         "is_win_rate": "IS Win Rate (%)", "oos_win_rate": "OOS Win Rate (%)",
                                         "oos_buy_signals": "OOS BUY Signals",
                                     }),
-                                    width="stretch", hide_index=True,
+                                    use_container_width=True, hide_index=True,
                                 )
                     elif _wfo_r and _wfo_r.get("error"):
                         st.caption(f"WFO: {_wfo_r.get('recommendation', _wfo_r.get('error', ''))}")
@@ -6652,7 +6652,7 @@ def page_arbitrage():
             spot_df.style
                 .map(_color_signal, subset=["Signal"])
                 .map(_color_net,    subset=["Net Spread %"]),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
         _csv_button(spot_df, "arb_spot_spreads.csv", key="csv_arb_spot")
@@ -6834,7 +6834,7 @@ def page_arbitrage():
                 fr_df.style
                     .map(_color_fr,  subset=exch_cols)
                     .map(_color_ann, subset=ann_cols),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
             st.caption(
@@ -6881,7 +6881,7 @@ def page_arbitrage():
                     carry_df[["Pair", "Exchange", "Rate %", "Strategy", "Ann. Yield %"]].style
                         .map(_color_rate,        subset=["Rate %"])
                         .map(_color_carry_yield, subset=["Ann. Yield %"]),
-                    width="stretch",
+                    use_container_width=True,
                     hide_index=True,
                 )
             else:
@@ -6927,7 +6927,7 @@ def page_arbitrage():
 
                 st.dataframe(
                     _hl_df.style.map(_color_hl_sig, subset=["Signal"]),
-                    width="stretch", hide_index=True,
+                    use_container_width=True, hide_index=True,
                 )
                 _csv_button(_hl_df, "hyperliquid_funding.csv", key="csv_hl_funding")
             else:
