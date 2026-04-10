@@ -2025,11 +2025,18 @@ def page_dashboard():
                     _top5 = sorted(_tokens, key=lambda x: x.get("value_usd") or 0, reverse=True)[:5]
                     _tok_rows = []
                     for _tok in _top5:
+                        try:
+                            _bal  = float(_tok.get("balance")  or 0)
+                            _val  = float(_tok.get("value_usd") or 0)
+                            _chg  = _tok.get("change_pct_1d")
+                            _chg_fmt = f"{float(_chg):+.2f}%" if _chg is not None else "—"
+                        except (TypeError, ValueError):
+                            _bal, _val, _chg_fmt = 0.0, 0.0, "—"
                         _tok_rows.append({
                             "Symbol":     _tok.get("symbol", ""),
-                            "Balance":    f"{_tok.get('balance', 0):,.4f}",
-                            "Value USD":  f"${_tok.get('value_usd', 0):,.2f}",
-                            "24h %":      f"{_tok.get('change_pct_1d', 0):+.2f}%" if _tok.get('change_pct_1d') is not None else "—",
+                            "Balance":    f"{_bal:,.4f}",
+                            "Value USD":  f"${_val:,.2f}",
+                            "24h %":      _chg_fmt,
                             "Chain":      _tok.get("chain") or "Ethereum",
                         })
                     if _tok_rows:
