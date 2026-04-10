@@ -3278,16 +3278,19 @@ def freshness_dot_html(last_updated_ts: float | None, max_age_sec: int,
     )
 
 
-def signal_rank_list_html(results: list, max_show: int = 20) -> str:
+def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
     """
     Item 8 — Beginner-friendly ranked signal list to replace the Plotly heatmap.
     Renders a compact scrollable card-list sorted by confidence descending.
     Each row shows: rank, coin name, direction badge (▲/▼/■), confidence bar, entry/stop.
+    max_show=None means show all results (no cap).
     """
     if not results:
         return '<div style="color:rgba(168,180,200,0.5);padding:12px">No signals yet — run a scan first.</div>'
 
-    sorted_r = sorted(results, key=lambda x: x.get("confidence_avg_pct", 0), reverse=True)[:max_show]
+    sorted_r = sorted(results, key=lambda x: x.get("confidence_avg_pct", 0), reverse=True)
+    if max_show is not None:
+        sorted_r = sorted_r[:max_show]
 
     rows_html = ""
     for i, r in enumerate(sorted_r, 1):
