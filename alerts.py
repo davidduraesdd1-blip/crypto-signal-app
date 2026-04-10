@@ -10,6 +10,7 @@ import logging
 import os
 import smtplib
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 import requests
 from email.mime.text import MIMEText
@@ -22,6 +23,32 @@ _SESSION = requests.Session()
 _SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
 
 _ALERTS_CONFIG_FILE = "alerts_config.json"
+
+# ── Alert deduplication — 4-hour cooldown per pair+direction ─────────────────
+# Prevents the same high-confidence signal from firing an alert every 15 minutes.
+# Key: (pair, direction), Value: unix timestamp of last alert sent.
+_ALERT_COOLDOWN_SECS = 4 * 3600   # 4 hours
+_alert_last_sent: dict = {}        # in-memory; resets on process restart (acceptable)
+_alert_dedup_lock = threading.Lock()
+
+
+def _is_new_signal(pair: str, direction: str) -> bool:
+    """Return True only if this pair+direction hasn't been alerted in the last 4 hours."""
+    key = (pair, direction)
+    now = time.time()
+    with _alert_dedup_lock:
+        last = _alert_last_sent.get(key, 0)
+        if now - last < _ALERT_COOLDOWN_SECS:
+            return False
+        _alert_last_sent[key] = now
+        return True
+
+
+def _deduplicate_results(results: list) -> list:
+    """Filter scan results to only those with new signals (4h cooldown)."""
+    return [r for r in results if _is_new_signal(
+        r.get("pair", ""), r.get("direction", "")
+    )]
 
 
 # ──────────────────────────────────────────────
@@ -260,6 +287,7 @@ def format_scan_alert(results: list, min_confidence: float = 70) -> str | None:
 def send_scan_alerts(results: list, config: dict | None = None) -> tuple[bool, str | None]:
     """
     Send Telegram alert for completed scan.
+    Only fires for signals not alerted in the last 4 hours (dedup).
     Returns (sent: bool, error: str | None).
     """
     if config is None:
@@ -275,9 +303,14 @@ def send_scan_alerts(results: list, config: dict | None = None) -> tuple[bool, s
     except (ValueError, TypeError):
         min_conf = 70.0
 
-    message = format_scan_alert(results, min_conf)
+    # Dedup: only alert on signals that are new since last alert (4h cooldown)
+    new_results = _deduplicate_results(results)
+    if not new_results:
+        return False, "All signals already alerted within the last 4 hours — skipping"
+
+    message = format_scan_alert(new_results, min_conf)
     if message is None:
-        return False, f"No signals above {int(min_conf)}% threshold — no alert sent"
+        return False, f"No new signals above {int(min_conf)}% threshold — no alert sent"
 
     return send_telegram(token, chat_id, message)
 
@@ -379,7 +412,7 @@ def format_email_body(results: list, min_confidence: float = 70) -> str | None:
 
 
 def send_scan_email_alerts(results: list, config: dict | None = None) -> tuple[bool, str | None]:
-    """Send email alert for completed scan if email alerts are enabled."""
+    """Send email alert for completed scan if email alerts are enabled (4h dedup)."""
     if config is None:
         config = load_alerts_config()
 
@@ -394,11 +427,15 @@ def send_scan_email_alerts(results: list, config: dict | None = None) -> tuple[b
     except (ValueError, TypeError):
         min_conf = 70.0
 
-    body = format_email_body(results, min_conf)
-    if body is None:
-        return False, f"No signals above {int(min_conf)}% threshold — no email sent"
+    new_results = _deduplicate_results(results)
+    if not new_results:
+        return False, "All signals already emailed within the last 4 hours — skipping"
 
-    subject = f"Crypto Signal Alert — {len([r for r in results if r.get('confidence_avg_pct', 0) >= min_conf])} signal(s)"
+    body = format_email_body(new_results, min_conf)
+    if body is None:
+        return False, f"No new signals above {int(min_conf)}% threshold — no email sent"
+
+    subject = f"Crypto Signal Alert — {len([r for r in new_results if r.get('confidence_avg_pct', 0) >= min_conf])} new signal(s)"
     return send_email_alert(sender, app_pass, recipient, subject, body)
 
 
@@ -494,7 +531,7 @@ def format_discord_message(results: list, min_confidence: float = 70) -> str | N
 
 
 def send_scan_discord_alerts(results: list, config: dict | None = None) -> tuple[bool, str | None]:
-    """Send Discord alert for completed scan if Discord alerts are enabled."""
+    """Send Discord alert for completed scan if Discord alerts are enabled (4h dedup)."""
     if config is None:
         config = load_alerts_config()
 
@@ -507,9 +544,13 @@ def send_scan_discord_alerts(results: list, config: dict | None = None) -> tuple
     except (ValueError, TypeError):
         min_conf = 70.0
 
-    message = format_discord_message(results, min_conf)
+    new_results = _deduplicate_results(results)
+    if not new_results:
+        return False, "All signals already sent to Discord within the last 4 hours — skipping"
+
+    message = format_discord_message(new_results, min_conf)
     if message is None:
-        return False, f"No signals above {int(min_conf)}% threshold — no Discord alert sent"
+        return False, f"No new signals above {int(min_conf)}% threshold — no Discord alert sent"
 
     # Discord messages max 2000 chars; truncate gracefully
     if len(message) > 1900:
