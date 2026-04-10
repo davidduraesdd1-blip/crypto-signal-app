@@ -659,20 +659,223 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 }
 
 /* ═══════════════════════════════════════════════
-   LIGHT MODE — WCAG AA contrast
-   Activated via st.session_state["_sg_theme"] = "light"
+   LIGHT MODE — full WCAG AA implementation
+   Body class toggled by render_theme_toggle_sg() JS
 ═══════════════════════════════════════════════ */
-body.light-mode, body.light-mode .stApp {
-    background: #f1f5f9 !important;
-    color: #1e293b !important;
+
+/* 1. Override all design token variables so every var() flips automatically */
+body.light-mode {
+    --bg-base:   #f1f5f9;
+    --bg-0:      #f1f5f9;
+    --bg-1:      #ffffff;
+    --bg-2:      #f8fafc;
+    --bg-3:      #f0f4f8;
+    --bg-glass:  rgba(255, 255, 255, 0.88);
+    --text-1:    #0f172a;
+    --text-2:    #334155;
+    --text-3:    #64748b;
+    --text-4:    #94a3b8;
+    --border:    rgba(0, 0, 0, 0.09);
+    --border-hi: rgba(0, 0, 0, 0.14);
+    --border-px: rgba(0, 0, 0, 0.05);
+    --shadow-sm:   0 2px 6px rgba(0,0,0,0.08);
+    --shadow-card: 0 2px 12px rgba(0,0,0,0.07), inset 0 1px 0 rgba(255,255,255,0.9);
+    --shadow-glow: 0 0 20px rgba(0,212,170,0.10);
+    --shadow-pop:  0 8px 32px rgba(0,0,0,0.14);
 }
-body.light-mode [data-testid="stSidebar"] { background: #e8edf5 !important; color: #1e293b !important; }
-body.light-mode .metric-card, body.light-mode [class*="card"] {
-    background: rgba(255,255,255,0.95) !important;
+
+/* 2. App shell */
+body.light-mode,
+body.light-mode .stApp { background: #f1f5f9 !important; color: #1e293b !important; }
+body.light-mode .stApp {
+    background:
+        radial-gradient(ellipse 80% 50% at 15% 0%,   rgba(99,102,241,0.04) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 85% 100%, rgba(0,212,170,0.04)  0%, transparent 55%),
+        #f1f5f9 !important;
+    background-attachment: fixed !important;
+}
+body.light-mode [data-testid="stAppViewContainer"] > .main { background: transparent !important; }
+
+/* 3. Sidebar */
+body.light-mode [data-testid="stSidebar"] {
+    background: #e8edf5 !important;
+    border-right: 1px solid rgba(0,0,0,0.08) !important;
+}
+body.light-mode [data-testid="stSidebar"] .stRadio label { color: #475569 !important; }
+body.light-mode [data-testid="stSidebar"] .stRadio label:hover { color: #00d4aa !important; }
+body.light-mode [data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: rgba(255,255,255,0.75) !important;
     border-color: rgba(0,0,0,0.08) !important;
+}
+
+/* 4. Headings */
+body.light-mode h1 {
+    background: linear-gradient(135deg, #0f172a 0%, #334155 100%) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+body.light-mode h2 { color: #1e293b !important; }
+body.light-mode h3 { color: #475569 !important; }
+
+/* 5. Metric containers */
+body.light-mode [data-testid="metric-container"] {
+    background:
+        linear-gradient(rgba(255,255,255,0.96), rgba(255,255,255,0.96)) padding-box,
+        linear-gradient(135deg, rgba(0,212,170,0.20) 0%, rgba(99,102,241,0.12) 50%, rgba(0,0,0,0.05) 100%) border-box !important;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9) !important;
+}
+body.light-mode [data-testid="stMetricLabel"],
+body.light-mode [data-testid="stMetricLabel"] > div { color: rgba(71,85,105,0.85) !important; }
+body.light-mode [data-testid="stMetricValue"] > div,
+body.light-mode [data-testid="stMetricValue"] { color: #0f172a !important; }
+
+/* 6. Expanders */
+body.light-mode [data-testid="stExpander"] {
+    background:
+        linear-gradient(rgba(255,255,255,0.94), rgba(255,255,255,0.94)) padding-box,
+        linear-gradient(160deg, rgba(0,0,0,0.07) 0%, rgba(0,0,0,0.03) 100%) border-box !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
+}
+body.light-mode [data-testid="stExpander"]:hover {
+    background:
+        linear-gradient(rgba(240,254,250,0.97), rgba(240,254,250,0.97)) padding-box,
+        linear-gradient(160deg, rgba(0,212,170,0.22) 0%, rgba(99,102,241,0.10) 100%) border-box !important;
+}
+body.light-mode [data-testid="stExpander"] > details > summary { color: #334155 !important; }
+
+/* 7. Tabs */
+body.light-mode [data-testid="stTabs"] [data-baseweb="tab-list"] {
+    background: rgba(255,255,255,0.92) !important;
+    border: 1px solid rgba(0,0,0,0.08) !important;
+}
+body.light-mode [data-testid="stTabs"] [data-baseweb="tab"] { color: #64748b !important; }
+body.light-mode [data-testid="stTabs"] [aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(0,212,170,0.14) 0%, rgba(99,102,241,0.08) 100%) !important;
+    color: #00987a !important;
+    box-shadow: 0 0 0 1px rgba(0,212,170,0.20) !important;
+}
+body.light-mode [data-testid="stTabs"] [data-baseweb="tab"]:hover:not([aria-selected="true"]) {
+    background: rgba(0,0,0,0.04) !important;
+    color: #334155 !important;
+}
+
+/* 8. Input fields */
+body.light-mode [data-testid="stTextInput"] input,
+body.light-mode [data-testid="stNumberInput"] input {
+    background: rgba(255,255,255,0.97) !important;
+    border: 1px solid rgba(0,0,0,0.10) !important;
     color: #1e293b !important;
 }
-body.light-mode p, body.light-mode span, body.light-mode div { color: #1e293b; }
+body.light-mode [data-testid="stTextInput"] input::placeholder,
+body.light-mode [data-testid="stNumberInput"] input::placeholder { color: #94a3b8 !important; }
+
+/* 9. Select / dropdown (baseweb) */
+body.light-mode [data-testid="stSelectbox"] > div > div {
+    background: rgba(255,255,255,0.97) !important;
+    border: 1px solid rgba(0,0,0,0.10) !important;
+    color: #1e293b !important;
+}
+body.light-mode [data-testid="stMultiSelect"] > div {
+    background: rgba(255,255,255,0.97) !important;
+    border: 1px solid rgba(0,0,0,0.10) !important;
+}
+body.light-mode [data-baseweb="select"] [data-baseweb="input-container"],
+body.light-mode [data-baseweb="input"],
+body.light-mode [data-baseweb="textarea"] { background-color: #ffffff !important; color: #1e293b !important; }
+body.light-mode [data-baseweb="list"],
+body.light-mode [data-baseweb="popover"] { background-color: #ffffff !important; color: #1e293b !important; border: 1px solid rgba(0,0,0,0.10) !important; }
+body.light-mode [data-baseweb="list"] li,
+body.light-mode [data-baseweb="menu-item"] { color: #1e293b !important; }
+body.light-mode [data-baseweb="list"] li:hover,
+body.light-mode [data-baseweb="menu-item"]:hover { background-color: rgba(0,212,170,0.07) !important; }
+
+/* 10. Buttons */
+body.light-mode .stButton > button[kind="secondary"],
+body.light-mode .stButton > button:not([kind]) {
+    background: rgba(255,255,255,0.92) !important;
+    border: 1px solid rgba(0,0,0,0.12) !important;
+    color: #334155 !important;
+}
+body.light-mode .stButton > button[kind="secondary"]:hover,
+body.light-mode .stButton > button:not([kind]):hover {
+    border-color: rgba(0,212,170,0.4) !important;
+    color: #00987a !important;
+    background: rgba(0,212,170,0.06) !important;
+}
+body.light-mode .stDownloadButton > button {
+    background: rgba(255,255,255,0.92) !important;
+    border: 1px solid rgba(0,0,0,0.12) !important;
+    color: #334155 !important;
+}
+
+/* 11. Data tables */
+body.light-mode [data-testid="stDataFrame"],
+body.light-mode [data-testid="stDataFrameResizable"] {
+    border: 1px solid rgba(0,0,0,0.08) !important;
+    background: rgba(255,255,255,0.97) !important;
+}
+
+/* 12. Progress bar track */
+body.light-mode [data-testid="stProgressBar"] > div > div { background: rgba(0,0,0,0.07) !important; }
+
+/* 13. Alerts */
+body.light-mode .stSuccess { background: rgba(34,197,94,0.08) !important;  border-color: rgba(34,197,94,0.25) !important; }
+body.light-mode .stError   { background: rgba(239,68,68,0.08) !important;  border-color: rgba(239,68,68,0.25) !important; }
+body.light-mode .stWarning { background: rgba(245,158,11,0.08) !important; border-color: rgba(245,158,11,0.25) !important; }
+body.light-mode .stInfo    { background: rgba(0,212,170,0.06) !important;  border-color: rgba(0,212,170,0.22) !important; }
+body.light-mode [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p { color: #1e293b !important; }
+
+/* 14. Dividers */
+body.light-mode hr { background: linear-gradient(90deg, transparent, rgba(0,0,0,0.09) 30%, rgba(0,0,0,0.09) 70%, transparent) !important; }
+
+/* 15. Text + labels */
+body.light-mode [data-testid="stCaptionContainer"] p,
+body.light-mode .stCaption p { color: #64748b !important; }
+body.light-mode [data-testid="stMarkdownContainer"] p,
+body.light-mode [data-testid="stMarkdownContainer"] li { color: #1e293b !important; }
+body.light-mode [data-testid="stCheckbox"] label { color: #475569 !important; }
+body.light-mode [data-testid="stToggle"] label   { color: #475569 !important; }
+body.light-mode [data-testid="stRadio"] label span { color: #475569 !important; }
+
+/* 16. Forms */
+body.light-mode [data-testid="stForm"] {
+    background: rgba(255,255,255,0.88) !important;
+    border: 1px solid rgba(0,0,0,0.08) !important;
+}
+
+/* 17. Popovers */
+body.light-mode [data-testid="stPopover"] button {
+    background: rgba(255,255,255,0.92) !important;
+    border: 1px solid rgba(0,0,0,0.10) !important;
+    color: #475569 !important;
+}
+
+/* 18. Scrollbar */
+body.light-mode ::-webkit-scrollbar-track { background: #dde3ee; }
+body.light-mode ::-webkit-scrollbar-thumb { background: linear-gradient(180deg, rgba(0,130,104,0.5), rgba(80,83,180,0.35)); }
+
+/* 19. Inline HTML: flip known dark text colors → accessible on white */
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#e8ecf4"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#c4cedd"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#a8b4c8"] { color: #1e293b !important; }
+body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(232,236,244"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(168,180,200,0.7"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(168,180,200,0.8"] { color: #1e293b !important; }
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#6b7a94"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(107,122,148"] { color: #475569 !important; }
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#3d4a60"] { color: #64748b !important; }
+body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(168,180,200,0.4"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(168,180,200,0.45"] { color: #64748b !important; }
+
+/* 20. Inline dark card backgrounds → white */
+body.light-mode div[style*="background:rgba(14,18,30"],
+body.light-mode div[style*="background:rgba(8,11,18"],
+body.light-mode div[style*="background:rgba(16,20,34"] { background: rgba(255,255,255,0.92) !important; border-color: rgba(0,0,0,0.08) !important; }
+body.light-mode div[style*="background:rgba(255,255,255,0.04"],
+body.light-mode div[style*="background:rgba(255,255,255,0.03"] { background: rgba(0,0,0,0.04) !important; }
+body.light-mode div[style*="border:1px solid rgba(255,255,255,0.07"],
+body.light-mode div[style*="border:1px solid rgba(255,255,255,0.0"] { border-color: rgba(0,0,0,0.08) !important; }
 
 </style>
 """
