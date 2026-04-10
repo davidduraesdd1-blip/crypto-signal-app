@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "app": "supergrok",
+  "last_updated": "2026-04-10T00:00:00",
+  "total_resolved": 0,
+  "total_wins": 0,
+  "win_rate_pct": null,
+  "avg_pnl_pct": 0.0,
+  "dynamic_weights": {
+    "trend": 1.0,
+    "momentum": 1.0,
+    "meanrev": 1.0,
+    "sentiment": 1.0,
+    "risk": 1.0,
+    "lgbm": 1.0
+  },
+  "open_positions": 0,
+  "recent_signals": []
+}

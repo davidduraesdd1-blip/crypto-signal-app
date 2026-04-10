@@ -15,9 +15,10 @@ import os
 import threading
 
 try:
-    from config import CLAUDE_HAIKU_MODEL as _CLAUDE_HAIKU_MODEL
+    from config import CLAUDE_HAIKU_MODEL as _CLAUDE_HAIKU_MODEL, ANTHROPIC_ENABLED as _ANTHROPIC_ENABLED
 except ImportError:
     _CLAUDE_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+    _ANTHROPIC_ENABLED = False
 import time
 import xml.etree.ElementTree as ET
 from typing import Optional
@@ -43,6 +44,9 @@ _claude_credits_exhausted: bool = False
 def _get_anthropic_client():
     """Return or create the module-level Anthropic client (thread-safe)."""
     global _anthropic_client
+    # Master kill-switch: ANTHROPIC_ENABLED = False in config disables all Claude calls
+    if not _ANTHROPIC_ENABLED:
+        return None
     if _anthropic_client is not None:
         return _anthropic_client
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")

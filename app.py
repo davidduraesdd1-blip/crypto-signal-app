@@ -17,6 +17,44 @@ import time
 import requests
 from datetime import datetime, timedelta, timezone
 
+# ─── Sentry error monitoring (free tier — only loads when DSN is set) ──────────
+
+def _scrub_sentry_event(event, hint):
+    """Remove API keys, PII, and expected-noise events from Sentry before sending."""
+    _msg = str(event.get("message", "") or "")
+    _exc_values = (event.get("exception") or {}).get("values") or []
+    _exc_msgs = " ".join(str((v.get("value") or "")) for v in _exc_values)
+    _combined = (_msg + " " + _exc_msgs).lower()
+    # Anthropic credit exhaustion — billing issue, handled in code
+    if "credit balance" in _combined and ("anthropic" in _combined or "400" in _combined):
+        return None
+    # WebSocket disconnect noise — expected on idle/reconnect
+    if "connection to remote host was lost" in _combined:
+        return None
+    if "request" in event:
+        event["request"].pop("cookies", None)
+        event["request"].pop("headers", None)
+    for key in list(event.get("extra", {}).keys()):
+        if any(x in key.upper() for x in ["KEY", "SECRET", "TOKEN", "PASSWORD", "DSN"]):
+            event["extra"][key] = "[REDACTED]"
+    return event
+
+
+try:
+    import sentry_sdk as _sentry_sdk
+    _SENTRY_DSN = os.environ.get("SUPERGROK_SENTRY_DSN", "")
+    if _SENTRY_DSN:
+        _sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            traces_sample_rate=0.05,
+            profiles_sample_rate=0.0,
+            before_send=_scrub_sentry_event,
+            ignore_errors=["MediaFileStorageError"],
+        )
+except ImportError:
+    pass
+
+
 # ─── Input validation helpers (#13 security hardening) ──────────────────────
 import re as _re
 

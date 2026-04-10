@@ -130,8 +130,27 @@ def _get_conn() -> "_NoCloseConn":
 # ──────────────────────────────────────────────
 # SCHEMA CREATION
 # ──────────────────────────────────────────────
+def _check_db_integrity() -> bool:
+    """Run SQLite PRAGMA quick_check on startup to catch corruption early."""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=10)
+        result = conn.execute("PRAGMA quick_check").fetchone()
+        conn.close()
+        if result and result[0] == "ok":
+            return True
+        logger.warning("[DB] Startup integrity check failed: %s", result)
+        return False
+    except Exception as e:
+        logger.error("[DB] Startup integrity check error: %s", e)
+        return False
+
+
 def init_db():
     """Create all tables and indexes. Idempotent — safe to call on every startup."""
+    # Run quick integrity check before opening the pooled connection
+    if not _check_db_integrity():
+        logger.warning("[DB] Integrity check FAILED — app will continue with caution")
+
     with _write_lock:
         conn = None
         try:  # BUG-C01 / BUG-H02: conn inside try so finally always has a reference to close
