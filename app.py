@@ -1685,29 +1685,43 @@ def page_dashboard():
                 else:                  _sg_c, _sg_bg = "#ef4444", "rgba(239,68,68,0.07)"
 
                 def _sgf(v): return f"+{v:.2f}" if v >= 0 else f"{v:.2f}"
+                _sg_shape  = "▲" if _sg_score >= 0.10 else ("▼" if _sg_score <= -0.10 else "■")
+                _sg_wts    = _csig_sg.get("weights_applied", {"technical": 0.20, "macro": 0.20, "sentiment": 0.25, "onchain": 0.35})
+                _ta_s   = _sg_layers.get("technical", {}).get("score", 0)
+                _mac_s  = _sg_layers.get("macro",     {}).get("score", 0)
+                _sent_s = _sg_layers.get("sentiment", {}).get("score", 0)
+                _oc_s   = _sg_layers.get("onchain",   {}).get("score", 0)
+                _sg_xai = [("Technical", _ta_s,   _sg_wts.get("technical", 0.20)),
+                           ("Macro",     _mac_s,  _sg_wts.get("macro",     0.20)),
+                           ("Sentiment", _sent_s, _sg_wts.get("sentiment", 0.25)),
+                           ("On-Chain",  _oc_s,   _sg_wts.get("onchain",   0.35))]
+                _sg_dir   = 1 if _sg_score > 0 else (-1 if _sg_score < 0 else 0)
+                _sg_agree = sum(1 for _, s, _ in _sg_xai if (s > 0.05) == (_sg_dir > 0) and _sg_dir != 0)
+                _sg_conf  = {4: "HIGH", 3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "LOW"}.get(_sg_agree, "MEDIUM")
+                _sg_conf_c = {"HIGH": "#22c55e", "MEDIUM": "#f59e0b", "LOW": "#ef4444"}[_sg_conf]
 
                 if _sg_level_val == "beginner":
                     _sg_summary = _csig_sg.get("beginner_summary", "")
                     st.html(
                         f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
                         f"border-left:4px solid {_sg_c};border-radius:8px;padding:10px 16px;margin:8px 0;'>"
-                        f"<span style='color:{_sg_c};font-weight:700;'>■ Market Environment</span>"
+                        f"<span style='color:{_sg_c};font-weight:700;'>{_sg_shape} Market Environment</span>"
                         f"<span style='color:#94a3b8;font-size:0.85rem;margin-left:12px;'>{_sg_summary}</span>"
+                        f"<span style='margin-left:16px;background:{_sg_conf_c}22;color:{_sg_conf_c};"
+                        f"font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:10px;"
+                        f"border:1px solid {_sg_conf_c}44;'>{_sg_conf} CONFIDENCE</span>"
                         f"</div>"
                     )
                 else:
-                    _ta_s   = _sg_layers.get("technical", {}).get("score", 0)
-                    _mac_s  = _sg_layers.get("macro",     {}).get("score", 0)
-                    _sent_s = _sg_layers.get("sentiment", {}).get("score", 0)
-                    _oc_s   = _sg_layers.get("onchain",   {}).get("score", 0)
                     _gate_t = " · ⚠️ Risk Gate Active" if _sg_risk else ""
                     st.html(
                         f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
                         f"border-left:4px solid {_sg_c};border-radius:8px;padding:8px 16px;margin:8px 0;"
                         f"display:flex;align-items:center;gap:20px;flex-wrap:wrap;'>"
                         f"<div><span style='color:#64748b;font-size:0.72rem;text-transform:uppercase;'>Composite Signal</span>"
-                        f"<div style='color:{_sg_c};font-weight:800;font-size:0.95rem;'>{_sg_signal}{_gate_t}</div>"
-                        f"<div style='color:#64748b;font-size:0.75rem;'>Score {_sgf(_sg_score)}</div></div>"
+                        f"<div style='color:{_sg_c};font-weight:800;font-size:0.95rem;'>{_sg_shape} {_sg_signal}{_gate_t}</div>"
+                        f"<div style='color:#64748b;font-size:0.75rem;'>Score {_sgf(_sg_score)} &nbsp;·&nbsp; "
+                        f"<span style='color:{_sg_conf_c};font-weight:600;'>{_sg_conf} CONFIDENCE</span></div></div>"
                         f"<div style='color:#475569;font-size:0.78rem;border-left:1px solid #1e293b;padding-left:16px;'>"
                         f"<div>TA <span style='color:{'#22c55e' if _ta_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_ta_s)}</span>"
                         f" · Macro <span style='color:{'#22c55e' if _mac_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_mac_s)}</span>"
@@ -1715,6 +1729,29 @@ def page_dashboard():
                         f" · On-Chain <span style='color:{'#22c55e' if _oc_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_oc_s)}</span></div>"
                         f"</div></div>"
                     )
+
+                # XAI breakdown expander
+                with st.expander("🔍 Why this signal? — Signal driver breakdown", expanded=False):
+                    _xai_rows = ""
+                    for _xn, _xs, _xw in _sg_xai:
+                        _xwc = _xs * _xw
+                        _xbar_w = min(abs(_xwc) * 250, 100)
+                        _xbar_c = "#22c55e" if _xwc >= 0 else "#ef4444"
+                        _xai_rows += (
+                            f"<div style='display:flex;align-items:center;gap:10px;margin:5px 0;'>"
+                            f"<div style='width:90px;font-size:0.78rem;color:#cbd5e1;'>{_xn}</div>"
+                            f"<div style='width:40px;font-size:0.7rem;color:#64748b;text-align:right;'>{_xw*100:.0f}%</div>"
+                            f"<div style='flex:1;background:#1e293b;border-radius:3px;height:14px;overflow:hidden;'>"
+                            f"<div style='width:{_xbar_w:.0f}%;background:{_xbar_c};height:100%;border-radius:3px;'></div></div>"
+                            f"<div style='width:55px;font-size:0.78rem;font-weight:600;color:{_xbar_c};text-align:right;'>{_xwc*100:+.1f}%</div>"
+                            f"</div>"
+                        )
+                    _sg_note = ("Each bar shows how much that factor pushed the signal bullish (+) or bearish (−)."
+                                if _sg_level_val == "beginner"
+                                else f"Weighted contributions · regime: {_csig_sg.get('regime', 'N/A')} · weights are regime-adjusted.")
+                    st.html(f"<div style='padding:4px 0 8px;'>"
+                            f"<div style='font-size:0.72rem;color:#64748b;margin-bottom:8px;'>{_sg_note}</div>"
+                            f"{_xai_rows}</div>")
         except Exception as _sg_cs_err:
             logger.debug("[App] composite signal banner skipped: %s", _sg_cs_err)
 
