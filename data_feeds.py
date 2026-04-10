@@ -92,54 +92,62 @@ _NO_RETRY_SESSION = _build_no_retry_session()
 import concurrent.futures as _cf_yf
 import pandas as _pd_empty
 
-def _yf_history(ticker_sym: str, *, timeout_s: float = 8.0, **kwargs) -> "import pandas; pandas.DataFrame":
+def _yf_history(ticker_sym: str, *, timeout_s: float = 8.0, **kwargs):
     """
     Call yf.Ticker(ticker_sym).history(**kwargs) with a hard wall-clock timeout.
     Returns an empty DataFrame on timeout or any error.
+
+    CRITICAL: Do NOT use 'with ThreadPoolExecutor() as ex' here.
+    The context manager calls shutdown(wait=True) on __exit__, which blocks until
+    the yfinance thread finishes even after a TimeoutError — defeating the entire
+    purpose of the timeout and causing the exact 60-second health-check 503s we
+    are trying to prevent. Instead we manually call shutdown(wait=False) in finally.
     """
+    import pandas as _pd
     try:
         import yfinance as _yf
-        import pandas as _pd
     except ImportError:
-        import pandas as _pd
         return _pd.DataFrame()
+    _ex = _cf_yf.ThreadPoolExecutor(max_workers=1)
     try:
-        with _cf_yf.ThreadPoolExecutor(max_workers=1) as _ex:
-            _fut = _ex.submit(_yf.Ticker(ticker_sym).history, **kwargs)
-            return _fut.result(timeout=timeout_s)
+        _fut = _ex.submit(_yf.Ticker(ticker_sym).history, **kwargs)
+        return _fut.result(timeout=timeout_s)
     except _cf_yf.TimeoutError:
         logging.debug("[yfinance] %s .history() timed out after %ss", ticker_sym, timeout_s)
-        import pandas as _pd
         return _pd.DataFrame()
     except Exception as _e:
         logging.debug("[yfinance] %s .history() error: %s", ticker_sym, _e)
-        import pandas as _pd
         return _pd.DataFrame()
+    finally:
+        # wait=False: don't block — let the dangling yfinance thread finish in
+        # the background. The thread is a daemon so it won't prevent process exit.
+        _ex.shutdown(wait=False)
 
 
-def _yf_download(symbol: str, *, timeout_s: float = 12.0, **kwargs) -> "import pandas; pandas.DataFrame":
+def _yf_download(symbol: str, *, timeout_s: float = 12.0, **kwargs):
     """
     Call yf.download(symbol, **kwargs) with a hard wall-clock timeout.
     Returns an empty DataFrame on timeout or any error.
+
+    Same wait=False reasoning as _yf_history above — see comment there.
     """
+    import pandas as _pd
     try:
         import yfinance as _yf
-        import pandas as _pd
     except ImportError:
-        import pandas as _pd
         return _pd.DataFrame()
+    _ex = _cf_yf.ThreadPoolExecutor(max_workers=1)
     try:
-        with _cf_yf.ThreadPoolExecutor(max_workers=1) as _ex:
-            _fut = _ex.submit(_yf.download, symbol, **kwargs)
-            return _fut.result(timeout=timeout_s)
+        _fut = _ex.submit(_yf.download, symbol, **kwargs)
+        return _fut.result(timeout=timeout_s)
     except _cf_yf.TimeoutError:
         logging.debug("[yfinance] download(%s) timed out after %ss", symbol, timeout_s)
-        import pandas as _pd
         return _pd.DataFrame()
     except Exception as _e:
         logging.debug("[yfinance] download(%s) error: %s", symbol, _e)
-        import pandas as _pd
         return _pd.DataFrame()
+    finally:
+        _ex.shutdown(wait=False)
 
 
 # ─── Rate Limiter (token bucket — #11 security hardening) ────────────────────

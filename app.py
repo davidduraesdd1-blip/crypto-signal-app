@@ -2904,7 +2904,13 @@ def page_dashboard():
                 _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
                 import concurrent.futures as _cf22
                 with st.spinner("Calculating signals..."):
-                    with _cf22.ThreadPoolExecutor(max_workers=1) as _ex22:
+                    # CRITICAL: Do NOT use 'with ThreadPoolExecutor as ex' here.
+                    # The context manager calls shutdown(wait=True) on exit, which
+                    # blocks until get_enriched_df() finishes even after TimeoutError
+                    # — causing the exact 60-second 503 health-check failures seen
+                    # when switching pairs. Use shutdown(wait=False) in finally instead.
+                    _ex22 = _cf22.ThreadPoolExecutor(max_workers=1)
+                    try:
                         _ml_future = _ex22.submit(
                             model.get_enriched_df,
                             model.get_exchange_instance(model.TA_EXCHANGE),
@@ -2915,6 +2921,8 @@ def page_dashboard():
                             _ml_df = _ml_future.result(timeout=10)
                         except _cf22.TimeoutError:
                             _ml_df = None
+                    finally:
+                        _ex22.shutdown(wait=False)
                 if _ml_df is not None and not _ml_df.empty:
                     _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
                     _ml_pred = _ml.get("prediction", "UNCERTAIN")
