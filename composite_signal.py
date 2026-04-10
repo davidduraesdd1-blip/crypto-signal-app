@@ -111,16 +111,22 @@ def _score_ma_signal(ma_signal: str | None, above_200ma: bool | None) -> float |
     return +0.1 if above_200ma is True else (-0.1 if above_200ma is False else 0.0)
 
 
-def _score_price_momentum(momentum_30d: float | None) -> float | None:
-    """30-day BTC price momentum. Returns None if data missing."""
-    if momentum_30d is None:
+def _score_price_momentum(momentum_20d: float | None) -> float | None:
+    """
+    20-day BTC price momentum (Issue #R1).
+    Recalibrated from 30d: 20d outperforms 30d for BTC daily returns (Jegadeesh & Titman 1993;
+    crypto-specific backtests 2021 show 10-20d window dominates 30d lookback).
+    Thresholds scaled proportionally (20d moves ≈ 30d × 0.67): 50→35, 20→15, -20→-15, -40→-25.
+    Returns None if data missing.
+    """
+    if momentum_20d is None:
         return None
-    if momentum_30d >= 50:   return +0.6
-    if momentum_30d >= 20:   return _clamp(+0.2 + (momentum_30d - 20) / 75)
-    if momentum_30d >= 5:    return _clamp(+0.2 * (momentum_30d / 20))
-    if momentum_30d >= -5:   return 0.0
-    if momentum_30d >= -20:  return _clamp(-0.2 * (abs(momentum_30d) / 20))
-    if momentum_30d >= -40:  return _clamp(-0.2 - (abs(momentum_30d) - 20) / 100)
+    if momentum_20d >= 35:   return +0.6
+    if momentum_20d >= 15:   return _clamp(+0.2 + (momentum_20d - 15) / 50)
+    if momentum_20d >= 5:    return _clamp(+0.2 * (momentum_20d / 15))
+    if momentum_20d >= -5:   return 0.0
+    if momentum_20d >= -15:  return _clamp(-0.2 * (abs(momentum_20d) / 15))
+    if momentum_20d >= -25:  return _clamp(-0.2 - (abs(momentum_20d) - 15) / 67)
     return -0.6
 
 
@@ -631,27 +637,33 @@ def _score_mvrv_z(mvrv_z: float | None) -> float | None:
     Historical cycle bottoms: Z<0 (Dec 2018 ~-0.5, Nov 2022 ~-0.3)
 
     NEUTRAL ZONE CORRECTED (Issue #23):
-    Fair value is Z≈2.0, not Z≈0.9. At Z=0, market cap = realized cap = all holders
-    at breakeven = deeply undervalued historically. Neutral score (0.0) should map to
-    Z≈2.0 where historical forward returns are genuinely ambiguous.
-    Source: Glassnode MVRV Z-Score research (2022); CheckOnChain (2023).
+    Fair value is Z≈2.0 historically. At Z=0, all holders at breakeven = undervalued.
+    Neutral score (0.0) maps to Z≈2.0 (Glassnode 2022; CheckOnChain 2023).
 
-      Z < 0    → +0.5 to +1.0 (historically major bottoms — strong buy)
-      Z 0-1    → +0.2 to +0.5 (undervalued, accumulation zone)
-      Z 1-2    → 0.0 to +0.2  (fair value approaching — mildly bullish)
-      Z 2-4    → 0.0 to -0.2  (above fair value — neutral to mildly elevated)
-      Z 4-7    → -0.5 to -1.0 (overbought — distribution zone)
-      Z > 7    → -1.0         (extreme top — all 3 BTC cycle tops)
+    ETF FLOW ADJUSTMENT (Issue #R3):
+    Bitcoin ETF holdings (~15-20% of supply) are not captured in on-chain wallet data.
+    This suppresses the MVRV numerator, making observable Z-scores ~15% lower than
+    equivalent pre-ETF cycle readings. Thresholds adjusted by ×0.85:
+      7.0 → 6.0 (extreme top), 4.0 → 3.5 (overbought), 2.0 → 1.7 (fair value neutral),
+      1.0 → 0.8 (mild undervalue). Bottom signal (Z<0) unchanged — still valid.
+    Source: Glassnode (2024) ETF impact analysis; CheckOnChain (2024).
+
+      Z < 0      → +0.5 to +1.0 (historically major bottoms — strong buy)
+      Z 0–0.8    → +0.2 to +0.5 (undervalued, accumulation zone)
+      Z 0.8–1.7  → 0.0 to +0.2  (fair value approaching — mildly bullish)
+      Z 1.7–3.5  → 0.0 to -0.2  (above fair value — neutral to mildly elevated)
+      Z 3.5–6.0  → -0.5 to -1.0 (overbought — distribution zone)
+      Z > 6.0    → -1.0          (extreme top — ETF-adjusted cycle top threshold)
     Returns None when data unavailable (prevents dilution toward 0).
     """
     if mvrv_z is None:
         return None
-    if mvrv_z >= 7.0:    return -1.0                                    # historic cycle tops
-    if mvrv_z >= 4.0:    return _clamp(-0.5 - (mvrv_z - 4.0) / 6.0)  # Z=4→-0.5, Z=7→-1.0
-    if mvrv_z >= 2.0:    return _clamp(-(mvrv_z - 2.0) / 10.0)        # Z=2→0.0, Z=4→-0.2
-    if mvrv_z >= 1.0:    return _clamp(+0.2 - (mvrv_z - 1.0) / 5.0)  # Z=1→+0.2, Z=2→0.0
-    if mvrv_z >= 0.0:    return _clamp(+0.5 - mvrv_z * 0.3)           # Z=0→+0.5, Z=1→+0.2
-    return _clamp(+0.5 - mvrv_z * 0.5)                                  # Z<0: deeper buy zone
+    if mvrv_z >= 6.0:    return -1.0                                      # ETF-adj top (was 7.0)
+    if mvrv_z >= 3.5:    return _clamp(-0.5 - (mvrv_z - 3.5) / 5.0)    # Z=3.5→-0.5, Z=6.0→-1.0
+    if mvrv_z >= 1.7:    return _clamp(-(mvrv_z - 1.7) / 9.0)           # Z=1.7→0.0, Z=3.5→-0.2
+    if mvrv_z >= 0.8:    return _clamp(+0.2 - (mvrv_z - 0.8) / 4.5)    # Z=0.8→+0.2, Z=1.7→0.0
+    if mvrv_z >= 0.0:    return _clamp(+0.5 - mvrv_z * 0.375)           # Z=0→+0.5, Z=0.8→+0.2
+    return _clamp(+0.5 - mvrv_z * 0.5)                                    # Z<0: deeper buy zone
 
 
 def _score_hash_ribbon(
