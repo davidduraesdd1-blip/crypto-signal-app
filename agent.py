@@ -896,7 +896,6 @@ def _node_claude_reason(state: AgentState) -> AgentState:
         err_str = str(exc)
         # Detect credit exhaustion — activate circuit breaker for future calls
         if "credit" in err_str.lower() and ("400" in err_str or "balance" in err_str.lower()):
-            global _claude_credits_exhausted
             with _claude_credits_lock:
                 _claude_credits_exhausted = True
             logger.info("[agent] Claude credit balance exhausted — disabling AI calls")
