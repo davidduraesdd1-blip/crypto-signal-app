@@ -411,8 +411,8 @@ def _check_pre_risk(state: AgentState, cfg: dict) -> tuple:
     except Exception:
         pass  # gate errors never block — fail-open
 
-    direction = sig.get("direction", "NEUTRAL")
-    if "NEUTRAL" in direction or not direction:
+    direction = sig.get("direction", "HOLD")
+    if direction in ("HOLD", "NEUTRAL", "LOW VOL", "NO DATA") or not direction:
         return False, f"Signal direction is {direction!r} — no trade"
 
     conf = sig.get("confidence_avg_pct", 0)
@@ -681,7 +681,7 @@ def _build_bull_bear_section(sig: dict) -> str:
     first_tf  = list(tf_data.values())[0] if tf_data else {}
 
     conf      = sig.get("confidence_avg_pct", 50)
-    direction = sig.get("direction", "NEUTRAL")
+    direction = sig.get("direction", "HOLD")
     rsi       = first_tf.get("rsi", 50)
     adx       = first_tf.get("adx", 20)
     st        = first_tf.get("supertrend", "?")

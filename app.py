@@ -2458,10 +2458,17 @@ def page_dashboard():
         _tp1_val = r.get("tp1") or exit_
         bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
                            help="This is your TARGET — the price to sell at and take your profit. Think of it as the finish line.")
-        # Score out of 10 alongside % — research shows teens prefer a 1-10 scale
+        # Macro Trend Score — weighted average across all 4 timeframes (1H:10%, 4H:20%, 1D:35%, 1W:35%)
+        # Renamed from "Confidence Score" to "Macro Trend Score" to clarify it is the combined view.
         _score_10 = max(1, min(10, round(conf / 10)))
-        bot_cols[1].metric("Confidence Score", f"{_score_10}/10  ({conf:.0f}%)",
-                           help="How strongly our model agrees on the signal direction. Above 65% = actionable. 7+/10 = strong signal. 5 or below = uncertain — don't trade this.")
+        bot_cols[1].metric("📈 Macro Trend Score", f"{_score_10}/10  ({conf:.0f}%)",
+                           help=(
+                               "The Macro Trend Score combines all timeframes into one number — "
+                               "think of it as the overall direction of the boat. "
+                               "Weights: 1H=10%, 4H=20%, Daily=35%, Weekly=35%. "
+                               "Above 65% = actionable signal. 7+/10 = strong conviction. "
+                               "5 or below = mixed — wait for clarity."
+                           ))
         # #50 Fractional Kelly position sizing — display recommended size from Kelly formula
         _kelly_pos_pct = pos_pct   # default to model-computed size
         try:
@@ -2624,46 +2631,168 @@ def page_dashboard():
 
             tf_data = r.get("timeframes", {})
             if tf_data:
+                # ── Shape + color badge helper (CLAUDE.md §8: never color alone) ───────
+                _DIR_SHAPE = {
+                    "STRONG BUY":  "▲▲",
+                    "BUY":         "▲",
+                    "HOLD":        "■",
+                    "NEUTRAL":     "■",
+                    "SELL":        "▽",
+                    "STRONG SELL": "▼▼",
+                    "LOW VOL":     "◌",
+                    "NO DATA":     "—",
+                }
+                _DIR_COLOR = {
+                    "STRONG BUY":  "#22c55e",
+                    "BUY":         "#00d4aa",
+                    "HOLD":        "#94a3b8",
+                    "NEUTRAL":     "#94a3b8",
+                    "SELL":        "#f97316",
+                    "STRONG SELL": "#ef4444",
+                    "LOW VOL":     "#6b7280",
+                    "NO DATA":     "#6b7280",
+                }
+
+                # ── Alignment indicator — count bullish / bearish / hold timeframes ─────
+                _TF_ORDER  = ["1h", "4h", "1d", "1w"]
+                _TF_PLAIN  = {"1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W"}
+                _TF_FULL   = {"1h": "1 Hour", "4h": "4 Hours", "1d": "Daily", "1w": "Weekly"}
+                _bull_tfs, _bear_tfs, _hold_tfs = [], [], []
+                for _atf in _TF_ORDER:
+                    _adir = tf_data.get(_atf, {}).get("direction", "NO DATA")
+                    if "BUY" in _adir:    _bull_tfs.append(_TF_PLAIN[_atf])
+                    elif "SELL" in _adir: _bear_tfs.append(_TF_PLAIN[_atf])
+                    else:                 _hold_tfs.append(_TF_PLAIN[_atf])
+
+                _n_bull = len(_bull_tfs); _n_bear = len(_bear_tfs); _n_tot = len(tf_data)
+                if _n_bull >= 3:
+                    _align_color = "#22c55e"
+                    _align_text  = f"▲ {_n_bull} of {_n_tot} timeframes BULLISH ({', '.join(_bull_tfs)})"
+                elif _n_bear >= 3:
+                    _align_color = "#ef4444"
+                    _align_text  = f"▼ {_n_bear} of {_n_tot} timeframes BEARISH ({', '.join(_bear_tfs)})"
+                elif _n_bull > _n_bear:
+                    _align_color = "#00d4aa"
+                    _align_text  = f"▲ Leaning bullish — {_n_bull} buy, {_n_bear} sell ({', '.join(_hold_tfs or ['no hold'])} neutral)"
+                elif _n_bear > _n_bull:
+                    _align_color = "#f97316"
+                    _align_text  = f"▽ Leaning bearish — {_n_bear} sell, {_n_bull} buy"
+                else:
+                    _align_color = "#94a3b8"
+                    _align_text  = f"■ Mixed signals — {_n_bull} buy, {_n_bear} sell, {len(_hold_tfs)} hold"
+
+                # ── Section header row ────────────────────────────────────────────────
                 _tf_head_col, _tf_info_col = st.columns([5, 1])
                 with _tf_head_col:
-                    st.markdown("**What each timeframe says**")
+                    st.markdown(
+                        f'<div style="margin:8px 0 2px 0">'
+                        f'<span style="font-weight:700;font-size:14px">⏱ Micro Trends — What Each Timeframe Says</span>'
+                        f'</div>'
+                        f'<div style="font-size:12px;color:{_align_color};font-weight:600;margin-bottom:6px">'
+                        f'{_align_text}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
                 with _tf_info_col:
                     _ui.tf_column_guide_popover()
-                _tf_rows = []
-                # Plain-English timeframe labels (research: teens respond to time they understand)
-                _TF_PLAIN = {"1h": "1 Hour", "4h": "4 Hours", "1d": "Daily", "1w": "Weekly"}
-                for tf, td in tf_data.items():
-                    _td_dir = td.get("direction", "N/A")
-                    _no_data = _td_dir in ("NO DATA", "N/A")
-                    _td_conf = td.get("confidence", 0)
-                    _rsi_raw = td.get("rsi", "N/A")
-                    # Plain English RSI — "Heat Level: Overheated (72)", "Heat Level: Cool (28)"
-                    try:
-                        _rsi_v = float(_rsi_raw)
-                        if _rsi_v >= 70:
-                            _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
-                        elif _rsi_v <= 30:
-                            _rsi_str = f"🧊 Very Cool ({_rsi_v:.0f})"
-                        elif _rsi_v >= 55:
-                            _rsi_str = f"Warm ({_rsi_v:.0f})"
-                        elif _rsi_v <= 45:
-                            _rsi_str = f"Cool ({_rsi_v:.0f})"
-                        else:
-                            _rsi_str = f"Neutral ({_rsi_v:.0f})"
-                    except (ValueError, TypeError):
-                        _rsi_str = str(_rsi_raw)
-                    _tf_rows.append({
-                        "Time Period": _TF_PLAIN.get(tf, tf),
-                        "Signal": _td_dir,
-                        # Show "—" instead of "0%" when a timeframe returned no data
-                        "Strength": "—" if _no_data else f"{_td_conf}%",
-                        "Heat Level (RSI)": _rsi_str,
-                        "Trend Power (ADX)": td.get("adx", "N/A"),
-                        "Trend Direction": td.get("supertrend", "N/A"),
-                        "Market Mode": _ui.regime_label(td.get("regime", "")),
-                        "Strategy": _ui.bias_label(td.get("strategy_bias", "")),
-                    })
-                st.dataframe(pd.DataFrame(_tf_rows).set_index("Time Period"), width='stretch')
+
+                # ── Beginner: simplified cards (shape + plain English only) ───────────
+                if _user_lv == "beginner":
+                    _beg_cols = st.columns(len(tf_data))
+                    for _ci, (_btf, _btd) in enumerate(tf_data.items()):
+                        _bdir  = _btd.get("direction", "NO DATA")
+                        _bconf = _btd.get("confidence", 0)
+                        _bshp  = _DIR_SHAPE.get(_bdir, "—")
+                        _bclr  = _DIR_COLOR.get(_bdir, "#94a3b8")
+                        _bno   = _bdir in ("NO DATA", "N/A", "LOW VOL")
+                        _brsi  = _btd.get("rsi", None)
+                        try:
+                            _brsi_str = f"RSI {float(_brsi):.0f}" if _brsi is not None else ""
+                        except (TypeError, ValueError):
+                            _brsi_str = ""
+                        _plain_action = {
+                            "STRONG BUY": "Strong signal to buy",
+                            "BUY": "Signal to buy",
+                            "HOLD": "Hold — no action",
+                            "NEUTRAL": "Hold — no action",
+                            "SELL": "Signal to sell",
+                            "STRONG SELL": "Strong signal to sell",
+                            "LOW VOL": "Low volume — skip",
+                            "NO DATA": "No data",
+                        }.get(_bdir, _bdir)
+                        with _beg_cols[_ci]:
+                            st.markdown(
+                                f'<div style="border:1px solid rgba(255,255,255,0.08);border-radius:10px;'
+                                f'padding:12px 10px;text-align:center;background:rgba(255,255,255,0.03)">'
+                                f'<div style="font-size:11px;color:#94a3b8;font-weight:600;'
+                                f'text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">'
+                                f'{_TF_FULL.get(_btf, _btf)}</div>'
+                                f'<div style="font-size:22px;font-weight:800;color:{_bclr};'
+                                f'letter-spacing:0.02em;margin-bottom:4px">{_bshp}</div>'
+                                f'<div style="font-size:12px;color:{_bclr};font-weight:700;'
+                                f'margin-bottom:4px">{_bdir.replace("_", " ")}</div>'
+                                f'<div style="font-size:11px;color:#64748b">'
+                                f'{"—" if _bno else f"{_bconf:.0f}% confidence"}'
+                                f'</div>'
+                                f'<div style="font-size:10px;color:#475569;margin-top:2px">'
+                                f'{_brsi_str}</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                    # Plain-English alignment summary for beginners
+                    st.markdown(
+                        f'<div style="font-size:12px;color:#94a3b8;margin:8px 0 4px 0;'
+                        f'padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;'
+                        f'border-left:3px solid {_align_color}">'
+                        f'<b>What does this mean?</b> Each box shows one time period — '
+                        f'1 Hour is the shortest view (like today\'s weather), '
+                        f'Weekly is the longest view (like the season). '
+                        f'When most show ▲ BUY, the overall direction is bullish. '
+                        f'When they disagree, wait for clarity before acting.'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                else:
+                    # ── Intermediate + Advanced: full table with badges + confidence bars ─
+                    _tf_rows = []
+                    for tf in _TF_ORDER:
+                        if tf not in tf_data:
+                            continue
+                        td = tf_data[tf]
+                        _td_dir  = td.get("direction", "N/A")
+                        _no_data = _td_dir in ("NO DATA", "N/A")
+                        _td_conf = td.get("confidence", 0)
+                        _td_shp  = _DIR_SHAPE.get(_td_dir, "—")
+                        _rsi_raw = td.get("rsi", "N/A")
+                        try:
+                            _rsi_v = float(_rsi_raw)
+                            if _rsi_v >= 70:   _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
+                            elif _rsi_v <= 30: _rsi_str = f"🧊 Very Cool ({_rsi_v:.0f})"
+                            elif _rsi_v >= 55: _rsi_str = f"Warm ({_rsi_v:.0f})"
+                            elif _rsi_v <= 45: _rsi_str = f"Cool ({_rsi_v:.0f})"
+                            else:              _rsi_str = f"Neutral ({_rsi_v:.0f})"
+                        except (ValueError, TypeError):
+                            _rsi_str = str(_rsi_raw)
+
+                        _row = {
+                            "Timeframe":       _TF_FULL.get(tf, tf),
+                            "Signal":          f"{_td_shp} {_td_dir}",
+                            "Confidence":      "—" if _no_data else f"{_td_conf:.0f}%",
+                            "Heat (RSI)":      _rsi_str,
+                            "Trend (ADX)":     td.get("adx", "N/A"),
+                            "Direction":       td.get("supertrend", "N/A"),
+                            "Market Mode":     _ui.regime_label(td.get("regime", "")),
+                        }
+                        # Advanced: also show strategy bias
+                        if _user_lv == "advanced":
+                            _row["Strategy"] = _ui.bias_label(td.get("strategy_bias", ""))
+                            _row["Agents"]   = f"{td.get('agent_vote', 'N/A')}"
+                        _tf_rows.append(_row)
+
+                    if _tf_rows:
+                        _tf_df = pd.DataFrame(_tf_rows).set_index("Timeframe")
+                        st.dataframe(_tf_df, use_container_width=True)
 
         # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
         try:

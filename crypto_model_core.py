@@ -2694,12 +2694,14 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
 
 def get_signal_direction(confidence):
     # CQ-09: symmetric thresholds around 50 to eliminate directional bias
-    # STRONG BUY ≥ 75  |  BUY 55–74  |  NEUTRAL 45–54  |  SELL 25–44  |  STRONG SELL < 25
+    # STRONG BUY ≥ 75  |  BUY 55–74  |  HOLD 45–54  |  SELL 25–44  |  STRONG SELL < 25
+    # HOLD replaces NEUTRAL for per-timeframe direction: "hold current positions, no new entry"
+    # (NEUTRAL is reserved for composite market environment signals, not trade action labels)
     if confidence is None:
         confidence = 0.0
     if confidence >= 75: return "STRONG BUY"
     if confidence >= 55: return "BUY"
-    if confidence >= 45: return "NEUTRAL"   # BUG-R14: was > 45, excluded exactly 45.0 → SELL
+    if confidence >= 45: return "HOLD"      # BUG-R14: was > 45, excluded exactly 45.0
     if confidence >= 25: return "SELL"      # CM-38: was > 25, excluded exactly 25.0 → STRONG SELL
     return "STRONG SELL"
 
@@ -2760,7 +2762,7 @@ def _compute_kelly_fraction() -> float | None:
         bt = _db.get_backtest_df()
         if bt.empty:
             return None
-        bt = bt[~bt['direction'].str.contains('NEUTRAL|LOW VOL', na=False, regex=True)]
+        bt = bt[~bt['direction'].str.contains('NEUTRAL|HOLD|LOW VOL', na=False, regex=True)]
         bt = bt[bt['direction'].isin(['BUY', 'STRONG BUY', 'SELL', 'STRONG SELL'])].copy()
         if len(bt) < 20:
             return None
@@ -3458,8 +3460,8 @@ def run_backtest():
             return None
 
     df_valid = df_signals.dropna(subset=required).copy()
-    # Only backtest clear directional signals — skip NEUTRAL and LOW VOL (no clear edge)
-    df_valid = df_valid[~df_valid['direction'].str.contains('NEUTRAL|LOW VOL', na=False)]
+    # Only backtest clear directional signals — skip HOLD/NEUTRAL and LOW VOL (no clear edge)
+    df_valid = df_valid[~df_valid['direction'].str.contains('NEUTRAL|HOLD|LOW VOL', na=False)]
     if 'confidence_avg_pct' in df_valid.columns:
         df_valid = df_valid[df_valid['confidence_avg_pct'] > 30]
     if len(df_valid) == 0:
@@ -3817,7 +3819,7 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 continue
 
             direction = get_signal_direction(conf)
-            if direction in ('NEUTRAL', 'LOW VOL', 'NO DATA'):
+            if direction in ('HOLD', 'NEUTRAL', 'LOW VOL', 'NO DATA'):
                 continue
             is_buy = 'BUY' in direction
 
@@ -4592,8 +4594,8 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
     # Apply circuit breaker: if portfolio drawdown exceeds threshold, suppress new entries
     effective_direction = direction_avg
     _cb_triggered = circuit_breaker.get('triggered', False)
-    if _cb_triggered and direction_avg not in ('NEUTRAL', 'LOW VOL', 'NO DATA'):
-        effective_direction = 'NEUTRAL'  # Downgrade — no new entries during drawdown protection
+    if _cb_triggered and direction_avg not in ('HOLD', 'NEUTRAL', 'LOW VOL', 'NO DATA'):
+        effective_direction = 'HOLD'  # Downgrade — no new entries during drawdown protection
 
     # ── Wyckoff Phase Detection (item 23) ─────────────────────────────────────
     # Run on the primary 1H df (or best available); adds signal_bias to conf_avg.
