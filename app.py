@@ -6077,88 +6077,88 @@ def page_backtest():
                     st.caption("WFE validation temporarily unavailable.")
 
             # ── Stress Test ────────────────────────────────────────────────────────────
+            # _render_stress_test defined immediately below (must precede its call)
+            def _render_stress_test():
+                """Render the historical stress test section inside Backtest Viewer."""
+                if _stress_mod is None:
+                    st.caption("stress_test.py not available")
+                    return
+
+                st.markdown("---")
+                _ui.section_header("Historical Stress Test", "Replay actual crisis periods to estimate portfolio performance", icon="🔥")
+
+                _sc1, _sc2, _sc3 = st.columns([3, 2, 2])
+                with _sc1:
+                    _scenario_opts = list(_stress_mod.STRESS_SCENARIOS.keys())
+                    _scenario_labels = {k: v["label"] for k, v in _stress_mod.STRESS_SCENARIOS.items()}
+                    _sel_scenario = st.selectbox(
+                        "Select Scenario",
+                        options=_scenario_opts,
+                        format_func=lambda k: _scenario_labels[k],
+                        key="stress_scenario_select",
+                    )
+                with _sc2:
+                    _stress_pos_pct = st.number_input(
+                        "Position Size (%)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
+                        key="stress_pos_pct",
+                    )
+                with _sc3:
+                    _stress_dir = st.selectbox("Assumed Direction", ["BUY", "SELL"], key="stress_dir")
+
+                _sc_meta = _stress_mod.STRESS_SCENARIOS.get(_sel_scenario, {})
+                st.caption(
+                    f"**Period:** {_sc_meta.get('start','')} → {_sc_meta.get('end','')}  |  "
+                    f"**Known BTC DD:** {_sc_meta.get('known_btc_drawdown',0):.1f}%  |  "
+                    f"{_sc_meta.get('description','')}"
+                )
+
+                if st.button("▶ Run Stress Test", key="run_stress_btn", type="primary"):
+                    with st.spinner("Fetching historical OHLCV and simulating...", show_time=True):
+                        try:
+                            import crypto_model_core as _cm
+                            _stress_res = _stress_mod.run_stress_test(
+                                pairs=_cm.PAIRS,
+                                scenario_key=_sel_scenario,
+                                position_pct=_stress_pos_pct,
+                                default_direction=_stress_dir,
+                            )
+                            st.session_state["stress_results"] = _stress_res
+                        except Exception as _se:
+                            st.error(f"Stress test failed: {_se}")
+
+                _stress_data = st.session_state.get("stress_results")
+                if _stress_data and isinstance(_stress_data, dict) and "portfolio" in _stress_data:
+                    _p = _stress_data["portfolio"]
+                    _s = _stress_data.get("scenario", {})
+                    st.subheader(f"Results: {_s.get('label', _sel_scenario)}")
+
+                    _sp1, _sp2, _sp3, _sp4, _sp5 = st.columns(5)
+                    _sp1.metric("Portfolio Return", f"{_p.get('portfolio_return', 0):+.2f}%")
+                    _sp2.metric("Total P&L", f"${_p.get('total_pnl_usd', 0):+,.0f}")
+                    _sp3.metric("Worst Drawdown", f"{_p.get('worst_drawdown_pct', 0):.2f}%")
+                    _sp4.metric("Win Rate", f"{_p.get('win_rate', 0):.1f}%")
+                    _sp5.metric("Pairs Tested", _p.get("total_pairs", 0))
+
+                    # Per-pair results table
+                    _pair_rows = []
+                    for _pr, _metrics in _stress_data.get("results", {}).items():
+                        if _metrics.get("error"):
+                            _pair_rows.append({"Pair": _pr, "Return %": "N/A", "P&L $": "N/A",
+                                               "Max DD %": "N/A", "Vol Ann %": "N/A", "Status": "No data"})
+                        else:
+                            _pair_rows.append({
+                                "Pair": _pr,
+                                "Return %": round(_metrics.get("price_return_pct", 0), 2),
+                                "P&L $": round(_metrics.get("pnl_usd", 0), 2),
+                                "Max DD %": round(_metrics.get("max_drawdown_pct", 0), 2),
+                                "Vol Ann %": round(_metrics.get("vol_ann_pct", 0), 2),
+                                "Status": "OK",
+                            })
+                    if _pair_rows:
+                        _stress_df = pd.DataFrame(_pair_rows)
+                        st.dataframe(_stress_df, hide_index=True, use_container_width=True)
+
             _render_stress_test()
-
-
-        def _render_stress_test():
-            """Render the historical stress test section inside Backtest Viewer."""
-            if _stress_mod is None:
-                st.caption("stress_test.py not available")
-                return
-
-            st.markdown("---")
-            _ui.section_header("Historical Stress Test", "Replay actual crisis periods to estimate portfolio performance", icon="🔥")
-
-            _sc1, _sc2, _sc3 = st.columns([3, 2, 2])
-            with _sc1:
-                _scenario_opts = list(_stress_mod.STRESS_SCENARIOS.keys())
-                _scenario_labels = {k: v["label"] for k, v in _stress_mod.STRESS_SCENARIOS.items()}
-                _sel_scenario = st.selectbox(
-                    "Select Scenario",
-                    options=_scenario_opts,
-                    format_func=lambda k: _scenario_labels[k],
-                    key="stress_scenario_select",
-                )
-            with _sc2:
-                _stress_pos_pct = st.number_input(
-                    "Position Size (%)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
-                    key="stress_pos_pct",
-                )
-            with _sc3:
-                _stress_dir = st.selectbox("Assumed Direction", ["BUY", "SELL"], key="stress_dir")
-
-            _sc_meta = _stress_mod.STRESS_SCENARIOS.get(_sel_scenario, {})
-            st.caption(
-                f"**Period:** {_sc_meta.get('start','')} → {_sc_meta.get('end','')}  |  "
-                f"**Known BTC DD:** {_sc_meta.get('known_btc_drawdown',0):.1f}%  |  "
-                f"{_sc_meta.get('description','')}"
-            )
-
-            if st.button("▶ Run Stress Test", key="run_stress_btn", type="primary"):
-                with st.spinner("Fetching historical OHLCV and simulating...", show_time=True):
-                    try:
-                        import crypto_model_core as _cm
-                        _stress_res = _stress_mod.run_stress_test(
-                            pairs=_cm.PAIRS,
-                            scenario_key=_sel_scenario,
-                            position_pct=_stress_pos_pct,
-                            default_direction=_stress_dir,
-                        )
-                        st.session_state["stress_results"] = _stress_res
-                    except Exception as _se:
-                        st.error(f"Stress test failed: {_se}")
-
-            _stress_data = st.session_state.get("stress_results")
-            if _stress_data and isinstance(_stress_data, dict) and "portfolio" in _stress_data:
-                _p = _stress_data["portfolio"]
-                _s = _stress_data.get("scenario", {})
-                st.subheader(f"Results: {_s.get('label', _sel_scenario)}")
-
-                _sp1, _sp2, _sp3, _sp4, _sp5 = st.columns(5)
-                _sp1.metric("Portfolio Return", f"{_p.get('portfolio_return', 0):+.2f}%")
-                _sp2.metric("Total P&L", f"${_p.get('total_pnl_usd', 0):+,.0f}")
-                _sp3.metric("Worst Drawdown", f"{_p.get('worst_drawdown_pct', 0):.2f}%")
-                _sp4.metric("Win Rate", f"{_p.get('win_rate', 0):.1f}%")
-                _sp5.metric("Pairs Tested", _p.get("total_pairs", 0))
-
-                # Per-pair results table
-                _pair_rows = []
-                for _pr, _metrics in _stress_data.get("results", {}).items():
-                    if _metrics.get("error"):
-                        _pair_rows.append({"Pair": _pr, "Return %": "N/A", "P&L $": "N/A",
-                                           "Max DD %": "N/A", "Vol Ann %": "N/A", "Status": "No data"})
-                    else:
-                        _pair_rows.append({
-                            "Pair": _pr,
-                            "Return %": round(_metrics.get("price_return_pct", 0), 2),
-                            "P&L $": round(_metrics.get("pnl_usd", 0), 2),
-                            "Max DD %": round(_metrics.get("max_drawdown_pct", 0), 2),
-                            "Vol Ann %": round(_metrics.get("vol_ann_pct", 0), 2),
-                            "Status": "OK",
-                        })
-                if _pair_rows:
-                    _stress_df = pd.DataFrame(_pair_rows)
-                    st.dataframe(_stress_df, hide_index=True, use_container_width=True)
 
 
 def _run_backtest_thread():
