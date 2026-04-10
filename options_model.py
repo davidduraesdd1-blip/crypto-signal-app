@@ -160,7 +160,7 @@ def price_option(
     expiry_days: int,
     vol: float,
     option_type: str = "call",
-    risk_free: float = 0.045,
+    risk_free: float = None,   # Issue #12: None → fetch live FRED 3M T-bill rate
 ) -> OptionPrice:
     """
     Price a single option and compute all Greeks.
@@ -172,8 +172,10 @@ def price_option(
         expiry_days: Days to expiry
         vol        : Implied volatility (annualised decimal, e.g. 0.80)
         option_type: "call" or "put"
-        risk_free  : Risk-free rate (default: 4.5% = 0.045)
+        risk_free  : Risk-free rate; None = fetch live FRED 3M T-bill (Issue #12)
     """
+    if risk_free is None:
+        risk_free = get_live_rf_rate(fallback=0.045)
     T = expiry_days / 365.0
     price, delta, gamma, theta, vega = black_scholes(spot, strike, T, risk_free, vol, option_type)
 
@@ -202,7 +204,7 @@ def atm_greeks(
     spot: float,
     vol: float,
     expiry_days: int = 30,
-    risk_free: float = 0.045,
+    risk_free: float = None,   # Issue #12: None → fetch live FRED 3M T-bill rate
 ) -> dict:
     """
     Compute ATM call and put Greeks for a quick market-wide Greeks summary.
@@ -212,6 +214,8 @@ def atm_greeks(
     vega_usd (vega × portfolio_notional proxy), and a risk_summary string.
     """
     try:
+        if risk_free is None:
+            risk_free = get_live_rf_rate(fallback=0.045)
         atm_call = price_option(token, spot, spot, expiry_days, vol, "call", risk_free)
         atm_put  = price_option(token, spot, spot, expiry_days, vol, "put",  risk_free)
 
@@ -245,6 +249,131 @@ def atm_greeks(
     except Exception as exc:
         logger.debug("[OptionsModel] atm_greeks failed for %s: %s", token, exc)
         return {"token": token, "error": str(exc)}
+
+
+def compute_iv_rank(
+    current_iv: float,
+    iv_history: list,
+) -> dict:
+    """
+    Issue #11 — IV Rank and IV Percentile.
+
+    IV Rank (IVR): Where is current IV relative to its 52-week high/low?
+      IVR = (current_iv - 52w_low) / (52w_high - 52w_low) × 100
+      IVR=100: IV at its highest point in 52 weeks → sell options (premium richest)
+      IVR=0:   IV at its lowest point in 52 weeks → buy options (premium cheapest)
+
+    IV Percentile (IVP): What % of days in the past 252 trading days had IV lower?
+      More robust than IVR because it accounts for the distribution of IV over the year,
+      not just the two extreme endpoints. If IV is at 60% but spent 90% of days below
+      current IV, IVP=90% correctly signals expensive options.
+
+    Research: Natenberg "Option Volatility and Pricing" (2015) §8;
+    tastytrade IV Rank methodology (2014-present); Sosnick (2020) IV Percentile.
+    IVR > 50 = rich options (sell strategies); IVR < 25 = cheap (buy strategies).
+
+    Parameters
+    ----------
+    current_iv  : current implied volatility as decimal (e.g. 0.80 = 80%)
+    iv_history  : list of daily IV values (decimals); ideally 252 trading days
+
+    Returns dict:
+      iv_rank_pct      : float  — 0-100 (IVR percentage)
+      iv_percentile    : float  — 0-100 (IVP percentage)
+      iv_52w_high      : float  — 52-week high IV
+      iv_52w_low       : float  — 52-week low IV
+      iv_signal        : str    — 'RICH' | 'NORMAL' | 'CHEAP'
+      strategy_hint    : str    — options strategy recommended
+    """
+    if not iv_history or len(iv_history) < 5:
+        return {
+            "iv_rank_pct":   None, "iv_percentile": None,
+            "iv_52w_high":   None, "iv_52w_low":    None,
+            "iv_signal":     "UNKNOWN", "strategy_hint": "Insufficient IV history",
+        }
+
+    hist = [v for v in iv_history if v is not None and v > 0]
+    if not hist:
+        return {"iv_rank_pct": None, "iv_percentile": None, "iv_52w_high": None,
+                "iv_52w_low": None, "iv_signal": "UNKNOWN", "strategy_hint": "No valid IV data"}
+
+    high52 = max(hist)
+    low52  = min(hist)
+    iv_range = high52 - low52
+
+    iv_rank_pct = round((current_iv - low52) / iv_range * 100, 1) if iv_range > 1e-6 else 50.0
+    iv_rank_pct = max(0.0, min(100.0, iv_rank_pct))
+
+    # IV Percentile: fraction of historical days with IV below current
+    iv_pct = round(sum(1 for v in hist if v < current_iv) / len(hist) * 100, 1)
+
+    if iv_rank_pct >= 50:
+        signal = "RICH"
+        hint   = "Favor premium-selling strategies (covered calls, cash-secured puts, strangles)"
+    elif iv_rank_pct <= 25:
+        signal = "CHEAP"
+        hint   = "Favor debit spreads, long straddles, or long calls/puts (cheap premium)"
+    else:
+        signal = "NORMAL"
+        hint   = "Neutral — consider both premium-selling and directional debit strategies"
+
+    return {
+        "iv_rank_pct":   iv_rank_pct,
+        "iv_percentile": iv_pct,
+        "iv_52w_high":   round(high52 * 100, 1),
+        "iv_52w_low":    round(low52  * 100, 1),
+        "current_iv_pct": round(current_iv * 100, 1),
+        "iv_signal":     signal,
+        "strategy_hint": hint,
+    }
+
+
+# ─── Live risk-free rate ──────────────────────────────────────────────────────
+
+_RF_CACHE: dict = {"rate": None, "ts": 0.0}
+_RF_CACHE_TTL = 14400   # 4 hours
+
+
+def get_live_rf_rate(fallback: float = 0.045) -> float:
+    """
+    Issue #12 — Fetch live 3-month T-bill rate from FRED (DGS3MO series).
+    Used as the risk-free rate in Black-Scholes instead of the hardcoded 4.5%.
+    Caches for 4 hours (rate changes infrequently).
+
+    Returns the rate as a decimal (e.g. 0.053 = 5.3%).
+    Falls back to `fallback` (default 4.5%) on any error.
+    """
+    import time as _time
+    now = _time.time()
+    if _RF_CACHE["rate"] is not None and (now - _RF_CACHE["ts"]) < _RF_CACHE_TTL:
+        return _RF_CACHE["rate"]
+
+    try:
+        import urllib.request, json as _json
+        url = "https://fred.stlouisfed.org/graph/fredgraph.json?id=DGS3MO"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = _json.loads(resp.read().decode())
+        # FRED returns list of [date, value] pairs
+        observations = data.get("observations") or data.get("data") or []
+        # Handle both FRED API formats
+        if not observations and isinstance(data, list):
+            observations = data
+        rate_str = None
+        for obs in reversed(observations):
+            val = obs[1] if isinstance(obs, list) else obs.get("value", ".")
+            if val and val != ".":
+                rate_str = val
+                break
+        if rate_str:
+            rate = float(rate_str) / 100.0   # FRED returns percent
+            rate = max(0.0, min(0.20, rate))  # sanity clamp 0-20%
+            _RF_CACHE["rate"] = rate
+            _RF_CACHE["ts"]   = now
+            return rate
+    except Exception as _e:
+        logger.debug("[OptionsModel] live RF rate fetch failed: %s — using fallback %.3f", _e, fallback)
+
+    return fallback
 
 
 def implied_vol_from_price(

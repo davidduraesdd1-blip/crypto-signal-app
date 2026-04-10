@@ -7506,6 +7506,29 @@ def fetch_btc_ta_signals() -> dict:
         if ma350 > 0:
             pi_cycle_ratio = round((ma111 * 2) / ma350, 4)
 
+    # ── Issue #7: Ichimoku Cloud position (daily, crypto-adjusted periods) ──────
+    # Tenkan=10d, Kijun=30d, Senkou B=60d (vs. equity 9/26/52 for 5-day weeks)
+    # "Above Cloud" = confirmed uptrend; "Below Cloud" = downtrend; "In Cloud" = transition
+    # Research: Ichimoku Kinko Hyo (Hosoda 1969); crypto periods: Gopalakrishnan (2020)
+    ichimoku_cloud_position = None
+    if len(closes) >= 60 and len(highs) == len(closes) and len(lows) == len(closes):
+        tenkan_h = max(highs[-10:]);  tenkan_l = min(lows[-10:])
+        kijun_h  = max(highs[-30:]);  kijun_l  = min(lows[-30:])
+        senkou_b_h = max(highs[-60:]); senkou_b_l = min(lows[-60:])
+        tenkan_sen = (tenkan_h + tenkan_l) / 2
+        kijun_sen  = (kijun_h  + kijun_l)  / 2
+        senkou_a   = (tenkan_sen + kijun_sen) / 2
+        senkou_b   = (senkou_b_h + senkou_b_l) / 2
+        cloud_top    = max(senkou_a, senkou_b)
+        cloud_bottom = min(senkou_a, senkou_b)
+        c = closes[-1]
+        if c > cloud_top:
+            ichimoku_cloud_position = "Above Cloud"
+        elif c < cloud_bottom:
+            ichimoku_cloud_position = "Below Cloud"
+        else:
+            ichimoku_cloud_position = "In Cloud"
+
     # ── E2: Weekly RSI-14 confirmation (higher timeframe filter) ─────────────
     # Fetch BTC weekly candles (≈90 weeks = ~18 months). Separate yfinance call.
     # Weekly RSI prevents false signals: strong daily RSI signals in weekly
@@ -7533,17 +7556,18 @@ def fetch_btc_ta_signals() -> dict:
         pass
 
     result = {
-        "rsi_14":          rsi_14,
-        "rsi_14_weekly":   rsi_14_weekly,
-        "ma_signal":       ma_signal,
-        "price_momentum":  price_momentum,
-        "above_200ma":     above_200ma,
-        "above_20sma":     above_20sma,
-        "adx_14":          adx_14,
-        "vwap_dev_pct":    vwap_dev_pct,
-        "pi_cycle_ratio":  pi_cycle_ratio,
-        "btc_price":       round(closes[-1], 2) if closes else None,
-        "source":          "yfinance",
+        "rsi_14":                   rsi_14,
+        "rsi_14_weekly":            rsi_14_weekly,
+        "ma_signal":                ma_signal,
+        "price_momentum":           price_momentum,
+        "above_200ma":              above_200ma,
+        "above_20sma":              above_20sma,
+        "adx_14":                   adx_14,
+        "vwap_dev_pct":             vwap_dev_pct,
+        "pi_cycle_ratio":           pi_cycle_ratio,
+        "ichimoku_cloud_position":  ichimoku_cloud_position,   # Issue #7
+        "btc_price":                round(closes[-1], 2) if closes else None,
+        "source":                   "yfinance",
     }
     with _BTC_TA_CACHE_LOCK:
         _BTC_TA_CACHE["btc_ta"] = {**result, "_ts": now}

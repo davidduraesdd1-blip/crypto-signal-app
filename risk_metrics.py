@@ -270,11 +270,25 @@ def compute_var_summary(
     if len(pnl) >= 5:
         mu       = float(np.mean(pnl))
         std      = float(np.std(pnl))
-        down_std = float(np.std(pnl[pnl < 0])) if (pnl < 0).any() else std
 
-        sharpe  = round(mu / std, 3) if std > 0 else 0.0
-        # Sortino: when down_std==0 all returns are non-negative → perfect downside profile
-        sortino = round(mu / down_std, 3) if down_std > 0 else (999.9 if mu > 0 else 0.0)
+        # Annualised Sharpe: scale per-trade P&L to annual frequency.
+        # _LOOKBACK_DAYS window / n_samples gives avg holding period in days.
+        # Annual factor = sqrt(365 / avg_holding_days).
+        # Research: Lo (2002) "The Statistics of Sharpe Ratios" — annualisation is
+        # mandatory for cross-strategy comparison; per-trade Sharpe is meaningless.
+        n_trades = len(pnl)
+        avg_hold_days = max(1.0, _LOOKBACK_DAYS / n_trades)
+        ann_factor = (365.0 / avg_hold_days) ** 0.5
+        sharpe = round((mu / std) * ann_factor, 3) if std > 0 else 0.0
+
+        # Sortino: downside deviation = sqrt(mean(min(r - MAR, 0)^2)) where MAR=0.
+        # Correct formula per Sortino & van der Meer (1991): penalises only returns
+        # below the minimum acceptable return (MAR), not all negative volatility.
+        # Bug fixed: was using std of negative returns only (biased — ignores the
+        # zero shortfall of positive returns in the mean-square calculation).
+        shortfalls = np.minimum(pnl, 0.0)           # MAR = 0: only below-target returns
+        downside_dev = float(np.sqrt(np.mean(shortfalls ** 2)))
+        sortino = round((mu / downside_dev) * ann_factor, 3) if downside_dev > 0 else (999.9 if mu > 0 else 0.0)
 
         # Max drawdown: max cumulative loss in equity curve
         equity = np.cumprod(1 + pnl / 100)
