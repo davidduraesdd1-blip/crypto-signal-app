@@ -4765,6 +4765,52 @@ def page_backtest():
                     mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"), help=_ui.HELP_CALMAR)
                     mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"), help="How many trades in a row lost money at worst.")
                     mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%", help=_ui.HELP_EXPECTANCY)
+
+                # ── Beginner "What does this mean for me?" panel ──────────────
+                _wr_v  = float(_wr)
+                _ret_v = float(m.get('total_return', 0))
+                _dd_v  = abs(float(m.get('max_drawdown', 0)))
+                if _wr_v >= 60 and _ret_v > 0:
+                    _btm_color  = "rgba(0,212,170,0.10)"; _btm_border = "rgba(0,212,170,0.35)"
+                    _btm_icon   = "✅"; _btm_grade = "Strong Performance"
+                    _btm_msg    = (
+                        f"The model has been right <strong>{_wr_v:.0f}%</strong> of the time — "
+                        f"well above the 50% you'd get from random guessing. "
+                        f"Following every signal would have returned <strong>{_ret_v:+.1f}%</strong> overall."
+                    )
+                elif _wr_v >= 50 and _ret_v >= 0:
+                    _btm_color  = "rgba(245,158,11,0.10)"; _btm_border = "rgba(245,158,11,0.35)"
+                    _btm_icon   = "📊"; _btm_grade = "Decent Performance"
+                    _btm_msg    = (
+                        f"The model wins more often than it loses (<strong>{_wr_v:.0f}%</strong> win rate) "
+                        f"and the total return is <strong>{_ret_v:+.1f}%</strong>. "
+                        f"This is an acceptable result, though there's room to improve."
+                    )
+                else:
+                    _btm_color  = "rgba(239,68,68,0.10)"; _btm_border = "rgba(239,68,68,0.35)"
+                    _btm_icon   = "⚠️"; _btm_grade = "Challenging Period"
+                    _btm_msg    = (
+                        f"The model's win rate is <strong>{_wr_v:.0f}%</strong> and total return is "
+                        f"<strong>{_ret_v:+.1f}%</strong> over this backtest period. "
+                        f"This reflects past data — real-time performance may differ."
+                    )
+                _btm_risk = (
+                    "The worst losing patch was small — the model has managed risk well so far."
+                    if _dd_v < 20 else
+                    f"The worst losing patch was <strong>{_dd_v:.1f}%</strong> — keep your position sizes small to limit your exposure during downturns."
+                )
+                st.markdown(
+                    f'<div style="background:{_btm_color};border:1px solid {_btm_border};'
+                    f'border-radius:12px;padding:18px 22px;margin:14px 0">'
+                    f'<div style="font-size:13px;font-weight:700;color:#00d4aa;margin-bottom:8px">'
+                    f'{_btm_icon} What does this mean for me? — {_btm_grade}</div>'
+                    f'<div style="font-size:13px;color:#a8b4c8;line-height:1.65">'
+                    f'{_btm_msg}<br><br>{_btm_risk}<br><br>'
+                    f'<em>Past performance does not guarantee future results. '
+                    f'Always treat signals as one input in your decision — not a guarantee.</em>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
             else:
                 # Intermediate / Advanced — full metric grids
                 mc = st.columns(6)
@@ -5462,6 +5508,48 @@ def page_backtest():
                         'test_signals': 'Test Signals', 'accuracy_pct': 'OOS Accuracy'
                     }).set_index('Window'), width="stretch")
 
+                    # ── "What does this mean?" panel ───────────────────────
+                    _wf_acc = wf_r.get('mean_accuracy') or 0.0
+                    _wf_std = wf_r.get('std_accuracy') or 0.0
+                    if _wf_acc >= 60:
+                        _wfm_color = "rgba(0,212,170,0.08)"; _wfm_border = "rgba(0,212,170,0.30)"
+                        _wfm_icon  = "✅"; _wfm_verdict = "Strong out-of-sample accuracy"
+                        _wfm_msg   = (
+                            f"Across {int(wf_splits)} separate time windows, the model correctly called direction "
+                            f"<strong>{_wf_acc:.0f}%</strong> of the time on data it had never seen before. "
+                            f"This is a strong result — it suggests the model isn't just memorising past data."
+                        )
+                    elif _wf_acc >= 50:
+                        _wfm_color = "rgba(245,158,11,0.08)"; _wfm_border = "rgba(245,158,11,0.30)"
+                        _wfm_icon  = "📊"; _wfm_verdict = "Acceptable accuracy"
+                        _wfm_msg   = (
+                            f"The model was right <strong>{_wf_acc:.0f}%</strong> of the time on unseen data — "
+                            f"slightly better than random. This is acceptable but not exceptional."
+                        )
+                    else:
+                        _wfm_color = "rgba(239,68,68,0.08)"; _wfm_border = "rgba(239,68,68,0.30)"
+                        _wfm_icon  = "⚠️"; _wfm_verdict = "Below random on unseen data"
+                        _wfm_msg   = (
+                            f"The model only got <strong>{_wf_acc:.0f}%</strong> accuracy on unseen data — "
+                            f"below the 50% you'd expect from random guessing. "
+                            f"This may indicate overfitting to the training period."
+                        )
+                    _wf_std_msg = (
+                        f"Consistency score: ±{_wf_std:.1f}% variation across windows. "
+                        + ("Very consistent — the model performs reliably across different market phases."
+                           if _wf_std < 8 else
+                           "Some variation between windows — the model works better in some market conditions than others.")
+                    )
+                    st.markdown(
+                        f'<div style="background:{_wfm_color};border:1px solid {_wfm_border};'
+                        f'border-radius:12px;padding:16px 20px;margin:10px 0">'
+                        f'<div style="font-size:13px;font-weight:700;color:#00d4aa;margin-bottom:6px">'
+                        f'{_wfm_icon} What does this mean? — {_wfm_verdict}</div>'
+                        f'<div style="font-size:13px;color:#a8b4c8;line-height:1.6">'
+                        f'{_wfm_msg}<br><br>{_wf_std_msg}'
+                        f'</div></div>',
+                        unsafe_allow_html=True,
+                    )
 
             # Deep OHLCV-replay backtest
             st.markdown("---")
@@ -6195,6 +6283,43 @@ def page_backtest():
                     if _pair_rows:
                         _stress_df = pd.DataFrame(_pair_rows)
                         st.dataframe(_stress_df, hide_index=True, width='stretch')
+
+                    # ── "What does this mean?" panel (all levels) ─────────────
+                    _st_ret  = float(_p.get('portfolio_return', 0))
+                    _st_dd   = abs(float(_p.get('worst_drawdown_pct', 0)))
+                    _st_wr   = float(_p.get('win_rate', 0))
+                    _st_lbl  = _s.get('label', _sel_scenario)
+                    if _st_ret > 0:
+                        _stm_color = "rgba(0,212,170,0.08)"; _stm_border = "rgba(0,212,170,0.30)"
+                        _stm_icon  = "✅"; _stm_verdict = "The model would have stayed profitable"
+                        _stm_msg   = f"Your simulated portfolio <strong>gained {_st_ret:+.1f}%</strong> during the {_st_lbl} crisis. This suggests the model can generate positive returns even in severe market downturns."
+                    elif _st_ret > -10:
+                        _stm_color = "rgba(245,158,11,0.08)"; _stm_border = "rgba(245,158,11,0.30)"
+                        _stm_icon  = "📊"; _stm_verdict = "The model held up reasonably well"
+                        _stm_msg   = f"Your portfolio <strong>lost {abs(_st_ret):.1f}%</strong> during {_st_lbl}. Losses were limited — the model helped reduce the impact compared to holding through the crash."
+                    else:
+                        _stm_color = "rgba(239,68,68,0.08)"; _stm_border = "rgba(239,68,68,0.30)"
+                        _stm_icon  = "⚠️"; _stm_verdict = "The model took significant losses"
+                        _stm_msg   = f"Your portfolio <strong>lost {abs(_st_ret):.1f}%</strong> during {_st_lbl}. This was a severe crisis — even most professional funds lost heavily. Consider smaller position sizes during extreme uncertainty."
+                    _st_risk_msg = (
+                        f"The worst single drawdown was <strong>{_st_dd:.1f}%</strong>. "
+                        + ("That's manageable — the model recovered well." if _st_dd < 20
+                           else "That's significant — in real trading, keep position sizes small in volatile markets.")
+                    )
+                    _stm_lv = st.session_state.get("user_level", "beginner")
+                    st.markdown(
+                        f'<div style="background:{_stm_color};border:1px solid {_stm_border};'
+                        f'border-radius:12px;padding:16px 20px;margin:12px 0">'
+                        f'<div style="font-size:13px;font-weight:700;color:#00d4aa;margin-bottom:6px">'
+                        f'{_stm_icon} What does this mean? — {_stm_verdict}</div>'
+                        f'<div style="font-size:13px;color:#a8b4c8;line-height:1.6">'
+                        f'{_stm_msg}<br><br>{_st_risk_msg}'
+                        + (f'<br><br><em>Win rate of <strong>{_st_wr:.0f}%</strong> means the model picked the right direction '
+                           f'on {_st_wr:.0f}% of pairs during this period.</em>'
+                           if _stm_lv != "beginner" else "")
+                        + f'</div></div>',
+                        unsafe_allow_html=True,
+                    )
 
             _render_stress_test()
 
