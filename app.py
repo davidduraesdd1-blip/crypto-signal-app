@@ -4633,10 +4633,21 @@ def page_config():
             if not _es.get("keys_configured", False):
                 st.warning("No API keys saved — enter and save keys first.")
             else:
+                import concurrent.futures as _cf_okx
                 with st.spinner("Connecting to OKX...", show_time=True):
-                    _conn = _exec.test_connection()
+                    _okx_ex = _cf_okx.ThreadPoolExecutor(max_workers=1)
+                    try:
+                        _okx_fut = _okx_ex.submit(_exec.test_connection)
+                        try:
+                            _conn = _okx_fut.result(timeout=12)
+                        except _cf_okx.TimeoutError:
+                            _conn = {"ok": False, "balance_usdt": 0.0, "error": "timeout"}
+                    finally:
+                        _okx_ex.shutdown(wait=False)
                 if _conn["ok"]:
                     st.success(f"Connected! USDT Balance: ${_conn['balance_usdt']:,.2f}")
+                elif _conn.get("error") == "timeout":
+                    st.error("OKX did not respond in time — check your internet connection and try again.")
                 else:
                     logger.warning("[Execution] OKX connection failed: %s", _conn['error'])
                     st.error("Connection failed — check your OKX API key, secret, and passphrase in Settings.")
