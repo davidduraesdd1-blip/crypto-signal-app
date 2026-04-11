@@ -3901,6 +3901,37 @@ def page_config():
 
     overrides = {}
 
+    def _save_config(overrides):
+        weights_override = overrides.pop("_weights", {})
+        try:
+            with open(model._CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(overrides, f, indent=4)
+            # Save weights separately
+            if weights_override:
+                model.weights.update(weights_override)
+                model.save_weights()
+            model.load_config_overrides()
+            # INT-07: restart WebSocket feed with updated PAIRS list (idempotent)
+            _ws.start(model.PAIRS)
+            st.success("Config saved. Changes applied to next scan.")
+        except Exception as e:
+            logger.error("[Config] save failed: %s", e)
+            st.error("Could not save config — check file permissions and try again.")
+
+    def _reset_config():
+        try:
+            if os.path.exists(model._CONFIG_FILE):
+                os.remove(model._CONFIG_FILE)
+            if os.path.exists(model.DYNAMIC_WEIGHTS_FILE):
+                os.remove(model.DYNAMIC_WEIGHTS_FILE)
+            # Clear weights from DB and re-seed with defaults via public API (BUG-15)
+            _db.clear_weights(seed_weights=model.DEFAULT_WEIGHTS)
+            model.weights = model.DEFAULT_WEIGHTS.copy()
+            st.success("Config reset to defaults.")
+        except Exception as e:
+            logger.error("[Config] reset failed: %s", e)
+            st.error("Could not reset config — check file permissions and try again.")
+
     # ── Auto-jump to Alerts tab when navigated from sidebar
     _cfg_initial_tab = 0
     _st_tab_override = st.session_state.pop("_settings_tab", None)
@@ -4822,38 +4853,6 @@ def page_config():
                         _save_alerts_config_and_clear(_wl_cfg)
                         st.rerun()
 
-
-    def _save_config(overrides):
-        weights_override = overrides.pop("_weights", {})
-        try:
-            with open(model._CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(overrides, f, indent=4)
-            # Save weights separately
-            if weights_override:
-                model.weights.update(weights_override)
-                model.save_weights()
-            model.load_config_overrides()
-            # INT-07: restart WebSocket feed with updated PAIRS list (idempotent)
-            _ws.start(model.PAIRS)
-            st.success("Config saved. Changes applied to next scan.")
-        except Exception as e:
-            logger.error("[Config] save failed: %s", e)
-            st.error("Could not save config — check file permissions and try again.")
-
-
-    def _reset_config():
-        try:
-            if os.path.exists(model._CONFIG_FILE):
-                os.remove(model._CONFIG_FILE)
-            if os.path.exists(model.DYNAMIC_WEIGHTS_FILE):
-                os.remove(model.DYNAMIC_WEIGHTS_FILE)
-            # Clear weights from DB and re-seed with defaults via public API (BUG-15)
-            _db.clear_weights(seed_weights=model.DEFAULT_WEIGHTS)
-            model.weights = model.DEFAULT_WEIGHTS.copy()
-            st.success("Config reset to defaults.")
-        except Exception as e:
-            logger.error("[Config] reset failed: %s", e)
-            st.error("Could not reset config — check file permissions and try again.")
 
 
 # ── Backtest progress fragment — module level to keep session-state key stable ──
