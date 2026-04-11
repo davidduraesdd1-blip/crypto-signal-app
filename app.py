@@ -150,57 +150,8 @@ except Exception as _e:
     logging.debug("[App] agent unavailable: %s", _e)
     _agent = None
 
-# ── Sentry error monitoring (optional — set SUPERGROK_SENTRY_DSN env var) ──
-
-def _scrub_sentry_event(event, hint):
-    """Remove PII, API keys, and expected-noise events from Sentry before sending."""
-    # Drop known-noisy non-actionable events
-    _msg = str(event.get("message", "") or "")
-    _exc_values = (event.get("exception") or {}).get("values") or []
-    _exc_msgs = " ".join(
-        str((v.get("value") or "")) for v in _exc_values
-    )
-    _combined = (_msg + " " + _exc_msgs).lower()
-
-    # OKX WebSocket periodic close frames — "goodbye" is the server's normal
-    # session expiry close frame. The reconnect loop handles this automatically.
-    if "connection to remote host was lost" in _combined or "goodbye" in _combined:
-        return None
-
-    # Anthropic credit exhaustion — already handled in code via _llm_credits_exhausted
-    # flag; subsequent calls are suppressed. First occurrence is logged to files.
-    if "credit balance" in _combined and "anthropic" in _combined:
-        return None
-
-    # Streamlit media file cache misses — happen on app restart, not actionable
-    if "mediafilestorагеerror" in _combined or "mediafilestoragerror" in _combined:
-        return None
-
-    # Scrub request data (PII)
-    if "request" in event:
-        event["request"].pop("cookies", None)
-        event["request"].pop("headers", None)
-    # Scrub environment variables that might contain keys
-    if "extra" in event:
-        for key in list(event.get("extra", {}).keys()):
-            if any(x in key.upper() for x in ["KEY", "SECRET", "TOKEN", "PASSWORD"]):
-                event["extra"][key] = "[REDACTED]"
-    return event
-
-
-try:
-    import sentry_sdk as _sentry_sdk
-    _SENTRY_DSN = os.environ.get("SUPERGROK_SENTRY_DSN", "")
-    if _SENTRY_DSN:
-        _sentry_sdk.init(
-            dsn=_SENTRY_DSN,
-            traces_sample_rate=0.1,
-            profiles_sample_rate=0.0,
-            before_send=_scrub_sentry_event,
-        )
-        logging.getLogger(__name__).info("[App] Sentry error monitoring active")
-except ImportError:
-    pass
+# ── Sentry second init removed — duplicate of the module-level init at lines 22-55.
+# The first init already has the full noise filter and runs earlier for better coverage.
 
 
 def _numpy_serializer(obj):
@@ -448,6 +399,13 @@ def _cached_macro_signal_adjustment() -> dict:
 def _cached_deribit_options_skew(currency: str) -> dict:
     """Cache get_deribit_options_skew() — Deribit API call, 5-min TTL."""
     return data_feeds.get_deribit_options_skew(currency)
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
+def _cached_macro_enrichment() -> dict:
+    """Cache get_macro_enrichment() — yfinance HTTP calls (DXY/VIX/M2/rates), 5-min TTL.
+    Without this cache, every Dashboard render triggered 4+ yfinance network requests."""
+    return data_feeds.get_macro_enrichment()
 
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=60)
@@ -1662,7 +1620,7 @@ def page_dashboard():
 
         # ── S25: Macro Intelligence — always-visible scorecard ───────────────────
         try:
-            _me = data_feeds.get_macro_enrichment()
+            _me = _cached_macro_enrichment()
             _ui.render_macro_scorecard_panel(_me, _sg_level_val)
         except Exception as _me_err:
             logger.warning("[App] macro panel failed: %s", _me_err)
