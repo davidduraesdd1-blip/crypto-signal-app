@@ -257,6 +257,7 @@ def get_agent_config() -> dict:
     """Return agent config from alerts_config.json merged with UI overrides."""
     cfg = _alerts.load_alerts_config()
     base = {
+        # Short-name keys (accessed by _check_pre_risk / _check_post_risk)
         "enabled":                  bool(cfg.get("agent_enabled", False)),
         "interval_seconds":         int(cfg.get("agent_interval_seconds", _AGENT_DEFAULTS["agent_interval_seconds"])),
         "min_confidence":           float(cfg.get("agent_min_confidence", _AGENT_DEFAULTS["agent_min_confidence"])),
@@ -264,14 +265,15 @@ def get_agent_config() -> dict:
         "daily_loss_limit_pct":     float(cfg.get("agent_daily_loss_limit_pct", _AGENT_DEFAULTS["agent_daily_loss_limit_pct"])),
         "portfolio_size_usd":       float(cfg.get("agent_portfolio_size_usd", _AGENT_DEFAULTS["agent_portfolio_size_usd"])),
         "dry_run":                  bool(cfg.get("agent_dry_run", True)),
-        "agent_min_confidence":     float(cfg.get("agent_min_confidence", _AGENT_DEFAULTS["agent_min_confidence"])),
+        # Prefixed keys (accessed by _apply_overrides / UI Active Limits panel)
+        "agent_min_confidence":          float(cfg.get("agent_min_confidence", _AGENT_DEFAULTS["agent_min_confidence"])),
         "agent_max_concurrent_positions": int(cfg.get("agent_max_concurrent_positions", _AGENT_DEFAULTS["agent_max_concurrent_positions"])),
-        "agent_daily_loss_limit_pct": float(cfg.get("agent_daily_loss_limit_pct", _AGENT_DEFAULTS["agent_daily_loss_limit_pct"])),
-        "agent_portfolio_size_usd": float(cfg.get("agent_portfolio_size_usd", _AGENT_DEFAULTS["agent_portfolio_size_usd"])),
-        "agent_interval_seconds":   int(cfg.get("agent_interval_seconds", _AGENT_DEFAULTS["agent_interval_seconds"])),
-        "agent_max_trade_size_pct": float(_AGENT_DEFAULTS["agent_max_trade_size_pct"]),
-        "agent_max_drawdown_pct":   float(_AGENT_DEFAULTS["agent_max_drawdown_pct"]),
-        "agent_cooldown_after_loss_s": int(_AGENT_DEFAULTS["agent_cooldown_after_loss_s"]),
+        "agent_daily_loss_limit_pct":    float(cfg.get("agent_daily_loss_limit_pct", _AGENT_DEFAULTS["agent_daily_loss_limit_pct"])),
+        "agent_portfolio_size_usd":      float(cfg.get("agent_portfolio_size_usd", _AGENT_DEFAULTS["agent_portfolio_size_usd"])),
+        "agent_interval_seconds":        int(cfg.get("agent_interval_seconds", _AGENT_DEFAULTS["agent_interval_seconds"])),
+        "agent_max_trade_size_pct":      float(_AGENT_DEFAULTS["agent_max_trade_size_pct"]),
+        "agent_max_drawdown_pct":        float(_AGENT_DEFAULTS["agent_max_drawdown_pct"]),
+        "agent_cooldown_after_loss_s":   int(_AGENT_DEFAULTS["agent_cooldown_after_loss_s"]),
     }
     return _apply_overrides(base)  # G2: merge live UI overrides at every call
 

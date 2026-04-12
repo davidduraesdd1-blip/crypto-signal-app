@@ -9,6 +9,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import html as _html
 import json
 import logging
 import os
@@ -2983,7 +2984,7 @@ def page_dashboard():
                         f'padding:10px 14px;margin:4px 0 10px 0;border-left:2px solid {_story_sig_col};">'
                         f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;'
                         f'letter-spacing:0.6px;margin-bottom:4px">Signal Story</div>'
-                        f'<div style="font-size:13px;color:#c8d4e8;line-height:1.5">{_story_text}</div>'
+                        f'<div style="font-size:13px;color:#c8d4e8;line-height:1.5">{_html.escape(str(_story_text))}</div>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
