@@ -3404,7 +3404,7 @@ def fetch_defillama_top_yields(min_apy: float = 5.0, max_apy: float = 50.0, top_
         if cached and now - cached.get("_ts", 0) < _LLAMA_TTL:
             return cached.get("data", [])
     try:
-        resp = _SESSION.get("https://yields.llama.fi/pools", timeout=15)
+        resp = _SESSION.get("https://yields.llama.fi/pools", timeout=(5, 10))  # FIX-503: (connect, read) tuple caps retry chain at 47s max
         if resp.status_code == 200:
             pools = resp.json().get("data", [])
             filtered = [
@@ -5072,7 +5072,7 @@ def fetch_deribit_options_chain(currency: str = "BTC") -> dict:
             resp = _SESSION.get(
                 "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
                 params={"currency": currency, "kind": "option"},
-                timeout=15,
+                timeout=(5, 10),  # FIX-503: (connect, read) tuple caps retry chain at 47s max
             )
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}", "source": "deribit"}
@@ -6014,7 +6014,7 @@ def _fetch_pcr_for_currency(currency: str) -> float:
         resp = _SESSION.get(
             "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
             params={"currency": currency, "kind": "option"},
-            timeout=15,
+            timeout=(5, 10),  # FIX-503: (connect, read) tuple caps retry chain at 47s max
         )
         if resp.status_code != 200:
             return 0.0

@@ -337,7 +337,7 @@ def send_email_alert(
         msg["To"] = recipient
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
 
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:  # FIX-503: reduced from 15s to stay under health-check deadline
             server.ehlo()
             server.starttls()
             server.login(sender, app_password)
