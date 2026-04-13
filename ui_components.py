@@ -901,7 +901,6 @@ def inject_css():
     st.iframe(
         f'<script>try{{window.parent.document.body.classList.{_mode}("light-mode");}}catch(e){{}}</script>',
         height=0,
-        scrolling=False,
     )
 
 
@@ -921,7 +920,6 @@ def inject_beginner_mode_js(beginner_mode: bool) -> None:
     st.iframe(
         f'<script>try{{window.parent.document.body.classList.{action}("beginner-mode");}}catch(e){{}}</script>',
         height=0,
-        scrolling=False,
     )
 
 
