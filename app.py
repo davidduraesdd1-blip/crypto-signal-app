@@ -305,9 +305,10 @@ def _cached_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     return _db.get_agent_log_df(limit=limit)
 
 
-@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
+@st.cache_data(ttl=420, show_spinner=False, max_entries=1)
 def _cached_api_health() -> dict:
-    """Cache API health check pings — 5-min TTL (#17 security hardening)."""
+    """Cache API health check pings — 7-min TTL (staggered from 5-min caches to avoid
+    simultaneous cache-miss HTTP storm at the 300-second mark that contributed to 503s)."""
     return data_feeds.validate_api_keys()
 
 
@@ -465,17 +466,28 @@ def _get_scheduler() -> BackgroundScheduler:
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
-        # P1: Startup catch-up — resolve any pending feedback outcomes immediately
-        # so intelligence is never lost after a Streamlit restart/idle shutdown.
-        def _startup_feedback_catchup():
-            try:
-                model.run_feedback_loop()
-                logging.info("[Startup] Feedback catch-up complete")
-            except Exception as _e:
-                logging.debug(f"[Startup] Feedback catch-up (non-critical): {_e}")
-        import threading as _t
-        _t.Thread(target=_startup_feedback_catchup, name="StartupFeedbackCatchup", daemon=True).start()
+        # P1: Startup catch-up — delayed 90 seconds so the initial Streamlit render
+        # completes and all @st.cache_data caches warm up before the feedback thread
+        # acquires _exchange_cache_lock for load_markets(). Running immediately caused
+        # the lock to be held for up to 60s during the 10-minute cache-expiry window,
+        # which blocked concurrent render threads and triggered 503 health-check timeouts.
+        _scheduler.add_job(
+            _run_startup_feedback_catchup,
+            trigger="date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=90),
+            id="startup_feedback_catchup",
+            replace_existing=True,
+        )
     return _scheduler
+
+
+def _run_startup_feedback_catchup():
+    """Delayed startup feedback catch-up (runs 90s after first render via APScheduler)."""
+    try:
+        model.run_feedback_loop()
+        logging.info("[Startup] Feedback catch-up complete")
+    except Exception as _e:
+        logging.debug(f"[Startup] Feedback catch-up (non-critical): {_e}")
 
 
 def _setup_calibration_job():
@@ -1154,11 +1166,13 @@ def _ws_health_fragment():
 # where the condition is False, because the key was registered in the previous run.
 @st.fragment(run_every=3)
 def _scan_progress():
-    # Early-return when not scanning — keeps fragment registered without rendering anything.
-    if not st.session_state.get("scan_running", False) and not _SCAN_STATUS.get("running", False):
-        with _scan_lock:
-            if not _scan_state["running"]:
-                return
+    # Early-return when not scanning — lock-free fast path avoids contention with the
+    # scan thread that holds _scan_lock for long periods; _SCAN_STATUS is a plain dict
+    # written atomically so reading it without a lock is safe for this boolean check.
+    if (not st.session_state.get("scan_running", False)
+            and not _SCAN_STATUS.get("running", False)
+            and not _scan_state.get("running", False)):
+        return
     # PERF-30: read from in-memory _SCAN_STATUS first (no DB round-trip per tick)
     # Only fall back to SQLite if in-memory says not running (e.g. fresh restart)
     _mem_prog = _SCAN_STATUS.get("progress", 0)
@@ -5032,7 +5046,9 @@ def page_config():
 
 
 # ── Backtest progress fragment — module level to keep session-state key stable ──
-@st.fragment(run_every=1)
+# run_every=5: 5-second poll is responsive enough for a 2-5 minute backtest while
+# cutting event-loop scheduling pressure 5× vs the former run_every=1.
+@st.fragment(run_every=5)
 def _backtest_progress():
     # Early-return when not running — keeps fragment registered without rendering anything.
     if not st.session_state.get("backtest_running", False) and not _bt_state["running"]:
