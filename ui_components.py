@@ -887,7 +887,6 @@ def inject_css():
     PERF: guarded by (session_state + theme) so the large CSS block is only
     sent to the browser when the theme actually changes.
     """
-    import streamlit.components.v1 as _stc
     _theme = st.session_state.get("_sg_theme", "dark")
     if (st.session_state.get("_css_injected")
             and st.session_state.get("_css_theme_last") == _theme):
@@ -895,11 +894,11 @@ def inject_css():
     st.markdown(_CSS, unsafe_allow_html=True)
     st.session_state["_css_injected"] = True
     st.session_state["_css_theme_last"] = _theme
-    # Apply body.light-mode class via components.v1.html — this creates a real iframe
-    # that executes JavaScript. st.markdown(<script>) is silently discarded by React's
-    # dangerouslySetInnerHTML, so this is the only working JS injection method in Streamlit.
+    # Apply body.light-mode class via st.iframe (replaces deprecated st.components.v1.html).
+    # st.iframe renders HTML in a sandboxed iframe that executes JavaScript.
+    # st.markdown(<script>) is silently discarded by React's dangerouslySetInnerHTML.
     _mode = "add" if _theme == "light" else "remove"
-    _stc.html(
+    st.iframe(
         f'<script>try{{window.parent.document.body.classList.{_mode}("light-mode");}}catch(e){{}}</script>',
         height=0,
         scrolling=False,
@@ -912,15 +911,14 @@ def inject_beginner_mode_js(beginner_mode: bool) -> None:
     Call once per page render, after inject_css().
     PERF: only re-injects JS when beginner_mode state actually changes.
     """
-    import streamlit.components.v1 as _stc
     last = st.session_state.get("_beginner_mode_last")
     if last == beginner_mode:
         return
     st.session_state["_beginner_mode_last"] = beginner_mode
     action = "add" if beginner_mode else "remove"
-    # Use components.v1.html for JS execution — st.markdown(<script>) is silently
-    # dropped by React's dangerouslySetInnerHTML and never executes.
-    _stc.html(
+    # Use st.iframe for JS execution (replaces deprecated st.components.v1.html).
+    # st.markdown(<script>) is silently dropped by React's dangerouslySetInnerHTML.
+    st.iframe(
         f'<script>try{{window.parent.document.body.classList.{action}("beginner-mode");}}catch(e){{}}</script>',
         height=0,
         scrolling=False,
@@ -3532,7 +3530,7 @@ def render_theme_toggle_sg() -> None:
     """Render a sun/moon theme toggle for SuperGrok sidebar.
 
     Stores theme in st.session_state["_sg_theme"].
-    The body.light-mode class is applied by inject_css() via st.components.v1.html()
+    The body.light-mode class is applied by inject_css() via st.iframe()
     on the same rerun — no separate JS injection needed here.
     """
     _is_light = st.session_state.get("_sg_theme") == "light"

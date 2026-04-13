@@ -1799,7 +1799,7 @@ def render_top_bottom_widget(result: dict, user_level: str = "beginner") -> None
         ))
         fig.update_layout(height=220, margin=dict(l=20, r=20, t=40, b=0),
                           paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.markdown(
             f"<div style='background:rgba(0,0,0,0.15);border-left:4px solid {color};"
@@ -1887,7 +1887,7 @@ def render_top_bottom_widget(result: dict, user_level: str = "beginner") -> None
                               "Conf%": comps["bos_choch"].get("confidence", 0)})
         if sig_rows:
             import pandas as pd
-            st.dataframe(pd.DataFrame(sig_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(sig_rows), hide_index=True, width="stretch")
 
     # ── ADVANCED ──────────────────────────────────────────────────────────────
     else:
@@ -1910,7 +1910,7 @@ def render_top_bottom_widget(result: dict, user_level: str = "beginner") -> None
             ))
             fig.update_layout(height=200, margin=dict(l=10, r=10, t=30, b=0),
                               paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col2:
             layer_rows = []
@@ -1936,7 +1936,7 @@ def render_top_bottom_widget(result: dict, user_level: str = "beginner") -> None
                     "Weight":     f"{w_map[lk]}%",
                 })
             st.dataframe(_pd.DataFrame(layer_rows), hide_index=True,
-                         use_container_width=True)
+                         width="stretch")
 
         # All active signals table
         all_sigs = []
@@ -1963,7 +1963,7 @@ def render_top_bottom_widget(result: dict, user_level: str = "beginner") -> None
         if all_sigs:
             st.markdown("**Active Signals**")
             st.dataframe(_pd.DataFrame(all_sigs).sort_values("Conf%", ascending=False),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
 
         # Volume Profile details
         vp = comps.get("volume_profile", {})
