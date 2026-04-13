@@ -131,8 +131,8 @@ def _get_composite_gate_result() -> dict:
         ta_data = None
         try:
             ta_data = _df.fetch_btc_ta_signals()
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("[Agent] BTC TA signals fetch failed: %s", _e)
 
         # Layer 3: Deribit put/call ratio (30% of sentiment sub-weight)
         put_call_ratio = None
@@ -140,8 +140,8 @@ def _get_composite_gate_result() -> dict:
             _deribit = _df.fetch_deribit_options_chain()
             if not _deribit.get("error"):
                 put_call_ratio = _deribit.get("put_call_ratio")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("[Agent] Deribit options chain fetch failed: %s", _e)
 
         # Issue #6: BTC perpetual funding rate (15% of sentiment sub-weight)
         btc_funding_rate_pct = None
@@ -149,8 +149,8 @@ def _get_composite_gate_result() -> dict:
             _fr = _df.get_funding_rate("BTC/USDT")
             if not _fr.get("error") and _fr.get("funding_rate_pct") is not None:
                 btc_funding_rate_pct = float(_fr["funding_rate_pct"])
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("[Agent] BTC funding rate fetch failed: %s", _e)
 
         result = _cs.compute_composite_signal(macro_data, onchain_data, fg_value,
                                               put_call_ratio=put_call_ratio,
