@@ -2718,14 +2718,18 @@ def page_dashboard():
 
         # ── Top/Bottom Score widget ────────────────────────────────────────────────
         try:
-            import model as _sg_model
             from top_bottom_detector import compute_composite_top_bottom_score, render_top_bottom_widget as _rtbw
 
-            @st.cache_data(ttl=3600, show_spinner=False)
+            @st.cache_data(ttl=3600, show_spinner=False, max_entries=120)
             def _sg_fetch_ohlcv_df(p: str, tf: str, limit: int = 180):
-                """Fetch OHLCV via exchange fallback chain → DataFrame."""
+                """Fetch OHLCV via exchange fallback chain → DataFrame.
+
+                max_entries=120 caps memory at ~37 pairs × 3 TFs = 111 slots max.
+                Uses the top-level `model` alias (crypto_model_core) — NOT a separate
+                `import model` which would fail (no model.py exists in this directory).
+                """
                 try:
-                    raw = _sg_model.fetch_chart_ohlcv(p, tf, limit=limit)
+                    raw = model.fetch_chart_ohlcv(p, tf, limit=limit)
                     if not raw:
                         return None
                     _df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])

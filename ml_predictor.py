@@ -33,8 +33,13 @@ _cache_lock = threading.Lock()
 _CACHE_TTL = 3600  # 1 hour
 
 # ─── Model store ───────────────────────────────────────────────────────────────
-_model_store: dict = {}   # {(pair, tf): fitted_model}
+# Cap at 20 entries (5 coins × 4 TFs): GBM + XGBoost model pair is ~2-10MB each;
+# 148 entries for 37 pairs × 4 TFs would use 300-700MB — enough to hit the
+# Streamlit Community Cloud 1GB memory limit. FIFO eviction removes oldest half
+# when the cap is reached so hot coins stay in memory.
+_model_store: dict = {}   # {(pair, tf): fitted_model}, insertion-ordered Python 3.7+
 _model_lock = threading.Lock()
+_MODEL_STORE_MAX_ENTRIES = 20   # ~40-200MB ceiling for model store
 
 # PERF-19: disk persistence via joblib — survives Streamlit hot-reloads
 _MODEL_DISK_TTL = 3600   # 1 hour — don't load a pkl file older than this
@@ -298,6 +303,21 @@ def _train_model(df: pd.DataFrame):
     return {"gbm": gbm, "xgb": xgb_model, "X_train": X, "y_train": y, "accuracy": accuracy}
 
 
+def _evict_model_store_if_full() -> None:
+    """FIFO evict oldest half of _model_store when it reaches _MODEL_STORE_MAX_ENTRIES.
+    Called inside _model_lock. Python dicts are insertion-ordered (3.7+), so
+    list(_model_store.keys())[: n//2] gives the n//2 oldest entries.
+    """
+    if len(_model_store) >= _MODEL_STORE_MAX_ENTRIES:
+        keys_to_evict = list(_model_store.keys())[: _MODEL_STORE_MAX_ENTRIES // 2]
+        for k in keys_to_evict:
+            del _model_store[k]
+        logger.debug(
+            "[ml_predictor] evicted %d stale models from store (cap=%d)",
+            len(keys_to_evict), _MODEL_STORE_MAX_ENTRIES,
+        )
+
+
 def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
     """Return in-memory cached model, disk-cached model, or train a new one.
 
@@ -305,6 +325,9 @@ def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
     1. In-memory _model_store — zero latency, lost on Streamlit hot-reload
     2. Disk pkl via joblib — survives hot-reloads, 1-hour TTL
     3. Retrain from OHLCV data — last resort (slowest path)
+
+    Memory cap: _MODEL_STORE_MAX_ENTRIES enforced via FIFO eviction so the
+    store never grows to 148 entries × 2-10MB = 300-700MB.
     """
     key = (pair, tf)
     with _model_lock:
@@ -315,12 +338,14 @@ def _get_or_train_model(pair: str, tf: str, df: pd.DataFrame):
     model = _load_model_from_disk(pair, tf)
     if model is not None:
         with _model_lock:
+            _evict_model_store_if_full()
             _model_store[key] = model
         return model
     # Train from scratch and persist to both memory and disk
     model = _train_model(df)
     if model:
         with _model_lock:
+            _evict_model_store_if_full()
             _model_store[key] = model
         _save_model_to_disk(pair, tf, model)
     return model
