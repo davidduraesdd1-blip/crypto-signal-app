@@ -2125,8 +2125,11 @@ def page_dashboard():
                     "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
                     "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
                     "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
-                    "Top Pick": "⚡ Yes" if r.get("high_conf") else "—",
+                    "Top Pick":   "⚡ Yes" if r.get("high_conf") else "—",
                 })
+                _pair_key = r["pair"]
+                _cyc = st.session_state.get(f"tb_score_{_pair_key}")
+                summary_rows[-1]["Cycle Score"] = f"{_cyc}/100" if _cyc is not None else "—"
             st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), width='stretch')
         st.markdown("---")
 
@@ -2401,6 +2404,114 @@ def page_dashboard():
         is_hc       = r.get("high_conf", False)
         is_trending = r.get("trending", False)
 
+        # ── DECISIVE TRADE ACTION CARD (always first — beginner to advanced) ─────
+        _d_up    = "BUY"  in direction.upper()
+        _d_down  = "SELL" in direction.upper()
+        _d_color = "#22c55e" if _d_up else ("#ef4444" if _d_down else "#f59e0b")
+        _d_shape = "▲" if _d_up else ("▼" if _d_down else "■")
+        _d_label = direction.replace("STRONG ", "STRONG ")  # preserve as-is
+        _tp1_act = r.get("tp1") or exit_
+        _conf_10 = max(1, min(10, round(conf / 10)))
+
+        # Per-timeframe signal breakdown (MTF table)
+        _tf_data    = r.get("timeframes", {})
+        _tf_order   = ["1h", "4h", "1d", "1w"]
+        _tf_labels  = {"1h": "1 Hour", "4h": "4 Hour", "1d": "Daily", "1w": "Weekly"}
+        _tf_rows_html = ""
+        _tf_agree_buy  = 0
+        _tf_agree_sell = 0
+        for _tf in _tf_order:
+            _tfc = _tf_data.get(_tf, {})
+            if not _tfc:
+                continue
+            _tfd  = str(_tfc.get("direction", "NO DATA"))
+            _tfpc = float(_tfc.get("confidence", 0) or 0)
+            _tf_is_buy  = "BUY"  in _tfd.upper()
+            _tf_is_sell = "SELL" in _tfd.upper()
+            if _tf_is_buy:  _tf_agree_buy  += 1
+            if _tf_is_sell: _tf_agree_sell += 1
+            _tf_color = "#22c55e" if _tf_is_buy else ("#ef4444" if _tf_is_sell else "#f59e0b")
+            _tf_shape = "▲" if _tf_is_buy else ("▼" if _tf_is_sell else "■")
+            _tf_bar_w = int(min(100, _tfpc))
+            _tf_rows_html += (
+                f"<tr>"
+                f"<td style='padding:3px 10px 3px 4px;color:#94a3b8;font-size:0.79rem;white-space:nowrap'>{_tf_labels.get(_tf,'')}</td>"
+                f"<td style='padding:3px 8px;color:{_tf_color};font-weight:700;font-size:0.82rem'>{_tf_shape} {_tfd}</td>"
+                f"<td style='padding:3px 8px;min-width:90px'>"
+                f"<div style='background:rgba(255,255,255,0.06);border-radius:4px;height:8px;overflow:hidden'>"
+                f"<div style='background:{_tf_color};width:{_tf_bar_w}%;height:100%;border-radius:4px'></div>"
+                f"</div></td>"
+                f"<td style='padding:3px 4px;color:{_tf_color};font-size:0.78rem'>{int(_tfpc)}%</td>"
+                f"</tr>"
+            )
+
+        _mtf_total = _tf_agree_buy + _tf_agree_sell
+        if _tf_agree_buy >= 3:
+            _mtf_verdict = "✅ STRONG ALIGNMENT — Multiple timeframes confirm BUY"
+            _mtf_vc = "#22c55e"
+        elif _tf_agree_sell >= 3:
+            _mtf_verdict = "✅ STRONG ALIGNMENT — Multiple timeframes confirm SELL"
+            _mtf_vc = "#ef4444"
+        elif _tf_agree_buy == 2:
+            _mtf_verdict = "⚡ PARTIAL BUY — 2 timeframes bullish, mixed overall"
+            _mtf_vc = "#86efac"
+        elif _tf_agree_sell == 2:
+            _mtf_verdict = "⚠️ PARTIAL SELL — 2 timeframes bearish, mixed overall"
+            _mtf_vc = "#f97316"
+        else:
+            _mtf_verdict = "⬛ MIXED — Timeframes disagree. Wait for clarity."
+            _mtf_vc = "#94a3b8"
+
+        # Cycle timing from session state (populated by top/bottom widget below)
+        _cycle_score = st.session_state.get(f"tb_score_{pair}", None)
+        if _cycle_score is not None:
+            if _cycle_score >= 80:    _cycle_text, _cycle_color = f"✅ EXCELLENT TIMING — Cycle Score {_cycle_score}/100 (Bottom Zone)", "#22c55e"
+            elif _cycle_score >= 65:  _cycle_text, _cycle_color = f"👍 GOOD TIMING — Cycle Score {_cycle_score}/100 (Buy Zone)", "#86efac"
+            elif _cycle_score >= 35:  _cycle_text, _cycle_color = f"⏳ NEUTRAL TIMING — Cycle Score {_cycle_score}/100 (Wait)", "#f59e0b"
+            elif _cycle_score >= 20:  _cycle_text, _cycle_color = f"⚠️ CAUTION — Cycle Score {_cycle_score}/100 (Top Zone)", "#f97316"
+            else:                     _cycle_text, _cycle_color = f"🛑 POOR TIMING — Cycle Score {_cycle_score}/100 (Extreme Top)", "#ef4444"
+            _cycle_row = (f"<tr><td style='padding:6px 10px 6px 4px;color:#64748b;font-size:0.79rem;font-weight:600'>CYCLE TIMING</td>"
+                          f"<td colspan='3' style='padding:6px 4px;color:{_cycle_color};font-size:0.82rem;font-weight:700'>{_cycle_text}</td></tr>")
+        else:
+            _cycle_row = ""
+
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,rgba({('34,197,94' if _d_up else ('239,68,68' if _d_down else '245,158,11'))},0.08) 0%,rgba(0,0,0,0.2) 100%);"
+            f"border:1px solid {_d_color}44;border-left:5px solid {_d_color};"
+            f"border-radius:12px;padding:18px 22px;margin-bottom:16px'>"
+            f"<div style='display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap'>"
+            f"<div style='font-size:2.2rem;font-weight:900;color:{_d_color};line-height:1'>{_d_shape} {_d_label}</div>"
+            f"<div style='background:{_d_color}22;border:1px solid {_d_color}66;border-radius:20px;padding:4px 14px;"
+            f"color:{_d_color};font-size:0.85rem;font-weight:700'>{_conf_10}/10 strength · {conf:.0f}%</div>"
+            f"<div style='color:#64748b;font-size:0.8rem;margin-left:auto'>{pair} · {bias}</div>"
+            f"</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>"
+            f"<div style='background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px'>"
+            f"<div style='color:#475569;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Entry Zone</div>"
+            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>${entry:,.4f}</div>" if entry else
+            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>—</div>"
+            f"</div>"
+            f"<div style='background:rgba(239,68,68,0.06);border-radius:8px;padding:10px 14px'>"
+            f"<div style='color:#475569;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Stop Loss</div>"
+            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>${stop:,.4f}</div>" if stop else
+            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>—</div>"
+            f"</div>"
+            f"<div style='background:rgba(34,197,94,0.06);border-radius:8px;padding:10px 14px'>"
+            f"<div style='color:#475569;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Take Profit</div>"
+            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>${_tp1_act:,.4f}</div>" if _tp1_act else
+            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>—</div>"
+            f"</div>"
+            f"</div>"
+            f"<div style='font-size:0.75rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px'>Timeframe Breakdown</div>"
+            f"<table style='width:100%;border-collapse:collapse'>"
+            f"{_tf_rows_html}"
+            f"<tr><td colspan='4' style='padding:6px 4px;color:{_mtf_vc};font-size:0.82rem;font-weight:700;border-top:1px solid rgba(255,255,255,0.06)'>{_mtf_verdict}</td></tr>"
+            f"{_cycle_row}"
+            f"</table>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
         _ui.signal_card_header(
             pair=pair, direction=direction, conf=conf,
             bias=bias, regime=r.get("regime", "N/A"), is_hc=is_hc,
@@ -2660,6 +2771,8 @@ def page_dashboard():
                     )
 
             if _tb_result:
+                # Save score to session state so the Trade Action Card (above) can show cycle timing
+                st.session_state[f"tb_score_{pair}"] = _tb_result.get("score", 50)
                 st.markdown("---")
                 _ui.section_header("Top / Bottom Timing Score", "Where is this coin in its current cycle?", icon="📈")
                 _rtbw(_tb_result, user_level=_user_lv)
