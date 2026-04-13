@@ -2605,6 +2605,75 @@ def page_dashboard():
                     unsafe_allow_html=True,
                 )
 
+        # ── Top/Bottom Score widget ────────────────────────────────────────────────
+        try:
+            import model as _sg_model
+            from top_bottom_detector import compute_composite_top_bottom_score, render_top_bottom_widget as _rtbw
+
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def _sg_fetch_ohlcv_df(p: str, tf: str, limit: int = 180):
+                """Fetch OHLCV via exchange fallback chain → DataFrame."""
+                try:
+                    raw = _sg_model.fetch_chart_ohlcv(p, tf, limit=limit)
+                    if not raw:
+                        return None
+                    _df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                    _df[["open", "high", "low", "close", "volume"]] = (
+                        _df[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+                    )
+                    return _df.dropna(subset=["close"]).reset_index(drop=True)
+                except Exception as _e:
+                    logging.warning("top_bottom ohlcv fetch %s %s: %s", p, tf, _e)
+                    return None
+
+            with st.spinner(f"Computing top/bottom score for {pair}..."):
+                _tb_df_d  = _sg_fetch_ohlcv_df(pair, "1d",  180)
+                _tb_df_4h = _sg_fetch_ohlcv_df(pair, "4h",  120)
+                _tb_df_1h = _sg_fetch_ohlcv_df(pair, "1h",  100)
+
+                # Macro + sentiment from existing scan result
+                _tb_macro = {}
+                _tb_sent  = {}
+                _tb_oc = r.get("onchain_data") or {}
+                if _tb_oc:
+                    _tb_macro["mvrv_z_score"]       = _tb_oc.get("mvrv_z")
+                    _tb_macro["sopr"]               = _tb_oc.get("sopr")
+                    _tb_macro["hash_ribbons_signal"] = _tb_oc.get("hash_ribbon_signal")
+                if r.get("pi_cycle_ratio"):
+                    _tb_macro["pi_cycle_ratio"] = r.get("pi_cycle_ratio")
+                _tb_fng = r.get("fng_value")
+                if _tb_fng is not None:
+                    _tb_sent["fear_greed_value"] = float(_tb_fng)
+                _tb_fr = r.get("funding_rate_pct")
+                if _tb_fr is not None:
+                    _tb_sent["funding_rate_annualized"] = float(_tb_fr) * 365 * 3  # 8h rate → annualized approx
+
+                _tb_result = None
+                if _tb_df_d is not None:
+                    _tb_result = compute_composite_top_bottom_score(
+                        df=_tb_df_d,
+                        macro_data=_tb_macro or None,
+                        sentiment_data=_tb_sent or None,
+                        df_1h=_tb_df_1h,
+                        df_4h=_tb_df_4h,
+                        symbol=pair.replace("/USDT", "").replace("/USD", ""),
+                    )
+
+            if _tb_result:
+                st.markdown("---")
+                _ui.section_header("Top / Bottom Timing Score", "Where is this coin in its current cycle?", icon="📈")
+                _rtbw(_tb_result, user_level=_user_lv)
+                if _user_lv == "beginner":
+                    st.caption(
+                        "ⓘ This score uses 5 layers of analysis: On-Chain Macro · Sentiment · "
+                        "RSI/MACD Divergence · Market Structure (BOS/CHoCH, Order Blocks) · "
+                        "Volatility (Chandelier Exit, Squeeze). Score 80–100 = historical bottom zone."
+                    )
+        except ImportError:
+            pass
+        except Exception as _tb_exc:
+            logging.warning("Top/Bottom widget error for %s: %s", pair, _tb_exc)
+
         # ── Advanced Details (collapsed by default) ────────────────────────────────
         _adv_label = "📊 Technical Details" if _user_lv == "beginner" else "📊 More Details — Timeframes & Technicals"
         with st.expander(_adv_label, expanded=False):
