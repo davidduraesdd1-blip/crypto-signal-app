@@ -2721,21 +2721,20 @@ def page_dashboard():
 
         # ── Item 6 Tier 2: "Why this signal?" plain-English reasoning ─────────────
         if _user_lv in ("beginner", "intermediate"):
-            with st.expander("🔍 Why this signal? — Plain-English reasons", expanded=False):
-                st.markdown(
-                    _ui.why_signal_html(
-                        direction     = direction,
-                        conf          = conf,
-                        rsi           = _km_rsi,
-                        adx           = _km_adx,
-                        mtf           = mtf,
-                        consensus     = r.get("consensus", 0.0),
-                        regime        = r.get("regime", ""),
-                        bias          = r.get("strategy_bias", ""),
-                        funding_rate  = _km_fr,
-                    ),
-                    unsafe_allow_html=True,
-                )
+            _why_html = _ui.why_signal_html(
+                direction     = direction,
+                conf          = conf,
+                rsi           = _km_rsi,
+                adx           = _km_adx,
+                mtf           = mtf,
+                consensus     = r.get("consensus", 0.0),
+                regime        = r.get("regime", ""),
+                bias          = r.get("strategy_bias", ""),
+                funding_rate  = _km_fr,
+            )
+            if _why_html:
+                with st.expander("🔍 Why this signal? — Plain-English reasons", expanded=False):
+                    st.markdown(_why_html, unsafe_allow_html=True)
 
         # ── Top/Bottom Score widget ────────────────────────────────────────────────
         try:

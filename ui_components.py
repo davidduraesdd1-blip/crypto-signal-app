@@ -3082,11 +3082,58 @@ def why_signal_html(
     d = (direction or "").upper()
     is_buy  = "BUY"  in d
     is_sell = "SELL" in d
-    if not is_buy and not is_sell:
-        return ""
+    is_hold = not is_buy and not is_sell
 
-    accent = "#00d4aa" if is_buy else "#f6465d"
+    accent = "#00d4aa" if is_buy else "#f6465d" if is_sell else "#f59e0b"
     reasons: list[str] = []
+
+    # ── HOLD-specific reasons ─────────────────────────────────────────────────
+    if is_hold:
+        reasons.append(
+            "⏸️ <b>No clear edge right now</b> — the model's indicators are mixed or "
+            "conflicting. Entering a trade without a clear edge increases risk unnecessarily."
+        )
+        if rsi is not None and 40 <= rsi <= 60:
+            reasons.append(
+                f"↔️ <b>Momentum is neutral</b> — RSI of {rsi:.0f} sits in the middle "
+                f"zone (40–60), which signals neither buyers nor sellers are in control."
+            )
+        if adx is not None and adx < 20:
+            reasons.append(
+                f"😴 <b>Trend is weak / choppy</b> — ADX of {adx:.0f} is below 20, meaning "
+                f"the market is ranging sideways. Trend-following signals are unreliable here."
+            )
+        if mtf > 0 and mtf < 60:
+            reasons.append(
+                f"🕐 <b>Timeframes are split</b> — only {mtf:.0f}% of the 1h / 4h / daily "
+                f"charts agree on direction. Waiting for alignment reduces false-signal risk."
+            )
+        agents_agree = round((consensus or 0) * 6)
+        if agents_agree < 3:
+            reasons.append(
+                f"🤖 <b>AI models are divided</b> — only {agents_agree} of 6 AI models "
+                f"agree on a direction. The model recommends waiting for clearer consensus."
+            )
+        reasons.append(
+            "💡 <b>What to do</b> — consider watching for a breakout above resistance or "
+            "below support before entering. Keep existing positions; don't add new ones."
+        )
+        # Build and return HOLD card immediately
+        bullet_html = "".join(
+            f'<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04)">'
+            f'<span style="min-width:4px;background:{accent};border-radius:2px;align-self:stretch"></span>'
+            f'<span>{r}</span>'
+            f'</div>'
+            for r in reasons
+        )
+        return f"""
+<div style="background:rgba(20,24,36,0.6);border:1px solid rgba(255,255,255,0.06);
+            border-radius:10px;padding:14px 16px;margin:4px 0 8px 0;font-size:12.5px;
+            color:rgba(200,210,230,0.85);line-height:1.65">
+  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+              letter-spacing:0.8px;margin-bottom:10px">🔍 Why HOLD?</div>
+  {bullet_html}
+</div>"""
 
     # Tooltip wrappers for key jargon — Item 10
     _rsi_tip = tt("RSI", "Relative Strength Index — a momentum indicator (0–100). Above 70 = potentially overbought, below 30 = potentially oversold.")
