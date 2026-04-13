@@ -900,7 +900,7 @@ def inject_css():
     _mode = "add" if _theme == "light" else "remove"
     st.iframe(
         f'<script>try{{window.parent.document.body.classList.{_mode}("light-mode");}}catch(e){{}}</script>',
-        height=0,
+        height=1,
     )
 
 
@@ -919,7 +919,7 @@ def inject_beginner_mode_js(beginner_mode: bool) -> None:
     # st.markdown(<script>) is silently dropped by React's dangerouslySetInnerHTML.
     st.iframe(
         f'<script>try{{window.parent.document.body.classList.{action}("beginner-mode");}}catch(e){{}}</script>',
-        height=0,
+        height=1,
     )
 
 
