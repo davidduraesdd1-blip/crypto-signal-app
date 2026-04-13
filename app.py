@@ -672,6 +672,27 @@ try:
 except Exception:
     pass
 
+# ── AI / API Health Banner ─────────────────────────────────────────────────────
+try:
+    from config import ANTHROPIC_ENABLED as _sg_ai_enabled, ANTHROPIC_API_KEY as _sg_ai_key
+    _sg_ai_key_present = bool(_sg_ai_key)
+    if _sg_ai_enabled and _sg_ai_key_present:
+        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#22c55e", "✅", "Claude AI active"
+    elif _sg_ai_enabled and not _sg_ai_key_present:
+        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#ef4444", "🔴", "Claude AI: key missing"
+    else:
+        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#64748b", "⚫", "Claude AI disabled"
+    st.sidebar.markdown(
+        f"<div style='background:rgba(0,0,0,0.15);border:1px solid {_sg_ai_col}44;"
+        f"border-left:3px solid {_sg_ai_col};border-radius:6px;"
+        f"padding:4px 10px;margin:4px 0;font-size:0.71rem;"
+        f"color:{_sg_ai_col};font-weight:600;'>"
+        f"{_sg_ai_icon} {_sg_ai_txt}</div>",
+        unsafe_allow_html=True,
+    )
+except Exception:
+    pass
+
 # ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
 # Beginner = default; persists across all pages via session_state.
 # beginner_mode kept for backward compat with inject_beginner_mode_js().

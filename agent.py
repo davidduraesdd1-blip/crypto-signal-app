@@ -64,7 +64,7 @@ except ImportError:
 # Once credits are exhausted (HTTP 400 "credit balance") all Claude calls in
 # _node_claude_reason() return "reject" immediately — no API round-trip.
 # Mirrors the same pattern in llm_analysis.py.  Cleared on next app restart.
-_claude_credits_exhausted: bool = not _ANTHROPIC_ENABLED
+_claude_credits_exhausted: bool = False   # only set True when exhaustion is actually detected
 _claude_credits_lock = threading.Lock()
 
 

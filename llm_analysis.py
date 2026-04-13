@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Set True  → all Claude calls return graceful fallback text (no API calls made).
 # Set False → normal operation.
 # To re-enable AI: set ANTHROPIC_ENABLED = True in config.py.
-_llm_credits_exhausted: bool = not ANTHROPIC_ENABLED
+_llm_credits_exhausted: bool = False   # only set True when exhaustion is actually detected
 _llm_credits_lock = threading.Lock()
 
 _CACHE: dict = {}

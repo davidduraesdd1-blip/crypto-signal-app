@@ -14,10 +14,9 @@ ETHERSCAN_API_KEY: str | None = os.environ.get("ETHERSCAN_API_KEY", "")
 ZERION_API_KEY: str | None = os.environ.get("ZERION_API_KEY", "")
 
 # ─── Anthropic / AI master switch ────────────────────────────────────────────
-# Set to True when Anthropic credits are funded and AI features should be active.
-# False = all Claude API calls are skipped; apps show graceful fallback text.
-# To enable: change False → True here (one line, all AI features restore instantly).
-ANTHROPIC_ENABLED: bool = False
+# Reads from ANTHROPIC_ENABLED env var if set; defaults to True so AI features
+# are live when an API key is present. Set env var to "false" to disable.
+ANTHROPIC_ENABLED: bool = os.environ.get("ANTHROPIC_ENABLED", "true").lower() not in ("false", "0", "no")
 
 # ─── LLM Model Constants ──────────────────────────────────────────────────────
 # Centralised model names — update here to change everywhere.
