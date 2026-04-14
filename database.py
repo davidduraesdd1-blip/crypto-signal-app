@@ -2802,7 +2802,7 @@ def get_pnl_summary() -> dict:
     try:
         conn = _get_conn()
         rows = conn.execute(
-            "SELECT pnl_pct, holding_hours FROM pnl_tracking WHERE status='closed'"
+            "SELECT pnl_pct, holding_hours, entry_time, exit_time FROM pnl_tracking WHERE status='closed'"
         ).fetchall()
         open_count = conn.execute(
             "SELECT COUNT(*) FROM pnl_tracking WHERE status='open'"
@@ -2828,17 +2828,59 @@ def get_pnl_summary() -> dict:
         avg_pnl = sum(pnls) / n if n else 0.0
         total   = sum(pnls)
 
-        # Rough annualised return: compound each trade then annualise by average holding period
-        avg_hours = sum(hours) / len(hours) if hours else 24.0
-        avg_hours = max(avg_hours, 0.25)  # guard against near-zero
+        # Annualised return (CAGR-style) — compound factor over actual calendar span.
+        #
+        # BUG FIX: the old formula used avg_hours × n as the time denominator.
+        # With 2 trades held 2.2h each → total_hours=4.4 → years≈0.0005 →
+        # exponent=1/0.0005=2000 → 1.057^2000 ≈ 10^48 (nonsense).
+        #
+        # Correct approach:
+        # 1. Use the ACTUAL calendar span (first entry_time → last exit_time).
+        # 2. Floor the span at 30 days (720h) so a handful of short-term trades
+        #    can't produce astronomical exponents.
+        # 3. Require ≥5 trades for a meaningful estimate; return 0.0 otherwise.
         compound_factor = 1.0
         for p in pnls:
             compound_factor *= (1 + p / 100.0)
-        total_hours = avg_hours * n
-        years = total_hours / 8760.0
-        if years > 0 and compound_factor > 0:
+
+        # Derive actual calendar span from timestamps
+        try:
+            entry_times = [r["entry_time"] for r in rows if r["entry_time"]]
+            exit_times  = [r["exit_time"]  for r in rows if r["exit_time"]]
+            if entry_times and exit_times:
+                from datetime import datetime as _dt
+                def _parse(ts):
+                    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S",
+                                "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f%z"):
+                        try:
+                            return _dt.strptime(ts[:26], fmt[:len(ts)])
+                        except Exception:
+                            pass
+                    return None
+                _first = min(t for t in (_parse(s) for s in entry_times) if t)
+                _last  = max(t for t in (_parse(s) for s in exit_times)  if t)
+                # strip tzinfo for naive arithmetic if mixed
+                if hasattr(_first, "tzinfo") and _first.tzinfo and hasattr(_last, "tzinfo") and _last.tzinfo:
+                    span_hours = (_last - _first).total_seconds() / 3600.0
+                else:
+                    _first = _first.replace(tzinfo=None) if hasattr(_first, "replace") else _first
+                    _last  = _last.replace(tzinfo=None)  if hasattr(_last,  "replace") else _last
+                    span_hours = (_last - _first).total_seconds() / 3600.0
+            else:
+                span_hours = sum(hours) if hours else 24.0
+        except Exception:
+            span_hours = sum(hours) if hours else 24.0
+
+        # Floor at 30 days — prevents exponent blow-up with sparse short-term samples
+        _MIN_SPAN_HOURS = 30 * 24  # 720 h
+        span_hours = max(span_hours, _MIN_SPAN_HOURS)
+        years = span_hours / 8760.0
+
+        if n >= 5 and years > 0 and compound_factor > 0:
             annualized = (compound_factor ** (1.0 / years) - 1) * 100
+            annualized = max(-999.9, min(9999.9, annualized))  # hard cap for display
         else:
+            # Too few trades for a reliable annualized figure
             annualized = 0.0
 
         return {

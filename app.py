@@ -6199,11 +6199,15 @@ def page_backtest():
                         f"{_pnl_sum.get('avg_pnl_pct', 0):+.2f}%",
                         help="Mean P&L per closed trade",
                     )
-                    _pnl_c4.metric(
-                        "Est. Annualised Return",
-                        f"{_pnl_sum.get('annualized_return_pct', 0):+.1f}%",
-                        help="Rough CAGR-style estimate based on average holding period",
+                    _ann_pct = _pnl_sum.get("annualized_return_pct", 0)
+                    _ann_n   = _pnl_sum.get("total_trades", 0)
+                    # Show N/A when < 5 trades — CAGR is statistically unreliable below that threshold
+                    _ann_val = f"{_ann_pct:+.1f}%" if _ann_n >= 5 else "N/A"
+                    _ann_help = (
+                        "CAGR over the actual calendar span of all closed trades, "
+                        "floored at 30 days. Requires ≥5 closed trades to display."
                     )
+                    _pnl_c4.metric("Est. Annualised Return", _ann_val, help=_ann_help)
                     _pnl_c5, _pnl_c6, _pnl_c7 = st.columns(3)
                     _pnl_c5.metric("Best Trade", f"{_pnl_sum.get('best_trade_pct', 0):+.2f}%")
                     _pnl_c6.metric("Worst Trade", f"{_pnl_sum.get('worst_trade_pct', 0):+.2f}%")
