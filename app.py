@@ -3002,12 +3002,14 @@ def page_dashboard():
                         except (ValueError, TypeError):
                             _rsi_str = str(_rsi_raw)
 
+                        _adx_raw = td.get("adx")
+                        _adx_str = f"{_adx_raw:.1f}" if isinstance(_adx_raw, (int, float)) else "N/A"
                         _row = {
                             "Timeframe":       _TF_FULL.get(tf, tf),
                             "Signal":          f"{_td_shp} {_td_dir}",
                             "Confidence":      "—" if _no_data else f"{_td_conf:.0f}%",
                             "Heat (RSI)":      _rsi_str,
-                            "Trend (ADX)":     td.get("adx", "N/A"),
+                            "Trend (ADX)":     _adx_str,
                             "Direction":       td.get("supertrend", "N/A"),
                             "Market Mode":     _ui.regime_label(td.get("regime", "")),
                         }
