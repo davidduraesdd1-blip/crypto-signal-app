@@ -3317,13 +3317,15 @@ def run_feedback_loop():
                 f"CONCEPT DRIFT DETECTED: 30d win rate {drift['win_rate_30d']:.1%} vs "
                 f"90d win rate {drift['win_rate_90d']:.1%} "
                 f"(ratio={drift['ratio']:.2f} < threshold 0.75). "
-                f"Triggering Optuna re-optimization on BTC/USDT 1h."
+                f"Drift flagged — Optuna re-optimization skipped in background thread "
+                f"(would block Tornado for 5-10 min). Flag stored; UI can trigger manually."
             )
-            try:
-                run_optuna_weight_optimization(n_trials=30, pair='BTC/USDT', tf='1h')
-                logging.info("DRIFT: Optuna re-optimization complete.")
-            except Exception as opt_e:
-                logging.warning(f"DRIFT: Optuna re-optimization failed: {opt_e}")
+            # PERF-503: Do NOT run Optuna in the feedback background thread.
+            # run_optuna_weight_optimization() fetches ~500 OHLCV rows + runs 30 trial
+            # backtests — typically 5-10 minutes of CPU+IO in a daemon thread. This held
+            # the GIL long enough to block Streamlit's health check and caused 503s.
+            # Drift is stored in _last_drift_result for the UI to surface a warning;
+            # the user can trigger manual re-optimization from the Performance tab.
     except Exception as drift_e:
         logging.warning(f"Drift detection failed: {drift_e}")
 
