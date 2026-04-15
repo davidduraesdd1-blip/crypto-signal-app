@@ -243,6 +243,8 @@ h3 {
    Metric values (1rem+) and page titles kept large intentionally.
    Captions/badges kept at 0.75rem for visual hierarchy.
 ═══════════════════════════════════════════════ */
+[data-testid="stMarkdownContainer"] div,
+[data-testid="stMarkdownContainer"] span { font-size: 0.85rem; }
 [data-testid="stMain"] label, [data-testid="stMain"] label p, [data-testid="stMain"] label span { font-size: 0.85rem !important; }
 [data-testid="stMain"] input, [data-testid="stMain"] textarea { font-size: 0.85rem !important; }
 [data-testid="stMain"] [data-baseweb="select"] span, [data-testid="stMain"] [data-baseweb="select"] div, [data-testid="stMain"] [data-baseweb="select"] input { font-size: 0.85rem !important; }
@@ -1894,14 +1896,14 @@ def top_movers_card_html(gainers: list, losers: list) -> str:
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">'
             f'<span style="font-weight:600;color:#e2e8f0;font-size:0.88rem;">{sym}</span>'
-            f'<span style="color:#94a3b8;font-size:0.78rem;">{price_fmt}</span>'
+            f'<span style="color:#94a3b8;font-size:0.85rem;">{price_fmt}</span>'
             f'<span style="color:{color};font-weight:700;font-size:0.88rem;">'
             f'{arrow} {sign}{pct:.2f}%</span>'
             f'</div>'
         )
 
-    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:#64748b;font-size:0.82rem;padding:8px 0;">No data</div>'
-    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:#64748b;font-size:0.82rem;padding:8px 0;">No data</div>'
+    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:#64748b;font-size:0.85rem;padding:8px 0;">No data</div>'
+    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:#64748b;font-size:0.85rem;padding:8px 0;">No data</div>'
 
     return f"""
 <div style="
@@ -1983,7 +1985,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
             val = components.get(k, 0) or 0
             rows.append(
                 f'<div style="display:flex;justify-content:space-between;'
-                f'font-size:0.78rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
+                f'font-size:0.85rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
                 f'<span style="color:#94a3b8;">{lbl}</span>'
                 f'<span style="color:{color};font-weight:600;">{val:.0f}</span>'
                 f'</div>'
@@ -2011,7 +2013,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
       <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Liquidation Cascade Risk</span>
     </div>
     <span style="background:{bg};color:{color};border:1px solid {color}66;border-radius:20px;
-                 padding:3px 10px;font-size:0.78rem;font-weight:700;">{icon} {risk_level}</span>
+                 padding:3px 10px;font-size:0.85rem;font-weight:700;">{icon} {risk_level}</span>
   </div>
 
   <!-- Score gauge bar -->
@@ -2021,7 +2023,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
                 transition:width 0.5s ease;"></div>
   </div>
 
-  <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.82rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.85rem;">
     <span style="color:{color};font-weight:700;font-size:1.1rem;">{score:.0f}<span style="font-size:0.75rem;color:#94a3b8;">/100</span></span>
     <span style="color:#94a3b8;">{label}</span>
   </div>
@@ -2062,7 +2064,7 @@ def signal_accuracy_badge_html(win_rate: float, sample_size: int,
         f'<span title="Historical accuracy of{suffix} signals over last {sample_size} trades" '
         f'style="display:inline-flex;align-items:center;gap:5px;'
         f'background:rgba(15,23,42,0.8);border:1px solid {color}44;border-radius:20px;'
-        f'padding:3px 9px;font-size:0.76rem;cursor:help;">'
+        f'padding:3px 9px;font-size:0.85rem;cursor:help;">'
         f'<span style="color:{color};font-weight:700;">{pct:.0f}%</span>'
         f'<span style="color:#94a3b8;">{label} · {n_text}</span>'
         f'</span>'
@@ -2098,7 +2100,7 @@ def regime_banner_html(regime: str, hurst: float | None = None,
         h_label = "Trending" if hurst > 0.55 else ("Mean-Reverting" if hurst < 0.45 else "Random Walk")
         hurst_html = (
             f'<span style="background:rgba(255,255,255,0.05);border-radius:8px;'
-            f'padding:3px 8px;font-size:0.78rem;margin-left:10px;">'
+            f'padding:3px 8px;font-size:0.85rem;margin-left:10px;">'
             f'Hurst: <span style="color:{h_color};font-weight:700;">{hurst:.2f}</span>'
             f' <span style="color:#64748b;">({h_label})</span></span>'
         )
@@ -2107,7 +2109,7 @@ def regime_banner_html(regime: str, hurst: float | None = None,
     if squeeze_active:
         squeeze_html = (
             '<span style="background:rgba(255,215,64,0.15);border:1px solid #ffd74066;'
-            'border-radius:8px;padding:3px 8px;font-size:0.78rem;margin-left:10px;'
+            'border-radius:8px;padding:3px 8px;font-size:0.85rem;margin-left:10px;'
             'animation:pulse 1.5s ease-in-out infinite;">'
             '🗜 <span style="color:#ffd740;font-weight:700;">SQUEEZE</span>'
             ' <span style="color:#94a3b8;">— breakout imminent</span></span>'
@@ -2128,7 +2130,7 @@ def regime_banner_html(regime: str, hurst: float | None = None,
 ">
   <span style="font-size:1.2rem;">{icon}</span>
   <span style="color:{color};font-weight:700;font-size:0.95rem;">{title}</span>
-  <span style="color:#64748b;font-size:0.82rem;">— {advice}</span>
+  <span style="color:#64748b;font-size:0.85rem;">— {advice}</span>
   {hurst_html}
   {squeeze_html}
 </div>
@@ -2156,7 +2158,7 @@ def position_size_card_html(recommended_pct: float, rationale: str,
         size_color  = "#ff5252"
         status_html = (
             '<div style="background:rgba(255,82,82,0.15);border:1px solid #ff525266;'
-            'border-radius:8px;padding:8px 12px;margin-top:10px;font-size:0.82rem;">'
+            'border-radius:8px;padding:8px 12px;margin-top:10px;font-size:0.85rem;">'
             '🚨 <span style="color:#ff5252;font-weight:700;">Circuit Breaker ACTIVE</span>'
             ' — all new signals suppressed until daily/weekly loss limit resets.</div>'
         )
@@ -2167,7 +2169,7 @@ def position_size_card_html(recommended_pct: float, rationale: str,
         pnl_color   = "#00e676" if daily_pnl_pct >= 0 else "#ff5252"
         pnl_sign    = "+" if daily_pnl_pct >= 0 else ""
         status_html = (
-            f'<div style="font-size:0.8rem;color:#94a3b8;margin-top:8px;">'
+            f'<div style="font-size:0.85rem;color:#94a3b8;margin-top:8px;">'
             f'Today\'s P&L: <span style="color:{pnl_color};font-weight:600;">'
             f'{pnl_sign}{daily_pnl_pct:.2f}%</span>'
             f'</div>'
@@ -2198,7 +2200,7 @@ def position_size_card_html(recommended_pct: float, rationale: str,
     <div style="width:{bar_pct}%;height:100%;border-radius:6px;
                 background:linear-gradient(90deg,#6366f1,{size_color});"></div>
   </div>
-  <div style="color:#94a3b8;font-size:0.8rem;">{rationale}</div>
+  <div style="color:#94a3b8;font-size:0.85rem;">{rationale}</div>
   {status_html}
 </div>
 """
@@ -2236,19 +2238,19 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
         rows.append(f"""
 <div style="margin-bottom:8px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-    <span style="font-size:0.82rem;color:#cbd5e1;font-weight:500;">{name}</span>
+    <span style="font-size:0.85rem;color:#cbd5e1;font-weight:500;">{name}</span>
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="color:{color};font-size:0.8rem;font-weight:700;">{icon} {signal}</span>
+      <span style="color:{color};font-size:0.85rem;font-weight:700;">{icon} {signal}</span>
       <span style="color:#64748b;font-size:0.75rem;">contrib: <span style="color:{color};">{c_sign}{contrib:.1f}</span></span>
     </div>
   </div>
   <div style="background:rgba(255,255,255,0.05);border-radius:4px;height:4px;overflow:hidden;">
     <div style="width:{bar_w}%;height:100%;border-radius:4px;background:{color};opacity:0.7;"></div>
   </div>
-  <div style="text-align:right;font-size:0.7rem;color:#475569;margin-top:1px;">weight {weight:.0%}</div>
+  <div style="text-align:right;font-size:0.85rem;color:#475569;margin-top:1px;">weight {weight:.0%}</div>
 </div>""")
 
-    rows_html = "".join(rows) if rows else '<div style="color:#64748b;font-size:0.82rem;">No agent data</div>'
+    rows_html = "".join(rows) if rows else '<div style="color:#64748b;font-size:0.85rem;">No agent data</div>'
 
     return f"""
 <div style="
@@ -2298,7 +2300,7 @@ _PRICE_TICKER_CSS = """
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.82rem;
+  font-size:0.85rem;
   font-weight: 600;
 }
 </style>
@@ -3493,7 +3495,7 @@ def signal_badge_html(direction: str, label: str = "") -> str:
     return (
         f"<span style='display:inline-flex;align-items:center;gap:4px;"
         f"background:{_bg};border:1px solid {_border};border-radius:6px;"
-        f"padding:2px 8px;font-size:0.72rem;font-weight:700;color:{_txt};'>"
+        f"padding:2px 8px;font-size:0.85rem;font-weight:700;color:{_txt};'>"
         f"{_shape} {_display}</span>"
     )
 
@@ -3577,7 +3579,7 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
                 f"letter-spacing:0.8px;margin-bottom:4px'>{_period}</div>"
                 f"<div style='font-size:1.9rem;font-weight:800;color:{_chex};"
                 f"font-family:var(--font-mono)'>{_val:.0f}</div>"
-                f"<div style='font-size:0.70rem;color:{_chex};margin-top:2px'>{_lbl}</div>"
+                f"<div style='font-size:0.85rem;color:{_chex};margin-top:2px'>{_lbl}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )

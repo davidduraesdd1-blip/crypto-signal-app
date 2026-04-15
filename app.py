@@ -697,7 +697,7 @@ try:
     st.sidebar.markdown(
         f"<div style='background:rgba(0,0,0,0.15);border:1px solid {_sg_ai_col}44;"
         f"border-left:3px solid {_sg_ai_col};border-radius:6px;"
-        f"padding:4px 10px;margin:4px 0;font-size:0.71rem;"
+        f"padding:4px 10px;margin:4px 0;font-size:0.85rem;"
         f"color:{_sg_ai_col};font-weight:600;'>"
         f"{_sg_ai_icon} {_sg_ai_txt}</div>",
         unsafe_allow_html=True,
@@ -1702,7 +1702,7 @@ def page_dashboard():
                         f"<span style='color:{_sg_c};font-weight:700;'>{_sg_shape} Market Environment</span>"
                         f"<span style='color:#94a3b8;font-size:0.85rem;margin-left:12px;'>{_sg_summary}</span>"
                         f"<span style='margin-left:16px;background:{_sg_conf_c}22;color:{_sg_conf_c};"
-                        f"font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:10px;"
+                        f"font-size:0.85rem;font-weight:700;padding:2px 8px;border-radius:10px;"
                         f"border:1px solid {_sg_conf_c}44;'>{_sg_conf} CONFIDENCE</span>"
                         f"</div>"
                     )
@@ -1712,11 +1712,11 @@ def page_dashboard():
                         f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
                         f"border-left:4px solid {_sg_c};border-radius:8px;padding:8px 16px;margin:8px 0;"
                         f"display:flex;align-items:center;gap:20px;flex-wrap:wrap;'>"
-                        f"<div><span style='color:#64748b;font-size:0.72rem;text-transform:uppercase;'>Composite Signal</span>"
+                        f"<div><span style='color:#64748b;font-size:0.85rem;text-transform:uppercase;'>Composite Signal</span>"
                         f"<div style='color:{_sg_c};font-weight:800;font-size:0.95rem;'>{_sg_shape} {_sg_signal}{_gate_t}</div>"
                         f"<div style='color:#64748b;font-size:0.75rem;'>Score {_sgf(_sg_score)} &nbsp;·&nbsp; "
                         f"<span style='color:{_sg_conf_c};font-weight:600;'>{_sg_conf} CONFIDENCE</span></div></div>"
-                        f"<div style='color:#475569;font-size:0.78rem;border-left:1px solid #1e293b;padding-left:16px;'>"
+                        f"<div style='color:#475569;font-size:0.85rem;border-left:1px solid #1e293b;padding-left:16px;'>"
                         f"<div>TA <span style='color:{'#22c55e' if _ta_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_ta_s)}</span>"
                         f" · Macro <span style='color:{'#22c55e' if _mac_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_mac_s)}</span>"
                         f" · Sentiment <span style='color:{'#22c55e' if _sent_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_sent_s)}</span>"
@@ -1733,18 +1733,18 @@ def page_dashboard():
                         _xbar_c = "#22c55e" if _xwc >= 0 else "#ef4444"
                         _xai_rows += (
                             f"<div style='display:flex;align-items:center;gap:10px;margin:5px 0;'>"
-                            f"<div style='width:90px;font-size:0.78rem;color:#cbd5e1;'>{_xn}</div>"
-                            f"<div style='width:40px;font-size:0.7rem;color:#64748b;text-align:right;'>{_xw*100:.0f}%</div>"
+                            f"<div style='width:90px;font-size:0.85rem;color:#cbd5e1;'>{_xn}</div>"
+                            f"<div style='width:40px;font-size:0.85rem;color:#64748b;text-align:right;'>{_xw*100:.0f}%</div>"
                             f"<div style='flex:1;background:#1e293b;border-radius:3px;height:14px;overflow:hidden;'>"
                             f"<div style='width:{_xbar_w:.0f}%;background:{_xbar_c};height:100%;border-radius:3px;'></div></div>"
-                            f"<div style='width:55px;font-size:0.78rem;font-weight:600;color:{_xbar_c};text-align:right;'>{_xwc*100:+.1f}%</div>"
+                            f"<div style='width:55px;font-size:0.85rem;font-weight:600;color:{_xbar_c};text-align:right;'>{_xwc*100:+.1f}%</div>"
                             f"</div>"
                         )
                     _sg_note = ("Each bar shows how much that factor pushed the signal bullish (+) or bearish (−)."
                                 if _sg_level_val == "beginner"
                                 else f"Weighted contributions · regime: {_csig_sg.get('regime', 'N/A')} · weights are regime-adjusted.")
                     st.html(f"<div style='padding:4px 0 8px;'>"
-                            f"<div style='font-size:0.72rem;color:#64748b;margin-bottom:8px;'>{_sg_note}</div>"
+                            f"<div style='font-size:0.85rem;color:#64748b;margin-bottom:8px;'>{_sg_note}</div>"
                             f"{_xai_rows}</div>")
         except Exception as _sg_cs_err:
             logger.debug("[App] composite signal banner skipped: %s", _sg_cs_err)
@@ -2470,13 +2470,13 @@ def page_dashboard():
             _tf_bar_w = int(min(100, _tfpc))
             _tf_rows_html += (
                 f"<tr>"
-                f"<td style='padding:3px 10px 3px 4px;color:#94a3b8;font-size:0.79rem;white-space:nowrap'>{_tf_labels.get(_tf,'')}</td>"
-                f"<td style='padding:3px 8px;color:{_tf_color};font-weight:700;font-size:0.82rem'>{_tf_shape} {_tfd}</td>"
+                f"<td style='padding:3px 10px 3px 4px;color:#94a3b8;font-size:0.85rem;white-space:nowrap'>{_tf_labels.get(_tf,'')}</td>"
+                f"<td style='padding:3px 8px;color:{_tf_color};font-weight:700;font-size:0.85rem'>{_tf_shape} {_tfd}</td>"
                 f"<td style='padding:3px 8px;min-width:90px'>"
                 f"<div style='background:rgba(255,255,255,0.06);border-radius:4px;height:8px;overflow:hidden'>"
                 f"<div style='background:{_tf_color};width:{_tf_bar_w}%;height:100%;border-radius:4px'></div>"
                 f"</div></td>"
-                f"<td style='padding:3px 4px;color:{_tf_color};font-size:0.78rem'>{int(_tfpc)}%</td>"
+                f"<td style='padding:3px 4px;color:{_tf_color};font-size:0.85rem'>{int(_tfpc)}%</td>"
                 f"</tr>"
             )
 
@@ -2505,8 +2505,8 @@ def page_dashboard():
             elif _cycle_score >= 35:  _cycle_text, _cycle_color = f"⏳ NEUTRAL TIMING — Cycle Score {_cycle_score}/100 (Wait)", "#f59e0b"
             elif _cycle_score >= 20:  _cycle_text, _cycle_color = f"⚠️ CAUTION — Cycle Score {_cycle_score}/100 (Top Zone)", "#f97316"
             else:                     _cycle_text, _cycle_color = f"🛑 POOR TIMING — Cycle Score {_cycle_score}/100 (Extreme Top)", "#ef4444"
-            _cycle_row = (f"<tr><td style='padding:6px 10px 6px 4px;color:#64748b;font-size:0.79rem;font-weight:600'>CYCLE TIMING</td>"
-                          f"<td colspan='3' style='padding:6px 4px;color:{_cycle_color};font-size:0.82rem;font-weight:700'>{_cycle_text}</td></tr>")
+            _cycle_row = (f"<tr><td style='padding:6px 10px 6px 4px;color:#64748b;font-size:0.85rem;font-weight:600'>CYCLE TIMING</td>"
+                          f"<td colspan='3' style='padding:6px 4px;color:{_cycle_color};font-size:0.85rem;font-weight:700'>{_cycle_text}</td></tr>")
         else:
             _cycle_row = ""
 
@@ -2518,21 +2518,21 @@ def page_dashboard():
             f"<div style='font-size:2.2rem;font-weight:900;color:{_d_color};line-height:1'>{_d_shape} {_d_label}</div>"
             f"<div style='background:{_d_color}22;border:1px solid {_d_color}66;border-radius:20px;padding:4px 14px;"
             f"color:{_d_color};font-size:0.85rem;font-weight:700'>{_conf_10}/10 strength · {conf:.0f}%</div>"
-            f"<div style='color:#64748b;font-size:0.8rem;margin-left:auto'>{pair} · {bias}</div>"
+            f"<div style='color:#64748b;font-size:0.85rem;margin-left:auto'>{pair} · {bias}</div>"
             f"</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>"
             f"<div style='background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px'>"
-            f"<div style='color:#475569;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Entry Zone</div>"
+            f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Entry Zone</div>"
             f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>${entry:,.4f}</div>" if entry else
             f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>—</div>"
             f"</div>"
             f"<div style='background:rgba(239,68,68,0.06);border-radius:8px;padding:10px 14px'>"
-            f"<div style='color:#475569;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Stop Loss</div>"
+            f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Stop Loss</div>"
             f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>${stop:,.4f}</div>" if stop else
             f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>—</div>"
             f"</div>"
             f"<div style='background:rgba(34,197,94,0.06);border-radius:8px;padding:10px 14px'>"
-            f"<div style='color:#475569;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Take Profit</div>"
+            f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Take Profit</div>"
             f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>${_tp1_act:,.4f}</div>" if _tp1_act else
             f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>—</div>"
             f"</div>"
@@ -2540,7 +2540,7 @@ def page_dashboard():
             f"<div style='font-size:0.75rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px'>Timeframe Breakdown</div>"
             f"<table style='width:100%;border-collapse:collapse'>"
             f"{_tf_rows_html}"
-            f"<tr><td colspan='4' style='padding:6px 4px;color:{_mtf_vc};font-size:0.82rem;font-weight:700;border-top:1px solid rgba(255,255,255,0.06)'>{_mtf_verdict}</td></tr>"
+            f"<tr><td colspan='4' style='padding:6px 4px;color:{_mtf_vc};font-size:0.85rem;font-weight:700;border-top:1px solid rgba(255,255,255,0.06)'>{_mtf_verdict}</td></tr>"
             f"{_cycle_row}"
             f"</table>"
             f"</div>",
