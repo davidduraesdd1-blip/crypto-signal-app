@@ -87,7 +87,8 @@ def _get_interval() -> int:
     try:
         cfg = _alerts.load_alerts_config()
         return int(cfg.get("autoscan_interval_minutes", DEFAULT_INTERVAL_MINUTES))
-    except Exception:
+    except Exception as e:
+        logger.debug("[Scheduler] Could not read interval from alerts config: %s", e)
         return DEFAULT_INTERVAL_MINUTES
 
 
