@@ -3512,17 +3512,20 @@ def render_what_this_means(message: str, title: str = "What does this mean for m
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
 def _fetch_fng_30d_avg() -> float:
     """Fetch 30-day average Fear & Greed from alternative.me. Cached 60 min."""
-    import requests as _req
-    _r = _req.get(
-        "https://api.alternative.me/fng/?limit=30",
-        timeout=6,
-        headers={"Accept": "application/json"},
-    )
-    if _r.status_code == 200:
-        _data = _r.json().get("data", [])
-        _vals = [int(d["value"]) for d in _data if "value" in d]
-        if _vals:
-            return sum(_vals) / len(_vals)
+    try:
+        import requests as _req
+        _r = _req.get(
+            "https://api.alternative.me/fng/?limit=30",
+            timeout=6,
+            headers={"Accept": "application/json"},
+        )
+        if _r.status_code == 200:
+            _data = _r.json().get("data", [])
+            _vals = [int(d["value"]) for d in _data if "value" in d]
+            if _vals:
+                return sum(_vals) / len(_vals)
+    except Exception as _fng30_err:
+        logger.debug("[UI] FNG 30d avg fetch failed: %s", _fng30_err)
     return 50.0
 
 
@@ -3540,8 +3543,8 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
         _hist = _fg.get("history_7d", [])
         _vals7 = [int(h["value"]) for h in _hist if "value" in h]
         _avg7  = sum(_vals7) / max(1, len(_vals7)) if _vals7 else float(_cur)
-    except Exception:
-        pass
+    except Exception as _fng_err:
+        logger.debug("[UI] Fear & Greed 7d fetch failed: %s", _fng_err)
 
     # 30-day average: cached API call (1-hour TTL) — was uncached, hitting API on every rerun
     try:
@@ -4355,8 +4358,10 @@ def render_liquidation_overlay_panel(results: list, user_level: str = "beginner"
     try:
         import websocket_feeds as _ws
         _ws_prices = _ws.get_all_prices()
-    except Exception:
-        pass
+    except ImportError:
+        pass  # websocket-client optional
+    except Exception as _ws_liq_err:
+        logger.debug("[UI] WS prices for liquidation heatmap failed: %s", _ws_liq_err)
 
     if liq_data is None:
         try:
@@ -4645,8 +4650,8 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
             f'</div>',
             unsafe_allow_html=True,
         )
-    except Exception:
-        pass
+    except Exception as _macro_adj_err:
+        logger.debug("[UI] macro adjustment banner render failed: %s", _macro_adj_err)
 
 
 def render_what_this_means_sg(message: str, title: str = "What does this mean for me?") -> None:

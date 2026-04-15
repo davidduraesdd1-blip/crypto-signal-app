@@ -349,8 +349,8 @@ def _save_alerts_config_and_clear(cfg: dict) -> None:
     _alerts.save_alerts_config(cfg)
     try:
         _cached_alerts_config.clear()
-    except Exception:
-        pass
+    except Exception as _clr_err:
+        logger.debug("[App] alerts config cache clear failed: %s", _clr_err)
 
 
 # ── PERF: @st.cache_data wrappers for slow external module calls ──────────────
@@ -644,10 +644,10 @@ if not globals().get("_OHLCV_PREWARM_STARTED"):
                             _pw_ex, _pw_pair, _pw_tf,
                             limit=model._TF_OHLCV_LIMIT.get(_pw_tf, model.SCAN_OHLCV_LIMIT),
                         )
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as _pw_pair_err:
+                        logging.debug("[Prewarm] %s/%s fetch failed: %s", _pw_pair, _pw_tf, _pw_pair_err)
+        except Exception as _pw_err:
+            logging.debug("[Prewarm] OHLCV prewarm thread failed: %s", _pw_err)
     threading.Thread(target=_ohlcv_prewarm, daemon=True, name="ohlcv-prewarm").start()
 
 # Auto-start autonomous agent if enabled in config (idempotent)
@@ -681,8 +681,8 @@ try:
             '📄 Paper Mode — Simulated trades only</span></div>',
             unsafe_allow_html=True,
         )
-except Exception:
-    pass
+except Exception as _mode_badge_err:
+    logger.debug("[App] paper/live mode badge render failed: %s", _mode_badge_err)
 
 # ── AI / API Health Banner ─────────────────────────────────────────────────────
 try:
@@ -702,8 +702,8 @@ try:
         f"{_sg_ai_icon} {_sg_ai_txt}</div>",
         unsafe_allow_html=True,
     )
-except Exception:
-    pass
+except Exception as _ai_banner_err:
+    logger.debug("[App] AI health banner render failed: %s", _ai_banner_err)
 
 # ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
 # Beginner = default; persists across all pages via session_state.
@@ -783,13 +783,13 @@ if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload 
         ]:
             try:
                 _fn.clear()
-            except Exception:
-                pass
+            except Exception as _fc_err:
+                logger.debug("[App] cache clear failed for %s: %s", _fn, _fc_err)
     # Also clear module-level cache dicts in data_feeds — not covered by st.cache_data.clear()
     try:
         data_feeds.clear_all_module_caches()
-    except Exception:
-        pass
+    except Exception as _df_clr_err:
+        logger.debug("[App] data_feeds module cache clear failed: %s", _df_clr_err)
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -1269,8 +1269,8 @@ def page_dashboard():
                 })
         if _ticker_prices:
             st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
-    except Exception:
-        pass
+    except Exception as _ticker_err:
+        logger.debug("[App] price ticker strip render failed: %s", _ticker_err)
 
     # FNG chip + scan controls
     col_btn, col_fng, col_ts = st.columns([2, 2, 4])
@@ -1482,8 +1482,8 @@ def page_dashboard():
             try:
                 import datetime as _dt
                 _scan_ts_unix = _dt.datetime.fromisoformat(str(_scan_ts_str)).timestamp()
-            except Exception:
-                pass
+            except Exception as _ts_parse_err:
+                logging.debug("[UI] scan timestamp parse failed: %s", _ts_parse_err)
         st.markdown(
             _ui.freshness_dot_html(_scan_ts_unix, max_age_sec=900, label="Scan data"),
             unsafe_allow_html=True,
@@ -1651,8 +1651,8 @@ def page_dashboard():
       {f'<div style="font-size:10px;color:#4b5563;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
     </div>
     """, unsafe_allow_html=True)
-        except Exception:
-            pass
+        except Exception as _sk3_err:
+            logger.debug("[App] options IV skew card render failed: %s", _sk3_err)
 
         # ── S25: Macro Intelligence — always-visible scorecard ───────────────────
         try:
@@ -2639,8 +2639,8 @@ def page_dashboard():
                         _al  = float(abs(_losses_k['pnl_pct'].mean())) / 100
                         _kf  = _risk_mod.compute_kelly_fraction(_wr, _aw, _al, fraction=0.25)
                         _kelly_pos_pct = _kf.get("recommended_position_pct", pos_pct)
-        except Exception:
-            pass
+        except Exception as _kelly_ui_err:
+            logger.debug("[App] Kelly position size widget failed: %s", _kelly_ui_err)
         bot_cols[2].metric(
             "Suggested Trade Size",
             f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "N/A",
@@ -3036,8 +3036,8 @@ def page_dashboard():
                     ),
                     unsafe_allow_html=True,
                 )
-        except Exception:
-            pass
+        except Exception as _casc_err:
+            logger.debug("[App] cascade risk card render failed: %s", _casc_err)
 
         # ── News Sentiment ─────────────────────────────────────────────────────────
         if _news_mod is not None:
@@ -3074,8 +3074,8 @@ def page_dashboard():
                         _wc3.metric("Large Whales", _whale.get("large_whale_count", 0))
                         _total_usd = _whale.get("total_usd", 0)
                         _wc4.metric("Total Volume", f"${_total_usd/1e6:.1f}M" if _total_usd >= 1e6 else f"${_total_usd:,.0f}")
-            except Exception:
-                pass
+            except Exception as _whale_widget_err:
+                logging.debug("[UI] Whale tracker widget render failed: %s", _whale_widget_err)
 
         # ── ML Price Prediction ─────────────────────────────────────────────────────
         # PERF-22: run get_enriched_df() in a background thread with 10s timeout so
@@ -3174,10 +3174,10 @@ def page_dashboard():
                                     f'</div>',
                                     unsafe_allow_html=True,
                                 )
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _hmm_inner_err:
+                        logger.debug("[App] HMM regime bar render failed: %s", _hmm_inner_err)
+            except Exception as _hmm_outer_err:
+                logger.debug("[App] HMM regime section failed: %s", _hmm_outer_err)
 
         # ── #61 Signal Story — 1-2 plain English sentences below the signal card ──
         if _llm is not None:
@@ -3210,8 +3210,8 @@ def page_dashboard():
                         f'</div>',
                         unsafe_allow_html=True,
                     )
-            except Exception:
-                pass
+            except Exception as _story_err:
+                logger.debug("[App] signal story render failed: %s", _story_err)
 
         # APP-30: sanitise pair for widget keys — '/' in key crashes Streamlit's
         # session-state serialiser (_check_serializable KeyError on FLR/USDT etc.)
@@ -3383,8 +3383,8 @@ def page_dashboard():
                         showlegend=False,
                     )
                     st.plotly_chart(_ch_fig, width='stretch', key=f"conf_hist_{_pk}")
-            except Exception:
-                pass
+            except Exception as _conf_hist_err:
+                logger.debug("[App] confidence history chart failed: %s", _conf_hist_err)
 
         st.markdown("---")
 
@@ -3592,8 +3592,8 @@ def page_dashboard():
                             {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
                             for i, j in zip(_rows_idx, _cols_idx)
                         ]
-                    except Exception:
-                        pass
+                    except Exception as _corr_rows_err:
+                        logger.debug("[App] correlation high-pairs list failed: %s", _corr_rows_err)
                     if high_corr_rows:
                         st.dataframe(pd.DataFrame(high_corr_rows), width='stretch', hide_index=True)
                     else:
@@ -4008,8 +4008,8 @@ def _start_scan():
     try:
         if os.path.exists(_SCAN_CACHE_FILE):
             os.remove(_SCAN_CACHE_FILE)
-    except Exception:
-        pass
+    except Exception as _cache_del_err:
+        logger.debug("[App] scan cache file delete failed (non-fatal): %s", _cache_del_err)
     t = threading.Thread(target=_run_scan_thread, daemon=True)
     t.start()
 
@@ -5637,8 +5637,8 @@ def page_backtest():
                             _dur = datetime.now(_tz.utc) - _et.to_pydatetime()
                             _h, _rem = divmod(int(_dur.total_seconds()), 3600)
                             _dur_str = f"{_h}h {_rem // 60}m"
-                        except Exception:
-                            pass
+                        except Exception as _dur_err:
+                            logger.debug("[App] position duration parse failed: %s", _dur_err)
 
                     # Render position card
                     _pnl_sign  = "+" if _pnl_pct >= 0 else ""
@@ -7417,8 +7417,8 @@ def page_agent():
             )
             _ui.section_header("Rolling Win Rate", "7-day rolling window over past 30 days")
             st.plotly_chart(_wr_fig, width='stretch')
-    except Exception:
-        pass
+    except Exception as _wr_err:
+        logger.debug("[App] agent rolling win rate chart failed: %s", _wr_err)
 
     st.markdown("---")
     _ui.section_header("Recent Agent Decisions", "Last 200 cycles from agent_log table")

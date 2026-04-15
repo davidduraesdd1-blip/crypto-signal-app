@@ -10,7 +10,7 @@ import numpy as np
 import json
 import requests
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import time
 import os
 import logging
@@ -2121,10 +2121,12 @@ def _enrich_df(df, tf: str = None):
     df['macd'] = ema_fast - ema_slow
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
-    # RSI
+    # RSI — Wilder's EWM smoothing (com=13 = alpha=1/14) matches compute_rsi() and
+    # top_bottom_detector._rsi(). The old rolling(14).mean() gave slightly different
+    # values and caused signal inconsistency between _enrich_df() and standalone RSI.
     delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = -delta.where(delta < 0, 0).rolling(14).mean()
+    gain = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
     df['rsi'] = 100 - (100 / (1 + gain / loss.replace(0, 1e-10).fillna(1e-10)))  # CM-16: NaN loss → neutral
     df['rsi'] = df['rsi'].fillna(50)  # BUG-DC01: NaN during 14-bar warmup → neutral 50
     # Bollinger
@@ -2148,20 +2150,23 @@ def _enrich_df(df, tf: str = None):
     df['senkou_span_b'] = (df['high'].rolling(45).max() + df['low'].rolling(45).min()) / 2  # 45 bars (~7.5d on 4H) — tighter than equity 52-period for crypto's faster cycles
     # ATR + ADX (PERF-07 / BUG-R26: compute TR once, derive both ATR and ADX from it so
     # calculate_signal_confidence reads df['atr'] and df['adx'] without re-computing)
+    # Wilder's EWM (com=13) is the correct smoothing for both ATR and ADX per Wilder (1978).
+    # The old rolling(14).mean() gives different values on short bars and doesn't match
+    # compute_atr() which also uses EWM (com=13). Using EWM throughout ensures consistency.
     _tr = pd.concat([df['high'] - df['low'],
                      (df['high'] - df['close'].shift()).abs(),
                      (df['low'] - df['close'].shift()).abs()], axis=1).max(axis=1)
-    _atr = _tr.rolling(14).mean()
+    _atr = _tr.ewm(com=13, adjust=False).mean()
     df['atr'] = _atr  # PERF-07: was missing — caused fallback compute_atr() on every signal calc
     _up   = df['high'] - df['high'].shift()
     _down = df['low'].shift() - df['low']
     _pdm  = pd.Series(np.where((_up > _down) & (_up > 0), _up, 0), index=df.index)
     _mdm  = pd.Series(np.where((_down > _up) & (_down > 0), _down, 0), index=df.index)
     _atr_safe = _atr.replace(0, np.nan)  # guard: avoid inf when price has zero range
-    _pdi  = 100 * _pdm.rolling(14).mean() / _atr_safe
-    _mdi  = 100 * _mdm.rolling(14).mean() / _atr_safe
+    _pdi  = 100 * _pdm.ewm(com=13, adjust=False).mean() / _atr_safe
+    _mdi  = 100 * _mdm.ewm(com=13, adjust=False).mean() / _atr_safe
     _dx   = 100 * (_pdi - _mdi).abs() / (_pdi + _mdi + 1e-6)
-    df['adx'] = _dx.rolling(14).mean().fillna(20.0)
+    df['adx'] = _dx.ewm(com=13, adjust=False).mean().fillna(20.0)
     # Gaussian Channels — fast(50), base(100), slow(200) bars
     # GC-01: 3-period multi-timeframe bands using causal Gaussian kernel
     _gc_mults = _GC_MULT.get(tf, _GC_MULT['1d'])  # (fast_mult, base_mult, slow_mult)
@@ -2304,6 +2309,9 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         # BUG-CMC01: pre-compute strategy_bias here so GC dampener (below) can reference it.
         # Without this, the first use at the GC scoring block raises NameError — every signal
         # calculation silently falls through to the except and returns zeros.
+        # Note: strategy_bias is also re-derived below in the regime_bonus block (line ~2480).
+        # Both are intentional: this one enables the GC dampener; the second one also computes
+        # regime_bonus from the same regime value. Values will always agree.
         if regime == "Trending":
             strategy_bias = "Trend-Follow"
         elif regime == "Ranging":
@@ -2668,8 +2676,10 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
         try:
             from news_sentiment import get_sentiment_score_bias as _news_bias_fn
             score += _news_bias_fn(pair)
-        except Exception:
-            pass
+        except ImportError:
+            pass  # news_sentiment optional module
+        except Exception as _news_err:
+            logging.debug("[Core] news sentiment bias failed for %s: %s", pair, _news_err)
 
         # ── Allora Network decentralized price prediction bias (max ±10 pts) ────
         # If Allora predicts significantly above/below current price, adjust score
@@ -2677,8 +2687,10 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             from allora import get_allora_price_bias as _allora_bias_fn
             _current_price = float(df['close'].iloc[-1])
             score += _allora_bias_fn(pair, _current_price)
-        except Exception:
-            pass
+        except ImportError:
+            pass  # allora optional module
+        except Exception as _allora_err:
+            logging.debug("[Core] allora price bias failed for %s: %s", pair, _allora_err)
 
         score = max(0, min(100, score))
         # T2-A: Sigmoid calibration — converts raw score to a more decisive probability-like value.
@@ -2755,8 +2767,8 @@ def _compute_kelly_fraction() -> float | None:
                         logging.debug("[Kelly] %d live trades win_rate=%.1f%%",
                                       len(fb), len(fb[fb['actual_pnl_pct'] > 0]) / len(fb) * 100)
                         return result
-        except Exception:
-            pass
+        except Exception as _kelly_fb_err:
+            logging.debug("[Kelly] feedback-based Kelly failed: %s", _kelly_fb_err)
 
         # Priority 2: backtest simulation data
         bt = _db.get_backtest_df()
@@ -2998,8 +3010,8 @@ def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"
             _hv = float(_lr.tail(min(90, len(_lr))).std())
             if _hv > 0 and _cv > 2.0 * _hv:   # crisis: current vol > 2× historical
                 _kelly_scaled *= 0.5             # effectively quarter-Kelly
-    except Exception:
-        pass
+    except Exception as _qk_err:
+        logging.debug("[Kelly] quarter-Kelly crisis check failed: %s", _qk_err)
     kelly_cap_usd = (
         PORTFOLIO_SIZE_USD * _kelly_scaled
         if _kelly_scaled is not None and _kelly_scaled > 0
@@ -3729,7 +3741,6 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
         ta_ex.load_markets()
         if pair not in ta_ex.markets:
             # Try OKX as the universal fallback for the deep backtest paginated fetch
-            import data_feeds as _dff_db
             _okx_ex = None
             try:
                 import ccxt
@@ -3739,8 +3750,8 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 if _okx_sym in _okx_ex.markets:
                     ta_ex = _okx_ex
                     logging.info(f"run_deep_backtest: {pair} not on Kraken — switched to OKX")
-            except Exception:
-                pass
+            except Exception as _okx_fallback_err:
+                logging.debug("[Backtest] OKX fallback for %s failed: %s", pair, _okx_fallback_err)
             if pair not in ta_ex.markets:
                 return {"error": f"Pair {pair} not available on Kraken or OKX for deep backtest. "
                                  "Try BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT or other major pairs.",
@@ -4878,8 +4889,8 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         _p, _tf = args
         try:
             robust_fetch_ohlcv(ta_ex, _p, _tf, limit=_TF_OHLCV_LIMIT.get(_tf, SCAN_OHLCV_LIMIT))
-        except Exception:
-            pass
+        except Exception as _pf_err:
+            logging.debug("[OHLCV prefetch] %s/%s failed: %s", _p, _tf, _pf_err)
 
     # PERF-HC: hard 45-second wall-clock timeout on the OHLCV prefetch phase.
     # Without this, slow API responses can block the Streamlit process for
@@ -4911,8 +4922,10 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
     try:
         import websocket_feeds as _ws_snap
         _ws_px_map = _ws_snap.get_all_prices() or {}
-    except Exception:
-        pass
+    except ImportError:
+        pass  # websocket-client optional
+    except Exception as _ws_px_err:
+        logging.debug("[Core] WS price snapshot failed: %s", _ws_px_err)
 
     def _check_delta_skip(pair) -> dict | None:
         cached = _delta_cache.get(pair)
@@ -5022,25 +5035,25 @@ def scan_single_pair(pair: str) -> dict | None:
     trending_coins  = []
     try:
         trending_coins = _data_feeds.get_trending_coins()
-    except Exception:
-        pass
+    except Exception as _trend_err:
+        logging.debug("[Core] trending coins fetch failed: %s", _trend_err)
     global_mkt = {}
     try:
         global_mkt = _data_feeds.get_global_market()
-    except Exception:
-        pass
+    except Exception as _gm_err:
+        logging.debug("[Core] global market fetch failed: %s", _gm_err)
     # #26 Pi Cycle Top — fetch for single-pair calls (was missing; kill-switch never fired)
     pi_cycle_data: dict = {}
     try:
         pi_cycle_data = _data_feeds.fetch_pi_cycle_top() or {}
-    except Exception:
-        pass
+    except Exception as _pi_err:
+        logging.debug("[Core] pi cycle top fetch failed: %s", _pi_err)
     # TVL — single-pair fetch so tvl_map is populated (was missing from run_single_pair)
     tvl_map: dict = {}
     try:
         tvl_map = {pair: _data_feeds.get_defillama_tvl(pair)}
-    except Exception:
-        pass
+    except Exception as _tvl_err:
+        logging.debug("[Core] TVL fetch failed for %s: %s", pair, _tvl_err)
 
     master_df       = _db.get_signals_df(limit=200)
     circuit_breaker = check_drawdown_circuit_breaker()
@@ -5053,8 +5066,8 @@ def scan_single_pair(pair: str) -> dict | None:
                 ohlcv_btc,
                 columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
             )
-        except Exception:
-            pass
+        except Exception as _btc_df_err:
+            logging.debug("[Core] BTC/USDT OHLCV for stat arb failed: %s", _btc_df_err)
 
     return _scan_pair(
         pair, ta_ex, fng_value, fng_category,

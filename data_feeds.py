@@ -90,7 +90,6 @@ _NO_RETRY_SESSION = _build_no_retry_session()
 # sequential .history() calls each hang for ~10s on Yahoo's CDN.
 # Fix: run every yfinance call in a 1-worker thread pool with a hard timeout.
 import concurrent.futures as _cf_yf
-import pandas as _pd_empty
 
 def _yf_history(ticker_sym: str, *, timeout_s: float = 8.0, **kwargs):
     """
@@ -242,6 +241,15 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "cointelegraph.com",                        # Cointelegraph RSS feed
     # CoinDCX INR exchange
     "api.coindcx.com",                          # CoinDCX (INR regional premiums)
+    # DeFiLlama yield + TVL feeds
+    "api.llama.fi",                             # DeFiLlama protocol TVL
+    "yields.llama.fi",                          # DeFiLlama yield pools
+    # GeckoTerminal DEX pools + OHLCV
+    "api.geckoterminal.com",                    # GeckoTerminal DEX pools/OHLCV
+    # CoinMetrics on-chain metrics (community API — no key required)
+    "community-api.coinmetrics.io",             # CoinMetrics on-chain metrics
+    # FRED (St. Louis Fed) macro data — CSV download endpoint
+    "fred.stlouisfed.org",                      # FRED CSV macro data
 })
 
 
@@ -715,8 +723,8 @@ def get_onchain_metrics(pair: str) -> dict:
                         hash_ribbon_signal = _cm.get("hash_ribbon_signal", "N/A")
                         puell_multiple     = _cm.get("puell_multiple") or 1.0
                         puell_signal       = _cm.get("puell_signal", "N/A")
-                except Exception:
-                    pass
+                except Exception as _cm_binance_err:
+                    logging.debug("[OnChain] CoinMetrics overlay (Binance path) failed: %s", _cm_binance_err)
             whale_activity = vol_mcap > 0.10
 
             result = {
@@ -785,8 +793,8 @@ def get_onchain_metrics(pair: str) -> dict:
                     hash_ribbon_signal = _cm.get("hash_ribbon_signal", "N/A")
                     puell_multiple     = _cm.get("puell_multiple") or 1.0
                     puell_signal       = _cm.get("puell_signal", "N/A")
-            except Exception:
-                pass
+            except Exception as _cm_cg_err:
+                logging.debug("[OnChain] CoinMetrics overlay (CoinGecko path) failed: %s", _cm_cg_err)
         whale_activity = vol_mcap > 0.10
 
         result = {
@@ -1583,8 +1591,8 @@ def get_carry_trade_opportunities(
                     ),
                     "annualized_yield": ann_yield,
                 })
-        except Exception:
-            pass
+        except Exception as _carry_scan_err:
+            logging.debug("[CarryArb] _scan_one failed for %s: %s", pair, _carry_scan_err)
         return opps
 
     # PERF-CARRY: pre-warm the multi-exchange funding rate cache for all pairs
@@ -1625,8 +1633,8 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
                 items = data.get("data", [])
                 if items and data.get("code") == "0":
                     return pair, _parse_okx_item(items[0], now)
-        except Exception:
-            pass
+        except Exception as _okx_fr_err:
+            logging.debug("[Funding] OKX batch fetch failed for %s: %s", pair, _okx_fr_err)
         return pair, None
 
     try:
@@ -1642,8 +1650,8 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
                 else:
                     results[pair] = _empty_result("Not on OKX futures", now)
             return results
-    except Exception:
-        pass
+    except Exception as _okx_batch_err:
+        logging.debug("[Funding] OKX batch executor failed: %s", _okx_batch_err)
 
     # 2. Per-symbol fallback (fapi.binance.com bulk removed — geo-blocked for US users)
     for pair in pairs:
@@ -4049,8 +4057,8 @@ def fetch_fred_macro() -> dict:
                         break
                 if len(m2_vals) >= 13 and m2_vals[12] > 0:
                     result["m2_yoy"] = round((m2_vals[0] / m2_vals[12] - 1) * 100, 2)
-        except Exception:
-            pass
+        except Exception as _m2_err:
+            logging.debug("[FRED] M2 YoY fetch failed: %s", _m2_err)
         result["source"] = "FRED"
         import datetime as _dt
         result["timestamp"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -5907,8 +5915,8 @@ def fetch_cmc_global_metrics() -> dict:
         try:
             keys = _load_api_keys()
             api_key = keys.get("coinmarketcap_key", "").strip()
-        except Exception:
-            pass
+        except Exception as _cmc_key_err:
+            logging.debug("[CMC] API key load failed: %s", _cmc_key_err)
 
     if not api_key:
         return {
@@ -6487,8 +6495,8 @@ def fetch_bitso_price(book: str = "btc_mxn") -> "Optional[float]":
                                 if _fx_price > 0:
                                     # OKX returns CURRENCY/USDT, invert to get USDT/CURRENCY
                                     mxn_rate = 1.0 / _fx_price if _fx_price else mxn_rate
-                    except Exception:
-                        pass
+                    except Exception as _mxn_err:
+                        logging.debug("[Bitso] MXN rate fetch failed: %s", _mxn_err)
                 price_usd = round(last_local / mxn_rate, 2) if mxn_rate > 0 else None
                 if price_usd and price_usd > 0:
                     with _BITSO_PRICE_LOCK:
@@ -6939,7 +6947,7 @@ def _get_runtime_key(key_name: str, default: str = "") -> str:
         if val:
             return val
     except Exception:
-        pass
+        pass  # intentionally silent — Streamlit context not available in non-UI contexts
     env_key = _ENV_MAP.get(key_name, "")
     env_val = _os.environ.get(env_key, "") if env_key else ""
     return env_val if env_val else default
@@ -7289,8 +7297,8 @@ def clear_all_module_caches() -> None:
         try:
             with _lock:
                 _cache.clear()
-        except Exception:
-            pass
+        except Exception as _lc_err:
+            logging.debug("[CacheClear] locked cache clear failed: %s", _lc_err)
     # Lock-free caches
     for _cache in [
         _MULTI_FR_CACHE, _CG_LIQ_CACHE, _CQ_CACHE, _GN_CACHE,
@@ -7304,14 +7312,14 @@ def clear_all_module_caches() -> None:
     ]:
         try:
             _cache.clear()
-        except Exception:
-            pass
+        except Exception as _uc_err:
+            logging.debug("[CacheClear] unlocked cache clear failed: %s", _uc_err)
     # Fixed-struct caches (reset to empty sentinel)
     for _fc in [_DERIBIT_OI_CACHE, _REGPREM_CACHE, _FX_CACHE, _CMC_CACHE, _PCR_CACHE]:
         try:
             _fc.update({"ts": 0.0, "data": None})
-        except Exception:
-            pass
+        except Exception as _fc_err:
+            logging.debug("[CacheClear] fixed-struct cache reset failed: %s", _fc_err)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -7619,8 +7627,8 @@ def fetch_btc_ta_signals() -> dict:
                     rsi_14_weekly = round(100 - 100 / (1 + w_avg_g / w_avg_l), 2)
                 else:
                     rsi_14_weekly = 100.0
-    except Exception:
-        pass
+    except Exception as _weekly_rsi_err:
+        logging.debug("[Composite] weekly RSI-14 compute failed: %s", _weekly_rsi_err)
 
     result = {
         "rsi_14":                   rsi_14,

@@ -275,8 +275,10 @@ def place_order(
                 ws_tick = _ws_feeds.get_price(pair)
                 if ws_tick:
                     current_price = ws_tick["price"]
-            except Exception:
-                pass
+            except ImportError:
+                pass  # websocket-client optional
+            except Exception as _ws_price_err:
+                logger.debug("[Exec] WS price fallback failed for %s: %s", pair, _ws_price_err)
         # BUG-R03: truthiness check rejects 0.0 (broken ticker) silently.
         # Explicit None / non-positive check is clearer and safer.
         if current_price is None or current_price <= 0:

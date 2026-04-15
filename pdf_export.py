@@ -4,7 +4,10 @@ Uses reportlab to build scan and backtest PDF reports.
 """
 
 import io
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -305,8 +308,8 @@ def generate_backtest_pdf(metrics: dict, trades_df, scan_timestamp: str = None) 
                         v = float(row.get("pnl_pct") or 0)
                         style_t.add("TEXTCOLOR", (pnl_col, i), (pnl_col, i),
                                     GREEN if v > 0 else RED)
-                    except Exception:
-                        pass
+                    except Exception as _pnl_color_err:
+                        logger.debug("[PDF] PnL color styling failed at row %d: %s", i, _pnl_color_err)
 
             tbl_t.setStyle(style_t)
             story.append(tbl_t)

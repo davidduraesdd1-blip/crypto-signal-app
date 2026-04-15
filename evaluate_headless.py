@@ -93,8 +93,8 @@ def run_evaluation() -> bool:
                         try:
                             ticker = ex.fetch_ticker(pair)
                             prices[pair] = float(ticker.get("last", 0))
-                        except Exception:
-                            pass
+                        except Exception as _ticker_err:
+                            logger.debug("Ticker fetch failed for %s: %s", pair, _ticker_err)
                     if prices:
                         closed = _db.auto_close_stale_positions(prices, hold_days=14)
                         if closed:

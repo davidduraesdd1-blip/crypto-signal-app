@@ -706,8 +706,8 @@ def migrate_csv_to_db():
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as _db_close_err:
+                logger.debug("[DB] init conn close failed (non-fatal): %s", _db_close_err)
 
 
 # ──────────────────────────────────────────────

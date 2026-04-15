@@ -20,7 +20,7 @@ try:
     from config import CLAUDE_MODEL, CLAUDE_HAIKU_MODEL, ANTHROPIC_ENABLED
 except ImportError:
     CLAUDE_MODEL = "claude-sonnet-4-6"
-    CLAUDE_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+    CLAUDE_HAIKU_MODEL = "claude-haiku-4-5"
     ANTHROPIC_ENABLED = False
 
 logger = logging.getLogger(__name__)

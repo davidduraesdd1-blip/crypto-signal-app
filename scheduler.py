@@ -111,8 +111,8 @@ def run_scan_job() -> None:
                 if _in_quiet_hours(now_str, qs, qe):
                     logger.info("[Scheduler] Skipped — quiet hours active (%s–%s UTC)", qs, qe)
                     return
-        except Exception:
-            pass
+        except Exception as _qh_err:
+            logger.debug("[Scheduler] quiet hours check failed (continuing): %s", _qh_err)
 
         logger.info("=" * 60)
         logger.info("SCAN STARTED — %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
@@ -177,8 +177,8 @@ def run_scan_job() -> None:
         logger.exception("[Scheduler] Scan failed: %s", e)
         try:
             _db.write_scan_status(False, error=str(e), progress=0)
-        except Exception:
-            pass
+        except Exception as _status_err:
+            logger.debug("[Scheduler] scan status write failed: %s", _status_err)
     finally:
         _scan_lock.release()
 

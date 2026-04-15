@@ -21,7 +21,7 @@ ANTHROPIC_ENABLED: bool = os.environ.get("ANTHROPIC_ENABLED", "true").lower() no
 # ─── LLM Model Constants ──────────────────────────────────────────────────────
 # Centralised model names — update here to change everywhere.
 CLAUDE_MODEL: str = "claude-sonnet-4-6"           # primary signal explanation model
-CLAUDE_HAIKU_MODEL: str = "claude-haiku-4-5-20251001"  # fast/cheap structured calls (weight adjustments)
+CLAUDE_HAIKU_MODEL: str = "claude-haiku-4-5"           # fast/cheap structured calls (weight adjustments)
 
 # ─── Tier 1 Pair Expansion (#40) ──────────────────────────────────────────────
 # 9 new assets added to the tracked pairs list (HYPE excluded — DEX-only, no CEX listing).

@@ -201,8 +201,8 @@ def start(pairs: list[str]) -> None:
     if ws_to_close:
         try:
             ws_to_close.close()
-        except Exception:
-            pass
+        except Exception as _ws_close_err:
+            logger.debug("[WS] old socket close failed (non-fatal): %s", _ws_close_err)
     _ws_thread = threading.Thread(
         target=_run_loop,
         args=(pairs, my_session),
@@ -228,8 +228,8 @@ def stop() -> None:
     if ws_to_close:
         try:
             ws_to_close.close()
-        except Exception:
-            pass
+        except Exception as _ws_stop_err:
+            logger.debug("[WS] stop() socket close failed (non-fatal): %s", _ws_stop_err)
 
 
 def get_price(pair: str) -> Optional[dict]:
@@ -299,8 +299,8 @@ def _watchdog_loop(pairs: list[str]) -> None:
                 if ws_to_close:
                     try:
                         ws_to_close.close()
-                    except Exception:
-                        pass
+                    except Exception as _wd_close_err:
+                        logger.debug("[WS] watchdog reconnect close failed (non-fatal): %s", _wd_close_err)
 
 
 def _start_watchdog(pairs: list[str]) -> None:
