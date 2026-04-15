@@ -239,6 +239,23 @@ h3 {
 }
 
 /* ═══════════════════════════════════════════════
+   GLOBAL BASE FONT — 0.85rem for all interactive + body elements
+   Metric values (1rem+) and page titles kept large intentionally.
+   Captions/badges kept at 0.75rem for visual hierarchy.
+═══════════════════════════════════════════════ */
+[data-testid="stMain"] label, [data-testid="stMain"] label p, [data-testid="stMain"] label span { font-size: 0.85rem !important; }
+[data-testid="stMain"] input, [data-testid="stMain"] textarea { font-size: 0.85rem !important; }
+[data-testid="stMain"] [data-baseweb="select"] span, [data-testid="stMain"] [data-baseweb="select"] div, [data-testid="stMain"] [data-baseweb="select"] input { font-size: 0.85rem !important; }
+[data-testid="stMain"] [role="listbox"] li, [data-testid="stMain"] [role="option"], [data-testid="stMain"] [role="option"] * { font-size: 0.85rem !important; }
+[data-testid="stMain"] button p, [data-testid="stMain"] button span, [data-testid="stFormSubmitButton"] button p { font-size: 0.85rem !important; }
+[data-testid="stMain"] [data-testid="stTab"] p, [data-testid="stMain"] [data-testid="stTab"] span { font-size: 0.85rem !important; }
+[data-testid="stMain"] p { font-size: 0.85rem !important; }
+[data-testid="stSidebar"] label, [data-testid="stSidebar"] label p, [data-testid="stSidebar"] label span { font-size: 0.85rem !important; }
+[data-testid="stSidebar"] p { font-size: 0.85rem !important; }
+[data-testid="stExpander"] > details > summary { font-size: 0.85rem !important; }
+[data-testid="stCaptionContainer"] p, [data-testid="stMain"] small { font-size: 0.75rem !important; }
+
+/* ═══════════════════════════════════════════════
    SIDEBAR — deeper glass panel
 ═══════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
