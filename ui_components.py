@@ -1260,7 +1260,7 @@ def sidebar_header(version: str, exchange: str, n_pairs: int):
     if BRAND_LOGO_PATH and _Path and _Path(BRAND_LOGO_PATH).exists():
         st.sidebar.image(BRAND_LOGO_PATH, width=120)
     else:
-        _wordmark = BRAND_NAME if BRAND_NAME else "⬡ CryptoSignal"
+        _wordmark = BRAND_NAME if BRAND_NAME else "⬡ Family Office · Signal Intelligence"
         st.sidebar.markdown(
             f"""
             <div style="
@@ -1675,7 +1675,7 @@ def beginner_welcome_html() -> str:
                 box-shadow:0 4px 32px rgba(0,0,0,0.4)">
         <div style="font-size:28px;margin-bottom:10px">👋</div>
         <div style="font-size:20px;font-weight:800;color:#e8ecf4;margin-bottom:6px">
-            Welcome to CryptoSignal
+            Welcome to Family Office · Signal Intelligence
         </div>
         <div style="font-size:13px;color:rgba(168,180,200,0.75);line-height:1.7;margin-bottom:18px">
             This tool scans cryptocurrency markets and tells you which coins may be worth buying,
@@ -2838,7 +2838,7 @@ def render_welcome_banner() -> None:
     _c1, _c2 = st.columns([11, 1])
     with _c1:
         st.info(
-            "👋 **Welcome to CryptoSignal!**  \n"
+            "👋 **Welcome to Family Office · Signal Intelligence!**  \n"
             "This app scans crypto markets and delivers clear, actionable trade signals. "
             "Every metric is explained in plain English — no experience needed.  \n"
             "**Quick start:** The **Dashboard** shows today's top signals ranked by confidence. "

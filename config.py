@@ -177,5 +177,5 @@ def feature_enabled(name: str) -> bool:
 # Set env vars to activate: SUPERGROK_BRAND_NAME="My App"  SUPERGROK_BRAND_LOGO_PATH="logo.png"
 # When unset (default), the app shows a clean placeholder header.
 # 2-line rebrand when ready — no restructuring required.
-BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "")
+BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "Family Office · Signal Intelligence")
 BRAND_LOGO_PATH: str = os.environ.get("SUPERGROK_BRAND_LOGO_PATH", "")

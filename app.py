@@ -569,7 +569,7 @@ def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
 
 # ── Page config must be first ──
 st.set_page_config(
-    page_title="Crypto Signal Model v5.9.13",
+    page_title="Family Office · Signal Intelligence",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
