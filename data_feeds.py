@@ -5990,6 +5990,111 @@ def fetch_cmc_global_metrics() -> dict:
         }
 
 
+def fetch_prices_cascade(symbols: list) -> dict:
+    """
+    Unified CMC → CoinGecko → OKX price cascade for any list of coin symbols.
+
+    Returns {SYMBOL: price_usd} for every symbol resolved.
+    Symbols that fail all 3 tiers are absent from the result.
+
+    Tier 1: CoinMarketCap (primary — broadest coverage, 333 req/day free)
+    Tier 2: CoinGecko simple/price (secondary — strong coverage)
+    Tier 3: OKX REST ticker (tertiary — no auth, good for mid-cap coins)
+    Tier 4: MEXC REST ticker (quaternary — CC, SHX, ZBCN, XDC coverage)
+
+    Results are cached 5 min.
+    """
+    if not symbols:
+        return {}
+
+    _syms = [s.upper() for s in symbols]
+    _result: dict = {}
+
+    # ── Tier 1: CoinMarketCap ────────────────────────────────────────────────
+    _cmc_key = _os.environ.get("COINMARKETCAP_API_KEY", "").strip()
+    if _cmc_key:
+        try:
+            r = _SESSION.get(
+                "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+                headers={"X-CMC_PRO_API_KEY": _cmc_key, "Accept": "application/json"},
+                params={"symbol": ",".join(_syms), "convert": "USD"},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                for sym, entry in r.json().get("data", {}).items():
+                    if isinstance(entry, list):
+                        entry = entry[0] if entry else {}
+                    px = (entry.get("quote", {}).get("USD", {}).get("price") or 0)
+                    if px and float(px) > 0:
+                        _result[sym.upper()] = round(float(px), 8)
+        except Exception as _e:
+            logging.debug("[cascade/CMC] %s", _e)
+
+    # ── Tier 2: CoinGecko simple/price ───────────────────────────────────────
+    _CG_IDS = {
+        "XRP": "ripple", "XLM": "stellar", "XDC": "xdce-crowd-sale",
+        "CC": "canton", "HBAR": "hedera-hashgraph", "SHX": "stronghold-token",
+        "ZBCN": "zebec-protocol", "BTC": "bitcoin", "ETH": "ethereum",
+        "SOL": "solana", "HYPE": "hyperliquid",
+    }
+    _cg_needed = [_CG_IDS[s] for s in _syms if s in _CG_IDS and s not in _result]
+    if _cg_needed:
+        try:
+            _cg_reverse = {v: k for k, v in _CG_IDS.items()}
+            r = _SESSION.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": ",".join(_cg_needed), "vs_currencies": "usd"},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                for cg_id, vals in r.json().items():
+                    sym = _cg_reverse.get(cg_id)
+                    px = vals.get("usd", 0)
+                    if sym and px and float(px) > 0:
+                        _result[sym] = round(float(px), 8)
+        except Exception as _e:
+            logging.debug("[cascade/CoinGecko] %s", _e)
+
+    # ── Tier 3: OKX REST spot ticker ─────────────────────────────────────────
+    _OKX_PAIRS = {
+        "CC": "CC-USDT", "XDC": "XDC-USDT", "SHX": "SHX-USDT",
+        "HBAR": "HBAR-USDT", "XLM": "XLM-USDT", "XRP": "XRP-USDT",
+    }
+    for sym in [s for s in _syms if s in _OKX_PAIRS and s not in _result]:
+        try:
+            r = _SESSION.get(
+                "https://www.okx.com/api/v5/market/ticker",
+                params={"instId": _OKX_PAIRS[sym]},
+                timeout=6,
+            )
+            if r.status_code == 200:
+                tickers = r.json().get("data", [])
+                if tickers:
+                    px = float(tickers[0].get("last", 0) or 0)
+                    if px > 0:
+                        _result[sym] = round(px, 8)
+        except Exception as _e:
+            logging.debug("[cascade/OKX] %s %s", sym, _e)
+
+    # ── Tier 4: MEXC REST ticker — CC, SHX, ZBCN, XDC ───────────────────────
+    _MEXC_PAIRS = {"CC": "CCUSDT", "SHX": "SHXUSDT", "ZBCN": "ZBCNUSDT", "XDC": "XDCUSDT"}
+    for sym in [s for s in _syms if s in _MEXC_PAIRS and s not in _result]:
+        try:
+            r = _SESSION.get(
+                "https://api.mexc.com/api/v3/ticker/price",
+                params={"symbol": _MEXC_PAIRS[sym]},
+                timeout=6,
+            )
+            if r.status_code == 200:
+                px = float(r.json().get("price", 0) or 0)
+                if px > 0:
+                    _result[sym] = round(px, 8)
+        except Exception as _e:
+            logging.debug("[cascade/MEXC] %s %s", sym, _e)
+
+    return _result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # #34 — DERIBIT PUT/CALL RATIO SIGNAL
 # Fetches open interest split by option type (PUT vs CALL) for BTC and ETH.
