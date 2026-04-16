@@ -5106,7 +5106,7 @@ def page_backtest():
 
         if metrics:
             m = metrics
-            _wr = m['win_rate']
+            _wr = m.get('win_rate', 0)
 
             # ── Item 12: Beginner simplified view — 3 big metrics ─────────────────
             if _bt_lv == "beginner":
@@ -5119,24 +5119,24 @@ def page_backtest():
                 )
                 bm[1].metric(
                     "💰 Total Return",
-                    f"{m['total_return']}%",
+                    f"{m.get('total_return', 0)}%",
                     help="If you had followed every signal since the start, this is the total gain or loss on your portfolio.",
                 )
                 bm[2].metric(
                     "🛡️ Worst Drawdown",
-                    f"{m['max_drawdown']}%",
+                    f"{m.get('max_drawdown', 0)}%",
                     help="The biggest drop from a high point before recovering. Think of it as the worst losing patch. Lower is safer.",
                 )
                 with st.expander("📊 Full Performance Stats", expanded=False):
                     mc = st.columns(6)
-                    mc[0].metric("Trades Simulated", m["total_trades"], help=_ui.HELP_TOTAL_TRADES)
+                    mc[0].metric("Trades Simulated", m.get("total_trades", 0), help=_ui.HELP_TOTAL_TRADES)
                     mc[1].metric("Profitable Trades", f"{_wr}%", delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip", help=_ui.HELP_WIN_RATE)
-                    mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%", help=_ui.HELP_AVG_PNL)
-                    mc[3].metric("Profit vs Loss Ratio", m["profit_factor"], help=_ui.HELP_PROFIT_FACTOR)
-                    mc[4].metric("Performance Quality", m["sharpe"], help=_ui.HELP_SHARPE)
-                    mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%", help=_ui.HELP_MAX_DRAWDOWN)
+                    mc[2].metric("Avg Gain per Trade", f"{m.get('avg_pnl', 0)}%", help=_ui.HELP_AVG_PNL)
+                    mc[3].metric("Profit vs Loss Ratio", m.get("profit_factor", 0), help=_ui.HELP_PROFIT_FACTOR)
+                    mc[4].metric("Performance Quality", m.get("sharpe", 0), help=_ui.HELP_SHARPE)
+                    mc[5].metric("Worst Losing Streak", f"{m.get('max_drawdown', 0)}%", help=_ui.HELP_MAX_DRAWDOWN)
                     mc2 = st.columns(5)
-                    mc2[0].metric("Total Return", f"{m['total_return']}%")
+                    mc2[0].metric("Total Return", f"{m.get('total_return', 0)}%")
                     mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"), help=_ui.HELP_SORTINO)
                     mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"), help=_ui.HELP_CALMAR)
                     mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"), help="How many trades in a row lost money at worst.")
@@ -5190,22 +5190,22 @@ def page_backtest():
             else:
                 # Intermediate / Advanced — full metric grids
                 mc = st.columns(6)
-                mc[0].metric("Trades Simulated", m["total_trades"],
+                mc[0].metric("Trades Simulated", m.get("total_trades", 0),
                              help=_ui.HELP_TOTAL_TRADES)
                 mc[1].metric(f"Profitable Trades", f"{_wr}%",
                              delta=f"{round(_wr - 50, 1):+.1f}% vs coin-flip",
                              help=_ui.HELP_WIN_RATE)
-                mc[2].metric("Avg Gain per Trade", f"{m['avg_pnl']}%",
+                mc[2].metric("Avg Gain per Trade", f"{m.get('avg_pnl', 0)}%",
                              help=_ui.HELP_AVG_PNL)
-                mc[3].metric("Profit vs Loss Ratio", m["profit_factor"],
+                mc[3].metric("Profit vs Loss Ratio", m.get("profit_factor", 0),
                              help=_ui.HELP_PROFIT_FACTOR)
-                mc[4].metric("Performance Quality", m["sharpe"],
+                mc[4].metric("Performance Quality", m.get("sharpe", 0),
                              help=_ui.HELP_SHARPE)
-                mc[5].metric("Worst Losing Streak", f"{m['max_drawdown']}%",
+                mc[5].metric("Worst Losing Streak", f"{m.get('max_drawdown', 0)}%",
                              help=_ui.HELP_MAX_DRAWDOWN)
 
                 mc2 = st.columns(5)
-                mc2[0].metric("Total Return", f"{m['total_return']}%")
+                mc2[0].metric("Total Return", f"{m.get('total_return', 0)}%")
                 mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
                               help=_ui.HELP_SORTINO)
                 mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
