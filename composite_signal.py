@@ -80,6 +80,8 @@ def _detect_regime(vix: float | None, adx_14: float | None) -> tuple[str, float,
     elif adx_14 is not None and adx_14 < 20:
         regime = "RANGING"
     else:
+        if vix is None and adx_14 is None:
+            logger.debug("[composite] Both VIX and ADX unavailable — defaulting to NORMAL regime")
         regime = "NORMAL"
     w = _REGIME_WEIGHTS[regime]
     return regime, w["technical"], w["macro"], w["sentiment"], w["onchain"]

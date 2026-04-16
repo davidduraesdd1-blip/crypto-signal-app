@@ -73,7 +73,8 @@ def compute_historical_var(
         if conn is not None:
             conn.close()
 
-    pnl_returns = np.array([float(r[0]) for r in rows])
+    _raw = np.array([float(r[0]) for r in rows])
+    pnl_returns = _raw[np.isfinite(_raw)]  # drop any NaN/Inf from corrupted rows
     position_usd = portfolio_size_usd * position_pct / 100
 
     if len(pnl_returns) >= _MIN_HIST_SAMPLES:
@@ -226,7 +227,8 @@ def compute_var_summary(
         if conn is not None:
             conn.close()
 
-    pnl_returns = np.array([float(r[0]) for r in rows])
+    _raw = np.array([float(r[0]) for r in rows])
+    pnl_returns = _raw[np.isfinite(_raw)]  # drop any NaN/Inf from corrupted rows
     position_usd = portfolio_size_usd * position_pct / 100
 
     def _var_from_data(confidence: float) -> dict:
