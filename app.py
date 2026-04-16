@@ -550,22 +550,7 @@ def _get_next_autoscan_time() -> datetime | None:
     return job.next_run_time if job else None
 
 
-def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
-    """Return True if now_str (HH:MM UTC) falls in the [start, end) quiet window.
-    Handles overnight wrap (e.g. 22:00–06:00)."""
-    try:
-        h, m     = map(int, now_str.split(":"))
-        sh, sm   = map(int, start_str.split(":"))
-        eh, em   = map(int, end_str.split(":"))
-        now_mins = h  * 60 + m
-        s_mins   = sh * 60 + sm
-        e_mins   = eh * 60 + em
-        if s_mins <= e_mins:           # same-day window e.g. 09:00–17:00
-            return s_mins <= now_mins < e_mins
-        else:                          # overnight wrap e.g. 22:00–06:00
-            return now_mins >= s_mins or now_mins < e_mins
-    except Exception:
-        return False
+from scheduler import _in_quiet_hours  # canonical definition lives in scheduler.py
 
 # ── Page config must be first ──
 st.set_page_config(

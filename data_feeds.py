@@ -3109,125 +3109,8 @@ _NEWS_CACHE: dict  = {}   # {pair: {result..., "_ts": float}}
 _NEWS_CACHE_LOCK   = threading.Lock()
 _NEWS_CACHE_TTL    = 900  # 15-minute cache
 
-# Map base currency to CryptoPanic currency code
-_CP_COIN_MAP: dict[str, str] = {
-    "BTC": "BTC", "ETH": "ETH", "SOL": "SOL", "BNB": "BNB",
-    "XRP": "XRP", "ADA": "ADA", "DOGE": "DOGE", "AVAX": "AVAX",
-    "DOT": "DOT", "LINK": "LINK", "MATIC": "MATIC", "LTC": "LTC",
-    "UNI": "UNI", "ATOM": "ATOM",
-}
-
-
-def get_news_sentiment(pair: str, max_articles: int = 5) -> dict:
-    """
-    Fetch recent CryptoPanic news and compute bullish/bearish sentiment for a pair.
-
-    Requires `cryptopanic_key` in alerts_config.json (free at cryptopanic.com).
-    Returns:
-        signal:       'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'N/A'
-        bullish_pct:  float (0-100), percentage of positive votes
-        bearish_pct:  float (0-100)
-        total_votes:  int
-        articles:     list[dict] with title, url, published_at, kind, domain
-        source:       'CryptoPanic'
-    """
-    now = time.time()
-    with _NEWS_CACHE_LOCK:
-        cached = _NEWS_CACHE.get(pair, {})
-        if cached.get("_ts", 0) + _NEWS_CACHE_TTL > now:
-            return {k: v for k, v in cached.items() if k != "_ts"}
-
-    # Get API key
-    keys = _load_api_keys()
-    token = keys.get("cryptopanic_key", "")
-    if not token:
-        return _no_key_result("cryptopanic",
-                              "News sentiment: CryptoPanic free token — sign up at cryptopanic.com")
-
-    # Resolve coin symbol from pair (e.g. "BTC/USDT" → "BTC")
-    base = pair.split("/")[0].upper()
-    coin = _CP_COIN_MAP.get(base, base)
-
-    try:
-        resp = _SESSION.get(
-            "https://cryptopanic.com/api/free/v1/posts/",
-            params={
-                "auth_token": token,
-                "currencies": coin,
-                "filter":     "hot",
-                "public":     "true",
-                "kind":       "news",
-            },
-            timeout=8,
-        )
-        if resp.status_code == 403:
-            result = _no_key_result("cryptopanic", "Invalid or expired API token")
-            with _NEWS_CACHE_LOCK:
-                _NEWS_CACHE[pair] = {**result, "_ts": now}
-            return result
-        if resp.status_code != 200:
-            logging.debug("CryptoPanic %s HTTP %s", pair, resp.status_code)
-            result = _no_key_result("cryptopanic", f"HTTP {resp.status_code}")
-            with _NEWS_CACHE_LOCK:
-                _NEWS_CACHE[pair] = {**result, "_ts": now}
-            return result
-
-        posts = resp.json().get("results", [])
-        if not posts:
-            result = {
-                "signal": "NEUTRAL", "bullish_pct": 50.0, "bearish_pct": 50.0,
-                "total_votes": 0, "articles": [], "source": "CryptoPanic",
-            }
-            with _NEWS_CACHE_LOCK:
-                _NEWS_CACHE[pair] = {**result, "_ts": now}
-            return result
-
-        # Aggregate votes across recent posts
-        total_pos = 0
-        total_neg = 0
-        articles  = []
-        for p in posts[:20]:   # use up to 20 posts for vote aggregation
-            v = p.get("votes", {}) or {}
-            total_pos += int(v.get("positive", 0) or 0)
-            total_neg += int(v.get("negative", 0) or 0)
-            if len(articles) < max_articles:
-                articles.append({
-                    "title":        p.get("title", ""),
-                    "url":          p.get("url", ""),
-                    "published_at": (p.get("published_at") or "")[:16],
-                    "kind":         p.get("kind", "news"),
-                    "domain":       p.get("domain", ""),
-                })
-
-        total_votes = total_pos + total_neg
-        if total_votes > 0:
-            bullish_pct = round(total_pos / total_votes * 100, 1)
-            bearish_pct = round(total_neg / total_votes * 100, 1)
-        else:
-            bullish_pct = bearish_pct = 50.0
-
-        if   bullish_pct >= 60: signal = "BULLISH"
-        elif bearish_pct >= 60: signal = "BEARISH"
-        else:                   signal = "NEUTRAL"
-
-        result = {
-            "signal":      signal,
-            "bullish_pct": bullish_pct,
-            "bearish_pct": bearish_pct,
-            "total_votes": total_votes,
-            "articles":    articles,
-            "source":      "CryptoPanic",
-        }
-        with _NEWS_CACHE_LOCK:
-            _NEWS_CACHE[pair] = {**result, "_ts": now}
-        return result
-
-    except Exception as _e:
-        logging.debug("CryptoPanic %s: %s", pair, _e)
-        result = _no_key_result("cryptopanic", str(_e))
-        with _NEWS_CACHE_LOCK:
-            _NEWS_CACHE[pair] = {**result, "_ts": now}
-        return result
+# get_news_sentiment removed — canonical version is in news_sentiment.py.
+# app.py uses news_sentiment.get_news_sentiment() via _news_mod.
 
 
 # ──────────────────────────────────────────────
@@ -5999,8 +5882,9 @@ def fetch_prices_cascade(symbols: list) -> dict:
 
     Tier 1: CoinMarketCap (primary — broadest coverage, 333 req/day free)
     Tier 2: CoinGecko simple/price (secondary — strong coverage)
-    Tier 3: OKX REST ticker (tertiary — no auth, good for mid-cap coins)
-    Tier 4: MEXC REST ticker (quaternary — CC, SHX, ZBCN, XDC coverage)
+    Tier 3: Kraken REST ticker (tertiary — no auth, US-accessible, XRP/XLM/HBAR/HYPE)
+    Tier 4: OKX REST ticker (quaternary — no auth, good for mid-cap coins)
+    Tier 5: MEXC REST ticker (quinary — CC, SHX, ZBCN, XDC coverage)
 
     Results are cached 5 min.
     """
@@ -6055,7 +5939,40 @@ def fetch_prices_cascade(symbols: list) -> dict:
         except Exception as _e:
             logging.debug("[cascade/CoinGecko] %s", _e)
 
-    # ── Tier 3: OKX REST spot ticker ─────────────────────────────────────────
+    # ── Tier 3: Kraken REST ticker (US-accessible, no auth) ──────────────────
+    # Kraken uses non-standard pair names: crypto X-prefix, fiat Z-prefix.
+    # The response key is Kraken's canonical name; c[0] = last trade price.
+    _KRAKEN_PAIRS = {
+        "XRP":  "XXRPZUSD",
+        "XLM":  "XXLMZUSD",
+        "HBAR": "HBARUSD",
+        "HYPE": "HYPEUSD",
+    }
+    _kraken_needed = [_KRAKEN_PAIRS[s] for s in _syms
+                      if s in _KRAKEN_PAIRS and s not in _result]
+    if _kraken_needed:
+        try:
+            r = _SESSION.get(
+                "https://api.kraken.com/0/public/Ticker",
+                params={"pair": ",".join(_kraken_needed)},
+                timeout=6,
+            )
+            if r.status_code == 200:
+                _kdata = r.json().get("result", {})
+                for sym, kpair in _KRAKEN_PAIRS.items():
+                    if sym not in _result:
+                        _kentry = _kdata.get(kpair)
+                        if not _kentry:
+                            _kalt = kpair.lstrip("XZ").replace("ZUSD", "USD")
+                            _kentry = _kdata.get(_kalt)
+                        if _kentry:
+                            px = float((_kentry.get("c") or ["0"])[0] or 0)
+                            if px > 0:
+                                _result[sym] = round(px, 8)
+        except Exception as _e:
+            logging.debug("[cascade/Kraken] %s", _e)
+
+    # ── Tier 4: OKX REST spot ticker ─────────────────────────────────────────
     _OKX_PAIRS = {
         "CC": "CC-USDT", "XDC": "XDC-USDT", "SHX": "SHX-USDT",
         "HBAR": "HBAR-USDT", "XLM": "XLM-USDT", "XRP": "XRP-USDT",
@@ -6076,7 +5993,7 @@ def fetch_prices_cascade(symbols: list) -> dict:
         except Exception as _e:
             logging.debug("[cascade/OKX] %s %s", sym, _e)
 
-    # ── Tier 4: MEXC REST ticker — CC, SHX, ZBCN, XDC ───────────────────────
+    # ── Tier 5: MEXC REST ticker — CC, SHX, ZBCN, XDC ───────────────────────
     _MEXC_PAIRS = {"CC": "CCUSDT", "SHX": "SHXUSDT", "ZBCN": "ZBCNUSDT", "XDC": "XDCUSDT"}
     for sym in [s for s in _syms if s in _MEXC_PAIRS and s not in _result]:
         try:
