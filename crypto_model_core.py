@@ -1234,7 +1234,7 @@ def retrain_lgbm_from_feedback(min_samples: int = 50) -> dict:
                   callbacks=[lgb.early_stopping(15, verbose=False),
                               lgb.log_evaluation(-1)])
 
-        val_acc = float((model.predict(X_val) == y_val).mean()) if len(X_val) > 0 else float('nan')
+        val_acc = float((model.predict(X_val) == y_val).mean()) if len(X_val) > 0 else None
         trained_at = datetime.now(timezone.utc).isoformat()
 
         with _lgbm_feedback_lock:
@@ -1242,13 +1242,14 @@ def retrain_lgbm_from_feedback(min_samples: int = 50) -> dict:
             _lgbm_feedback_cache["trained_at"] = trained_at
             _lgbm_feedback_cache["n_samples"] = len(df_valid)
 
-        logging.info(f"LightGBM feedback retrain: {len(df_valid)} samples, val_acc={val_acc:.3f}")
+        _acc_str = f"{val_acc:.1%}" if val_acc is not None else "N/A (no validation set)"
+        logging.info(f"LightGBM feedback retrain: {len(df_valid)} samples, val_acc={_acc_str}")
         return {
             "success": True,
             "n_samples": len(df_valid),
-            "accuracy": round(val_acc, 4),
+            "accuracy": round(val_acc, 4) if val_acc is not None else None,
             "trained_at": trained_at,
-            "message": f"Retrained on {len(df_valid)} resolved signals (val acc: {val_acc:.1%})",
+            "message": f"Retrained on {len(df_valid)} resolved signals (val acc: {_acc_str})",
         }
 
     except Exception as e:
