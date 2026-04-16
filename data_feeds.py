@@ -302,11 +302,15 @@ def _parse_binance_item(item: dict, now: float) -> dict | None:
     if "lastFundingRate" not in item:
         return None
     rate = float(item["lastFundingRate"])
+    try:
+        _mark = float(item.get("markPrice", 0) or 0)
+    except (ValueError, TypeError):
+        _mark = 0.0
     return {
         "funding_rate": rate,
         "funding_rate_pct": round(rate * 100, 4),
         "next_funding_time": int(item.get("nextFundingTime", 0)),
-        "mark_price": float(item.get("markPrice", 0)),
+        "mark_price": _mark,
         "signal": _funding_signal(rate),
         "source": "binance",
         "error": None,
@@ -320,11 +324,15 @@ def _parse_bybit_item(item: dict, now: float) -> dict | None:
     if fr_str is None:
         return None
     rate = float(fr_str)
+    try:
+        _mark = float(item.get("markPrice", 0) or 0)
+    except (ValueError, TypeError):
+        _mark = 0.0
     return {
         "funding_rate": rate,
         "funding_rate_pct": round(rate * 100, 4),
         "next_funding_time": int(item.get("nextFundingTime", 0)),
-        "mark_price": float(item.get("markPrice", 0)),
+        "mark_price": _mark,
         "signal": _funding_signal(rate),
         "source": "bybit",
         "error": None,
