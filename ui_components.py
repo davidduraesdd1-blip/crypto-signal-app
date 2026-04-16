@@ -886,6 +886,11 @@ body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(107,122,148"] { color
 body.light-mode :is(div,span,p,a,td,th)[style*="color:#3d4a60"] { color: #64748b !important; }
 body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(168,180,200,0.4"],
 body.light-mode :is(div,span,p,a,td,th)[style*="color:rgba(168,180,200,0.45"] { color: #64748b !important; }
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#9ca3af"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#9CA3AF"] { color: #64748b !important; }
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#888"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#aaa"],
+body.light-mode :is(div,span,p,a,td,th)[style*="color:#999"] { color: #64748b !important; }
 
 /* 20. Inline dark card backgrounds → white */
 body.light-mode div[style*="background:rgba(14,18,30"],
