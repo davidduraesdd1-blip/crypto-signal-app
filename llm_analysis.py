@@ -51,6 +51,9 @@ def get_signal_explanation(pair: str, result: dict) -> str:
         3-4 sentence analyst-style explanation string.
         Falls back to error message if API key missing or call fails.
     """
+    # Honour kill switch — ANTHROPIC_ENABLED=false disables all Claude API calls
+    if not ANTHROPIC_ENABLED:
+        return "AI Analysis is currently disabled."
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         try:
@@ -249,6 +252,9 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
         dict of {indicator_name: multiplier} — e.g. {"onchain": 1.2, "fng": 0.9}
         Returns empty dict on error or no API key.
     """
+    # Honour kill switch — ANTHROPIC_ENABLED=false disables all Claude API calls
+    if not ANTHROPIC_ENABLED:
+        return {}
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         try:

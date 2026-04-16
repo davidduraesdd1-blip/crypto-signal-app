@@ -354,9 +354,9 @@ def _save_alerts_config_and_clear(cfg: dict) -> None:
 
 
 # ── PERF: @st.cache_data wrappers for slow external module calls ──────────────
-@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=24)
 def _cached_news_sentiment(pair: str) -> dict:
-    """Streamlit-level cache for news sentiment — 15 min TTL, cross-worker dedup.
+    """Streamlit-level cache for news sentiment — 1 hr TTL per §12 (news/sentiment = 60 min).
     Module-level _cache in news_sentiment.py is per-process; this bridges workers."""
     if _news_mod is None:
         return {}
