@@ -301,7 +301,10 @@ def _parse_binance_item(item: dict, now: float) -> dict | None:
     """Parse a Binance premiumIndex item into our standard format."""
     if "lastFundingRate" not in item:
         return None
-    rate = float(item["lastFundingRate"])
+    try:
+        rate = float(item["lastFundingRate"])
+    except (ValueError, TypeError):
+        return None
     try:
         _mark = float(item.get("markPrice", 0) or 0)
     except (ValueError, TypeError):
@@ -323,7 +326,10 @@ def _parse_bybit_item(item: dict, now: float) -> dict | None:
     fr_str = item.get("fundingRate")
     if fr_str is None:
         return None
-    rate = float(fr_str)
+    try:
+        rate = float(fr_str)
+    except (ValueError, TypeError):
+        return None
     try:
         _mark = float(item.get("markPrice", 0) or 0)
     except (ValueError, TypeError):
@@ -353,7 +359,10 @@ def _parse_okx_item(item: dict, now: float) -> dict | None:
     fr_str = item.get("fundingRate")
     if fr_str is None:
         return None
-    rate = float(fr_str)
+    try:
+        rate = float(fr_str)
+    except (ValueError, TypeError):
+        return None
     return {
         "funding_rate": rate,
         "funding_rate_pct": round(rate * 100, 4),
