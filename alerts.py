@@ -257,7 +257,8 @@ def format_scan_alert(results: list, min_confidence: float = 70) -> str | None:
             lines.append(f"Entry:  <b>{_fmt_price(f['entry'])}</b>")
         if f["stop"] and f["entry"]:
             try:
-                stop_pct = abs(float(f["entry"]) - float(f["stop"])) / float(f["entry"]) * 100
+                _entry_f = float(f["entry"])
+                stop_pct = abs(_entry_f - float(f["stop"])) / _entry_f * 100 if _entry_f != 0 else 0
                 lines.append(f"Stop:   {_fmt_price(f['stop'])}  <i>(-{stop_pct:.1f}% risk)</i>")
             except Exception:
                 lines.append(f"Stop:   {_fmt_price(f['stop'])}")
@@ -384,7 +385,8 @@ def format_email_body(results: list, min_confidence: float = 70) -> str | None:
             lines.append(f"  Entry:  {_fmt_price(f['entry'])}")
         if f["stop"] and f["entry"]:
             try:
-                stop_pct = abs(float(f["entry"]) - float(f["stop"])) / float(f["entry"]) * 100
+                _entry_f = float(f["entry"])
+                stop_pct = abs(_entry_f - float(f["stop"])) / _entry_f * 100 if _entry_f != 0 else 0
                 lines.append(f"  Stop:   {_fmt_price(f['stop'])}  (-{stop_pct:.1f}% risk)")
             except Exception:
                 lines.append(f"  Stop:   {_fmt_price(f['stop'])}")
@@ -503,7 +505,8 @@ def format_discord_message(results: list, min_confidence: float = 70) -> str | N
             lines.append(f"Entry:  **{_fmt_price(f['entry'])}**")
         if f["stop"] and f["entry"]:
             try:
-                stop_pct = abs(float(f["entry"]) - float(f["stop"])) / float(f["entry"]) * 100
+                _entry_f = float(f["entry"])
+                stop_pct = abs(_entry_f - float(f["stop"])) / _entry_f * 100 if _entry_f != 0 else 0
                 lines.append(f"Stop:   {_fmt_price(f['stop'])}  *(-{stop_pct:.1f}% risk)*")
             except Exception:
                 lines.append(f"Stop:   {_fmt_price(f['stop'])}")

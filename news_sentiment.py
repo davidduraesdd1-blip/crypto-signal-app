@@ -256,14 +256,22 @@ def _classify_with_claude(headlines: list[str], pair: str) -> dict:
             messages=[{"role": "user", "content": prompt}],
         )
         import json
+        if not msg.content or not hasattr(msg.content[0], "text"):
+            logger.warning("[Sentiment] Empty Claude response — falling back to rule-based")
+            return _rule_based_classify(headlines, pair)
         raw = msg.content[0].text.strip()
         # strip markdown code fences if present
         # NEWS-03: case-insensitive check for ```json fence
         if raw.startswith("```"):
-            raw = raw.split("```")[1]
+            _p = raw.split("```")
+            raw = _p[1] if len(_p) > 1 else _p[0]
             if raw.lower().startswith("json"):
                 raw = raw[4:]
-        result = json.loads(raw)
+        try:
+            result = json.loads(raw)
+        except (json.JSONDecodeError, ValueError) as _je:
+            logger.warning("[Sentiment] JSON parse failed: %s — falling back to rule-based", _je)
+            return _rule_based_classify(headlines, pair)
         # NEWS-02: use .get() with defaults to avoid KeyError on incomplete Claude response
         bullish = result.get("bullish", 0) or 0
         bearish = result.get("bearish", 0) or 0

@@ -214,9 +214,16 @@ def load_overrides() -> dict:
     """Read current UI overrides. Returns {} on missing file or parse error."""
     try:
         if _AGENT_OVERRIDES_FILE.exists():
-            return json.loads(_AGENT_OVERRIDES_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+            text = _AGENT_OVERRIDES_FILE.read_text(encoding="utf-8").strip()
+            if not text:
+                return {}
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as _je:
+                logger.warning("[agent] agent_overrides.json parse error: %s", _je)
+                return {}
+    except (IOError, OSError) as _oe:
+        logger.warning("[agent] Failed to read agent_overrides.json: %s", _oe)
     return {}
 
 
