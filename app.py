@@ -261,21 +261,29 @@ def _cached_feedback_df() -> "pd.DataFrame":
     return _db.get_feedback_df(limit=500)
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_global_market() -> dict:
-    """Return CoinGecko global market stats. data_feeds.py has its own 5-min in-memory
-    cache so this does not hit the network on every Streamlit re-run. @st.cache_data is
-    intentionally NOT used here — it would lock in the $0M fallback for 5 minutes when
-    CoinGecko rate-limits the first cold-start call, preventing retry on subsequent renders."""
+    """Return CoinGecko global market stats, cached 5 minutes.
+    data_feeds.py also has its own in-memory cache per process; this Streamlit-layer cache
+    prevents N concurrent worker processes each hitting CoinGecko independently.
+    try/except ensures a rate-limit failure doesn't lock in {} for 5 min — raises and
+    lets the next render retry against the module-level cache."""
     import data_feeds as _df
-    return _df.get_global_market()
+    try:
+        return _df.get_global_market()
+    except Exception:
+        return {}
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_trending_coins() -> list:
-    """Return CoinGecko trending coins. data_feeds.py has its own in-memory cache.
-    @st.cache_data removed for same reason as _cached_global_market — avoids locking
-    in empty-list fallback when CoinGecko rate-limits on first cold-start call."""
+    """Return CoinGecko trending coins, cached 5 minutes.
+    Same rationale as _cached_global_market — prevents per-worker duplicate API calls."""
     import data_feeds as _df
-    return _df.get_trending_coins()
+    try:
+        return _df.get_trending_coins()
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=60, show_spinner=False, max_entries=5)
@@ -324,7 +332,7 @@ def _cached_resolved_feedback_df(days: int = 365) -> "pd.DataFrame":
     return _db.get_resolved_feedback_df(days=days)
 
 
-@st.cache_data(ttl=300, show_spinner=False, max_entries=30)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=50)
 def _cached_confidence_history(pair: str, days: int = 30) -> list:
     """Cache confidence history per pair — 5-min TTL."""
     return _db.get_confidence_history(pair, days=days)
