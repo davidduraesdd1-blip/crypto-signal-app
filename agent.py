@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -622,6 +623,8 @@ def _compute_agent_sharpe_weights() -> dict:
 
         # Map global Sharpe to a [0.7, 1.3] multiplier — don't wildly distort weights
         multiplier = float(max(0.7, min(1.3, 1.0 + sharpe * 0.3)))
+        if not math.isfinite(multiplier):
+            multiplier = 1.0  # guard: pnl.std() NaN (e.g. constant series) produces NaN multiplier
 
         weights = {k: round(v * multiplier, 3) for k, v in _DEFAULT.items()}
 
@@ -632,7 +635,7 @@ def _compute_agent_sharpe_weights() -> dict:
         return weights
 
     except Exception as _exc:
-        logger.debug("[agent] Sharpe weight computation failed: %s", _exc)
+        logger.warning("[agent] Sharpe weight computation failed: %s", _exc)
         return _DEFAULT
 
 
@@ -802,6 +805,8 @@ def _node_claude_reason(state: AgentState) -> AgentState:
     # Rolling Sharpe context + reflection memory
     sharpe_w      = _compute_agent_sharpe_weights()
     sharpe_mult   = sharpe_w.get("agents", 1.0)
+    if not math.isfinite(sharpe_mult):
+        sharpe_mult = 1.0   # guard: NaN must never reach Claude system prompt
     sharpe_label  = "above-average" if sharpe_mult > 1.05 else ("below-average" if sharpe_mult < 0.95 else "average")
     reflection    = _get_reflection_memory(state["pair"])
     bull_bear_blk = _build_bull_bear_section(sig)
