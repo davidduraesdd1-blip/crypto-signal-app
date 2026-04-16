@@ -142,6 +142,13 @@ def black_scholes(
 
     vega = S * pdf_d1 * sqrt_T / 100.0   # per 1% vol move
 
+    # Guard: clamp any NaN/Inf that could arise from extreme inputs
+    price = 0.0                               if not math.isfinite(price) else price
+    delta = max(-1.0, min(1.0, delta))        if math.isfinite(delta)     else 0.0
+    gamma = 0.0                               if not math.isfinite(gamma) else gamma
+    theta = 0.0                               if not math.isfinite(theta) else theta
+    vega  = 0.0                               if not math.isfinite(vega)  else vega
+
     return (
         round(float(price), 6),
         round(float(delta), 4),
