@@ -600,7 +600,7 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
             'PENDLE': 'pendle', 'WIF': 'dogwifcoin', 'PYTH': 'pyth-network',
             'JUP': 'jupiter-exchange-solana', 'HBAR': 'hedera-hashgraph',
             'FLR': 'flare-networks', 'XDC': 'xdce-crowd-sale',
-            'CC': 'canton-network', 'SHX': 'stronghold-token',
+            'CC': 'canton', 'SHX': 'stronghold-token',
             'ZBCN': 'zebec-network', 'WFLR': 'wrapped-flare',
             'FXRP': 'fxrp',
         }

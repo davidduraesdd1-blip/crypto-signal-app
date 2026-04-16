@@ -77,6 +77,7 @@ TIER2_PAIRS: list[str] = [
     "ATOM/USDT", "FIL/USDT", "INJ/USDT", "PENDLE/USDT", "WIF/USDT",
     "PYTH/USDT", "JUP/USDT", "HBAR/USDT", "FLR/USDT", "XDC/USDT",
     "WFLR/USDT", "FXRP/USDT", "SHX/USDT", "ZBCN/USDT", "CPOOL/USDT",
+    "CC/USDT",   # Canton Network — §13 must-have; Bybit primary (no Binance listing)
 ]
 
 # Binance-listed Tier 2 (subset that have Binance SPOT markets)
@@ -97,7 +98,8 @@ TIER2_COINGECKO_IDS: dict[str, str] = {
     "HBAR/USDT": "hedera-hashgraph", "FLR/USDT": "flare-networks",
     "XDC/USDT": "xdce-crowd-sale", "WFLR/USDT": "wrapped-flare",
     "FXRP/USDT": "fxrp", "SHX/USDT": "stronghold-token",
-    "ZBCN/USDT": "zbcn", "CPOOL/USDT": "clearpool",
+    "ZBCN/USDT": "zebec-protocol", "CPOOL/USDT": "clearpool",
+    "CC/USDT":   "canton",         # Canton Network (§13 must-have); Bybit CC/USDT
 }
 
 # Default equal weights for Tier 2

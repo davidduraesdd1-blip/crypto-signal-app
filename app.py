@@ -15,7 +15,6 @@ import logging
 import os
 import threading
 import time
-import requests
 from datetime import datetime, timedelta, timezone
 
 # ─── Sentry error monitoring (free tier — only loads when DSN is set) ──────────
@@ -98,10 +97,6 @@ def audit(event: str, **ctx) -> None:
     """Log a security-relevant user action to the audit trail."""
     extra = " ".join(f"{k}={v!r}" for k, v in ctx.items())
     _audit_log.info("%s %s", event, extra)
-
-# PERF: module-level Session reuses TCP connections for all requests.get() calls in this file
-_http = requests.Session()
-_http.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
 
 from apscheduler.schedulers.background import BackgroundScheduler
 import alerts as _alerts
@@ -3471,9 +3466,11 @@ def page_dashboard():
             with col_pdf:
                 ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
-                try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
-                    if _pdf is None:
-                        raise ImportError("pdf_export module not available")
+                if _pdf is None:
+                    # Pass 5: show clear message when pdf_export module isn't installed
+                    st.caption("PDF export requires the `reportlab` library — not installed.")
+                else:
+                  try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
                     if st.session_state.get("_scan_pdf_ts") != ts_str:
                         st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
                         st.session_state["_scan_pdf_ts"] = ts_str
@@ -3489,7 +3486,7 @@ def page_dashboard():
                         )
                     else:
                         st.caption("PDF unavailable")
-                except Exception as _pdf_err:
+                  except Exception as _pdf_err:
                     logger.warning("[App] PDF generation failed: %s", _pdf_err)
                     st.caption("PDF generation failed — please try again.")
 
