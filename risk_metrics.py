@@ -104,7 +104,7 @@ def compute_historical_var(
         # Parametric fallback: use mean/std of available data or defaults
         if len(pnl_returns) >= 3:
             mu  = float(np.mean(pnl_returns))
-            std = float(np.std(pnl_returns))
+            std = float(np.std(pnl_returns, ddof=1))   # ddof=1: unbiased sample std
         else:
             mu  = 0.0
             std = 5.0   # default 5% position volatility
@@ -255,7 +255,7 @@ def compute_var_summary(
             # Parametric fallback using the same shared data
             if len(pnl_returns) >= 3:
                 mu  = float(np.mean(pnl_returns))
-                std = float(np.std(pnl_returns))
+                std = float(np.std(pnl_returns, ddof=1))   # ddof=1: unbiased sample std
             else:
                 mu  = 0.0
                 std = 5.0
@@ -271,7 +271,7 @@ def compute_var_summary(
 
     if len(pnl) >= 5:
         mu       = float(np.mean(pnl))
-        std      = float(np.std(pnl))
+        std      = float(np.std(pnl, ddof=1))    # ddof=1: unbiased sample std
 
         # Annualised Sharpe: scale per-trade P&L to annual frequency.
         # _LOOKBACK_DAYS window / n_samples gives avg holding period in days.
