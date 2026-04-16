@@ -372,10 +372,14 @@ def init_db():
             # ── Migrate existing feedback_log tables — add new columns if missing ──
             # Required for databases created before Phase 2 (F1 + F4 columns).
             # ALTER TABLE IF NOT EXISTS column is not valid SQLite syntax; use PRAGMA check.
+            _ALLOWED_MIGRATE_TABLES = {"feedback_log", "backtest_trades", "paper_trades",
+                                       "positions", "execution_log", "daily_signals"}
             def _add_col(tbl, col, col_def):
+                if tbl not in _ALLOWED_MIGRATE_TABLES:
+                    raise ValueError(f"[DB] _add_col: table '{tbl}' not in migration whitelist")
                 existing = [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
                 if col not in existing:
-                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_def}")
+                    conn.execute(f'ALTER TABLE "{tbl}" ADD COLUMN "{col}" {col_def}')
 
             for col, dfn in [
                 ('actual_exit',    'REAL'),
