@@ -4585,15 +4585,15 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
 
             _fig_m2 = _go.Figure()
 
-            # M2 line (left axis)
-            _fig_m2.add_trace(_go.Scatter(
+            # M2 line (left axis) — Scattergl = WebGL backend, 5-10x faster render
+            _fig_m2.add_trace(_go.Scattergl(
                 x=_dates, y=_m2_vals,
                 name="US M2 (tn USD)", mode="lines",
                 line=dict(color="#6366f1", width=2),
                 yaxis="y1",
             ))
             # M2 lagged line (shifted +90d — shown on same axis for alignment)
-            _fig_m2.add_trace(_go.Scatter(
+            _fig_m2.add_trace(_go.Scattergl(
                 x=_lag_dates, y=_m2_vals,
                 name="M2 +90d lag", mode="lines",
                 line=dict(color="#6366f1", width=1.5, dash="dot"),
@@ -4602,7 +4602,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
             # BTC price line (right axis)
             _btc_clean = [v for v in _btc_p if v is not None]
             if _btc_clean:
-                _fig_m2.add_trace(_go.Scatter(
+                _fig_m2.add_trace(_go.Scattergl(
                     x=[_dates[i] for i, v in enumerate(_btc_p) if v is not None],
                     y=_btc_clean,
                     name="BTC Price (USD)", mode="lines",
