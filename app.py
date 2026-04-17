@@ -1189,13 +1189,28 @@ def _scan_progress():
         unsafe_allow_html=True,
     )
 
-    # Simple text progress counter + PERF-A6: live partial results preview
+    # B4: ETA calculation — elapsed / done * remaining
     _n_done = _prog
+    _eta_str = ""
+    if _n_done > 0:
+        _start_ts = _SCAN_STATUS.get("start_time")
+        if _start_ts:
+            _elapsed  = time.time() - _start_ts
+            _rate     = _n_done / max(_elapsed, 0.1)          # pairs per second
+            _remaining = max(0, (_total - _n_done) / _rate)   # seconds left
+            if _remaining > 60:
+                _eta_str = f" · ~{int(_remaining // 60)}m {int(_remaining % 60)}s remaining"
+            elif _remaining > 3:
+                _eta_str = f" · ~{int(_remaining)}s remaining"
+            else:
+                _eta_str = " · almost done…"
+
+    # Simple text progress counter + PERF-A6: live partial results preview
     if _n_done > 0:
         st.markdown(
             f'<div style="font-size:12px;color:rgba(0,212,170,0.8);'
             f'font-weight:600;margin:4px 0 8px 0;">'
-            f'⚡ {_n_done} of {_total} coins scanned</div>',
+            f'⚡ {_n_done} of {_total} coins scanned{_eta_str}</div>',
             unsafe_allow_html=True,
         )
         # PERF-A6: Progressive scan — show top BUY signals found so far
@@ -3887,9 +3902,10 @@ def _run_scan_thread():
         _scan_state["progress"] = 0
         _scan_state["progress_pair"] = f"Connecting to {model.TA_EXCHANGE.upper()}..."
     # PERF-30: update in-memory status on scan start
-    _SCAN_STATUS["running"]  = True
-    _SCAN_STATUS["progress"] = 0
-    _SCAN_STATUS["current"]  = f"Connecting to {model.TA_EXCHANGE.upper()}..."
+    _SCAN_STATUS["running"]    = True
+    _SCAN_STATUS["progress"]   = 0
+    _SCAN_STATUS["current"]    = f"Connecting to {model.TA_EXCHANGE.upper()}..."
+    _SCAN_STATUS["start_time"] = time.time()   # B4: ETA calculation base
     _write_scan_status(running=True, progress=0, pair=f"Connecting to {model.TA_EXCHANGE.upper()}...")
     try:
         # st.session_state is only available in the Streamlit request context;
