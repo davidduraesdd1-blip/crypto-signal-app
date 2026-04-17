@@ -9,7 +9,8 @@ import numpy as np
 
 # ── pandas Copy-on-Write (perf: 30% memory reduction, avoids silent DF copies) ──
 try:
-    pd.options.mode.copy_on_write = True
+    if tuple(int(x) for x in pd.__version__.split(".")[:2]) < (3, 0):
+        pd.options.mode.copy_on_write = True
 except Exception:
     pass
 import plotly.graph_objects as go
