@@ -2742,6 +2742,24 @@ def page_dashboard():
             unsafe_allow_html=True,
         )
 
+        # ── Copy Signal Summary (E2) ────────────────────────────────────────────
+        try:
+            from datetime import datetime as _dt_sig, timezone as _tz_sig
+            _sig_ts = _dt_sig.now(_tz_sig.utc).strftime("%Y-%m-%d %H:%M UTC")
+            _sig_entry_str  = f"${entry:,.4f}"  if entry  else "N/A"
+            _sig_stop_str   = f"${stop:,.4f}"   if stop   else "N/A"
+            _sig_target_str = f"${exit_:,.4f}"  if exit_  else "N/A"
+            _sig_summary = (
+                f"[{pair}] {direction}  |  Confidence: {conf:.0f}%  |  "
+                f"Entry: {_sig_entry_str}  |  Stop: {_sig_stop_str}  |  "
+                f"Target: {_sig_target_str}  |  {_sig_ts}  — SuperGrok Signal Model"
+            )
+            with st.expander("📋 Copy Signal Summary", expanded=False):
+                st.code(_sig_summary, language=None)
+                st.caption("Click the copy icon (top-right of the box above) to copy this signal.")
+        except Exception:
+            pass
+
         # ── Item 6 Tier 2: "Why this signal?" plain-English reasoning ─────────────
         if _user_lv in ("beginner", "intermediate"):
             _why_html = _ui.why_signal_html(
