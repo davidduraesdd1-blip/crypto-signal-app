@@ -785,6 +785,11 @@ if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload 
         data_feeds.clear_all_module_caches()
     except Exception as _df_clr_err:
         logger.debug("[App] data_feeds module cache clear failed: %s", _df_clr_err)
+    try:
+        from cycle_indicators import clear_cycle_caches as _ccc
+        _ccc()
+    except Exception as _ci_clr_err:
+        logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -1672,10 +1677,36 @@ def page_dashboard():
             logger.warning("[App] macro panel failed: %s", _me_err)
             st.caption("Macro panel temporarily unavailable — try refreshing.")
 
-        # ── 4-Layer Composite Market Environment Signal ─────────────────────────
+        # ── Market Cycle Position Gauge (CoinsKid-style 1-100 + 5 zones) ────────
+        # Wraps the full 4-layer composite + new cycle indicators (retail trends,
+        # stablecoin supply delta, breadth, voliquidity, dumb money) into one
+        # Beginner-friendly 1-100 gauge. Renders above the Market Environment banner.
         try:
             import agent as _sg_agent
             _csig_sg = _sg_agent.get_composite_signal()
+        except Exception:
+            _csig_sg = None
+
+        try:
+            if _csig_sg:
+                from cycle_indicators import (
+                    compute_cycle_bundle as _ccb,
+                    render_cycle_gauge_html as _rcg,
+                )
+                _sg_bundle = _ccb(_csig_sg.get("score"))
+                _sg_cycle  = _sg_bundle.get("cycle_100") if _sg_bundle else None
+                if _sg_cycle:
+                    st.markdown(_rcg(_sg_cycle, _sg_level_val),
+                                unsafe_allow_html=True)
+                    # Attach to composite dict so downstream expanders can read it
+                    _csig_sg["cycle_100"]    = _sg_cycle
+                    _csig_sg["cycle_extras"] = {k: v for k, v in _sg_bundle.items()
+                                                if k != "cycle_100"}
+        except Exception as _cg_err:
+            logger.debug("[CycleGauge] render failed: %s", _cg_err)
+
+        # ── 4-Layer Composite Market Environment Signal ─────────────────────────
+        try:
             if _csig_sg and _csig_sg.get("score", 0) != 0.0:
                 _sg_score  = _csig_sg.get("score", 0.0)
                 _sg_signal = _csig_sg.get("signal", "NEUTRAL").replace("_", " ")

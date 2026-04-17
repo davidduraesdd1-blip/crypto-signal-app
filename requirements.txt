@@ -25,3 +25,4 @@ yfinance>=0.2.40
 scipy>=1.11.0
 sentry-sdk>=1.40.0
 python-dotenv>=1.0.0
+pytrends>=4.9.2   # Google Trends retail sentiment (optional — graceful fallback)
