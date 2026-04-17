@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -1688,15 +1687,18 @@ def compute_composite_top_bottom_score(
         "structure":  _W_STRUCTURE,
         "volatility": _W_VOLATILITY,
     }
-    total_w = sum(W.values())
-    if total_w <= 0:
-        total_w = 1.0
-
     # If macro data missing, redistribute its weight to divergence + structure
     if W["onchain"] == 0 and W["sentiment"] == 0:
         redistrib = (_W_ONCHAIN + _W_SENTIMENT) / 2
         W["divergence"] += redistrib
         W["structure"]  += redistrib
+
+    # Recompute total_w AFTER redistribution so the denominator matches the
+    # actual weight sum — computing it before caused 2× inflation when both
+    # macro layers were missing (total_w stayed at 0.50 while weights summed to 1.0).
+    total_w = sum(W.values())
+    if total_w <= 0:
+        total_w = 1.0
 
     composite_01 = sum(layers_raw[k] * W[k] for k in W) / total_w
     composite_01 = _clamp(composite_01)
