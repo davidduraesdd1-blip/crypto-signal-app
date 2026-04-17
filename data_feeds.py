@@ -38,30 +38,70 @@ except ImportError:
     _CCXT_AVAILABLE = False
     logging.warning("ccxt not installed — new exchange funding rates will be unavailable")
 
-# ─── HTTP Session with retry adapter (#12 security hardening) ────────────────
-def _build_session() -> requests.Session:
-    """Build a requests.Session with exponential backoff retry and browser User-Agent."""
-    session = requests.Session()
-    retry = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry, pool_maxsize=30, pool_connections=20)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
-        ),
-        "Accept-Encoding": "gzip, deflate, br",  # br = Brotli: 15-25% better compression than gzip
-        "Connection": "keep-alive",
-    })
-    return session
+# ── requests-cache: in-memory response cache with per-domain TTLs ────────────
+# Falls back to a plain Session if not installed.
+try:
+    from requests_cache import CachedSession as _CachedSession
+    _URLS_EXPIRE_AFTER = {
+        "*/coingecko.com/*":   60,   # live prices: 1 min
+        "*/binance.com/*":     30,   # futures prices: 30 s
+        "*/hyperliquid.xyz/*": 30,
+        "*/alternative.me/*":  300,  # Fear & Greed: 5 min
+        "*/llama.fi/*":        300,  # DeFiLlama: 5 min
+        "*/stlouisfed.org/*":  3600, # FRED: 1 hour
+        "*/coinmetrics.io/*":  3600,
+        "*/deribit.com/*":     120,
+        "*":                   120,  # default: 2 min
+    }
+    def _build_session():
+        """CachedSession with retry/backoff + per-domain TTLs + memory backend."""
+        session = _CachedSession(
+            backend="memory",
+            urls_expire_after=_URLS_EXPIRE_AFTER,
+            stale_if_error=True,
+        )
+        retry = Retry(
+            total=3, backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"], raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_maxsize=30, pool_connections=20)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+        })
+        return session
+    _CACHE_AVAILABLE = True
+except ImportError:
+    _CACHE_AVAILABLE = False
 
+if not _CACHE_AVAILABLE:
+    def _build_session() -> requests.Session:
+        """Fallback: plain Session when requests-cache is not installed."""
+        session = requests.Session()
+        retry = Retry(
+            total=3, backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"], raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_maxsize=30, pool_connections=20)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+        })
+        return session
 
 _SESSION = _build_session()
 
