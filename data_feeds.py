@@ -15,6 +15,22 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+# ── orjson: 4x faster JSON parsing — monkeypatches Response.json() globally ──
+# All resp.json() / r.json() calls throughout this module now use orjson.
+# orjson is in requirements.txt; falls back to stdlib json if not installed.
+try:
+    import orjson as _orjson
+    import requests.models as _req_models
+    def _fast_response_json(self, **_kw):
+        return _orjson.loads(self.content)
+    _req_models.Response.json = _fast_response_json
+    def _fast_json(content: bytes):
+        return _orjson.loads(content)
+except ImportError:
+    def _fast_json(content: bytes):
+        import json as _j
+        return _j.loads(content)
+
 try:
     import ccxt
     _CCXT_AVAILABLE = True
