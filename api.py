@@ -275,7 +275,7 @@ def health():
     try:
         stats = db.get_db_stats()
     except Exception as _e:
-        logger.warning(f"DB stats unavailable: {_e}")
+        logger.warning("DB stats unavailable: %s", _e)
         stats = {"error": "unavailable"}
     status = db.read_scan_status()
 

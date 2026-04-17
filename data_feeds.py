@@ -455,7 +455,7 @@ def get_funding_rate(pair: str) -> dict:
     try:
         resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
         if resp.status_code == 429:
-            logging.debug(f"OKX funding rate: rate limited (429) for {pair}")
+            logging.debug("OKX funding rate: rate limited (429) for %s", pair)
         elif resp.status_code == 200:
             data = resp.json()
             items = data.get("data", [])
@@ -466,13 +466,13 @@ def get_funding_rate(pair: str) -> dict:
                         _BINANCE_FUNDING_CACHE[pair] = parsed
                     return parsed
     except Exception as _e:
-        logging.debug(f"OKX funding rate fetch error for {pair}: {_e}")
+        logging.debug("OKX funding rate fetch error for %s: %s", pair, _e)
 
     # 2. Bybit (no US geo-block — replaces fapi.binance.com)
     try:
         resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
         if resp.status_code == 429:
-            logging.debug(f"Bybit funding rate: rate limited (429) for {pair}")
+            logging.debug("Bybit funding rate: rate limited (429) for %s", pair)
         elif resp.status_code == 200:
             data = resp.json()
             items = data.get("result", {}).get("list", [])
@@ -483,7 +483,7 @@ def get_funding_rate(pair: str) -> dict:
                         _BINANCE_FUNDING_CACHE[pair] = parsed
                     return parsed
     except Exception as _e:
-        logging.debug(f"Bybit funding rate fetch error for {pair}: {_e}")
+        logging.debug("Bybit funding rate fetch error for %s: %s", pair, _e)
 
     result = _empty_result("Funding N/A (spot pair or geo-blocked)", now)
     with _FUNDING_CACHE_LOCK:
@@ -832,7 +832,7 @@ def get_onchain_metrics(pair: str) -> dict:
         }
         resp = _SESSION.get(url, params=params, timeout=10)
         if resp.status_code == 429:
-            logging.debug(f"CoinGecko rate limited (429) for {pair} — using fallback")
+            logging.debug("CoinGecko rate limited (429) for %s — using fallback", pair)
             _fb = {**_fallback_onchain(), '_ts': now}
             with _ONCHAIN_CACHE_LOCK:
                 _ONCHAIN_CACHE[pair] = _fb
@@ -886,7 +886,7 @@ def get_onchain_metrics(pair: str) -> dict:
         return result
 
     except Exception as e:
-        logging.debug(f"CoinGecko onchain fetch failed for {pair}: {e}")
+        logging.debug("CoinGecko onchain fetch failed for %s: %s", pair, e)
         _fb = {**_fallback_onchain(), '_ts': now}
         with _ONCHAIN_CACHE_LOCK:
             _ONCHAIN_CACHE[pair] = _fb
@@ -940,7 +940,7 @@ def get_open_interest(pair: str) -> dict:
                     _OI_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.debug(f"OI fetch failed for {pair}: {e}")
+        logging.debug("OI fetch failed for %s: %s", pair, e)
 
     result = {'oi_usd': 0.0, 'signal': 'N/A', 'error': 'OI unavailable', '_ts': now}
     with _OI_CACHE_LOCK:
@@ -1251,7 +1251,7 @@ def get_options_iv(pair: str) -> dict:
                     _IV_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.debug(f"Deribit IV fetch failed for {pair}: {e}")
+        logging.debug("Deribit IV fetch failed for %s: %s", pair, e)
 
     result = {'iv': 0.0, 'iv_percentile': 50.0, 'signal': 'N/A', 'source': None,
               'error': 'IV unavailable', '_ts': now}
@@ -1329,7 +1329,7 @@ def get_orderbook_depth(pair: str, levels: int = 20) -> dict:
                     _OB_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.debug(f"OB depth fetch failed for {pair}: {e}")
+        logging.debug("OB depth fetch failed for %s: %s", pair, e)
 
     result = {'imbalance': 0.0, 'signal': 'N/A', 'bid_vol': 0.0, 'ask_vol': 0.0,
               'error': 'OB unavailable', '_ts': now}
@@ -1441,7 +1441,7 @@ def _fetch_kucoin_fr(pair: str, now: float) -> dict:
         url  = _KUCOIN_FUNDING_URL.format(symbol=sym)
         resp = _SESSION.get(url, timeout=6)
         if resp.status_code == 429:
-            logging.debug(f"KuCoin funding rate: rate limited (429) for {pair}")
+            logging.debug("KuCoin funding rate: rate limited (429) for %s", pair)
             return _empty_result("KuCoin: rate limited", now)
         if resp.status_code == 200:
             data = resp.json()
@@ -1866,7 +1866,7 @@ def get_lunarcrush_sentiment(pair: str) -> dict:
             _LC_CACHE[pair] = err_result
         return err_result
     except Exception as e:
-        logging.debug(f"LunarCrush fetch failed for {pair}: {e}")
+        logging.debug("LunarCrush fetch failed for %s: %s", pair, e)
         err_result = {**_no_key_result("lunarcrush", str(e)), "_ts": now}
         with _LC_CACHE_LOCK:
             _LC_CACHE[pair] = err_result
@@ -1936,7 +1936,7 @@ def get_coinglass_liquidations(pair: str) -> dict:
             _CG_LIQ_CACHE[pair] = err_result
         return err_result
     except Exception as e:
-        logging.debug(f"Coinglass liquidation fetch failed for {pair}: {e}")
+        logging.debug("Coinglass liquidation fetch failed for %s: %s", pair, e)
         err_result = {**_no_key_result("coinglass", str(e)), "_ts": now}
         with _CG_LIQ_LOCK:
             _CG_LIQ_CACHE[pair] = err_result
@@ -2016,7 +2016,7 @@ def get_cryptoquant_exchange_flow(pair: str) -> dict:
             _CQ_CACHE[pair] = err_result
         return err_result
     except Exception as e:
-        logging.debug(f"CryptoQuant flow fetch failed for {pair}: {e}")
+        logging.debug("CryptoQuant flow fetch failed for %s: %s", pair, e)
         err_result = {**_no_key_result("cryptoquant", str(e)), "_ts": now}
         with _CQ_LOCK:
             _CQ_CACHE[pair] = err_result
@@ -2112,7 +2112,7 @@ def get_glassnode_onchain(pair: str) -> dict:
             _GN_CACHE[pair] = result
         return result
     except Exception as e:
-        logging.debug(f"Glassnode fetch failed for {pair}: {e}")
+        logging.debug("Glassnode fetch failed for %s: %s", pair, e)
         return _no_key_result("glassnode", str(e))
 
 
@@ -2217,7 +2217,7 @@ def get_defillama_tvl(pair: str) -> dict:
         return result
 
     except Exception as e:
-        logging.debug(f"DefiLlama TVL fetch failed for {pair}: {e}")
+        logging.debug("DefiLlama TVL fetch failed for %s: %s", pair, e)
         result = {**_neutral, 'chain': chain_name, 'error': str(e)[:80], '_ts': now}
         with _TVL_CACHE_LOCK:
             _TVL_CACHE[pair] = result
@@ -2307,7 +2307,7 @@ def get_token_unlock_schedule(pair: str) -> dict:
             _UNLOCK_CACHE[pair] = result
         return result
     except Exception as e:
-        logging.debug(f"Token unlock fetch failed for {pair}: {e}")
+        logging.debug("Token unlock fetch failed for %s: %s", pair, e)
         result = {
             "signal": "N/A", "next_unlock_days": None, "unlock_pct_supply": None,
             "source": "tokenomist", "error": str(e), "_ts": now,
@@ -2359,7 +2359,7 @@ def get_trending_coins() -> list[str]:
         elif resp.status_code == 429:
             logging.debug("[Trending] CoinGecko rate-limited — reusing cached list")
     except Exception as e:
-        logging.debug(f"[Trending] fetch failed: {e}")
+        logging.debug("[Trending] fetch failed: %s", e)
 
     # Return last known list (may be empty on first call with error)
     with _TRENDING_LOCK:
@@ -2482,7 +2482,7 @@ def get_global_market() -> dict:
             # fall through to CoinPaprika below
 
     except Exception as e:
-        logging.debug(f"[GlobalMkt] CoinGecko fetch failed: {e}")
+        logging.debug("[GlobalMkt] CoinGecko fetch failed: %s", e)
         with _GLOBAL_LOCK:
             if _GLOBAL_CACHE:
                 return dict(_GLOBAL_CACHE)
@@ -2582,7 +2582,7 @@ def get_cvd(pair: str, limit: int = 500) -> dict:
         resp = _SESSION.get(url, timeout=8)
 
         if resp.status_code == 429:
-            logging.debug(f"[CVD] OKX rate limited for {pair}")
+            logging.debug("[CVD] OKX rate limited for %s", pair)
             return dict(_CVD_NEUTRAL)
         if resp.status_code != 200:
             return {**_CVD_NEUTRAL, "error": f"HTTP {resp.status_code}"}
@@ -2645,7 +2645,7 @@ def get_cvd(pair: str, limit: int = 500) -> dict:
         return {k: v for k, v in result.items() if k != "_ts"}
 
     except Exception as e:
-        logging.debug(f"[CVD] {pair}: {e}")
+        logging.debug("[CVD] %s: %s", pair, e)
         return {**_CVD_NEUTRAL, "error": str(e)}
 
 
@@ -2916,7 +2916,7 @@ def get_fear_greed_index(days: int = 7) -> dict:
             logging.debug("[F&G] rate limited — reusing cache")
 
     except Exception as e:
-        logging.debug(f"[F&G] fetch failed: {e}")
+        logging.debug("[F&G] fetch failed: %s", e)
 
     # Return stale cache if available, else neutral
     with _FNG_LOCK:
@@ -3058,7 +3058,7 @@ def get_liquidation_cascade_risk(pair: str) -> dict:
         return {k: v for k, v in result.items() if k != "_ts"}
 
     except Exception as e:
-        logging.debug(f"[CascadeRisk] {pair}: {e}")
+        logging.debug("[CascadeRisk] %s: %s", pair, e)
         result = {
             "score": 25, "risk_level": "LOW", "direction": "NEUTRAL",
             "signal": "SAFE", "components": {}, "funding_pct": 0.0,
@@ -3166,7 +3166,7 @@ def get_top_movers(top_n: int = 3) -> dict:
         elif resp.status_code == 429:
             logging.debug("[Movers] CoinGecko rate limited — reusing cache")
     except Exception as e:
-        logging.debug(f"[Movers] fetch failed: {e}")
+        logging.debug("[Movers] fetch failed: %s", e)
 
     with _MOVERS_LOCK:
         return _MOVERS_CACHE.get("data", {

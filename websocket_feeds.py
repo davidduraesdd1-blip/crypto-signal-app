@@ -89,7 +89,7 @@ def _on_open(ws, pairs: list[str]) -> None:
             logger.warning("[WS] Skipping malformed pair %r: %s", p, e)
     if args:
         ws.send(json.dumps({"op": "subscribe", "args": args}))
-    logger.info(f"[WS] Subscribed to tickers for {pairs}")
+    logger.info("[WS] Subscribed to tickers for %s", pairs)
 
 
 def _on_message(ws, message: str) -> None:
@@ -133,20 +133,20 @@ def _on_message(ws, message: str) -> None:
             with _lock:
                 _prices[pair] = entry
     except Exception as exc:
-        logger.debug(f"[WS] message parse error: {exc}")
+        logger.debug("[WS] message parse error: %s", exc)
 
 
 def _on_error(ws, error) -> None:
     with _lock:
         _status["connected"] = False
         _status["error"]     = str(error)
-    logger.warning(f"[WS] error: {error}")
+    logger.warning("[WS] error: %s", error)
 
 
 def _on_close(ws, close_code, close_msg) -> None:
     with _lock:
         _status["connected"] = False
-    logger.info(f"[WS] closed (code={close_code})")
+    logger.info("[WS] closed (code=%s)", close_code)
 
 
 # ── Background loop ────────────────────────────────────────────
@@ -169,7 +169,7 @@ def _run_loop(pairs: list[str], session: int) -> None:
             # Use local ref so a concurrent start() replacing _ws_app doesn't affect this run
             new_app.run_forever(ping_interval=_PING_INTERVAL, ping_timeout=10)
         except Exception as exc:
-            logger.warning(f"[WS] loop exception: {exc}")
+            logger.warning("[WS] loop exception: %s", exc)
         if _running and _session_id == session:
             with _lock:
                 _status["reconnects"] += 1
@@ -211,7 +211,7 @@ def start(pairs: list[str]) -> None:
     )
     _ws_thread.start()
     _start_watchdog(pairs)   # ensure heartbeat watchdog is running
-    logger.info(f"[WS] Started feed for {pairs}")
+    logger.info("[WS] Started feed for %s", pairs)
 
 
 def stop() -> None:

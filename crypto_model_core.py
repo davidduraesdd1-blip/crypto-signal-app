@@ -234,7 +234,7 @@ def load_config_overrides():
             if key in g:
                 g[key] = val
     except Exception as e:
-        logging.warning(f"Config override load failed: {e}")
+        logging.warning("Config override load failed: %s", e)
 
 load_config_overrides()
 
@@ -300,7 +300,7 @@ def _load_weights():
             with open(DYNAMIC_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            logging.debug(f"Could not load dynamic weights from file: {e}")
+            logging.debug("Could not load dynamic weights from file: %s", e)
     return DEFAULT_WEIGHTS.copy()
 
 weights = _load_weights()
@@ -445,7 +445,7 @@ def get_exchange_instance(name='kraken'):
             return ex
         except Exception as e:
             _exchange_failures.add(name)  # cache failure — suppress future spam
-            logging.debug(f"Exchange {name} failed: {str(e)[:60]}")
+            logging.debug("Exchange %s failed: %s", name, str(e)[:60])
             return None
 
 def robust_fetch_ticker(ex, pair):
@@ -516,7 +516,7 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
                     return df
             except Exception as _ge:
                 logging.debug("Gate.io REST fallback %s %s: %s", pair, timeframe, str(_ge)[:80])
-        logging.debug(f"OHLCV failed {pair} {timeframe}: {_e_msg[:60]}")
+        logging.debug("OHLCV failed %s %s: %s", pair, timeframe, _e_msg[:60])
         return pd.DataFrame()
 
 
@@ -660,7 +660,7 @@ def fetch_fear_greed():
     try:
         r = _http_session.get("https://api.alternative.me/fng/?limit=1", timeout=10)
         if r.status_code != 200:
-            logging.debug(f"Fear & Greed API returned HTTP {r.status_code}")
+            logging.debug("Fear & Greed API returned HTTP %s", r.status_code)
             return 50, "Neutral"
         _fng_list = r.json().get('data', [])
         if not _fng_list:
@@ -668,7 +668,7 @@ def fetch_fear_greed():
         data = _fng_list[0]
         return int(data.get('value', 50)), data.get('value_classification', 'Neutral')
     except Exception as e:
-        logging.debug(f"Fear & Greed fetch failed: {e}")
+        logging.debug("Fear & Greed fetch failed: %s", e)
         return 50, "Neutral"
 
 # ──────────────────────────────────────────────
@@ -928,7 +928,7 @@ def detect_hmm_regime(df) -> str:
     except ImportError:
         return None
     except Exception as _hmm_exc:
-        logging.debug(f"[HMM] regime detection failed: {_hmm_exc}")
+        logging.debug("[HMM] regime detection failed: %s", _hmm_exc)
         return None
 
 
@@ -1061,7 +1061,7 @@ def agent_vote_lgbm(df, hold_bars: int = 5):
     except ImportError:
         return 0.0, "LightGBM: not installed (pip install lightgbm)"
     except Exception as e:
-        logging.debug(f"LightGBM agent failed: {e}")
+        logging.debug("LightGBM agent failed: %s", e)
         return 0.0, "LightGBM: error"
 
 
@@ -1159,7 +1159,7 @@ def agent_vote_lstm(df, hold_bars: int = 5):
         return round(score, 1), f"LSTM-MLP: P(up)={prob_buy:.2f}"
 
     except Exception as e:
-        logging.debug(f"LSTM-MLP agent failed: {e}")
+        logging.debug("LSTM-MLP agent failed: %s", e)
         return 0.0, f"LSTM-MLP: error ({type(e).__name__})"
 
 
@@ -1243,7 +1243,7 @@ def retrain_lgbm_from_feedback(min_samples: int = 50) -> dict:
             _lgbm_feedback_cache["n_samples"] = len(df_valid)
 
         _acc_str = f"{val_acc:.1%}" if val_acc is not None else "N/A (no validation set)"
-        logging.info(f"LightGBM feedback retrain: {len(df_valid)} samples, val_acc={_acc_str}")
+        logging.info("LightGBM feedback retrain: %d samples, val_acc=%s", len(df_valid), _acc_str)
         return {
             "success": True,
             "n_samples": len(df_valid),
@@ -1253,7 +1253,7 @@ def retrain_lgbm_from_feedback(min_samples: int = 50) -> dict:
         }
 
     except Exception as e:
-        logging.warning(f"retrain_lgbm_from_feedback failed: {e}")
+        logging.warning("retrain_lgbm_from_feedback failed: %s", e)
         return {"success": False, "message": str(e)}
 
 
@@ -1378,7 +1378,7 @@ def multi_agent_vote(df, fng_value, fng_category, onchain_data, adx, atr_val, co
         consensus = len([v for v in votes if abs(v) > 70]) / len(votes) if votes else 0.0
         return final_vote, reasons, consensus, votes_dict
     except Exception as e:
-        logging.info(f"Multi-agent vote failed: {e}")
+        logging.warning("Multi-agent vote failed: %s", e)
         return 0.0, [], 0.0, _empty
 
 # ──────────────────────────────────────────────
@@ -1988,7 +1988,7 @@ def compute_cointegration_zscore(df1, df2, lookback=STAT_ARB_LOOKBACK):
         elif abs(z) < STAT_ARB_Z_EXIT: return z, "EXIT_SPREAD"
         return z, "NEUTRAL"
     except Exception as e:
-        logging.debug(f"Cointegration z-score failed: {e}")
+        logging.debug("Cointegration z-score failed: %s", e)
         return 0.0, "NEUTRAL"
 
 def get_stat_arb_bias(z_score, signal):
@@ -2665,7 +2665,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                     z_score, stat_arb_signal = compute_cointegration_zscore(_df_btc, df)
                     score += get_stat_arb_bias(z_score, stat_arb_signal) * w.get('stat_arb', 0.15)
             except Exception as e:
-                logging.debug(f"StatArb failed {pair} {tf}: {e}")
+                logging.debug("StatArb failed %s %s: %s", pair, tf, e)
 
         # T1-2: RL Regime Adapter — scale score based on historical per-regime win rate
         rl_mult = get_rl_regime_multiplier(regime)
@@ -2702,7 +2702,7 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
                 supertrend_str, sr_str, regime_str, strategy_bias,
                 agent_score, consensus, stat_arb_signal, agent_votes)
     except Exception as e:
-        logging.info(f"Signal calc failed {pair} {tf}: {e}")
+        logging.warning("Signal calc failed %s %s: %s", pair, tf, e)
         return 0, False, "None", "N/A", "N/A", "N/A", "N/A", "Balanced", 0.0, 0.0, "NEUTRAL", {}
 
 def get_signal_direction(confidence):
@@ -2782,7 +2782,7 @@ def _compute_kelly_fraction() -> float | None:
         return _kelly_from_pnl(bt['pnl_pct'])
 
     except Exception as e:
-        logging.warning(f"Kelly computation failed: {e}")
+        logging.warning("Kelly computation failed: %s", e)
         return None
 
 
@@ -2877,7 +2877,7 @@ def _compute_rl_adjustments() -> dict:
             adjustments[str(regime)] = round(max(0.75, min(1.25, multiplier)), 3)
         return adjustments
     except Exception as exc:
-        logging.warning(f"RL regime adjustment failed: {exc}")
+        logging.warning("RL regime adjustment failed: %s", exc)
         return {}
 
 
@@ -2984,7 +2984,7 @@ def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"
                         if not np.isnan(corr_val) and corr_val > CORR_THRESHOLD:
                             corr_adjust = CORR_REDUCTION_FACTOR
         except Exception as e:
-            logging.debug(f"Correlation adjustment failed: {e}")
+            logging.debug("Correlation adjustment failed: %s", e)
 
     # Apply Kelly Criterion cap if backtest data is available (use per-scan cache — PERF-03)
     with _weights_lock:
@@ -3275,9 +3275,9 @@ def run_feedback_loop():
             batch=100,
         )
         if quick_resolved > 0:
-            logging.info(f"Feedback quick-resolve (72h): {quick_resolved} outcomes written")
+            logging.info("Feedback quick-resolve (72h): %d outcomes written", quick_resolved)
     except Exception as e:
-        logging.warning(f"run_feedback_loop quick_resolve failed: {e}")
+        logging.warning("run_feedback_loop quick_resolve failed: %s", e)
 
     # F1b: Full resolve (14-day hold) — resolves older unresolved rows
     def _fetch_price(pair, since_ms):
@@ -3294,9 +3294,9 @@ def run_feedback_loop():
             batch=50,
         )
         if resolved_count > 0:
-            logging.info(f"Feedback resolver: {resolved_count} new outcomes written to feedback_log")
+            logging.info("Feedback resolver: %d new outcomes written to feedback_log", resolved_count)
     except Exception as e:
-        logging.warning(f"run_feedback_loop resolve failed: {e}")
+        logging.warning("run_feedback_loop resolve failed: %s", e)
 
     # Log evaluation metrics from ALL resolved data (was last-10-rows only — see Proof 9)
     resolved_df = _db.get_resolved_feedback_df(days=90)
@@ -3312,11 +3312,11 @@ def run_feedback_loop():
     try:
         retrain_result = retrain_lgbm_from_feedback(min_samples=50)
         if retrain_result.get("success"):
-            logging.info(f"LightGBM feedback retrain: {retrain_result['message']}")
+            logging.info("LightGBM feedback retrain: %s", retrain_result['message'])
         else:
-            logging.debug(f"LightGBM feedback retrain skipped: {retrain_result.get('message')}")
+            logging.debug("LightGBM feedback retrain skipped: %s", retrain_result.get('message'))
     except Exception as lgbm_e:
-        logging.warning(f"run_feedback_loop lgbm retrain failed: {lgbm_e}")
+        logging.warning("run_feedback_loop lgbm retrain failed: %s", lgbm_e)
 
     # F6/F7: Run drift detection after weights update — store result for UI; auto-trigger Optuna if drift detected
     # PERF-29: pass already-fetched resolved_df so check_concept_drift() skips its own 90d DB fetch
@@ -3327,11 +3327,12 @@ def run_feedback_loop():
             _last_drift_result = drift  # BUG-C05: lock protects against torn reads in UI thread
         if drift.get('drift_detected'):
             logging.warning(
-                f"CONCEPT DRIFT DETECTED: 30d win rate {drift['win_rate_30d']:.1%} vs "
-                f"90d win rate {drift['win_rate_90d']:.1%} "
-                f"(ratio={drift['ratio']:.2f} < threshold 0.75). "
-                f"Drift flagged — Optuna re-optimization skipped in background thread "
-                f"(would block Tornado for 5-10 min). Flag stored; UI can trigger manually."
+                "CONCEPT DRIFT DETECTED: 30d win rate %.1f%% vs "
+                "90d win rate %.1f%% "
+                "(ratio=%.2f < threshold 0.75). "
+                "Drift flagged — Optuna re-optimization skipped in background thread "
+                "(would block Tornado for 5-10 min). Flag stored; UI can trigger manually.",
+                drift['win_rate_30d'] * 100, drift['win_rate_90d'] * 100, drift['ratio'],
             )
             # PERF-503: Do NOT run Optuna in the feedback background thread.
             # run_optuna_weight_optimization() fetches ~500 OHLCV rows + runs 30 trial
@@ -3340,13 +3341,13 @@ def run_feedback_loop():
             # Drift is stored in _last_drift_result for the UI to surface a warning;
             # the user can trigger manual re-optimization from the Performance tab.
     except Exception as drift_e:
-        logging.warning(f"Drift detection failed: {drift_e}")
+        logging.warning("Drift detection failed: %s", drift_e)
 
     # P4: Export git checkpoint after every feedback cycle so intelligence persists across restarts
     try:
         _db.export_feedback_checkpoint()
     except Exception as _cpe:
-        logging.debug(f"Feedback checkpoint export failed (non-critical): {_cpe}")
+        logging.debug("Feedback checkpoint export failed (non-critical): %s", _cpe)
 
 
 def check_concept_drift(df_90d=None) -> dict:
@@ -3625,7 +3626,7 @@ def run_backtest():
             })
             equity.append(equity[-1] + pnl_usd)
         except Exception as e:
-            logging.warning(f"Backtest trade error {row.get('pair', '?')}: {e}")
+            logging.warning("Backtest trade error %s: %s", row.get('pair', '?'), e)
             continue
 
     if not trades:
@@ -3750,7 +3751,7 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 _okx_sym = pair  # OKX accepts BTC/USDT format
                 if _okx_sym in _okx_ex.markets:
                     ta_ex = _okx_ex
-                    logging.info(f"run_deep_backtest: {pair} not on Kraken — switched to OKX")
+                    logging.info("run_deep_backtest: %s not on Kraken — switched to OKX", pair)
             except Exception as _okx_fallback_err:
                 logging.debug("[Backtest] OKX fallback for %s failed: %s", pair, _okx_fallback_err)
             if pair not in ta_ex.markets:
@@ -3778,7 +3779,7 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 _page_chunks.append(candles)  # O(1) append instead of O(N) prepend
                 _time.sleep(0.2)  # respect rate limits
             except Exception as e:
-                logging.warning(f"run_deep_backtest page {page} failed: {e}")
+                logging.warning("run_deep_backtest page %s failed: %s", page, e)
                 break
 
         # Reverse page order (oldest first) then flatten in one pass — O(N) total
@@ -3944,7 +3945,7 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
         }
 
     except Exception as e:
-        logging.warning(f"run_deep_backtest failed: {e}")
+        logging.warning("run_deep_backtest failed: %s", e)
         return {"error": str(e), "trades": pd.DataFrame(), "metrics": {}}
 
 
@@ -4748,7 +4749,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
             _fng_result[0] = val
             _fng_result[1] = cat
         except Exception as _e:
-            logging.debug(f"pre-scan fear_greed fetch failed: {_e}")
+            logging.debug("pre-scan fear_greed fetch failed: %s", _e)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _pre3_ex:
         _f1 = _pre3_ex.submit(_pre_kelly)
@@ -4758,7 +4759,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
             try:
                 _f.result()
             except Exception as _fe:
-                logging.debug(f"pre-scan parallel task failed: {_fe}")
+                logging.debug("pre-scan parallel task failed: %s", _fe)
 
     fng_value, fng_category = _fng_result[0], _fng_result[1]
 
@@ -4780,7 +4781,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         try:
             return fn(*args)
         except Exception as e:
-            logging.debug(f"{label} fetch failed: {e}")
+            logging.debug("%s fetch failed: %s", label, e)
             return default
 
     # ── Build scan list — optionally append Tier 2 Binance pairs (#88) ────────
@@ -4875,7 +4876,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
         ohlcv_btc = ta_ex.fetch_ohlcv('BTC/USDT', '1d', limit=STAT_ARB_LOOKBACK)
         btc_df_for_scan = pd.DataFrame(ohlcv_btc, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     except Exception as _e:
-        logging.debug(f"StatArb BTC/USDT pre-fetch failed: {_e}")
+        logging.debug("StatArb BTC/USDT pre-fetch failed: %s", _e)
 
     # A6: OHLCV pre-fetch phase — pure I/O, no analysis yet.
     # PERF-A2: raised to 8 I/O workers (was 3) — OHLCV fetch is network-bound, not CPU-bound.
@@ -4984,7 +4985,7 @@ def run_scan(progress_callback=None, include_tier2: bool = False):
                 if result:
                     pair_results[pair] = result
             except Exception as e:
-                logging.info(f"[scan] {pair} failed: {e}")
+                logging.warning("[scan] %s failed: %s", pair, e)
 
     # Restore original scan order: Tier 1 first, then Tier 2 appended
     results = [pair_results[p] for p in _scan_pairs if p in pair_results]
@@ -5626,7 +5627,7 @@ def compute_correlation_matrix(pairs=None, lookback_days=30, tf='1d'):
             label = pair.replace('/USDT', '').replace('/USD', '')
             closes[label] = [o[4] for o in ohlcv[-lookback_days:]]
         except Exception as e:
-            logging.debug(f"compute_correlation_matrix: fetch failed for {pair}: {e}")
+            logging.debug("compute_correlation_matrix: fetch failed for %s: %s", pair, e)
 
     if len(closes) < 2:
         return None, f"Not enough pairs returned data (got {len(closes)})"
@@ -5670,7 +5671,7 @@ def run_cointegration_scan(pairs=None, tf='1d', lookback=100):
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             closes[pair] = df['close'].values[-lookback:]
         except Exception as e:
-            logging.debug(f"run_cointegration_scan: fetch failed {pair}: {e}")
+            logging.debug("run_cointegration_scan: fetch failed %s: %s", pair, e)
 
     valid_pairs = list(closes.keys())
     if len(valid_pairs) < 2:
@@ -5728,7 +5729,7 @@ def run_cointegration_scan(pairs=None, tf='1d', lookback=100):
                     "std_ratio":    round(std_spr, 6),
                 })
             except Exception as e:
-                logging.debug(f"run_cointegration_scan: pair ({a},{b}) failed: {e}")
+                logging.debug("run_cointegration_scan: pair (%s,%s) failed: %s", a, b, e)
 
     results.sort(key=lambda r: abs(r["zscore"]), reverse=True)
     return results, None

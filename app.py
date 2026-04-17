@@ -496,7 +496,7 @@ def _run_startup_feedback_catchup():
         model.run_feedback_loop()
         logging.info("[Startup] Feedback catch-up complete")
     except Exception as _e:
-        logging.debug(f"[Startup] Feedback catch-up (non-critical): {_e}")
+        logging.debug("[Startup] Feedback catch-up (non-critical): %s", _e)
 
 
 def _setup_calibration_job():
@@ -3934,7 +3934,7 @@ def _run_scan_thread():
         try:
             model.run_feedback_loop()
         except Exception as _fb_err:
-            logging.warning(f"Feedback loop error: {_fb_err}")
+            logging.warning("Feedback loop error: %s", _fb_err)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
         audit("scan_complete", pairs=len(results), timestamp=ts)
@@ -5567,7 +5567,7 @@ def page_backtest():
             try:
                 positions = model.load_positions()
             except Exception as _e:
-                logging.warning(f"load_positions failed: {_e}")
+                logging.warning("load_positions failed: %s", _e)
                 positions = {}
 
             # ── Portfolio Heat Strip ──────────────────────────────────────────────

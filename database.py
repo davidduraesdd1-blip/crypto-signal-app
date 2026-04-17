@@ -592,9 +592,9 @@ def migrate_csv_to_db():
                         df = df[[c for c in df.columns if c in known_cols]]
                         df.to_sql("feedback_log", conn, if_exists="append", index=False)
                         conn.commit()
-                        logger.info(f"DB migration: imported {len(df)} rows → feedback_log")
+                        logger.info("DB migration: imported %d rows → feedback_log", len(df))
                 except Exception as e:
-                    logger.warning(f"DB migration feedback_log failed: {e}")
+                    logger.warning("DB migration feedback_log failed: %s", e)
 
             # ── daily_signals_master.csv ──────────────
             if os.path.exists("daily_signals_master.csv") and _row_count(conn, "daily_signals") == 0:
@@ -616,9 +616,9 @@ def migrate_csv_to_db():
                             )
                         df.to_sql("daily_signals", conn, if_exists="append", index=False)
                         conn.commit()
-                        logger.info(f"DB migration: imported {len(df)} rows → daily_signals")
+                        logger.info("DB migration: imported %d rows → daily_signals", len(df))
                 except Exception as e:
-                    logger.warning(f"DB migration daily_signals failed: {e}")
+                    logger.warning("DB migration daily_signals failed: %s", e)
 
             # ── backtest_summary.csv ──────────────────
             if os.path.exists("backtest_summary.csv") and _row_count(conn, "backtest_trades") == 0:
@@ -631,9 +631,9 @@ def migrate_csv_to_db():
                         df = df[[c for c in df.columns if c in known_cols]]
                         df.to_sql("backtest_trades", conn, if_exists="append", index=False)
                         conn.commit()
-                        logger.info(f"DB migration: imported {len(df)} rows → backtest_trades")
+                        logger.info("DB migration: imported %d rows → backtest_trades", len(df))
                 except Exception as e:
-                    logger.warning(f"DB migration backtest_trades failed: {e}")
+                    logger.warning("DB migration backtest_trades failed: %s", e)
 
             # ── paper_trades_log.csv ──────────────────
             if os.path.exists("paper_trades_log.csv") and _row_count(conn, "paper_trades") == 0:
@@ -645,9 +645,9 @@ def migrate_csv_to_db():
                         df = df[[c for c in df.columns if c in known_cols]]
                         df.to_sql("paper_trades", conn, if_exists="append", index=False)
                         conn.commit()
-                        logger.info(f"DB migration: imported {len(df)} rows → paper_trades")
+                        logger.info("DB migration: imported %d rows → paper_trades", len(df))
                 except Exception as e:
-                    logger.warning(f"DB migration paper_trades failed: {e}")
+                    logger.warning("DB migration paper_trades failed: %s", e)
 
             # ── positions.json ────────────────────────
             if os.path.exists("positions.json") and _row_count(conn, "positions") == 0:
@@ -664,9 +664,9 @@ def migrate_csv_to_db():
                             rows.append(row)
                         pd.DataFrame(rows).to_sql("positions", conn, if_exists="append", index=False)
                         conn.commit()
-                        logger.info(f"DB migration: imported {len(rows)} positions → positions")
+                        logger.info("DB migration: imported %d positions → positions", len(rows))
                 except Exception as e:
-                    logger.warning(f"DB migration positions failed: {e}")
+                    logger.warning("DB migration positions failed: %s", e)
 
             # ── dynamic_weights.json ──────────────────
             if os.path.exists("dynamic_weights.json") and _row_count(conn, "dynamic_weights") == 0:
@@ -680,7 +680,7 @@ def migrate_csv_to_db():
                     conn.commit()
                     logger.info("DB migration: imported dynamic_weights.json → dynamic_weights")
                 except Exception as e:
-                    logger.warning(f"DB migration dynamic_weights failed: {e}")
+                    logger.warning("DB migration dynamic_weights failed: %s", e)
 
             # ── weights_log.csv ───────────────────────
             if os.path.exists("weights_log.csv") and _row_count(conn, "weights_log") == 0:
@@ -689,9 +689,9 @@ def migrate_csv_to_db():
                     if not df.empty:
                         df.to_sql("weights_log", conn, if_exists="append", index=False)
                         conn.commit()
-                        logger.info(f"DB migration: imported {len(df)} rows → weights_log")
+                        logger.info("DB migration: imported %d rows → weights_log", len(df))
                 except Exception as e:
-                    logger.warning(f"DB migration weights_log failed: {e}")
+                    logger.warning("DB migration weights_log failed: %s", e)
 
             # ── scan_results_cache.json ───────────────
             if os.path.exists("scan_results_cache.json") and _row_count(conn, "scan_cache") == 0:
@@ -706,7 +706,7 @@ def migrate_csv_to_db():
                         conn.commit()
                     logger.info("DB migration: imported scan_results_cache.json → scan_cache")
                 except Exception as e:
-                    logger.warning(f"DB migration scan_cache failed: {e}")
+                    logger.warning("DB migration scan_cache failed: %s", e)
         finally:
             try:
                 conn.close()
@@ -880,7 +880,7 @@ def resolve_feedback_outcomes(fetch_price_fn, hold_days: int = 14, batch: int = 
             ))
         except Exception as e:
             # BUG-28: use .get() to avoid KeyError inside exception handler
-            logger.warning(f"resolve_feedback_outcomes failed for row {row.get('id', '?')}: {e}")
+            logger.warning("resolve_feedback_outcomes failed for row %s: %s", row.get('id', '?'), e)
 
     if not updates:
         return 0
@@ -973,7 +973,7 @@ def quick_resolve_feedback(fetch_ohlcv_fn, hold_hours: int = 72, batch: int = 10
                 row['id'],
             ))
         except Exception as e:
-            logger.warning(f"quick_resolve_feedback failed for row {row.get('id')}: {e}")
+            logger.warning("quick_resolve_feedback failed for row %s: %s", row.get('id'), e)
 
     if not updates:
         return 0
@@ -1512,7 +1512,7 @@ def check_drawdown_circuit_breaker(portfolio_size: float,
             'peak_equity':  round(float(peak.iloc[-1]), 2),
         }
     except Exception as e:
-        logger.warning(f"Circuit breaker check failed: {e}")
+        logger.warning("Circuit breaker check failed: %s", e)
         return base
 
 

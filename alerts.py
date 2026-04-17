@@ -114,7 +114,7 @@ def load_alerts_config():
             with open(_ALERTS_CONFIG_FILE, "r", encoding="utf-8") as f:
                 config.update(json.load(f))
         except Exception as e:
-            logging.error(f"[alerts] Failed to load config from {_ALERTS_CONFIG_FILE}: {e}")
+            logging.error("[alerts] Failed to load config from %s: %s", _ALERTS_CONFIG_FILE, e)
     return config
 
 
@@ -135,7 +135,7 @@ def save_alerts_config(config: dict):
             pass
         os.replace(tmp_path, _ALERTS_CONFIG_FILE)
     except Exception as e:
-        logging.error(f"[alerts] Failed to save config: {e}")
+        logging.error("[alerts] Failed to save config: %s", e)
 
 
 # ──────────────────────────────────────────────
@@ -659,7 +659,7 @@ def check_watchlist_alerts(scan_results: list, config: dict | None = None) -> li
                         try:
                             fut.result()
                         except Exception as e:
-                            logging.warning(f"[watchlist] {name} fire failed: {e}")
+                            logging.warning("[watchlist] %s fire failed: %s", name, e)
 
             triggered.append({
                 "rule_name":  rule.get("name", ""),
