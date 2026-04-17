@@ -1742,9 +1742,12 @@ def get_funding_rates_batch(pairs: list[str]) -> dict[str, dict]:
 # identical in schema to a live response, so the rest of the model is unaffected.
 # ══════════════════════════════════════════════════════════════════════════════
 
-import json as _json
-import os as _os
-import threading as _threading
+# Aliases for stdlib modules already imported at the top of the file.
+# The _ prefix is intentional — these are private to the paid-stubs section and
+# make it clear they are module-level private names, not new imports.
+import json       as _json       # noqa: E402 (already imported as json above)
+import os         as _os         # noqa: E402 (already imported as os above)
+import threading  as _threading  # noqa: E402 (already imported as threading above)
 
 _API_KEYS_FILE = "alerts_config.json"
 _paid_key_cache: dict = {}
@@ -7387,6 +7390,17 @@ def clear_all_module_caches() -> None:
         (_BITSTAMP_PRICE_CACHE,  _BITSTAMP_CACHE_LOCK),
         (_BITGET_PRICE_CACHE,    _BITGET_CACHE_LOCK),
         (_WALLET_CACHE,          _WALLET_CACHE_LOCK),
+        # Previously missing — added by 10-pass audit:
+        (_LIQ_EVENTS_CACHE,      _LIQ_EVENTS_LOCK),        # Binance forced liquidation events (5m cache)
+        (_G_M2_CACHE,            _G_M2_INFLIGHT_LOCK),      # Global M2 composite (1h cache) — MEDIUM fix
+        (_M2_CHART_CACHE,        _M2_CHART_LOCK),           # M2 vs BTC chart data (12h cache)
+        (_COINDCX_PRICE_CACHE,   _COINDCX_PRICE_LOCK),     # CoinDCX INR price (regional)
+        (_DYDX_PRICE_CACHE,      _DYDX_PRICE_LOCK),        # dYdX DEX price
+        (_JUP_PRICE_CACHE,       _JUP_PRICE_LOCK),         # Jupiter DEX price
+        # _GITHUB_CACHE and _BTC_TA_CACHE are defined below this function in the
+        # module; Python resolves names at call time so forward refs are safe here.
+        (_GITHUB_CACHE,          _GITHUB_CACHE_LOCK),       # GitHub dev activity (6h cache)
+        (_BTC_TA_CACHE,          _BTC_TA_CACHE_LOCK),       # BTC daily TA signals (1h cache)
     ]
     for _cache, _lock in _caches_and_locks:
         try:
@@ -7404,6 +7418,7 @@ def clear_all_module_caches() -> None:
         _PI_CACHE, _SPARKLINE_CACHE, _REGIONAL_CACHE, _DEX_PRICE_CACHE,
         _EXCH_COMPARE_CACHE, _REGIONAL_COMP_CACHE, _DEX_CEX_CACHE,
         _CCXT_OHLCV_CACHE, _CCXT_TICKER_CACHE,
+        _MEXC_PRICE_CACHE, _BITSO_PRICE_CACHE,   # regional price caches (no lock)
     ]:
         try:
             _cache.clear()
@@ -7415,6 +7430,11 @@ def clear_all_module_caches() -> None:
             _fc.update({"ts": 0.0, "data": None})
         except Exception as _fc_err:
             logging.debug("[CacheClear] fixed-struct cache reset failed: %s", _fc_err)
+    # Fixed-struct F&G secondary cache (different sentinel shape)
+    try:
+        _FNG2_CACHE.update({"value": None, "label": None, "_ts": 0.0})
+    except Exception as _fng2_err:
+        logging.debug("[CacheClear] FNG2 cache reset failed: %s", _fng2_err)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

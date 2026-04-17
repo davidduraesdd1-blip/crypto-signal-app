@@ -181,7 +181,7 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
             parsed = json.loads(raw_text)
             text = str(parsed.get("explanation", raw_text)).strip()
         except (json.JSONDecodeError, ValueError, AttributeError):
-            logging.debug("[LLM #31] JSON parse failed for %s — using raw text fallback", pair)
+            logger.debug("[LLM #31] JSON parse failed for %s — using raw text fallback", pair)
             # Strip any stray markdown code fences if present
             text = raw_text.replace("```json", "").replace("```", "").strip()
         with _CACHE_LOCK:
@@ -199,9 +199,9 @@ Write 3-4 sentences only. No bullet points, no headers, no markdown. Sound like 
         if "credit" in err_str.lower() and ("400" in err_str or "balance" in err_str.lower()):
             with _llm_credits_lock:
                 _llm_credits_exhausted = True
-            logging.info("[LLM] Claude credit balance exhausted — disabling LLM explanation calls")
+            logger.info("[LLM] Claude credit balance exhausted — disabling LLM explanation calls")
             return "AI Analysis unavailable — Claude API credit balance exhausted."
-        logging.info(f"LLM explanation failed for {pair}: {err_str[:120]}")
+        logger.info("LLM explanation failed for %s: %s", pair, err_str[:120])
         return f"AI Analysis temporarily unavailable: {err_str[:200]}"
 
 
@@ -320,7 +320,7 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
                     if k != "rationale" and isinstance(v, (int, float)):
                         # Clamp multipliers to 0.5–2.0 to prevent runaway adjustments
                         weights[k] = max(0.5, min(2.0, float(v)))
-                logging.info("[LLM Weights] %s | %s", cache_key, inp.get("rationale", ""))
+                logger.info("[LLM Weights] %s | %s", cache_key, inp.get("rationale", ""))
                 break
 
         if weights:
@@ -329,7 +329,7 @@ def get_claude_weight_adjustments(market_ctx: dict) -> dict:
         return weights
 
     except Exception as e:
-        logging.debug("[LLM Weights] failed: %s", e)
+        logger.debug("[LLM Weights] failed: %s", e)
         return {}
 
 
@@ -429,6 +429,10 @@ def generate_signal_story(
     str — 1-2 plain English sentences, no jargon.
     Falls back to rule-based explanation if API unavailable.
     """
+    # Honour kill switch — ANTHROPIC_ENABLED=false disables all Claude API calls
+    if not ANTHROPIC_ENABLED:
+        return _rule_based_story(pair, signal, confidence, indicators)
+
     # 30-min cache keyed on (pair, signal) — confidence bucket
     cache_key = f"story:{pair}:{signal}:{int(confidence // 5)}"
     now = time.time()
@@ -493,7 +497,7 @@ def generate_signal_story(
         else:
             text = _rule_based_story(pair, signal, confidence, indicators)
     except Exception as e:
-        logging.debug("[SignalStory] API call failed: %s", e)
+        logger.debug("[SignalStory] API call failed: %s", e)
         text = _rule_based_story(pair, signal, confidence, indicators)
 
     # Evict oldest entries when cache is full
