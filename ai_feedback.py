@@ -9,7 +9,6 @@ Reads from the feedback_log SQLite table populated by crypto_model_core.py.
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import database as db
 
@@ -81,7 +80,7 @@ def compute_accuracy(pair: str = None, window_days: int = None) -> dict:
                 (cutoff,),
             ).fetchall()
     except Exception as e:
-        logger.error(f"compute_accuracy DB read failed: {e}")
+        logger.error("compute_accuracy DB read failed: %s", e)
         return _empty_result(pair)
     finally:
         if conn is not None:
@@ -412,7 +411,7 @@ def calibrate_alert_thresholds() -> dict:
             (cutoff,),
         ).fetchall()
     except Exception as e:
-        logger.error(f"Calibration DB read failed: {e}")
+        logger.error("Calibration DB read failed: %s", e)
         return {"calibrated": False, "reason": str(e), "samples": 0}
     finally:
         conn.close()
@@ -447,8 +446,8 @@ def calibrate_alert_thresholds() -> dict:
     delta     = new_thresh - old_thresh
     direction = "raised" if delta > 0.5 else ("lowered" if delta < -0.5 else "unchanged")
     logger.info(
-        f"Smart Alert Calibration: threshold {direction} {old_thresh:.1f}% → {new_thresh:.1f}% "
-        f"(p75={p75_conf:.1f}%, n={len(confident_vals)})"
+        "Smart Alert Calibration: threshold %s %.1f%% \u2192 %.1f%% (p75=%.1f%%, n=%d)",
+        direction, old_thresh, new_thresh, p75_conf, len(confident_vals),
     )
     return {
         "calibrated":    True,
@@ -599,7 +598,7 @@ def get_pair_win_rates() -> dict:
         ).fetchall()
         return {r[0]: round(float(r[2] or 0) / float(r[1]), 4) for r in rows if r[1]}
     except Exception as e:
-        logger.error(f"get_pair_win_rates failed: {e}")
+        logger.error("get_pair_win_rates failed: %s", e)
         return {}
     finally:
         conn.close()

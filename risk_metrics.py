@@ -13,7 +13,6 @@ Also provides portfolio-level position risk aggregation.
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import numpy as np
 
@@ -67,7 +66,7 @@ def compute_historical_var(
                 (cutoff,),
             ).fetchall()
     except Exception as e:
-        logger.error(f"Historical VaR DB read failed: {e}")
+        logger.error("Historical VaR DB read failed: %s", e)
         rows = []
     finally:
         if conn is not None:
@@ -221,7 +220,7 @@ def compute_var_summary(
                 (cutoff,),
             ).fetchall()
     except Exception as _e:
-        logger.error(f"VaR summary DB read failed: {_e}")
+        logger.error("VaR summary DB read failed: %s", _e)
         rows = []
     finally:
         if conn is not None:

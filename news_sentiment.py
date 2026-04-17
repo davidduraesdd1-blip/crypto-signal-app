@@ -21,8 +21,6 @@ except ImportError:
     _ANTHROPIC_ENABLED = False
 import time
 import xml.etree.ElementTree as ET
-from typing import Optional
-
 from concurrent.futures import ThreadPoolExecutor
 import requests
 
