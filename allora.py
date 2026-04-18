@@ -244,8 +244,31 @@ def get_allora_summary() -> dict:
         "last_checked": time.time(),
     }
 
-    for topic_id, (pair, name) in _TOPIC_MAP.items():
-        data = get_allora_prediction(pair)
+    # PERF: fetch all predictions in parallel (~6 pairs × 200ms sequential was
+    # ~1.2s of blocking on every dashboard render). ThreadPoolExecutor keeps
+    # the internal cache + per-pair fallbacks intact while overlapping the
+    # network I/O. Aggregate into `summary` AFTER the parallel fetches so the
+    # shared-state updates happen single-threaded.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    _items  = list(_TOPIC_MAP.items())
+    _fetched: list[tuple[int, tuple[str, str], dict]] = []
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(_items)))) as _pool:
+        _futs = {_pool.submit(get_allora_prediction, pair): (topic_id, (pair, name))
+                 for topic_id, (pair, name) in _items}
+        for _fut in as_completed(_futs, timeout=15):
+            topic_id, (pair, name) = _futs[_fut]
+            try:
+                data = _fut.result()
+            except Exception as _e:
+                logger.debug("[Allora] predict %s failed: %s", pair, _e)
+                data = {"predicted_price": None, "source": "error"}
+            _fetched.append((topic_id, (pair, name), data))
+
+    # Preserve original _TOPIC_MAP order in the predictions list for stable UI
+    _order = {topic_id: idx for idx, (topic_id, _) in enumerate(_items)}
+    _fetched.sort(key=lambda t: _order.get(t[0], 0))
+
+    for topic_id, (pair, name), data in _fetched:
         entry = {
             "pair":          pair,
             "name":          name,
