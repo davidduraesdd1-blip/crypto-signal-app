@@ -4920,8 +4920,12 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
         except Exception as e:
             logging.debug("[CoinMetrics] onchain fetch failed: %s — trying Blockchain.com fallback", e)
             # ── Blockchain.com fallback: MVRV + active addresses (free, US-accessible) ──
+            # timespan=all requests full history so the Z-score normalization can
+            # match the primary CoinMetrics path (all-time mean/stdev) rather than
+            # a 2-year rolling window. Otherwise fallback Z-scores are miscalibrated
+            # against the published thresholds (Dec 2017 top Z≈9.5, Apr 2021 Z≈8.0).
             try:
-                _bc_mvrv_url = "https://api.blockchain.info/charts/mvrv?format=json&timespan=2years&sampled=true&cors=true"
+                _bc_mvrv_url = "https://api.blockchain.info/charts/mvrv?format=json&timespan=all&sampled=true&cors=true"
                 _bc_addr_url = "https://api.blockchain.info/charts/n-unique-addresses?format=json&timespan=30days&cors=true"
                 _r_mvrv = _NO_RETRY_SESSION.get(_bc_mvrv_url, timeout=8)
                 _r_addr = _NO_RETRY_SESSION.get(_bc_addr_url, timeout=8)
@@ -4941,11 +4945,12 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 if not _mvrv_vals:
                     return {"error": str(e), "source": "coinmetrics"}
                 import statistics as _stats
+                # All-time normalization (matches primary CoinMetrics path at line 4846).
+                # Previously used last 365 days only, which produced Z-scores incompatible
+                # with the published Glassnode thresholds. Now consistent across both paths.
                 _cur_mvrv = _mvrv_vals[-1]
-                _window   = min(365, len(_mvrv_vals))
-                _trail    = _mvrv_vals[-_window:]
-                _mean_mv  = _stats.mean(_trail)
-                _std_mv   = _stats.stdev(_trail) if len(_trail) > 1 else 1.0
+                _mean_mv  = _stats.mean(_mvrv_vals)
+                _std_mv   = _stats.stdev(_mvrv_vals) if len(_mvrv_vals) > 1 else 1.0
                 _mvrv_z   = round((_cur_mvrv - _mean_mv) / max(_std_mv, 1e-6), 2)
                 if _mvrv_z < 0.0:   _mvrv_sig = "UNDERVALUED"
                 elif _mvrv_z < 1.5: _mvrv_sig = "FAIR_VALUE"
