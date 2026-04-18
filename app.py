@@ -1263,6 +1263,12 @@ def page_dashboard():
     # ── Welcome banner (item 19 — beginner only, once per session) ────────────
     _ui.render_welcome_banner()
 
+    # ── Quick-access popover row (ToS #7) — flush right, top of page ──────────
+    try:
+        _ui.render_quick_access_row()
+    except Exception:
+        pass
+
     st.markdown(
         '<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
         'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
@@ -4323,6 +4329,14 @@ def page_config():
         ta_ex = st.selectbox("TA Exchange (OHLCV source)", exchange_options,
                              index=exchange_options.index(model.TA_EXCHANGE) if model.TA_EXCHANGE in exchange_options else 0)
         overrides["TA_EXCHANGE"] = ta_ex
+
+        # ── Display Preferences (ToS #10) ─────────────────────────────────
+        st.markdown("---")
+        _ui.section_header("Display Preferences", "Regional gain/loss color convention for international markets", icon="🎨")
+        try:
+            _ui.render_regional_color_toggle()
+        except Exception as _rc_err:
+            logger.debug("[Settings] regional color toggle render failed: %s", _rc_err)
 
 
 

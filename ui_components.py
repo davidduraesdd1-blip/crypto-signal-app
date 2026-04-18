@@ -905,6 +905,142 @@ body.light-mode div[style*="border:1px solid rgba(255,255,255,0.0"] { border-col
 """
 
 
+# ── Regional color helpers (ToS #10) ──────────────────────────────────────
+# Supports "Asian" convention where RED = up (US/EU is green=up).
+# Flipping st.session_state["sg_up_is_red"] flips every gain/loss color.
+
+def color_up() -> str:
+    """Return the hex color for positive/up moves per the user's regional preference."""
+    return "#ef4444" if st.session_state.get("sg_up_is_red", False) else "#22c55e"
+
+def color_down() -> str:
+    """Return the hex color for negative/down moves per the user's regional preference."""
+    return "#22c55e" if st.session_state.get("sg_up_is_red", False) else "#ef4444"
+
+def color_for_delta(delta, default: str = "#64748b") -> str:
+    """Given a delta string/number, return the regionally-correct color.
+    Neutral (exactly 0 or '0' or '+0' / '-0') returns the default grey.
+    """
+    try:
+        if isinstance(delta, (int, float)):
+            if delta > 0:  return color_up()
+            if delta < 0:  return color_down()
+            return default
+    except Exception:
+        pass
+    s = str(delta).strip()
+    # Normalize common zero forms
+    if s in ("0", "+0", "-0", "0.0", "+0.0", "-0.0", "0.00", "+0.00", "-0.00", "—"):
+        return default
+    first = next((c for c in s if c in "+-"), None)
+    if first == "+": return color_up()
+    if first == "-": return color_down()
+    return default
+
+
+# ── Quick-access popover row (ToS #7) ─────────────────────────────────────
+# Top-right row of icon popovers for Agent / Alerts / Scans / Glossary.
+# Mirrors DeFi Market Intelligence pattern; cached reads keep overhead low.
+
+@st.cache_data(ttl=60, max_entries=1, show_spinner=False)
+def _sg_recent_alerts() -> list:
+    try:
+        from pathlib import Path
+        import json
+        fp = Path("data") / "alert_history.jsonl"
+        if not fp.exists():
+            return []
+        out = []
+        for line in fp.read_text(encoding="utf-8").strip().split("\n")[-5:]:
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+def render_quick_access_row() -> None:
+    """Render a 4-popover row flush-right at the top of a page."""
+    _sp, _agent, _alerts, _scans, _glos = st.columns([10, 1, 1, 1, 1])
+    with _agent:
+        with st.popover("⚙", help="Agent status"):
+            st.markdown("**Agent Status**")
+            _running = st.session_state.get("sg_agent_running", False)
+            st.markdown(f"Status: {'🟢 Active' if _running else '⚫ Idle'}")
+            st.caption("Full control on the Agent page.")
+    with _alerts:
+        with st.popover("🔔", help="Recent alerts"):
+            st.markdown("**Recent Alerts**")
+            _recent = _sg_recent_alerts()
+            if _recent:
+                for _a in _recent:
+                    st.markdown(f"• {_a.get('timestamp','—')[:16]} — {_a.get('message','—')[:60]}")
+            else:
+                st.caption("No alerts yet — configure in Settings.")
+    with _scans:
+        with st.popover("📜", help="Scan history"):
+            st.markdown("**Recent Scans**")
+            _sr = st.session_state.get("scan_results") or []
+            _last = st.session_state.get("scan_results_ts")
+            st.caption(f"Last scan: {str(_last)[:16] if _last else '—'}")
+            st.caption(f"Coins scanned: {len(_sr) if _sr else 0}")
+    with _glos:
+        with st.popover("📖", help="Glossary"):
+            st.markdown("**Quick Glossary**")
+            st.markdown(
+                "• **RSI** — momentum oscillator\n\n"
+                "• **MACD** — trend/momentum indicator\n\n"
+                "• **ADX** — trend strength\n\n"
+                "• **MTF** — multi-timeframe alignment\n\n"
+                "• **FNG** — Fear & Greed Index"
+            )
+            st.caption("Full glossary on the Dashboard page.")
+
+
+# ── Regional Color Preference toggle (ToS #10) ────────────────────────────
+
+def render_regional_color_toggle() -> None:
+    """Side-by-side Western/Asian swatch picker for up/down color convention."""
+    st.markdown(
+        "<div style='color:#94a3b8; font-size:0.88rem; margin-bottom:8px;'>"
+        "Regional color convention for gains and losses.</div>",
+        unsafe_allow_html=True,
+    )
+    _is_asian = st.session_state.get("sg_up_is_red", False)
+    _c1, _c2, _c3 = st.columns([4, 1, 4])
+    with _c1:
+        _active = "border:1px solid #00d4aa;" if not _is_asian else "border:1px solid rgba(148,163,184,0.15);"
+        st.markdown(
+            f"<div style='{_active} border-radius:10px; padding:14px; background:rgba(15,23,42,0.5);'>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:#22c55e; font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:#ef4444; font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
+            f"<div style='color:#94a3b8; font-size:0.8rem; margin-top:6px;'>Western (US, EU)</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with _c2:
+        st.markdown("<div style='display:flex; justify-content:center; align-items:center; height:100%;'>⇄</div>", unsafe_allow_html=True)
+        if st.toggle("Flip", value=_is_asian, key="sg_up_is_red_toggle", label_visibility="collapsed"):
+            if not _is_asian:
+                st.session_state["sg_up_is_red"] = True
+                st.rerun()
+        else:
+            if _is_asian:
+                st.session_state["sg_up_is_red"] = False
+                st.rerun()
+    with _c3:
+        _active = "border:1px solid #00d4aa;" if _is_asian else "border:1px solid rgba(148,163,184,0.15);"
+        st.markdown(
+            f"<div style='{_active} border-radius:10px; padding:14px; background:rgba(15,23,42,0.5);'>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:#ef4444; font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:#22c55e; font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
+            f"<div style='color:#94a3b8; font-size:0.8rem; margin-top:6px;'>Asian (CN, JP, KR)</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def inject_css():
     """Inject the full premium CSS design system into the Streamlit app.
     Re-injects when theme changes so body.light-mode rules activate correctly.
