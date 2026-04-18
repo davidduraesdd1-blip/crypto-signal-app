@@ -216,25 +216,25 @@ def build_chart_html(
         price_lines_js += f"""
   candleSeries.createPriceLine({{
     price: {_target:.8f},
-    color: '#636EFA',
+    color: '#8b5cf6',
     lineWidth: 1,
     lineStyle: 2,
     title: 'Target',
     axisLabelVisible: true,
   }});"""
-        legend_parts.append('<span style="color:#636EFA">&#9135; Target</span>')
+        legend_parts.append('<span style="color:#8b5cf6">&#9135; Target</span>')
 
     if _stop is not None:
         price_lines_js += f"""
   candleSeries.createPriceLine({{
     price: {_stop:.8f},
-    color: '#ff4b4b',
+    color: '#ef4444',
     lineWidth: 1,
     lineStyle: 2,
     title: 'Stop',
     axisLabelVisible: true,
   }});"""
-        legend_parts.append('<span style="color:#ff4b4b">&#9135; Stop</span>')
+        legend_parts.append('<span style="color:#ef4444">&#9135; Stop</span>')
 
     legend_html  = "&nbsp;&nbsp;&nbsp;".join(legend_parts)
     ind_height   = 160   # fixed indicator panel height
@@ -246,13 +246,13 @@ def build_chart_html(
 <meta charset="utf-8">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ background: #0e1117; font-family: monospace; overflow: hidden; }}
+  body {{ background: #0d0e14; font-family: monospace; overflow: hidden; }}
   #hdr {{
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 7px 10px 5px 10px;
-    border-bottom: 1px solid #1a1d23;
+    border-bottom: 1px solid #111827;
   }}
   #title {{ color: #00d4aa; font-size: 13px; font-weight: bold; letter-spacing: 0.03em; }}
   #legend {{ font-size: 11px; color: #aaa; display: flex; gap: 14px; }}
@@ -262,8 +262,8 @@ def build_chart_html(
     align-items: center;
     gap: 16px;
     padding: 2px 10px;
-    border-top: 1px solid #1a1d23;
-    background: #0e1117;
+    border-top: 1px solid #111827;
+    background: #0d0e14;
   }}
   #ind-bar span {{ font-size: 9px; letter-spacing: 0.04em; }}
   #indicators {{ width: 100%; }}
@@ -276,9 +276,9 @@ def build_chart_html(
 </div>
 <div id="chart"></div>
 <div id="ind-bar">
-  <span style="color:#f5a623">RSI 14</span>
+  <span style="color:#f59e0b">RSI 14</span>
   <span style="color:#00d4aa">MACD 12,26</span>
-  <span style="color:#ff6b6b">Signal 9</span>
+  <span style="color:#ef4444">Signal 9</span>
 </div>
 <div id="indicators"></div>
 <script src="{_CDN}"></script>
@@ -292,20 +292,20 @@ def build_chart_html(
     width:  el.offsetWidth || 820,
     height: {height},
     layout: {{
-      background: {{ color: '#0e1117' }},
-      textColor:  '#e0e0e0',
+      background: {{ color: '#0d0e14' }},
+      textColor:  '#e2e8f0',
     }},
     grid: {{
-      vertLines: {{ color: '#1a1d23' }},
-      horzLines: {{ color: '#1a1d23' }},
+      vertLines: {{ color: '#111827' }},
+      horzLines: {{ color: '#111827' }},
     }},
     crosshair: {{ mode: 1 }},
     rightPriceScale: {{
-      borderColor: '#2a2d35',
+      borderColor: '#1e293b',
       scaleMargins: {{ top: 0.05, bottom: 0.22 }},
     }},
     timeScale: {{
-      borderColor: '#2a2d35',
+      borderColor: '#1e293b',
       timeVisible: true,
       secondsVisible: false,
     }},
@@ -314,11 +314,11 @@ def build_chart_html(
   // ── Candlestick series ──────────────────────────────────────
   var candleSeries = chart.addCandlestickSeries({{
     upColor:         '#00d4aa',
-    downColor:       '#ff4b4b',
+    downColor:       '#ef4444',
     borderUpColor:   '#00d4aa',
-    borderDownColor: '#ff4b4b',
+    borderDownColor: '#ef4444',
     wickUpColor:     '#00d4aa',
-    wickDownColor:   '#ff4b4b',
+    wickDownColor:   '#ef4444',
   }});
   candleSeries.setData({candles_json});
 
@@ -342,17 +342,17 @@ def build_chart_html(
     width:  el2.offsetWidth || 820,
     height: {ind_height},
     layout: {{
-      background: {{ color: '#0e1117' }},
-      textColor:  '#e0e0e0',
+      background: {{ color: '#0d0e14' }},
+      textColor:  '#e2e8f0',
     }},
     grid: {{
-      vertLines: {{ color: '#1a1d23' }},
-      horzLines: {{ color: '#1a1d23' }},
+      vertLines: {{ color: '#111827' }},
+      horzLines: {{ color: '#111827' }},
     }},
     crosshair: {{ mode: 1 }},
-    rightPriceScale: {{ borderColor: '#2a2d35' }},
+    rightPriceScale: {{ borderColor: '#1e293b' }},
     timeScale: {{
-      borderColor: '#2a2d35',
+      borderColor: '#1e293b',
       timeVisible: true,
       secondsVisible: false,
     }},
@@ -362,7 +362,7 @@ def build_chart_html(
 
   // RSI line — top half of indicator panel
   var rsiSeries = chart2.addLineSeries({{
-    color:            '#f5a623',
+    color:            '#f59e0b',
     lineWidth:        1,
     priceScaleId:     'rsi',
     lastValueVisible: true,
@@ -371,12 +371,12 @@ def build_chart_html(
   }});
   chart2.priceScale('rsi').applyOptions({{
     scaleMargins: {{ top: 0.04, bottom: 0.54 }},
-    borderColor: '#2a2d35',
+    borderColor: '#1e293b',
   }});
   rsiSeries.setData({rsi_json});
   // Overbought / oversold reference lines
-  rsiSeries.createPriceLine({{ price: 70, color: '#3a3a3a', lineWidth: 1, lineStyle: 1, title: '' }});
-  rsiSeries.createPriceLine({{ price: 30, color: '#3a3a3a', lineWidth: 1, lineStyle: 1, title: '' }});
+  rsiSeries.createPriceLine({{ price: 70, color: '#334155', lineWidth: 1, lineStyle: 1, title: '' }});
+  rsiSeries.createPriceLine({{ price: 30, color: '#334155', lineWidth: 1, lineStyle: 1, title: '' }});
 
   // MACD histogram — bottom half
   var macdHist = chart2.addHistogramSeries({{
@@ -386,13 +386,13 @@ def build_chart_html(
   }});
   chart2.priceScale('macd').applyOptions({{
     scaleMargins: {{ top: 0.56, bottom: 0.02 }},
-    borderColor: '#2a2d35',
+    borderColor: '#1e293b',
   }});
   macdHist.setData({hist_json});
 
   // MACD signal line (red)
   var macdSignal = chart2.addLineSeries({{
-    color:            '#ff6b6b',
+    color:            '#ef4444',
     lineWidth:        1,
     priceScaleId:     'macd',
     lastValueVisible: false,
@@ -402,7 +402,7 @@ def build_chart_html(
 
   // MACD line (blue)
   var macdLine = chart2.addLineSeries({{
-    color:            '#636EFA',
+    color:            '#8b5cf6',
     lineWidth:        1,
     priceScaleId:     'macd',
     lastValueVisible: false,

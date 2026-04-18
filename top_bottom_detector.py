@@ -1767,7 +1767,7 @@ def render_top_bottom_widget(result: dict, user_level: str = "beginner") -> None
     elif score >= 35:
         color, label, emoji = "#f59e0b", "Neutral — Hold / Wait", "■"
     elif score >= 20:
-        color, label, emoji = "#f97316", "Top Zone — Consider Reducing", "▼"
+        color, label, emoji = "#f59e0b", "Top Zone — Consider Reducing", "▼"
     else:
         color, label, emoji = "#ef4444", "Extreme Top — Strong Sell Zone", "▼"
 

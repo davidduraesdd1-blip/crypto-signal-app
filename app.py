@@ -576,12 +576,12 @@ _ui.inject_css()
 # ── #59 UI/UX Refresh — global signal/card color variables ────────────────────
 SIGNAL_CSS = """
 <style>
-.signal-buy  { color: #00C853; font-weight: bold; }
-.signal-sell { color: #D50000; font-weight: bold; }
-.signal-hold { color: #FF6D00; font-weight: bold; }
-.metric-positive { color: #00C853; }
-.metric-negative { color: #D50000; }
-.card-container  { background: #1E1E1E; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+.signal-buy  { color: #22c55e; font-weight: bold; }
+.signal-sell { color: #ef4444; font-weight: bold; }
+.signal-hold { color: #f59e0b; font-weight: bold; }
+.metric-positive { color: #22c55e; }
+.metric-negative { color: #ef4444; }
+.card-container  { background: #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
 </style>
 """
 st.markdown(SIGNAL_CSS, unsafe_allow_html=True)
@@ -664,7 +664,7 @@ try:
         st.sidebar.markdown(
             '<div style="background:rgba(246,70,93,0.15);border:1px solid rgba(246,70,93,0.4);'
             'border-radius:8px;padding:7px 12px;text-align:center;margin-bottom:8px">'
-            '<span style="color:#f6465d;font-size:11px;font-weight:800;letter-spacing:0.8px">'
+            '<span style="color:#ef4444;font-size:11px;font-weight:800;letter-spacing:0.8px">'
             '🔴 LIVE TRADING ACTIVE — Real money at risk</span></div>',
             unsafe_allow_html=True,
         )
@@ -672,7 +672,7 @@ try:
         st.sidebar.markdown(
             '<div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);'
             'border-radius:8px;padding:6px 12px;text-align:center;margin-bottom:8px">'
-            '<span style="color:#818cf8;font-size:11px;font-weight:700;letter-spacing:0.5px">'
+            '<span style="color:#a78bfa;font-size:11px;font-weight:700;letter-spacing:0.5px">'
             '📄 Paper Mode — Simulated trades only</span></div>',
             unsafe_allow_html=True,
         )
@@ -745,7 +745,7 @@ _demo_val = st.sidebar.toggle(
 st.session_state["demo_mode"] = _demo_val
 if _demo_val:
     st.sidebar.markdown(
-        '<div style="background:#1c1200;border:1px solid rgba(251,191,36,0.3);border-radius:6px;'
+        '<div style="background:#1e293b;border:1px solid rgba(251,191,36,0.3);border-radius:6px;'
         'padding:6px 10px;font-size:11px;color:#FBBF24;margin-top:-6px">⚠️ DEMO MODE — synthetic data</div>',
         unsafe_allow_html=True,
     )
@@ -1264,7 +1264,7 @@ def page_dashboard():
     _ui.render_welcome_banner()
 
     st.markdown(
-        '<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        '<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
         'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
         unsafe_allow_html=True,
     )
@@ -1314,7 +1314,7 @@ def page_dashboard():
                 _fng_emoji = "🤩"
             else:
                 _fng_emoji = "🤑"
-            _fng_color = "#f6465d" if fv < 40 else "#00c076" if fv > 60 else "#f0a500"  # APP-05: fear=red, greed=green
+            _fng_color = "#ef4444" if fv < 40 else "#22c55e" if fv > 60 else "#f59e0b"  # APP-05: fear=red, greed=green
             st.markdown(
                 f'<span style="color:rgba(255,255,255,0.4);font-size:11px;'
                 f'text-transform:uppercase;letter-spacing:0.8px">Market Mood</span><br/>'
@@ -1615,12 +1615,12 @@ def page_dashboard():
             # Only render if signal is notable (not all-normal)
             if _bits3["signal"] != "NORMAL" or _macro3["adjustment"] != 0.0:
                 _bc3    = {"BLOOD_IN_STREETS": "#ef4444", "EXTREME_FEAR": "#f59e0b", "NORMAL": "#6b7280"}.get(_bits3["signal"], "#6b7280")
-                _bg3    = {"BLOOD_IN_STREETS": "#1f0000",  "EXTREME_FEAR": "#1c1200", "NORMAL": "#111827"}.get(_bits3["signal"], "#111827")
-                _dc3    = {0.0: "#ef4444", 0.5: "#f97316", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
+                _bg3    = {"BLOOD_IN_STREETS": "#0d0e14",  "EXTREME_FEAR": "#1e293b", "NORMAL": "#111827"}.get(_bits3["signal"], "#111827")
+                _dc3    = {0.0: "#ef4444", 0.5: "#f59e0b", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
                 _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
-                _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f97316", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
+                _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f59e0b", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
                 _sk3    = _cached_deribit_options_skew("BTC")
-                _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "—"), "#6b7280")
+                _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f59e0b", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "—"), "#6b7280")
                 _b1, _b2, _b3, _b4 = st.columns(4)
                 with _b1:
                     st.markdown(f"""
@@ -1663,7 +1663,7 @@ def page_dashboard():
       <div style="font-size:11px;color:#6b7280;margin-top:8px">
         Put IV {f"{_sk3['put_iv']:.1f}%" if "put_iv" in _sk3 else "—"} · Call IV {f"{_sk3['call_iv']:.1f}%" if "call_iv" in _sk3 else "—"}
       </div>
-      {f'<div style="font-size:10px;color:#4b5563;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
+      {f'<div style="font-size:10px;color:#475569;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
     </div>
     """, unsafe_allow_html=True)
         except Exception as _sk3_err:
@@ -1716,7 +1716,7 @@ def page_dashboard():
                 if _sg_score >= 0.3:   _sg_c, _sg_bg = "#22c55e", "rgba(34,197,94,0.07)"
                 elif _sg_score >= 0.1: _sg_c, _sg_bg = "#00d4aa", "rgba(0,212,170,0.07)"
                 elif _sg_score >= -0.1: _sg_c, _sg_bg = "#f59e0b", "rgba(245,158,11,0.07)"
-                elif _sg_score >= -0.3: _sg_c, _sg_bg = "#f97316", "rgba(249,115,22,0.07)"
+                elif _sg_score >= -0.3: _sg_c, _sg_bg = "#f59e0b", "rgba(249,115,22,0.07)"
                 else:                  _sg_c, _sg_bg = "#ef4444", "rgba(239,68,68,0.07)"
 
                 def _sgf(v): return f"+{v:.2f}" if v >= 0 else f"{v:.2f}"
@@ -1851,7 +1851,7 @@ def page_dashboard():
                             f"border:1px solid {_wcc}33;border-radius:8px;padding:12px'>"
                             f"<div style='font-size:12px;color:#6b7280'>{_wico} {_ph}</div>"
                             f"<div style='font-size:28px;font-weight:700;color:{_wcc}'>{_cnt}</div>"
-                            f"<div style='font-size:10px;color:#4b5563'>pairs</div></div>",
+                            f"<div style='font-size:10px;color:#475569'>pairs</div></div>",
                             unsafe_allow_html=True,
                         )
                 if _user_level_wyck == "advanced":
@@ -2138,10 +2138,10 @@ def page_dashboard():
                 texttemplate = "%{text}",
                 textfont     = {"size": 9},
                 colorscale   = [
-                    [0.0,  "#ff4b4b"],
-                    [0.25, "#ffaaaa"],
-                    [0.5,  "#888888"],
-                    [0.75, "#99e6cc"],
+                    [0.0,  "#ef4444"],
+                    [0.25, "#fca5a5"],
+                    [0.5,  "#94a3b8"],
+                    [0.75, "#86efac"],
                     [1.0,  "#00d4aa"],
                 ],
                 zmin=-1, zmax=1,
@@ -2151,9 +2151,9 @@ def page_dashboard():
             _hm_fig.update_layout(
                 height=max(250, 32 * len(_hm_pairs) + 60),
                 margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="#0e1117",
-                plot_bgcolor="#0e1117",
-                font=dict(color="#fafafa", size=9),
+                paper_bgcolor="#0d0e14",
+                plot_bgcolor="#0d0e14",
+                font=dict(color="#f8fafc", size=9),
                 xaxis=dict(side="top", tickfont=dict(size=9)),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
             )
@@ -2358,7 +2358,7 @@ def page_dashboard():
                         _tc   = "#e2e8f0"
                     elif "SELL" in _dir:
                         _bg   = f"rgba(246,70,93,{min(0.85, 0.25 + abs(_sc)/100)})"
-                        _border = "#f6465d"
+                        _border = "#ef4444"
                         _tc   = "#e2e8f0"
                     else:
                         _bg   = "rgba(107,114,128,0.15)"
@@ -2399,7 +2399,7 @@ def page_dashboard():
             _mchg = _gm.get("market_cap_change_24h", 0.0)
             _vol  = _gm.get("total_volume_24h_usd", 0)
             _alt  = _gm.get("altcoin_season_label", "—")
-            _gdc  = "#00c076" if _mchg >= 0 else "#f6465d"
+            _gdc  = "#22c55e" if _mchg >= 0 else "#ef4444"
             _ga   = "▲" if _mchg >= 0 else "▼"
             _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
             with _gc1:
@@ -2533,7 +2533,7 @@ def page_dashboard():
             _mtf_vc = "#86efac"
         elif _tf_agree_sell == 2:
             _mtf_verdict = "⚠️ PARTIAL SELL — 2 timeframes bearish, mixed overall"
-            _mtf_vc = "#f97316"
+            _mtf_vc = "#f59e0b"
         else:
             _mtf_verdict = "⬛ MIXED — Timeframes disagree. Wait for clarity."
             _mtf_vc = "#94a3b8"
@@ -2544,7 +2544,7 @@ def page_dashboard():
             if _cycle_score >= 80:    _cycle_text, _cycle_color = f"✅ EXCELLENT TIMING — Cycle Score {_cycle_score}/100 (Bottom Zone)", "#22c55e"
             elif _cycle_score >= 65:  _cycle_text, _cycle_color = f"👍 GOOD TIMING — Cycle Score {_cycle_score}/100 (Buy Zone)", "#86efac"
             elif _cycle_score >= 35:  _cycle_text, _cycle_color = f"⏳ NEUTRAL TIMING — Cycle Score {_cycle_score}/100 (Wait)", "#f59e0b"
-            elif _cycle_score >= 20:  _cycle_text, _cycle_color = f"⚠️ CAUTION — Cycle Score {_cycle_score}/100 (Top Zone)", "#f97316"
+            elif _cycle_score >= 20:  _cycle_text, _cycle_color = f"⚠️ CAUTION — Cycle Score {_cycle_score}/100 (Top Zone)", "#f59e0b"
             else:                     _cycle_text, _cycle_color = f"🛑 POOR TIMING — Cycle Score {_cycle_score}/100 (Extreme Top)", "#ef4444"
             _cycle_row = (f"<tr><td style='padding:6px 10px 6px 4px;color:#64748b;font-size:0.85rem;font-weight:600'>CYCLE TIMING</td>"
                           f"<td colspan='3' style='padding:6px 4px;color:{_cycle_color};font-size:0.85rem;font-weight:700'>{_cycle_text}</td></tr>")
@@ -2749,7 +2749,7 @@ def page_dashboard():
         # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
         _consensus     = r.get("consensus", 0.0)
         _agents_agree  = round(_consensus * 6)   # consensus = fraction of 6 agents with abs(vote)>70
-        _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#f6465d")
+        _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#ef4444")
 
         # Signal accuracy badge — shows historical win rate for this pair/direction
         try:
@@ -2933,7 +2933,7 @@ def page_dashboard():
                     "BUY":         "#00d4aa",
                     "HOLD":        "#94a3b8",
                     "NEUTRAL":     "#94a3b8",
-                    "SELL":        "#f97316",
+                    "SELL":        "#f59e0b",
                     "STRONG SELL": "#ef4444",
                     "LOW VOL":     "#6b7280",
                     "NO DATA":     "#6b7280",
@@ -2961,7 +2961,7 @@ def page_dashboard():
                     _align_color = "#00d4aa"
                     _align_text  = f"▲ Leaning bullish — {_n_bull} buy, {_n_bear} sell" + (f" ({', '.join(_hold_tfs)} neutral)" if _hold_tfs else "")
                 elif _n_bear > _n_bull:
-                    _align_color = "#f97316"
+                    _align_color = "#f59e0b"
                     _align_text  = f"▽ Leaning bearish — {_n_bear} sell, {_n_bull} buy"
                 else:
                     _align_color = "#94a3b8"
@@ -3169,7 +3169,7 @@ def page_dashboard():
                     _ml_prob = _ml.get("probability", 0.5)
                     _ml_acc  = _ml.get("model_accuracy", 0.0)
                     _ml_sig  = _ml.get("signal", "NEUTRAL")
-                    _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ff4b4b" if _ml_sig == "SELL" else "#f59e0b"
+                    _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ef4444" if _ml_sig == "SELL" else "#f59e0b"
                     _ml_emoji = "📈" if _ml_sig == "BUY" else ("📉" if _ml_sig == "SELL" else "😐")
                     _ml_plain = (
                         "The AI thinks the price will go UP in the next few hours."
@@ -3181,9 +3181,9 @@ def page_dashboard():
                     st.markdown(
                         f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
                         f'padding:12px 16px;margin:8px 0;border-left:3px solid {_ml_col};">'
-                        f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:4px;">'
+                        f'<div style="font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:4px;">'
                         f'{_ml_emoji} AI Price Prediction — Next Few Hours</div>'
-                        f'<div style="font-size:12px;color:#a8b4c8;">{_ml_plain}</div>'
+                        f'<div style="font-size:12px;color:#94a3b8;">{_ml_plain}</div>'
                         f'<div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:6px;">'
                         f'Confidence: <span style="color:{_ml_col};font-weight:700;">{_ml_prob:.0%}</span>'
                         f' &nbsp;·&nbsp; Model accuracy: {_ml_acc:.0%}'
@@ -3225,7 +3225,7 @@ def page_dashboard():
                                 st.markdown(
                                     f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
                                     f'padding:12px 16px;margin:8px 0;border-left:3px solid {_hmm_col};">'
-                                    f'<div style="font-size:13px;font-weight:700;color:#e8ecf4;margin-bottom:6px;">'
+                                    f'<div style="font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:6px;">'
                                     f'🧬 HMM Regime — Current State: '
                                     f'<span style="color:{_hmm_col}">{_hmm_state}</span>'
                                     f' ({_hmm_conf:.0%} confidence)</div>'
@@ -3265,7 +3265,7 @@ def page_dashboard():
                         f'padding:10px 14px;margin:4px 0 10px 0;border-left:2px solid {_story_sig_col};">'
                         f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;'
                         f'letter-spacing:0.6px;margin-bottom:4px">Signal Story</div>'
-                        f'<div style="font-size:13px;color:#c8d4e8;line-height:1.5">{_html.escape(str(_story_text))}</div>'
+                        f'<div style="font-size:13px;color:#cbd5e1;line-height:1.5">{_html.escape(str(_story_text))}</div>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
@@ -3406,7 +3406,7 @@ def page_dashboard():
                     _ch_conf  = [h["confidence"] for h in _ch_history]
                     _ch_sigs  = [h["signal"] for h in _ch_history]
                     _ch_colors = [
-                        "#00C853" if s == "BUY" else "#D50000" if s == "SELL" else "#9E9E9E"
+                        "#22c55e" if s == "BUY" else "#ef4444" if s == "SELL" else "#94a3b8"
                         for s in _ch_sigs
                     ]
                     _ch_fig = go.Figure()
@@ -3415,7 +3415,7 @@ def page_dashboard():
                         y=_ch_conf,
                         mode="lines+markers",
                         name="Confidence %",
-                        line=dict(color="#818cf8", width=1.5),
+                        line=dict(color="#a78bfa", width=1.5),
                         marker=dict(color=_ch_colors, size=6),
                         hovertemplate="%{x}<br>Confidence: %{y:.1f}%<extra></extra>",
                     ))
@@ -3426,9 +3426,9 @@ def page_dashboard():
                         plot_bgcolor="rgba(0,0,0,0)",
                         title=dict(
                             text=f"Confidence History — {pair} (last 30 days)  "
-                                 '<span style="color:#00C853">● BUY</span> '
-                                 '<span style="color:#D50000">● SELL</span> '
-                                 '<span style="color:#9E9E9E">● HOLD</span>',
+                                 '<span style="color:#22c55e">● BUY</span> '
+                                 '<span style="color:#ef4444">● SELL</span> '
+                                 '<span style="color:#94a3b8">● HOLD</span>',
                             font=dict(size=11),
                             x=0,
                         ),
@@ -3569,11 +3569,11 @@ def page_dashboard():
                 '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
                 'border-radius:12px;padding:28px 24px;text-align:center;margin:20px 0">'
                 '<div style="font-size:32px;margin-bottom:10px">\U0001f52c</div>'
-                '<div style="font-size:18px;font-weight:700;color:#e8ecf4;margin-bottom:8px">'
+                '<div style="font-size:18px;font-weight:700;color:#e2e8f0;margin-bottom:8px">'
                 'Advanced Analysis Tools</div>'
                 '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:380px;margin:0 auto">'
                 'Correlation matrix, volatility rankings, and pair trade scanner are available at '
-                '<strong style="color:#818cf8">Intermediate</strong> or '
+                '<strong style="color:#a78bfa">Intermediate</strong> or '
                 '<strong style="color:#a78bfa">Advanced</strong> level.<br><br>'
                 'Switch your experience level in the sidebar to unlock these tools.</div>'
                 '</div>',
@@ -3718,7 +3718,7 @@ def page_dashboard():
                     for _, _vr in _vol_df.iterrows():
                         _v = _vr["Ann. Vol%"]
                         _pct = _v / max(_vmax, 1)
-                        _vc = "#f6465d" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
+                        _vc = "#ef4444" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
                         _chips_vol += (
                             f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
                             f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
@@ -3791,7 +3791,7 @@ def page_dashboard():
                         # Signal color map
                         _COINT_COLORS = {
                             "LONG_SPREAD":  "#00d4aa",
-                            "SHORT_SPREAD": "#f6465d",
+                            "SHORT_SPREAD": "#ef4444",
                             "EXIT_SPREAD":  "#f59e0b",
                             "NEUTRAL":      "#64748b",
                         }
@@ -3829,7 +3829,7 @@ def page_dashboard():
                                     backdrop-filter:blur(12px)">
                                     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
                                         <div>
-                                            <span style="font-size:15px;font-weight:800;color:#e8ecf4;
+                                            <span style="font-size:15px;font-weight:800;color:#e2e8f0;
                                                          font-family:'JetBrains Mono',monospace">
                                                 {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
                                             </span>
@@ -3837,7 +3837,7 @@ def page_dashboard():
                                                 hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
                                             </span>
                                         </div>
-                                        <span style="background:{_sig_color};color:#06101c;padding:4px 13px;
+                                        <span style="background:{_sig_color};color:#0d0e14;padding:4px 13px;
                                                      border-radius:999px;font-size:11px;font-weight:800;
                                                      letter-spacing:0.5px">{_sig_label}</span>
                                     </div>
@@ -3859,7 +3859,7 @@ def page_dashboard():
                                                         width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
                                         </div>
                                     </div>
-                                    <div style="font-size:12px;color:#c4cedd;line-height:1.5;
+                                    <div style="font-size:12px;color:#cbd5e1;line-height:1.5;
                                                 border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
                                         {_cr['signal_plain']}
                                     </div>
@@ -4082,7 +4082,7 @@ def page_config():
     _cfg_lv = st.session_state.get("user_level", "beginner")
     _cfg_title = "⚙️ Settings" if _cfg_lv in ("beginner", "intermediate") else "⚙️ Config Editor"
     st.markdown(
-        f'<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
         f'letter-spacing:-0.5px;margin-bottom:0">{_cfg_title}</h1>',
         unsafe_allow_html=True,
     )
@@ -5074,8 +5074,8 @@ def page_config():
             for _wl_idx, _wl_rule in enumerate(_watchlist):
                 _wl_pill_color = (
                     "#00d4aa" if "BUY" in _wl_rule.get("condition", "") else
-                    "#f6465d" if "SELL" in _wl_rule.get("condition", "") else
-                    "#6366f1"
+                    "#ef4444" if "SELL" in _wl_rule.get("condition", "") else
+                    "#8b5cf6"
                 )
                 _wl_status = "🟢 ON" if _wl_rule.get("enabled", True) else "⚫ OFF"
                 _wl_rc1, _wl_rc2, _wl_rc3 = st.columns([5, 1, 1])
@@ -5083,7 +5083,7 @@ def page_config():
                     st.markdown(
                         f"""<div style="background:rgba(14,18,30,0.7);border:1px solid rgba(255,255,255,0.07);
                         border-radius:10px;padding:10px 14px;margin-bottom:4px">
-                        <span style="font-weight:700;color:#e8ecf4">{_wl_rule.get('name','—')}</span>
+                        <span style="font-weight:700;color:#e2e8f0">{_wl_rule.get('name','—')}</span>
                         <span style="background:{_wl_pill_color}22;color:{_wl_pill_color};
                               border:1px solid {_wl_pill_color}55;border-radius:999px;
                               font-size:10px;font-weight:700;padding:1px 9px;margin:0 6px">
@@ -5137,7 +5137,7 @@ def page_backtest():
     _bt_lv = st.session_state.get("user_level", "beginner")
     _bt_title = "Performance History" if _bt_lv in ("beginner", "intermediate") else "Backtest Viewer"
     st.markdown(
-        f'<h1 style="color:#e8ecf1;font-size:26px;font-weight:700;'
+        f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
         f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
         unsafe_allow_html=True,
     )
@@ -5257,7 +5257,7 @@ def page_backtest():
                     f'border-radius:12px;padding:18px 22px;margin:14px 0">'
                     f'<div style="font-size:13px;font-weight:700;color:#00d4aa;margin-bottom:8px">'
                     f'{_btm_icon} What does this mean for me? — {_btm_grade}</div>'
-                    f'<div style="font-size:13px;color:#a8b4c8;line-height:1.65">'
+                    f'<div style="font-size:13px;color:#94a3b8;line-height:1.65">'
                     f'{_btm_msg}<br><br>{_btm_risk}<br><br>'
                     f'<em>Past performance does not guarantee future results. '
                     f'Always treat signals as one input in your decision — not a guarantee.</em>'
@@ -5355,24 +5355,24 @@ def page_backtest():
                 x=_x, y=_eq.tolist(), mode="lines", name="Portfolio",
                 line=dict(color="#00d4aa", width=2),
             ), row=1, col=1)
-            _efig.add_hline(y=_init_eq, line_dash="dot", line_color="#888888",
+            _efig.add_hline(y=_init_eq, line_dash="dot", line_color="#94a3b8",
                             annotation_text=f"Start ${_init_eq:,.0f}",
                             annotation_position="bottom right", row=1, col=1)
             if _win_x:
                 _efig.add_trace(go.Scatter(
                     x=_win_x, y=_win_y, mode="markers", name="Win",
-                    marker=dict(color="#00cc96", size=5, symbol="circle"),
+                    marker=dict(color="#22c55e", size=5, symbol="circle"),
                 ), row=1, col=1)
             if _loss_x:
                 _efig.add_trace(go.Scatter(
                     x=_loss_x, y=_loss_y, mode="markers", name="Loss",
-                    marker=dict(color="#ff4b4b", size=5, symbol="circle"),
+                    marker=dict(color="#ef4444", size=5, symbol="circle"),
                 ), row=1, col=1)
 
             # Row 2: drawdown % (filled red below 0)
             _efig.add_trace(go.Scatter(
                 x=_x, y=_dd.tolist(), mode="lines", name="Drawdown %",
-                line=dict(color="#ff4b4b", width=1),
+                line=dict(color="#ef4444", width=1),
                 fill="tozeroy", fillcolor="rgba(255,75,75,0.2)",
             ), row=2, col=1)
 
@@ -5467,7 +5467,7 @@ def page_backtest():
             if 'pnl_pct' in df_trades.columns and len(df_trades) > 3:
                 st.subheader("PnL Distribution")
                 fig2 = px.histogram(df_trades, x='pnl_pct', nbins=20,
-                                    color_discrete_sequence=['#636EFA'],
+                                    color_discrete_sequence=['#8b5cf6'],
                                     labels={'pnl_pct': 'PnL %'})
                 fig2.add_vline(x=0, line_dash="dash", line_color="red")
                 fig2.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0))
@@ -5505,7 +5505,7 @@ def page_backtest():
                         x=mc_r['all_final_equities'],
                         nbinsx=60,
                         name="Final Equity",
-                        marker_color='#636EFA',
+                        marker_color='#8b5cf6',
                         opacity=0.75,
                     ))
                     fig_mc.add_vline(x=mc_r['initial_equity'], line_dash="dash",
@@ -5609,7 +5609,7 @@ def page_backtest():
                 _sell_exp   = sum(float(p.get("size_pct") or 0) for p in positions.values() if "SELL" in str(p.get("direction", "")))
                 _n_pos      = len(positions)
                 # Heat color: green < 30%, amber 30–60%, red > 60%
-                _heat_color = "#00d4aa" if _total_exp < 30 else ("#f59e0b" if _total_exp < 60 else "#f6465d")
+                _heat_color = "#00d4aa" if _total_exp < 30 else ("#f59e0b" if _total_exp < 60 else "#ef4444")
                 _heat_label = "Low" if _total_exp < 30 else ("Medium" if _total_exp < 60 else "High")
                 st.markdown(
                     f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
@@ -5626,7 +5626,7 @@ def page_backtest():
                     f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
                     f'border-radius:10px;padding:10px 18px;text-align:center">'
                     f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">OPEN POSITIONS</div>'
-                    f'<div style="font-size:20px;font-weight:700;color:#e8ecf4">{_n_pos}</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#e2e8f0">{_n_pos}</div>'
                     f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">trades active</div></div>'
                     f'<div style="background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.2);'
                     f'border-radius:10px;padding:10px 18px;text-align:center">'
@@ -5636,7 +5636,7 @@ def page_backtest():
                     f'<div style="background:rgba(246,70,93,0.06);border:1px solid rgba(246,70,93,0.2);'
                     f'border-radius:10px;padding:10px 18px;text-align:center">'
                     f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">SELL EXPOSURE</div>'
-                    f'<div style="font-size:20px;font-weight:700;color:#f6465d">{_sell_exp:.1f}%</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#ef4444">{_sell_exp:.1f}%</div>'
                     f'<div style="font-size:10px;color:rgba(168,180,200,0.4)">short trades</div></div>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -5705,10 +5705,10 @@ def page_backtest():
                     # Render position card
                     _pnl_sign  = "+" if _pnl_pct >= 0 else ""
                     _dir_emoji = "🟢" if "BUY" in _direction else "🔴"
-                    _pnl_color = "#00d4aa" if _pnl_pct >= 0 else "#ff4b4b"
+                    _pnl_color = "#00d4aa" if _pnl_pct >= 0 else "#ef4444"
 
                     st.markdown(
-                        f'<div style="background:#1a1f2e;border-radius:10px;padding:14px 18px;'
+                        f'<div style="background:#1e293b;border-radius:10px;padding:14px 18px;'
                         f'margin-bottom:10px;border-left:4px solid {_pnl_color}">'
                         f'<span style="font-size:15px;font-weight:700">{_dir_emoji} {_pair}</span>'
                         f'&nbsp;&nbsp;<code style="font-size:12px">{_direction}</code>'
@@ -5911,11 +5911,11 @@ def page_backtest():
                 '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
                 'border-radius:12px;padding:28px 24px;text-align:center;margin:20px 0">'
                 '<div style="font-size:32px;margin-bottom:10px">\U0001f52c</div>'
-                '<div style="font-size:18px;font-weight:700;color:#e8ecf4;margin-bottom:8px">'
+                '<div style="font-size:18px;font-weight:700;color:#e2e8f0;margin-bottom:8px">'
                 'Advanced Analysis Tools</div>'
                 '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:380px;margin:0 auto">'
                 'Walk-Forward Validation, Deep Backtest, and Signal Calibration are available at '
-                '<strong style="color:#818cf8">Intermediate</strong> or '
+                '<strong style="color:#a78bfa">Intermediate</strong> or '
                 '<strong style="color:#a78bfa">Advanced</strong> level.<br><br>'
                 'Switch your experience level in the sidebar to unlock these tools.</div>'
                 '</div>',
@@ -5999,7 +5999,7 @@ def page_backtest():
                         f'border-radius:12px;padding:16px 20px;margin:10px 0">'
                         f'<div style="font-size:13px;font-weight:700;color:#00d4aa;margin-bottom:6px">'
                         f'{_wfm_icon} What does this mean? — {_wfm_verdict}</div>'
-                        f'<div style="font-size:13px;color:#a8b4c8;line-height:1.6">'
+                        f'<div style="font-size:13px;color:#94a3b8;line-height:1.6">'
                         f'{_wfm_msg}<br><br>{_wf_std_msg}'
                         f'</div></div>',
                         unsafe_allow_html=True,
@@ -6125,7 +6125,7 @@ def page_backtest():
                     y=_cal_summary["win_rate_pct"],
                     name="Actual Win Rate",
                     marker_color=[
-                        "#00d4aa" if float(r["win_rate_pct"]) >= float(r["conf_bucket"]) + 5 else "#ff4b4b"
+                        "#00d4aa" if float(r["win_rate_pct"]) >= float(r["conf_bucket"]) + 5 else "#ef4444"
                         for _, r in _cal_summary.iterrows()
                     ],
                     text=_cal_summary.apply(lambda r: f"{r['win_rate_pct']:.0f}%<br>n={int(r['count'])}", axis=1),
@@ -6588,23 +6588,23 @@ def page_backtest():
                                     x=_wfv_ids, y=_wfv_is_sh,
                                     name="IS Sharpe",
                                     mode="lines+markers",
-                                    line=dict(color="#60a5fa", width=2),
+                                    line=dict(color="#00d4aa", width=2),
                                     marker=dict(size=7),
                                 ))
                                 _wfv_line.add_trace(go.Scatter(
                                     x=_wfv_ids, y=_wfv_oos_sh2,
                                     name="OOS Sharpe",
                                     mode="lines+markers",
-                                    line=dict(color="#34d399", width=2, dash="dot"),
+                                    line=dict(color="#2dd4bf", width=2, dash="dot"),
                                     marker=dict(size=7),
                                 ))
                                 _wfv_line.update_layout(
                                     title="IS Sharpe vs OOS Sharpe per Window",
                                     height=240,
                                     margin=dict(l=10, r=10, t=36, b=10),
-                                    paper_bgcolor="#0e1117",
-                                    plot_bgcolor="#0e1117",
-                                    font=dict(color="#fafafa", size=11),
+                                    paper_bgcolor="#0d0e14",
+                                    plot_bgcolor="#0d0e14",
+                                    font=dict(color="#f8fafc", size=11),
                                     legend=dict(orientation="h", y=1.12, x=0),
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
                                     yaxis=dict(title="Sharpe", gridcolor="#1f2937"),
@@ -6632,9 +6632,9 @@ def page_backtest():
                                     title="WFE Ratio per Window  (green ≥0.7 · yellow ≥0.5 · red <0.5)",
                                     height=220,
                                     margin=dict(l=10, r=80, t=36, b=10),
-                                    paper_bgcolor="#0e1117",
-                                    plot_bgcolor="#0e1117",
-                                    font=dict(color="#fafafa", size=11),
+                                    paper_bgcolor="#0d0e14",
+                                    plot_bgcolor="#0d0e14",
+                                    font=dict(color="#f8fafc", size=11),
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
                                     yaxis=dict(title="WFE", range=[0, max(max(_wfv_wfes) * 1.2, 1.1)],
                                                gridcolor="#1f2937"),
@@ -6774,7 +6774,7 @@ def page_backtest():
                         f'border-radius:12px;padding:16px 20px;margin:12px 0">'
                         f'<div style="font-size:13px;font-weight:700;color:#00d4aa;margin-bottom:6px">'
                         f'{_stm_icon} What does this mean? — {_stm_verdict}</div>'
-                        f'<div style="font-size:13px;color:#a8b4c8;line-height:1.6">'
+                        f'<div style="font-size:13px;color:#94a3b8;line-height:1.6">'
                         f'{_stm_msg}<br><br>{_st_risk_msg}'
                         + (f'<br><br><em>Win rate of <strong>{_st_wr:.0f}%</strong> means the model picked the right direction '
                            f'on {_st_wr:.0f}% of pairs during this period.</em>'
@@ -6911,15 +6911,15 @@ def page_arbitrage():
 
         def _color_signal(val: str) -> str:
             if "OPPORTUNITY" in val: return "color: #00d4aa; font-weight:bold"
-            if "MARGINAL"    in val: return "color: #f0b429"
+            if "MARGINAL"    in val: return "color: #f59e0b"
             return "color: #888"
 
         def _color_net(val: str) -> str:
             try:
                 v = float(val.replace("%", ""))
                 if v >= _arb.MIN_NET_SPREAD_PCT: return "color: #00d4aa; font-weight:bold"
-                if v >= 0:                        return "color: #f0b429"
-                return "color: #ff4b4b"
+                if v >= 0:                        return "color: #f59e0b"
+                return "color: #ef4444"
             except Exception:
                 return ""
 
@@ -7088,18 +7088,18 @@ def page_arbitrage():
 
             def _color_fr(val):
                 if not isinstance(val, (int, float)):
-                    return "color: #555555"
-                if val >  0.05: return "color: #ff4b4b; font-weight: bold"
-                if val >  0.01: return "color: #ffa500"
+                    return "color: #64748b"
+                if val >  0.05: return "color: #ef4444; font-weight: bold"
+                if val >  0.01: return "color: #f59e0b"
                 if val < -0.05: return "color: #00d4aa; font-weight: bold"
-                if val < -0.01: return "color: #7ecb9a"
-                return "color: #888888"
+                if val < -0.01: return "color: #22c55e"
+                return "color: #94a3b8"
 
             def _color_ann(val):
                 if not isinstance(val, (int, float)):
                     return ""
                 if val >= 30: return "color: #00d4aa; font-weight: bold"
-                if val >= 10: return "color: #7ecb9a"
+                if val >= 10: return "color: #22c55e"
                 return ""
 
             exch_cols = [c for c in ["OKX", "BINANCE", "BYBIT", "KUCOIN"] if c in fr_df.columns]
@@ -7139,17 +7139,17 @@ def page_arbitrage():
                     if not isinstance(val, (int, float)):
                         return ""
                     if val >= 50: return "color: #00d4aa; font-weight: bold"
-                    if val >= 20: return "color: #7ecb9a"
-                    if val >= 10: return "color: #ffa500"
+                    if val >= 20: return "color: #22c55e"
+                    if val >= 10: return "color: #f59e0b"
                     return ""
 
                 def _color_rate(val):
                     if not isinstance(val, (int, float)):
                         return ""
-                    if val >  0.05: return "color: #ff4b4b; font-weight: bold"
-                    if val >  0.01: return "color: #ffa500"
+                    if val >  0.05: return "color: #ef4444; font-weight: bold"
+                    if val >  0.01: return "color: #f59e0b"
                     if val < -0.05: return "color: #00d4aa; font-weight: bold"
-                    if val < -0.01: return "color: #7ecb9a"
+                    if val < -0.01: return "color: #22c55e"
                     return ""
 
                 st.dataframe(

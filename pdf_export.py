@@ -20,13 +20,13 @@ from reportlab.platypus import (
 
 # ── Color palette (matches dark theme) ──
 TEAL   = colors.HexColor("#00d4aa")
-DARK   = colors.HexColor("#0e1117")
-MID    = colors.HexColor("#1a1d23")
-TEXT   = colors.HexColor("#fafafa")
-GREEN  = colors.HexColor("#00cc96")
-RED    = colors.HexColor("#ff4b4b")
-ORANGE = colors.HexColor("#ffa500")
-GREY   = colors.HexColor("#888888")
+DARK   = colors.HexColor("#0d0e14")
+MID    = colors.HexColor("#111827")
+TEXT   = colors.HexColor("#f8fafc")
+GREEN  = colors.HexColor("#22c55e")
+RED    = colors.HexColor("#ef4444")
+ORANGE = colors.HexColor("#f59e0b")
+GREY   = colors.HexColor("#94a3b8")
 WHITE  = colors.white
 BLACK  = colors.black
 
@@ -68,11 +68,11 @@ def _signal_table_style(num_rows):
         ("ALIGN",      (0, 0), (-1, 0), "CENTER"),
         # Body rows
         ("FONTSIZE",   (0, 1), (-1, -1), 7.5),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f5f5f5"), WHITE]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), WHITE]),
         ("ALIGN",      (1, 1), (-1, -1), "CENTER"),
         ("ALIGN",      (0, 1), (0, -1), "LEFT"),
         # Grid
-        ("GRID",       (0, 0), (-1, -1), 0.3, colors.HexColor("#cccccc")),
+        ("GRID",       (0, 0), (-1, -1), 0.3, colors.HexColor("#cbd5e1")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING",   (0, 0), (-1, -1), 4),
@@ -184,11 +184,11 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
 
     # Color direction cells (column 2, rows 1+)
     _DIR_COLORS = {
-        "STRONG BUY":  "#c8f7e5",
-        "BUY":         "#e6f9f3",
-        "STRONG SELL": "#ffd6d6",
-        "SELL":        "#fff0f0",
-        "NEUTRAL":     "#f5f5f5",  # explicit neutral — no tint
+        "STRONG BUY":  "#d1fae5",
+        "BUY":         "#d1fae5",
+        "STRONG SELL": "#fecaca",
+        "SELL":        "#fee2e2",
+        "NEUTRAL":     "#f8fafc",  # explicit neutral — no tint
     }
     for i, r in enumerate(sorted_results, start=1):
         direction = r.get("direction", "")
@@ -198,7 +198,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
                 bg = hex_color
                 break
         if bg is None:
-            bg = "#efefef"  # fallback for NO DATA / LOW VOL / unknown
+            bg = "#f1f5f9"  # fallback for NO DATA / LOW VOL / unknown
         style2.add("BACKGROUND", (2, i), (2, i), colors.HexColor(bg))
         # High-conf row highlight
         if r.get("high_conf"):
