@@ -333,7 +333,19 @@ def place_order(
         ct_size   = float(market.get("contractSize") or 1.0)
         if ct_size <= 0:
             ct_size = 1.0
-        qty       = max(1, round(size_usd / (price_now * ct_size)))
+        # EXEC-03: guard against silent min-1-contract oversize when size_usd
+        # is tiny relative to notional. Without this, size_usd=$1 at BTC=$100k
+        # rounds to qty=0, then max(1, 0)=1 contract → places ~$100k order.
+        # Raise instead of silently placing a 100x oversized trade.
+        _raw_qty = size_usd / (price_now * ct_size)
+        if _raw_qty < 0.5:
+            raise ValueError(
+                f"Calculated qty {_raw_qty:.2e} < 0.5 contracts — size_usd "
+                f"(${size_usd}) too small relative to notional "
+                f"(price={price_now}, ct_size={ct_size}). "
+                f"Aborting to prevent silent oversizing."
+            )
+        qty       = max(1, round(_raw_qty))
         # EXEC-02: hard cap on contract qty to prevent runaway orders from bad data
         if qty > 1000:
             raise ValueError(
@@ -382,6 +394,10 @@ def close_position(
     direction = direction of the open position (BUY → close with SELL).
     order_type defaults to the configured default_order_type (usually 'market').
     """
+    # Guard against None / non-string direction — .upper() would AttributeError
+    # and the caller would see an opaque crash instead of a clear error.
+    if not isinstance(direction, str) or not direction:
+        raise ValueError(f"close_position: direction must be a non-empty string, got {direction!r}")
     close_dir = "SELL" if "BUY" in direction.upper() else "BUY"
     if order_type is None:
         order_type = get_exec_config().get("default_order_type", "market")
