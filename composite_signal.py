@@ -544,11 +544,19 @@ def _score_funding_rate(fr_pct: float | None) -> float | None:
     """
     if fr_pct is None:
         return None
+    # Step function matching the docstring bands exactly. Previous version
+    # mixed step-returns with _clamp(linear-interpolation) — e.g. at fr=0.05
+    # the `fr > 0.03` branch evaluated to _clamp(-0.5 - 0.02/0.04) = _clamp(-1.0)
+    # = -1.0 (_clamp defaults to [-1.0,+1.0]), while at fr=0.050001 the
+    # `fr > 0.05` branch returned -0.7 — a −0.3 downward discontinuity in
+    # the wrong direction (higher funding should yield MORE negative, not less).
+    # Step function matches the published thresholds cleanly and eliminates
+    # the discontinuity.
     if fr_pct > 0.05:    return -0.7
-    if fr_pct > 0.03:    return _clamp(-0.5 - (fr_pct - 0.03) / 0.04)
-    if fr_pct > 0.01:    return _clamp(-0.2 - (fr_pct - 0.01) / 0.1)
+    if fr_pct > 0.03:    return -0.5
+    if fr_pct > 0.01:    return -0.2
     if fr_pct >= -0.005: return +0.1
-    if fr_pct >= -0.02:  return _clamp(+0.4 + (abs(fr_pct) - 0.005) / 0.05)
+    if fr_pct >= -0.02:  return +0.4
     return +0.7
 
 
