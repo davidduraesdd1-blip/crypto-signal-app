@@ -794,9 +794,9 @@ def get_onchain_metrics(pair: str) -> dict:
                     if _cm and not _cm.get("error"):
                         if _cm.get("mvrv_z") is not None:
                             mvrv_z = _cm["mvrv_z"]
-                        hash_ribbon_signal = _cm.get("hash_ribbon_signal", "N/A")
+                        hash_ribbon_signal = _cm.get("hash_ribbon_signal", "—")
                         puell_multiple     = _cm.get("puell_multiple") or 1.0
-                        puell_signal       = _cm.get("puell_signal", "N/A")
+                        puell_signal       = _cm.get("puell_signal", "—")
                 except Exception as _cm_binance_err:
                     logging.debug("[OnChain] CoinMetrics overlay (Binance path) failed: %s", _cm_binance_err)
             whale_activity = vol_mcap > 0.10
@@ -864,9 +864,9 @@ def get_onchain_metrics(pair: str) -> dict:
                 if _cm and not _cm.get("error"):
                     if _cm.get("mvrv_z") is not None:
                         mvrv_z = _cm["mvrv_z"]
-                    hash_ribbon_signal = _cm.get("hash_ribbon_signal", "N/A")
+                    hash_ribbon_signal = _cm.get("hash_ribbon_signal", "—")
                     puell_multiple     = _cm.get("puell_multiple") or 1.0
-                    puell_signal       = _cm.get("puell_signal", "N/A")
+                    puell_signal       = _cm.get("puell_signal", "—")
             except Exception as _cm_cg_err:
                 logging.debug("[OnChain] CoinMetrics overlay (CoinGecko path) failed: %s", _cm_cg_err)
         whale_activity = vol_mcap > 0.10
@@ -1026,7 +1026,7 @@ def get_liquidation_pressure(pairs: list) -> list:
         results.append({
             "pair":              pair,
             "oi_usd":            oi_usd,
-            "oi_signal":         oi.get("signal", "N/A"),
+            "oi_signal":         oi.get("signal", "—"),
             "funding_rate_pct":  fr_pct,
             "funding_bias":      bias,
             "squeeze_score":     sq_score,

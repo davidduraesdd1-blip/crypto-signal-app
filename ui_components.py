@@ -3737,7 +3737,7 @@ def render_ttm_squeeze_panel(sparkline_data: dict, results: list,
         p      = r["pair"]
         closes = sparkline_data.get(p, [])
         sq     = _compute_squeeze(closes)
-        dir_   = r.get("direction", "N/A")
+        dir_   = r.get("direction", "—")
         if sq["state"] in ("SQUEEZE", "COMPRESSION"):
             squeeze_pairs.append({"pair": p, "direction": dir_, **sq})
 
@@ -4031,7 +4031,7 @@ def render_social_momentum_panel(results: list, user_level: str = "beginner") ->
     _social_rows = []
     for r in results:
         _is_trending = r.get("trending", False)
-        _dir         = r.get("direction", "N/A")
+        _dir         = r.get("direction", "—")
         _conf        = r.get("confidence_avg_pct", 50)
         _fng         = r.get("fng_value", 50)
         # Social score: 0-100
@@ -4543,25 +4543,25 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
             unsafe_allow_html=True,
         )
 
-    _m2t  = macro_data.get("m2_trend", "N/A")
+    _m2t  = macro_data.get("m2_trend", "—")
     _m2c  = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_m2t, "#6b7280")
     _m2p  = macro_data.get("m2_pct_change_90d", 0.0)
     _mini_card(_c1, "Global M2", _m2t, f"{_m2p:+.2f}% (90d)", _m2c,
                "Expanding = more liquidity = crypto tailwind" if user_level == "beginner" else "")
 
-    _yct  = macro_data.get("yield_curve", "N/A")
+    _yct  = macro_data.get("yield_curve", "—")
     _ycc  = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_yct, "#6b7280")
     _spr  = macro_data.get("yield_spread_pp", 0.0)
     _mini_card(_c2, "Yield Curve (10Y–2Y)", _yct, f"Spread {_spr:+.2f}pp", _ycc,
                "Inverted = recession warning" if user_level == "beginner" else "")
 
-    _dxt  = macro_data.get("dxy_trend", "N/A")
+    _dxt  = macro_data.get("dxy_trend", "—")
     _dxc  = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_dxt, "#6b7280")
     _dxv  = macro_data.get("dxy", 104.0)
     _mini_card(_c3, "US Dollar (DXY)", _dxt.replace("_", " "), f"DXY {_dxv:.1f}", _dxc,
                "Weak dollar = crypto tailwind" if user_level == "beginner" else "")
 
-    _vxt  = macro_data.get("vix_structure", "N/A")
+    _vxt  = macro_data.get("vix_structure", "—")
     _vxc  = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_vxt, "#6b7280")
     _vxv  = macro_data.get("vix", 18.0)
     _vx3  = macro_data.get("vix3m", 20.0)

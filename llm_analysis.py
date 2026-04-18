@@ -113,10 +113,10 @@ def get_signal_explanation(pair: str, result: dict) -> str:
 
         # First TF context data
         first_td = list(tf_data.values())[0] if tf_data else {}
-        onchain_str = first_td.get("onchain", "N/A")
-        iv_str = first_td.get("options_iv", "N/A")
-        ob_str = first_td.get("ob_depth", "N/A")
-        funding_str = first_td.get("funding", "N/A")
+        onchain_str = first_td.get("onchain", "—")
+        iv_str = first_td.get("options_iv", "—")
+        ob_str = first_td.get("ob_depth", "—")
+        funding_str = first_td.get("funding", "—")
 
         prompt = f"""You are a professional crypto trading analyst. A trader is looking at this signal on {pair}. Explain in exactly 3-4 concise sentences:
 1. What the overall signal is and why (key drivers)

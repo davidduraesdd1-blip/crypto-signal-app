@@ -1620,7 +1620,7 @@ def page_dashboard():
                 _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
                 _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f97316", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
                 _sk3    = _cached_deribit_options_skew("BTC")
-                _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "N/A"), "#6b7280")
+                _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f97316", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "—"), "#6b7280")
                 _b1, _b2, _b3, _b4 = st.columns(4)
                 with _b1:
                     st.markdown(f"""
@@ -1658,7 +1658,7 @@ def page_dashboard():
                     st.markdown(f"""
     <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_skc3};border-radius:10px;padding:16px">
       <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Options Skew (Deribit)</div>
-      <div style="font-size:18px;font-weight:700;color:{_skc3}">{_sk3.get("signal", "N/A")}</div>
+      <div style="font-size:18px;font-weight:700;color:{_skc3}">{_sk3.get("signal", "—")}</div>
       <div style="font-size:12px;color:#9ca3af;margin-top:4px">Skew: {f"{_sk3['skew']:+.1f}%" if "skew" in _sk3 else "—"}</div>
       <div style="font-size:11px;color:#6b7280;margin-top:8px">
         Put IV {f"{_sk3['put_iv']:.1f}%" if "put_iv" in _sk3 else "—"} · Call IV {f"{_sk3['call_iv']:.1f}%" if "call_iv" in _sk3 else "—"}
@@ -2196,11 +2196,11 @@ def page_dashboard():
                 summary_rows.append({
                     "Coin": r["pair"],
                     "Price": _live_str,
-                    "Signal": r.get("direction", "N/A"),
+                    "Signal": r.get("direction", "—"),
                     "Strength": f"{r.get('confidence_avg_pct', 0)}%",
-                    "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "N/A",
-                    "Take Profit": f"${_tp1:,.4f}" if _tp1 else "N/A",
-                    "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "N/A",
+                    "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "—",
+                    "Take Profit": f"${_tp1:,.4f}" if _tp1 else "—",
+                    "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "—",
                     "Top Pick":   "⚡ Yes" if r.get("high_conf") else "—",
                 })
                 _pair_key = r["pair"]
@@ -2398,7 +2398,7 @@ def page_dashboard():
             _ed   = _gm.get("eth_dominance", 0.0)
             _mchg = _gm.get("market_cap_change_24h", 0.0)
             _vol  = _gm.get("total_volume_24h_usd", 0)
-            _alt  = _gm.get("altcoin_season_label", "N/A")
+            _alt  = _gm.get("altcoin_season_label", "—")
             _gdc  = "#00c076" if _mchg >= 0 else "#f6465d"
             _ga   = "▲" if _mchg >= 0 else "▼"
             _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
@@ -2436,7 +2436,7 @@ def page_dashboard():
         _ui.section_header("Dive Deeper — Pick a Coin", "Choose a coin below to see the full breakdown: entry price, stop loss, AI prediction, news sentiment, and more", icon="🔬")
 
         def _pair_label(r):
-            _d  = r.get("direction", "N/A")
+            _d  = r.get("direction", "—")
             _c  = r.get("confidence_avg_pct", 0)
             _ic = direction_color(_d)
             _hc = "  ⚡ TOP PICK" if r.get("high_conf") else ""
@@ -2469,8 +2469,8 @@ def page_dashboard():
         # ── Selected Coin Detail Panel ─────────────────────────────────────────────
         pair        = r["pair"]
         conf        = r.get("confidence_avg_pct", 0)
-        direction   = r.get("direction", "N/A")
-        bias        = r.get("strategy_bias", "N/A")
+        direction   = r.get("direction", "—")
+        bias        = r.get("strategy_bias", "—")
         mtf         = r.get("mtf_alignment", 0)
         price       = r.get("price_usd")
         entry       = r.get("entry")
@@ -2590,7 +2590,7 @@ def page_dashboard():
 
         _ui.signal_card_header(
             pair=pair, direction=direction, conf=conf,
-            bias=bias, regime=r.get("regime", "N/A"), is_hc=is_hc,
+            bias=bias, regime=r.get("regime", "—"), is_hc=is_hc,
         )
 
         # Signal strength visual dots + risk badge — beginner at-a-glance indicators
@@ -2640,17 +2640,17 @@ def page_dashboard():
                 help="Live price from OKX.",
             )
         else:
-            top_cols[0].metric("Current Price", f"${price:,.4f}" if price else "N/A")
+            top_cols[0].metric("Current Price", f"${price:,.4f}" if price else "—")
         _entry_label = "Buy At" if "BUY" in direction.upper() else ("Sell At" if "SELL" in direction.upper() else "Entry Price")
-        top_cols[1].metric(_entry_label, f"${entry:,.4f}" if entry else "N/A",
+        top_cols[1].metric(_entry_label, f"${entry:,.4f}" if entry else "—",
                            help="The price to enter this trade. Try to get close to this level.")
-        top_cols[2].metric("Stop Loss — Exit If Wrong", f"${stop:,.4f}" if stop else "N/A",
+        top_cols[2].metric("Stop Loss — Exit If Wrong", f"${stop:,.4f}" if stop else "—",
                            help="If price hits this level, exit the trade to limit your loss.")
 
         # ── Row 2: Take Profit · Signal Strength · Trade Size ─────────────────────
         bot_cols = st.columns(3)
         _tp1_val = r.get("tp1") or exit_
-        bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "N/A",
+        bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "—",
                            help="This is your TARGET — the price to sell at and take your profit. Think of it as the finish line.")
         # Macro Trend Score — weighted average across all 4 timeframes (1H:10%, 4H:20%, 1D:35%, 1W:35%)
         # Renamed from "Confidence Score" to "Macro Trend Score" to clarify it is the combined view.
@@ -2684,7 +2684,7 @@ def page_dashboard():
             logger.debug("[App] Kelly position size widget failed: %s", _kelly_ui_err)
         bot_cols[2].metric(
             "Suggested Trade Size",
-            f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "N/A",
+            f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "—",
             help=(
                 "Recommended position size as % of portfolio based on historical win rate. "
                 "Fractional Kelly (25%) reduces risk of ruin. "
@@ -2727,22 +2727,22 @@ def page_dashboard():
         _km_c1, _km_c2, _km_c3, _km_c4 = st.columns(4)
         _km_c1.metric(
             "Current Price",
-            f"${price:,.4f}" if price else "N/A",
+            f"${price:,.4f}" if price else "—",
             delta=f"{_km_chg:+.2f}% 24h" if _km_chg is not None else None,
         )
         _km_c2.metric(
             "RSI (1h)",
-            f"{_km_rsi:.1f}" if _km_rsi is not None else "N/A",
+            f"{_km_rsi:.1f}" if _km_rsi is not None else "—",
             help="RSI above 70 = overbought, below 30 = oversold. Best range: 40-60 for entries.",
         )
         _km_c3.metric(
             "ADX (1h)",
-            f"{_km_adx:.1f}" if _km_adx is not None else "N/A",
+            f"{_km_adx:.1f}" if _km_adx is not None else "—",
             help="Trend strength indicator. Above 25 = strong trend. Below 20 = choppy/ranging.",
         )
         _km_c4.metric(
             "Funding Rate",
-            f"{_km_fr:+.4f}%" if _km_fr is not None else "N/A",
+            f"{_km_fr:+.4f}%" if _km_fr is not None else "—",
             help="Positive = longs pay shorts (bullish market). Negative = shorts pay longs (bearish market). Extreme values warn of reversals.",
         )
 
@@ -2778,9 +2778,9 @@ def page_dashboard():
         try:
             from datetime import datetime as _dt_sig, timezone as _tz_sig
             _sig_ts = _dt_sig.now(_tz_sig.utc).strftime("%Y-%m-%d %H:%M UTC")
-            _sig_entry_str  = f"${entry:,.4f}"  if entry  else "N/A"
-            _sig_stop_str   = f"${stop:,.4f}"   if stop   else "N/A"
-            _sig_target_str = f"${exit_:,.4f}"  if exit_  else "N/A"
+            _sig_entry_str  = f"${entry:,.4f}"  if entry  else "—"
+            _sig_stop_str   = f"${stop:,.4f}"   if stop   else "—"
+            _sig_target_str = f"${exit_:,.4f}"  if exit_  else "—"
             _sig_summary = (
                 f"[{pair}] {direction}  |  Confidence: {conf:.0f}%  |  "
                 f"Entry: {_sig_entry_str}  |  Stop: {_sig_stop_str}  |  "
@@ -2890,21 +2890,21 @@ def page_dashboard():
             tp2       = r.get("tp2")
             tp3       = r.get("tp3")
             lev_rec   = r.get("leverage_rec") or {}
-            lev_label = lev_rec.get("label", "N/A")
+            lev_label = lev_rec.get("label", "—")
             lev_basis = lev_rec.get("basis", "")
             mtf_conf  = r.get("mtf_confirmed", True)
             rr        = r.get("rr_ratios") or {}
 
             adv_cols = st.columns(4)
-            # Show "N/A" when mtf_alignment is 0 and no valid timeframes had data
-            _mtf_display = "N/A" if mtf == 0 and not any(
+            # Show em-dash when mtf_alignment is 0 and no valid timeframes had data
+            _mtf_display = "—" if mtf == 0 and not any(
                 td.get("direction") not in ("NO DATA", "N/A", "LOW VOL")
                 for td in r.get("timeframes", {}).values()
             ) else f"{mtf}%"
             adv_cols[0].metric("Timeframes Agreeing", _mtf_display, help=_ui.HELP_MTF_ALIGN)
-            adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "N/A",
+            adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "—",
                                delta=rr.get("tp2", ""), help="Second profit target — sell another 40% here.")
-            adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "N/A",
+            adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "—",
                                delta=rr.get("tp3", ""), help="Final ambitious target — hold last 20% here.")
             adv_cols[3].metric(
                 "Leverage (Futures Only)",
@@ -3046,11 +3046,11 @@ def page_dashboard():
                         if tf not in tf_data:
                             continue
                         td = tf_data[tf]
-                        _td_dir  = td.get("direction", "N/A")
+                        _td_dir  = td.get("direction", "—")
                         _no_data = _td_dir in ("NO DATA", "N/A")
                         _td_conf = td.get("confidence", 0)
                         _td_shp  = _DIR_SHAPE.get(_td_dir, "—")
-                        _rsi_raw = td.get("rsi", "N/A")
+                        _rsi_raw = td.get("rsi", "—")
                         try:
                             _rsi_v = float(_rsi_raw)
                             if _rsi_v >= 70:   _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
@@ -3062,14 +3062,14 @@ def page_dashboard():
                             _rsi_str = str(_rsi_raw)
 
                         _adx_raw = td.get("adx")
-                        _adx_str = f"{_adx_raw:.1f}" if isinstance(_adx_raw, (int, float)) else "N/A"
+                        _adx_str = f"{_adx_raw:.1f}" if isinstance(_adx_raw, (int, float)) else "—"
                         _row = {
                             "Timeframe":       _TF_FULL.get(tf, tf),
                             "Signal":          f"{_td_shp} {_td_dir}",
                             "Confidence":      "—" if _no_data else f"{_td_conf:.0f}%",
                             "Heat (RSI)":      _rsi_str,
                             "Trend (ADX)":     _adx_str,
-                            "Direction":       td.get("supertrend", "N/A"),
+                            "Direction":       td.get("supertrend", "—"),
                             "Market Mode":     _ui.regime_label(td.get("regime", "")),
                         }
                         # Advanced: also show strategy bias
@@ -5214,9 +5214,9 @@ def page_backtest():
                     mc[5].metric("Worst Losing Streak", f"{m.get('max_drawdown', 0)}%", help=_ui.HELP_MAX_DRAWDOWN)
                     mc2 = st.columns(5)
                     mc2[0].metric("Total Return", f"{m.get('total_return', 0)}%")
-                    mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"), help=_ui.HELP_SORTINO)
-                    mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"), help=_ui.HELP_CALMAR)
-                    mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"), help="How many trades in a row lost money at worst.")
+                    mc2[1].metric("Risk-Adj Return", m.get("sortino", "—"), help=_ui.HELP_SORTINO)
+                    mc2[2].metric("Recovery Speed", m.get("calmar", "—"), help=_ui.HELP_CALMAR)
+                    mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "—"), help="How many trades in a row lost money at worst.")
                     mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%", help=_ui.HELP_EXPECTANCY)
 
                 # ── Beginner "What does this mean for me?" panel ──────────────
@@ -5283,11 +5283,11 @@ def page_backtest():
 
                 mc2 = st.columns(5)
                 mc2[0].metric("Total Return", f"{m.get('total_return', 0)}%")
-                mc2[1].metric("Risk-Adj Return", m.get("sortino", "N/A"),
+                mc2[1].metric("Risk-Adj Return", m.get("sortino", "—"),
                               help=_ui.HELP_SORTINO)
-                mc2[2].metric("Recovery Speed", m.get("calmar", "N/A"),
+                mc2[2].metric("Recovery Speed", m.get("calmar", "—"),
                               help=_ui.HELP_CALMAR)
-                mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "N/A"),
+                mc2[3].metric("Longest Losing Run", m.get("max_consec_losses", "—"),
                               help="How many trades in a row lost money at worst. Lower = more consistent.")
                 mc2[4].metric("Edge per Trade", f"{m.get('expectancy', 0)}%",
                               help=_ui.HELP_EXPECTANCY)
@@ -5545,7 +5545,7 @@ def page_backtest():
                     m3.metric("Total Sell Signals", int(sells))
                 if 'confidence_avg_pct' in df.columns:
                     avg_conf = pd.to_numeric(df['confidence_avg_pct'], errors='coerce').mean()
-                    m4.metric("Avg Confidence", f"{avg_conf:.1f}%" if pd.notna(avg_conf) else "N/A")
+                    m4.metric("Avg Confidence", f"{avg_conf:.1f}%" if pd.notna(avg_conf) else "—")
 
                 st.markdown("---")
 
@@ -5785,7 +5785,7 @@ def page_backtest():
                     total_pnl = df_closed['pnl_pct'].sum()
                     wins = (df_closed['pnl_pct'] > 0).sum()
                     p1.metric("Total Trades", len(df_closed))
-                    p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "N/A")
+                    p2.metric("Win Rate", f"{wins/len(df_closed)*100:.1f}%" if len(df_closed) > 0 else "—")
                     p3.metric("Cumulative PnL %", f"{total_pnl:.2f}%")
 
                 st.dataframe(df_closed, width='stretch', height=350)
@@ -5803,7 +5803,7 @@ def page_backtest():
                 f1.metric("Logged Signals", len(df_fb))
                 if 'confidence' in df_fb.columns:
                     avg_fb_conf = pd.to_numeric(df_fb['confidence'], errors='coerce').mean()
-                    f2.metric("Avg Confidence Logged", f"{avg_fb_conf:.1f}%" if pd.notna(avg_fb_conf) else "N/A")
+                    f2.metric("Avg Confidence Logged", f"{avg_fb_conf:.1f}%" if pd.notna(avg_fb_conf) else "—")
 
                 if 'confidence' in df_fb.columns and 'timestamp' in df_fb.columns:
                     fig = px.scatter(df_fb, x='timestamp', y='confidence', color='direction',
@@ -5948,14 +5948,14 @@ def page_backtest():
                 else:
                     wf_cols = st.columns(2)
                     wf_cols[0].metric("Mean OOS Accuracy",
-                                      f"{wf_r['mean_accuracy']}%" if wf_r['mean_accuracy'] else "N/A",
+                                      f"{wf_r['mean_accuracy']}%" if wf_r['mean_accuracy'] else "—",
                                       help="Average directional accuracy across all out-of-sample test windows")
                     wf_cols[1].metric("Std Dev",
-                                      f"±{wf_r['std_accuracy']}%" if wf_r['std_accuracy'] is not None else "N/A",
+                                      f"±{wf_r['std_accuracy']}%" if wf_r['std_accuracy'] is not None else "—",
                                       help="Lower = more consistent across market regimes")
                     wf_df = pd.DataFrame(wf_r['windows'])
                     wf_df['accuracy_pct'] = wf_df['accuracy_pct'].apply(
-                        lambda x: f"{x}%" if x is not None else "N/A"
+                        lambda x: f"{x}%" if x is not None else "—"
                     )
                     st.dataframe(wf_df.rename(columns={
                         'window': 'Window', 'period': 'Period',
@@ -6267,7 +6267,7 @@ def page_backtest():
                     _ann_pct = _pnl_sum.get("annualized_return_pct", 0)
                     _ann_n   = _pnl_sum.get("total_trades", 0)
                     # Show N/A when < 5 trades — CAGR is statistically unreliable below that threshold
-                    _ann_val = f"{_ann_pct:+.1f}%" if _ann_n >= 5 else "N/A"
+                    _ann_val = f"{_ann_pct:+.1f}%" if _ann_n >= 5 else "—"
                     _ann_help = (
                         "CAGR over the actual calendar span of all closed trades, "
                         "floored at 30 days. Requires ≥5 closed trades to display."
@@ -6399,7 +6399,7 @@ def page_backtest():
                     st.error("IC computation failed — insufficient data or exchange unavailable. Try a different pair or timeframe.")
                 else:
                     _ic_val   = _ic_r.get("ic", 0) or 0
-                    _ic_label = _ic_r.get("ic_label", "N/A")
+                    _ic_label = _ic_r.get("ic_label", "—")
                     _ic_n     = _ic_r.get("n_samples", 0)
                     _ic_p     = _ic_r.get("p_value")
                     _ic_color = "#10b981" if _ic_val > 0.05 else ("#ef4444" if _ic_val < 0 else "#f59e0b")
@@ -6407,7 +6407,7 @@ def page_backtest():
                     _ic_cols[0].metric("IC Score", f"{_ic_val:.4f}")
                     _ic_cols[1].metric("Signal Quality", _ic_label)
                     _ic_cols[2].metric("Samples", _ic_n)
-                    _ic_cols[3].metric("p-value", f"{_ic_p:.4f}" if _ic_p is not None else "N/A")
+                    _ic_cols[3].metric("p-value", f"{_ic_p:.4f}" if _ic_p is not None else "—")
                     st.markdown(
                         f"<div style='border:1px solid {_ic_color};border-radius:8px;"
                         f"padding:10px 14px;margin-top:8px;font-size:13px;color:{_ic_color};'>"
@@ -6441,7 +6441,7 @@ def page_backtest():
                     st.error("Walk-forward efficiency computation failed — insufficient data or exchange unavailable. Try a different pair or timeframe.")
                 else:
                     _wfe_val   = _wfe_r.get("wfe", 0) or 0
-                    _wfe_label = _wfe_r.get("wfe_label", "N/A")
+                    _wfe_label = _wfe_r.get("wfe_label", "—")
                     _wfe_is    = _wfe_r.get("is_accuracy", 0)
                     _wfe_oos   = _wfe_r.get("oos_accuracy", 0)
                     _wfe_color = "#10b981" if _wfe_val >= 0.8 else ("#f59e0b" if _wfe_val >= 0.5 else "#ef4444")
@@ -6492,9 +6492,9 @@ def page_backtest():
                         _wfo_m1.metric("Optimal BUY Threshold", f"{int(_opt_t)}%",
                                        help="Confidence threshold that maximized win rate in IS periods")
                         _wfo_m2.metric("Avg OOS Win Rate",
-                                       f"{_avg_oos:.1f}%" if _avg_oos is not None else "N/A",
+                                       f"{_avg_oos:.1f}%" if _avg_oos is not None else "—",
                                        help="Average win rate in out-of-sample test periods")
-                        _wfo_m3.metric("Windows Used", _wfo_r.get("n_windows", "N/A"))
+                        _wfo_m3.metric("Windows Used", _wfo_r.get("n_windows", "—"))
                         if _rec:
                             st.info(_rec)
                         _wfo_wr_data = _wfo_r.get("window_results", [])
@@ -6556,13 +6556,13 @@ def page_backtest():
                             }.get(_wfv_grade, "#6b7280")
 
                             _wfv_m1, _wfv_m2, _wfv_m3, _wfv_m4 = st.columns(4)
-                            _wfv_m1.metric("Avg WFE", f"{_wfv_avg_wfe:.3f}" if _wfv_avg_wfe is not None else "N/A",
+                            _wfv_m1.metric("Avg WFE", f"{_wfv_avg_wfe:.3f}" if _wfv_avg_wfe is not None else "—",
                                            help="Average Walk-Forward Efficiency across all windows. >0.7 = good.")
                             _wfv_m2.metric("Grade", _wfv_grade,
                                            help="EXCELLENT≥0.9 · GOOD≥0.7 · FAIR≥0.5 · POOR<0.5")
-                            _wfv_m3.metric("Stability Score", f"{_wfv_stab:.3f}" if _wfv_stab is not None else "N/A",
+                            _wfv_m3.metric("Stability Score", f"{_wfv_stab:.3f}" if _wfv_stab is not None else "—",
                                            help="Std dev of WFE across windows. Lower = more consistent.")
-                            _wfv_m4.metric("Avg OOS Win Rate", f"{_wfv_oos_wr:.1f}%" if _wfv_oos_wr is not None else "N/A")
+                            _wfv_m4.metric("Avg OOS Win Rate", f"{_wfv_oos_wr:.1f}%" if _wfv_oos_wr is not None else "—")
 
                             # Recommendation banner
                             _wfv_rec = _wfv_r.get("recommendation", "")
@@ -6731,8 +6731,8 @@ def page_backtest():
                     _pair_rows = []
                     for _pr, _metrics in _stress_data.get("results", {}).items():
                         if _metrics.get("error"):
-                            _pair_rows.append({"Pair": _pr, "Return %": "N/A", "P&L $": "N/A",
-                                               "Max DD %": "N/A", "Vol Ann %": "N/A", "Status": "No data"})
+                            _pair_rows.append({"Pair": _pr, "Return %": "—", "P&L $": "—",
+                                               "Max DD %": "—", "Vol Ann %": "—", "Status": "No data"})
                         else:
                             _pair_rows.append({
                                 "Pair": _pr,
@@ -7074,7 +7074,7 @@ def page_arbitrage():
                         row["Best Rate"] = f"{best_rate:+.4f}% ({best_exch.upper()})"
                         row["Ann. Yield%"] = round(abs(best_rate) * 1095, 1)
                     else:
-                        row["Best Rate"] = "N/A"
+                        row["Best Rate"] = "—"
                         row["Ann. Yield%"] = 0.0
                     fr_rows.append(row)
 

@@ -169,7 +169,7 @@ def send_telegram(token: str, chat_id: str, message: str) -> tuple[bool, str | N
 def _fmt_price(val) -> str:
     """Format a price with auto-precision based on magnitude."""
     if val is None:
-        return "N/A"
+        return "—"
     try:
         v = float(val)
         if v >= 1000:
@@ -179,7 +179,7 @@ def _fmt_price(val) -> str:
         else:
             return f"${v:,.6f}"
     except (TypeError, ValueError):
-        return "N/A"
+        return "—"
 
 
 def _signal_emoji(direction: str) -> str:
@@ -202,7 +202,7 @@ def _extract_signal_fields(r: dict) -> dict:
     return {
         "pair":      r.get("pair", "?"),
         "conf":      r.get("confidence_avg_pct", 0),
-        "direction": r.get("direction", "N/A"),
+        "direction": r.get("direction", "—"),
         "price":     r.get("price_usd"),
         "entry":     r.get("entry"),
         "stop":      r.get("stop_loss"),
@@ -211,7 +211,7 @@ def _extract_signal_fields(r: dict) -> dict:
         "tp3":       r.get("tp3"),
         "mtf":       r.get("mtf_alignment", 0),
         "mtf_conf":  r.get("mtf_confirmed", True),
-        "lev_label": lev_rec.get("label", "N/A"),
+        "lev_label": lev_rec.get("label", "—"),
         "lev_basis": lev_rec.get("basis", ""),
         "pos_pct":   r.get("position_size_pct"),
         "regime":    r.get("risk_mode", r.get("regime", "")),

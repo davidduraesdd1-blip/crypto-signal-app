@@ -697,10 +697,10 @@ def _build_bull_bear_section(sig: dict) -> str:
     rsi       = first_tf.get("rsi", 50)
     adx       = first_tf.get("adx", 20)
     st        = first_tf.get("supertrend", "?")
-    funding   = first_tf.get("funding", "N/A")
-    ob        = first_tf.get("ob_depth", "N/A")
+    funding   = first_tf.get("funding", "—")
+    ob        = first_tf.get("ob_depth", "—")
     regime    = first_tf.get("regime", "?")
-    squeeze   = first_tf.get("squeeze", "N/A")
+    squeeze   = first_tf.get("squeeze", "—")
 
     bull_args = []
     bear_args = []

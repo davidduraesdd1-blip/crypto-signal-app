@@ -1426,7 +1426,7 @@ def compute_atr(df, period=14):
 
 def compute_supertrend(df, period=10, multiplier=3.0):
     if len(df) < period:
-        return "N/A"
+        return "—"
     atr_series = compute_atr(df, period)
     hl2 = (df['high'] + df['low']) / 2
     upper_band = hl2 + multiplier * atr_series

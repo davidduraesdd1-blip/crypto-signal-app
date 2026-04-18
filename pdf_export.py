@@ -90,7 +90,7 @@ def _direction_label(direction: str) -> str:
         "NEUTRAL":    "NEUTRAL",
     }
     if not isinstance(direction, str):
-        return "N/A"
+        return "—"
     for k, v in mapping.items():
         if k in direction:
             return v
@@ -168,14 +168,14 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
         rows.append([
             r.get("pair", "?"),
             f"{r.get('confidence_avg_pct', 0)}%",
-            _direction_label(r.get("direction", "N/A")),
+            _direction_label(r.get("direction", "—")),
             f"{r.get('mtf_alignment', 0)}%",
-            f"${price:,.4f}"    if price    is not None else "N/A",
-            f"${entry:,.4f}"   if entry    is not None else "N/A",
-            f"${exit_tgt:,.4f}" if exit_tgt is not None else "N/A",
-            f"${stop:,.4f}"    if stop     is not None else "N/A",
-            (r.get("strategy_bias") or "N/A")[:10],
-            (r.get("regime") or "N/A")[:10],
+            f"${price:,.4f}"    if price    is not None else "—",
+            f"${entry:,.4f}"   if entry    is not None else "—",
+            f"${exit_tgt:,.4f}" if exit_tgt is not None else "—",
+            f"${stop:,.4f}"    if stop     is not None else "—",
+            (r.get("strategy_bias") or "—")[:10],
+            (r.get("regime") or "—")[:10],
             "YES" if r.get("high_conf") else "",
         ])
 
@@ -263,7 +263,7 @@ def generate_backtest_pdf(metrics: dict, trades_df, scan_timestamp: str = None) 
             label = entry[0]
             key   = entry[1]
             suffix = entry[2] if len(entry) > 2 else ""
-            val = metrics.get(key, "N/A")
+            val = metrics.get(key, "—")
             # BUG-R27: val can be Python None (not "N/A") when the metric was not computed.
             # f"{None}%" renders as "None%" in the PDF — use explicit check instead.
             if val is None or val == "N/A" or val == "":  # BUG-PDF01: empty string renders as "%" in PDF
