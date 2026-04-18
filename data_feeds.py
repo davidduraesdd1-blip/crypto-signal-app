@@ -241,6 +241,7 @@ _BINANCE_LIMITER   = RateLimiter(calls_per_second=5.0)   # Binance allows ~1200/
 _COINGECKO_LIMITER = RateLimiter(calls_per_second=0.4)   # ~24 req/min (conservative — free tier allows 30)
 _DERIBIT_LIMITER   = RateLimiter(calls_per_second=2.0)   # Deribit: generous
 _EXCHANGE_LIMITER  = RateLimiter(calls_per_second=1.0)   # Generic for other exchanges
+_CMC_LIMITER       = RateLimiter(calls_per_second=0.5)   # CMC free tier: 30 req/min cap → 0.5/s = 30/min
 
 # Legacy module-level limiters (kept for any callers that reference them)
 _bybit_limiter    = _BINANCE_LIMITER
@@ -5904,6 +5905,7 @@ def fetch_cmc_global_metrics() -> dict:
             return dict(_CMC_CACHE["data"])
 
     try:
+        _CMC_LIMITER.acquire()
         resp = _SESSION.get(
             _CMC_GLOBAL_URL,
             headers={"X-CMC_PRO_API_KEY": api_key, "Accept": "application/json"},
@@ -5986,6 +5988,7 @@ def fetch_prices_cascade(symbols: list) -> dict:
     _cmc_key = _os.environ.get("COINMARKETCAP_API_KEY", "").strip()
     if _cmc_key:
         try:
+            _CMC_LIMITER.acquire()
             r = _SESSION.get(
                 "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
                 headers={"X-CMC_PRO_API_KEY": _cmc_key, "Accept": "application/json"},
