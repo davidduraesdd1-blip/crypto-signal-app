@@ -3569,25 +3569,30 @@ def run_backtest():
             # Trailing stop: distance from entry to initial stop (as fraction of entry)
             trail_dist = abs(entry - stop) / entry if TRAILING_STOP_ENABLED and entry > 0 else None
             current_stop = stop
-            for _, candle in df_future.iterrows():
+            # PERF: itertuples() is ~10-50x faster than iterrows() for nested loops.
+            # This inner loop runs ~100-300 candles per backtest row; multiplied by
+            # ~100-200 outer rows the iterrows overhead (Series object creation per
+            # row) was 200-1000ms of pure Python overhead. namedtuples keep the same
+            # attribute-access ergonomics (candle.high vs candle['high']).
+            for candle in df_future.itertuples(index=False):
                 if direction in ['BUY', 'STRONG BUY']:
                     # Advance trailing stop upward with new highs
-                    if trail_dist and candle['high'] > entry:
-                        new_trail = candle['high'] * (1 - trail_dist)
+                    if trail_dist and candle.high > entry:
+                        new_trail = candle.high * (1 - trail_dist)
                         if new_trail > current_stop:
                             current_stop = new_trail
-                    if candle['high'] >= target: exit_price = target; exit_reason = "Target"; break
-                    if candle['low'] <= current_stop: exit_price = current_stop; exit_reason = "TrailingStop" if current_stop > stop else "Stop"; break
+                    if candle.high >= target: exit_price = target; exit_reason = "Target"; break
+                    if candle.low <= current_stop: exit_price = current_stop; exit_reason = "TrailingStop" if current_stop > stop else "Stop"; break
                 elif direction in ['SELL', 'STRONG SELL']:
                     # Advance trailing stop downward with new lows
-                    if trail_dist and candle['low'] < entry:
-                        new_trail = candle['low'] * (1 + trail_dist)
+                    if trail_dist and candle.low < entry:
+                        new_trail = candle.low * (1 + trail_dist)
                         if new_trail < current_stop:
                             current_stop = new_trail
-                    if candle['low'] <= target: exit_price = target; exit_reason = "Target"; break
-                    if candle['high'] >= current_stop: exit_price = current_stop; exit_reason = "TrailingStop" if current_stop < stop else "Stop"; break
-                if (candle['timestamp'] - signal_time).total_seconds() >= BACKTEST_HOLD_DAYS * 86400:
-                    exit_price = candle['close']; exit_reason = "Timeout"; break
+                    if candle.low <= target: exit_price = target; exit_reason = "Target"; break
+                    if candle.high >= current_stop: exit_price = current_stop; exit_reason = "TrailingStop" if current_stop < stop else "Stop"; break
+                if (candle.timestamp - signal_time).total_seconds() >= BACKTEST_HOLD_DAYS * 86400:
+                    exit_price = candle.close; exit_reason = "Timeout"; break
 
             if exit_price is None:
                 continue
