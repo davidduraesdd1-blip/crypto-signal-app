@@ -1458,13 +1458,16 @@ def compute_supertrend_multi(df) -> dict:
 
     Returns:
       {
-        'fast': 'Uptrend'|'Downtrend'|'N/A',
+        'fast': 'Uptrend'|'Downtrend'|'—',           # '—' when len(df) < period
         'medium': '...',
         'slow': '...',
         'consensus': 'Uptrend'|'Downtrend'|'Mixed',   # majority of 3
         'agreement': int,   # 1=all agree, 0=split, -1=all disagree with fast
         'upvotes': int,     # how many of the 3 say Uptrend
       }
+
+    Vote-counting is safe when a leg returns '—': it matches neither
+    'Uptrend' nor 'Downtrend' so the short-data leg silently abstains.
     Signal fires strongest when all 3 agree — filters ~80% of false breakouts.
     Research: SuperTrend + MACD delivered 11.61% annualized ROI vs buy-and-hold (2025).
     """

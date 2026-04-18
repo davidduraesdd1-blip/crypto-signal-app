@@ -264,10 +264,11 @@ def generate_backtest_pdf(metrics: dict, trades_df, scan_timestamp: str = None) 
             key   = entry[1]
             suffix = entry[2] if len(entry) > 2 else ""
             val = metrics.get(key, "—")
-            # BUG-R27: val can be Python None (not "N/A") when the metric was not computed.
+            # BUG-R27: val can be Python None (not a fallback string) when the metric was not computed.
             # f"{None}%" renders as "None%" in the PDF — use explicit check instead.
-            if val is None or val == "N/A" or val == "":  # BUG-PDF01: empty string renders as "%" in PDF
-                metric_rows.append([label, "N/A"])
+            # Accept both legacy "N/A" and new "—" fallback strings as missing.
+            if val is None or val == "N/A" or val == "—" or val == "":  # BUG-PDF01: empty string renders as "%"
+                metric_rows.append([label, "—"])
             else:
                 metric_rows.append([label, f"{val}{suffix}"])
 
