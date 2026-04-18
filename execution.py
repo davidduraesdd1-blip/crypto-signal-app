@@ -412,6 +412,158 @@ def close_position(
 
 # ─── Auto-execute ───────────────────────────────────────────────────────────────
 
+def build_signal_plan(
+    results: list,
+    portfolio_size_usd: float = 10_000.0,
+    min_confidence_pct: float = 70.0,
+    include_neutrals: bool = False,
+) -> dict:
+    """
+    Build a dry-run portfolio plan from scan_results without placing any orders.
+
+    Used by the Dashboard "▶ Execute Top Signals" button to preview what
+    would happen before the user confirms. Mirrors the DeFi pattern in
+    agents/portfolio_executor.build_plan_from_picks.
+
+    Args:
+        results:             scan_results list from session_state
+        portfolio_size_usd:  total capital to allocate across legs
+        min_confidence_pct:  only include signals at or above this confidence
+        include_neutrals:    if False (default) skip NEUTRAL-direction signals
+
+    Returns:
+        dict with:
+          legs:               list of per-signal dicts (pair, direction, size_usd,
+                              confidence, high_conf, included, skip_reason)
+          total_notional_usd: sum of included leg sizes
+          included_count:     how many signals would be placed
+          skipped_count:      how many scan rows were skipped
+          authorization_tier: 'auto' | 'step_through' | 'requires_approval'
+          live_trading:       whether OKX is in live mode
+    """
+    cfg = get_exec_config()
+    legs: list = []
+    total_notional = 0.0
+    seen_pairs: set = set()
+
+    # Dollar-cap tiers (match DeFi portfolio_executor Q6)
+    AUTO_CAP   = 25_000.0
+    STEP_CAP   = 250_000.0
+
+    for r in results or []:
+        pair      = r.get("pair", "")
+        direction = str(r.get("direction") or "")
+        conf      = float(r.get("confidence_avg_pct") or 0)
+        high_conf = bool(r.get("high_conf"))
+        size_pct  = float(r.get("position_size_pct") or 10)
+        price     = r.get("price_usd")
+
+        leg = {
+            "pair": pair, "direction": direction, "confidence": conf,
+            "high_conf": high_conf, "position_size_pct": size_pct,
+            "price_usd": price, "size_usd": 0.0,
+            "included": False, "skip_reason": "",
+        }
+
+        if not pair or not direction:
+            leg["skip_reason"] = "Missing pair or direction"
+        elif pair in seen_pairs:
+            leg["skip_reason"] = "Duplicate pair in scan"
+        elif "NEUTRAL" in direction and not include_neutrals:
+            leg["skip_reason"] = "NEUTRAL signal skipped"
+        elif conf < min_confidence_pct:
+            leg["skip_reason"] = f"Confidence {conf:.0f}% below {min_confidence_pct:.0f}% threshold"
+        else:
+            size_usd = round((size_pct / 100.0) * portfolio_size_usd, 2)
+            leg["size_usd"]  = size_usd
+            leg["included"]  = True
+            total_notional  += size_usd
+            seen_pairs.add(pair)
+
+        legs.append(leg)
+
+    if total_notional <= AUTO_CAP:
+        tier = "auto"
+    elif total_notional <= STEP_CAP:
+        tier = "step_through"
+    else:
+        tier = "requires_approval"
+
+    return {
+        "legs":               legs,
+        "total_notional_usd": round(total_notional, 2),
+        "included_count":     sum(1 for lg in legs if lg["included"]),
+        "skipped_count":      sum(1 for lg in legs if not lg["included"]),
+        "authorization_tier": tier,
+        "live_trading":       cfg["live_trading"],
+        "keys_configured":    cfg["keys_configured"],
+        "min_confidence_pct": min_confidence_pct,
+        "portfolio_size_usd": portfolio_size_usd,
+    }
+
+
+def execute_signal_plan(plan: dict, continue_on_fail: bool = True) -> dict:
+    """
+    Execute every included leg of a signal plan.
+
+    Args:
+        plan:             dry-run output from build_signal_plan()
+        continue_on_fail: if True (default), continue past failed legs
+
+    Returns:
+        The same dict mutated with per-leg exec_status + aggregate
+        success_count / failed_count.
+    """
+    if plan.get("authorization_tier") == "requires_approval":
+        for lg in plan.get("legs", []):
+            if lg.get("included"):
+                lg["exec_status"]  = "blocked"
+                lg["exec_message"] = (
+                    f"Total notional ${plan['total_notional_usd']:,.0f} exceeds "
+                    "$250,000 auto-cap — out-of-band approval required."
+                )
+        plan["success_count"] = 0
+        plan["failed_count"]  = 0
+        plan["blocked_count"] = plan.get("included_count", 0)
+        return plan
+
+    cfg = get_exec_config()
+    success = failed = 0
+    for lg in plan.get("legs", []):
+        if not lg.get("included"):
+            lg["exec_status"] = "skipped"
+            lg["exec_message"] = lg.get("skip_reason", "")
+            continue
+        try:
+            res = place_order(
+                pair          = lg["pair"],
+                direction     = lg["direction"],
+                size_usd      = lg["size_usd"],
+                order_type    = cfg.get("default_order_type", "market"),
+                current_price = lg.get("price_usd"),
+            )
+            lg["exec_status"]  = res.get("status", "unknown")
+            lg["exec_message"] = res.get("reason") or res.get("message", "")
+            lg["order_id"]     = res.get("order_id")
+            if lg["exec_status"] in ("filled", "placed", "success"):
+                success += 1
+            else:
+                failed += 1
+                if not continue_on_fail:
+                    break
+        except Exception as e:
+            lg["exec_status"]  = "failed"
+            lg["exec_message"] = f"{type(e).__name__}: {str(e)[:200]}"
+            failed += 1
+            if not continue_on_fail:
+                break
+
+    plan["success_count"] = success
+    plan["failed_count"]  = failed
+    plan["blocked_count"] = 0
+    return plan
+
+
 def auto_execute_signals(
     results: list,
     portfolio_size_usd: float = 10_000.0,

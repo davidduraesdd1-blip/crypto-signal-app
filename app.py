@@ -1483,6 +1483,120 @@ def page_dashboard():
     _exec_status = _exec.get_status()
     _exec_cfg    = _exec.get_exec_config()
 
+    # ─── Phase 2B: One-Click Execute Top Signals ─────────────────────────────
+    # Build a dry-run plan from the current scan_results and offer a single
+    # button to execute the top-N high-confidence signals through OKX.
+    _ote_total = len(results)
+    _ote_hc    = sum(1 for r in results if r.get("high_conf"))
+    if _ote_total > 0:
+        _ote_c1, _ote_c2, _ote_c3, _ote_c4 = st.columns([2, 2, 2, 3])
+        with _ote_c1:
+            _ote_size = st.number_input(
+                "Portfolio size ($)",
+                min_value=100.0, max_value=1_000_000.0,
+                value=float(model.PORTFOLIO_SIZE_USD),
+                step=100.0, key="ote_size",
+                help="Total capital to allocate across signals.",
+            )
+        with _ote_c2:
+            _ote_min_conf = st.slider(
+                "Min confidence (%)",
+                min_value=50, max_value=95, value=70, step=5,
+                key="ote_min_conf",
+                help="Only include signals at or above this confidence.",
+            )
+        with _ote_c3:
+            _ote_include_neutrals = st.toggle(
+                "Include NEUTRAL",
+                value=False, key="ote_include_neutrals",
+                help="By default NEUTRAL signals are skipped.",
+            )
+        with _ote_c4:
+            _ote_mode_color = "#00d4aa" if not _exec_cfg["live_trading"] else "#f59e0b"
+            _ote_mode_label = "Paper mode" if not _exec_cfg["live_trading"] else "LIVE OKX"
+            st.markdown(
+                f"<div style='color:#94a3b8; font-size:0.82rem; padding-top:22px;'>"
+                f"Scan: <span style='color:#e2e8f0; font-weight:700;'>{_ote_total}</span> signals "
+                f"(<span style='color:#00d4aa;'>{_ote_hc}</span> high-confidence) · "
+                f"<span style='color:{_ote_mode_color}; font-weight:700;'>● {_ote_mode_label}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        @st.dialog("Signal Execution — Dry Run Preview", width="large")
+        def _ote_dialog(_results, _size, _min_c, _inc_neut):
+            _plan = _exec.build_signal_plan(
+                results=_results, portfolio_size_usd=float(_size),
+                min_confidence_pct=float(_min_c), include_neutrals=bool(_inc_neut),
+            )
+            _mode_color = "#00d4aa" if not _plan["live_trading"] else "#f59e0b"
+            _mode_label = "Paper mode (simulated fills)" if not _plan["live_trading"] else "LIVE — OKX USDT-M perpetuals"
+            st.markdown(
+                f"<div style='color:{_mode_color}; font-weight:700; font-size:0.9rem; margin-bottom:8px;'>"
+                f"● {_mode_label}</div>",
+                unsafe_allow_html=True,
+            )
+            _tier_c = {"auto": "#22c55e", "step_through": "#f59e0b", "requires_approval": "#ef4444"}.get(_plan["authorization_tier"], "#64748b")
+            _tier_l = {"auto": "AUTO", "step_through": "STEP-THROUGH", "requires_approval": "REQUIRES APPROVAL"}.get(_plan["authorization_tier"], "unknown")
+            _mc1, _mc2, _mc3 = st.columns(3)
+            with _mc1: st.metric("Total notional", f"${_plan['total_notional_usd']:,.0f}")
+            with _mc2: st.metric("Included legs", f"{_plan['included_count']} / {len(_plan['legs'])}")
+            with _mc3:
+                st.markdown(
+                    f"<div style='color:#94a3b8; font-size:0.7rem; letter-spacing:1.3px; "
+                    f"text-transform:uppercase;'>Tier</div>"
+                    f"<div style='color:{_tier_c}; font-weight:700; font-size:0.88rem;'>{_tier_l}</div>",
+                    unsafe_allow_html=True,
+                )
+            st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+            import pandas as _pdx
+            _rows = []
+            for lg in _plan["legs"]:
+                _rows.append({
+                    "": "✓" if lg["included"] else "—",
+                    "Pair": lg["pair"],
+                    "Direction": lg["direction"],
+                    "Conf %": f"{lg['confidence']:.0f}%",
+                    "Size ($)": f"${lg['size_usd']:,.0f}" if lg["included"] else "—",
+                    "Status": "Included" if lg["included"] else lg.get("skip_reason", ""),
+                })
+            st.dataframe(_pdx.DataFrame(_rows), width='stretch', hide_index=True)
+
+            if _plan["authorization_tier"] == "requires_approval":
+                st.error(f"Total notional ${_plan['total_notional_usd']:,.0f} exceeds $250,000 auto-cap — OOB approval required.")
+            elif _plan["included_count"] == 0:
+                st.warning("No signals met the criteria. Lower confidence threshold or include NEUTRAL.")
+            else:
+                _exec_label = (
+                    "▶ Execute in paper mode" if not _plan["live_trading"]
+                    else "▶ Execute LIVE on OKX"
+                )
+                if _plan["live_trading"] and not _plan["keys_configured"]:
+                    st.error("Live mode is enabled but OKX API keys not configured. Set OKX_API_KEY / OKX_SECRET / OKX_PASSPHRASE env vars.")
+                elif st.button(_exec_label, type="primary", width='stretch', key="ote_exec_go"):
+                    with st.spinner(f"Placing {_plan['included_count']} orders…"):
+                        _plan = _exec.execute_signal_plan(_plan)
+                    _ok_color = "#22c55e" if _plan.get("failed_count", 0) == 0 else "#f59e0b"
+                    st.markdown(
+                        f"<div style='background:rgba(15,23,42,0.5); border:1px solid rgba(148,163,184,0.15); "
+                        f"border-left:3px solid {_ok_color}; border-radius:8px; padding:14px; margin-top:10px; "
+                        f"font-size:0.9rem; color:#e2e8f0;'>"
+                        f"<b>Execution complete.</b> Success: {_plan.get('success_count', 0)} · "
+                        f"Failed: {_plan.get('failed_count', 0)} · Blocked: {_plan.get('blocked_count', 0)}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for lg in _plan["legs"]:
+                        if lg.get("exec_status") == "failed":
+                            st.error(f"{lg['pair']}: {lg.get('exec_message','')}")
+
+        if st.button(
+            "▶ Execute Top Signals",
+            type="primary", width='stretch', key="ote_open_btn",
+            help="Build a dry-run plan and review before placing any orders.",
+        ):
+            _ote_dialog(results, _ote_size, _ote_min_conf, _ote_include_neutrals)
+
     # ─── 5-TAB DASHBOARD STRUCTURE ───────────────────────────────────────────
     _dash_tab1, _dash_tab2, _dash_tab3, _dash_tab4, _dash_tab5 = st.tabs([
         "🎯 Today",
