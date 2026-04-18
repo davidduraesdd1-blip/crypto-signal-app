@@ -2988,8 +2988,15 @@ def get_liquidation_cascade_risk(pair: str) -> dict:
             ob_data = {'imbalance': 0.0, 'signal': 'BALANCED', 'bid_vol': 0.0, 'ask_vol': 0.0, 'error': 'fetch error'}
 
         # ── Component 1: Funding rate extremity (0-40 pts) ───────────────────
-        fr_pct  = abs(fr_data.get("funding_rate_pct", 0.0))
-        fr_raw  = fr_data.get("funding_rate", 0.0)
+        fr_pct  = abs(fr_data.get("funding_rate_pct", 0.0) or 0.0)
+        fr_raw  = fr_data.get("funding_rate", 0.0) or 0.0
+        # Guard against NaN/Inf from upstream feed — silent propagation would
+        # poison downstream scoring. math.isfinite catches both NaN and ±Inf.
+        import math as _math_check
+        if not _math_check.isfinite(fr_pct):
+            fr_pct = 0.0
+        if not _math_check.isfinite(fr_raw):
+            fr_raw = 0.0
         # Scale: 0% → 0 pts, 0.1% → 40 pts (cap)
         fr_score = min(40.0, fr_pct / 0.1 * 40.0)
 
