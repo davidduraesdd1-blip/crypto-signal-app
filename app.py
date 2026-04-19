@@ -952,16 +952,6 @@ st.sidebar.markdown(
 _alert_cfg_sidebar = _sidebar_alerts_cfg.copy()
 _alerts_changed = False
 
-_tg_on = st.sidebar.toggle(
-    "🔔 Telegram",
-    value=_alert_cfg_sidebar.get("telegram_enabled", False),
-    key="sb_tg_toggle",
-    help="Enable Telegram alerts for high-confidence signals. Configure token/chat ID in Settings → Alerts.",
-)
-if _tg_on != _alert_cfg_sidebar.get("telegram_enabled", False):
-    _alert_cfg_sidebar["telegram_enabled"] = _tg_on
-    _alerts_changed = True
-
 _em_on = st.sidebar.toggle(
     "📧 Email",
     value=_alert_cfg_sidebar.get("email_enabled", False),
@@ -972,15 +962,7 @@ if _em_on != _alert_cfg_sidebar.get("email_enabled", False):
     _alert_cfg_sidebar["email_enabled"] = _em_on
     _alerts_changed = True
 
-_dc_on = st.sidebar.toggle(
-    "💬 Discord",
-    value=_alert_cfg_sidebar.get("discord_enabled", False),
-    key="sb_dc_toggle",
-    help="Enable Discord webhook alerts. Configure in Settings → Alerts.",
-)
-if _dc_on != _alert_cfg_sidebar.get("discord_enabled", False):
-    _alert_cfg_sidebar["discord_enabled"] = _dc_on
-    _alerts_changed = True
+# Telegram + Discord sidebar toggles removed 2026-04-18.
 
 if _alerts_changed:
     _save_alerts_config_and_clear(_alert_cfg_sidebar)
@@ -4058,7 +4040,7 @@ def _progress_cb(done, total, pair_name):
 
 
 def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
-    """Send Telegram / email / Discord alerts for each closed paper position.
+    """Send email alerts for each closed paper position (Telegram + Discord removed 2026-04-18).
 
     Called after model.update_positions() returns a non-empty closed list, both
     from the automated scan thread and from the manual 'Check Exits & Refresh' button.
@@ -4081,17 +4063,7 @@ def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
             f"Entry: {_entry:,.5g}  →  Exit: {_exit_p:,.5g}\n"
             f"P&L: {_pnl:+.2f}%"
         )
-        # Telegram
-        if cfg.get("telegram_enabled"):
-            try:
-                _alerts.send_telegram(
-                    cfg.get("telegram_token", ""),
-                    cfg.get("telegram_chat_id", ""),
-                    _msg,
-                )
-            except Exception as _e:
-                logging.warning("[ExitAlert] Telegram failed: %s", _e)
-        # Email
+        # Email (Telegram + Discord senders removed 2026-04-18)
         if cfg.get("email_enabled"):
             try:
                 _alerts.send_email_alert(
@@ -4103,15 +4075,6 @@ def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
                 )
             except Exception as _e:
                 logging.warning("[ExitAlert] Email failed: %s", _e)
-        # Discord
-        if cfg.get("discord_enabled"):
-            try:
-                _alerts.send_discord(
-                    cfg.get("discord_webhook_url", ""),
-                    _msg,
-                )
-            except Exception as _e:
-                logging.warning("[ExitAlert] Discord failed: %s", _e)
 
 
 def _run_scan_thread():
@@ -4184,17 +4147,10 @@ def _run_scan_thread():
             except Exception as _e:
                 logging.warning("[App] Exit alert failed: %s", _e)
         try:
-            _alerts.send_scan_alerts(results, cfg)
-        except Exception as _e:
-            logging.warning("[App] Telegram alert failed: %s", _e)
-        try:
             _alerts.send_scan_email_alerts(results, cfg)
         except Exception as _e:
             logging.warning("[App] Email alert failed: %s", _e)
-        try:
-            _alerts.send_scan_discord_alerts(results, cfg)
-        except Exception as _e:
-            logging.warning("[App] Discord alert failed: %s", _e)
+        # Telegram + Discord dispatchers removed 2026-04-18.
         try:
             _alerts.check_watchlist_alerts(results, cfg)
         except Exception as _e:
@@ -4355,31 +4311,11 @@ def page_config():
 
     # ── ALERTS TAB content definition (full config moved from sidebar)
     def _render_alerts_tab():
-        """Full alert configuration — Telegram, Email, Discord."""
+        """Alert configuration — Email only.
+        Telegram + Discord channels were removed 2026-04-18 after repeated
+        bot-token / webhook-URL leaks. If you need a third-party channel
+        again, use the generic HTTPS webhook pattern (to be added)."""
         _at_cfg = _cached_alerts_config()
-
-        with st.expander("🔔 Telegram Alerts", expanded=_at_cfg.get("telegram_enabled", False)):
-            _at_cfg2 = _at_cfg.copy()
-            tg_enabled = st.toggle("Enable Telegram", value=_at_cfg2.get("telegram_enabled", False), key="cfg_tg_enabled")
-            tg_token   = st.text_input("Bot Token", value=_at_cfg2.get("telegram_token", ""), type="password",
-                                       placeholder="123456:ABC-DEF...", key="cfg_tg_token", disabled=not tg_enabled)
-            tg_chat_id = st.text_input("Chat ID", value=_at_cfg2.get("telegram_chat_id", ""),
-                                       placeholder="-1001234567890", key="cfg_tg_chat", disabled=not tg_enabled)
-            tg_min_conf = st.slider("Alert threshold (%)", 50, 95, int(_at_cfg2.get("min_confidence", 70)),
-                                    step=5, key="cfg_tg_thresh", disabled=not tg_enabled)
-            cst, ctest = st.columns(2)
-            with cst:
-                if st.button("Save Telegram", key="cfg_tg_save", width="stretch"):
-                    _at_cfg2.update({"telegram_enabled": tg_enabled, "telegram_token": tg_token.strip(),
-                                     "telegram_chat_id": tg_chat_id.strip(), "min_confidence": tg_min_conf})
-                    _save_alerts_config_and_clear(_at_cfg2)
-                    st.success("Saved!")
-            with ctest:
-                if st.button("Test", key="cfg_tg_test", width="stretch", disabled=not tg_enabled):
-                    ok, err = _alerts.send_telegram(tg_token.strip(), tg_chat_id.strip(),
-                                                    "\u2705 Telegram test — connection successful!")
-                    st.success("Message sent!") if ok else st.error(err or "Test failed — check your bot token and chat ID.")
-            st.caption("Get bot token from @BotFather · Chat ID from @userinfobot")
 
         with st.expander("📧 Email Alerts", expanded=_at_cfg.get("email_enabled", False)):
             _at_em = _at_cfg.copy()
@@ -4407,28 +4343,6 @@ def page_config():
                                                        "\u2705 Email alert test successful.")
                     st.success("Email sent!") if ok else st.error(err or "Test failed — check your Gmail App Password and email settings.")
             st.caption("Use a Gmail App Password (Settings → Security → 2FA → App passwords)")
-
-        with st.expander("💬 Discord Alerts", expanded=_at_cfg.get("discord_enabled", False)):
-            _at_dc = _at_cfg.copy()
-            dc_on  = st.toggle("Enable Discord", value=_at_dc.get("discord_enabled", False), key="cfg_dc_on")
-            dc_wh  = st.text_input("Webhook URL", value=_at_dc.get("discord_webhook_url", ""), type="password",
-                                   placeholder="https://discord.com/api/webhooks/...",
-                                   key="cfg_dc_wh", disabled=not dc_on)
-            dc_min = st.slider("Alert threshold (%)", 50, 95, int(_at_dc.get("discord_min_confidence", 70)),
-                               step=5, key="cfg_dc_thresh", disabled=not dc_on)
-            csd, ctd = st.columns(2)
-            with csd:
-                if st.button("Save Discord", key="cfg_dc_save", width="stretch"):
-                    _at_dc.update({"discord_enabled": dc_on, "discord_webhook_url": dc_wh.strip(),
-                                   "discord_min_confidence": dc_min})
-                    _save_alerts_config_and_clear(_at_dc)
-                    st.success("Saved!")
-            with ctd:
-                if st.button("Test", key="cfg_dc_test", width="stretch", disabled=not dc_on):
-                    ok, err = _alerts.send_discord(dc_wh.strip(),
-                                                   "\u2705 **Crypto Signal Model** — Discord test!")
-                    st.success("Message sent!") if ok else st.error(err or "Test failed — check your webhook URL and try again.")
-            st.caption("Create webhook: Channel → Edit → Integrations → Webhooks → New")
 
     # ── Tab 1: Trading Parameters
     with _cfg_t1:
@@ -5222,7 +5136,7 @@ def page_config():
             icon="🔔",
         )
         st.caption(
-            "Each rule fires via Telegram, Discord, and/or Email (whichever channels you have enabled above). "
+            "Each rule fires via Email (if enabled above). "
             "Use 'ALL' in the coin field to watch every coin in the scan list."
         )
 

@@ -154,17 +154,10 @@ def run_scan_job() -> None:
             logger.warning("[Scheduler] Failed to load alerts config: %s", _e)
             _alerts_cfg = {}
         try:
-            _alerts.send_scan_alerts(results, _alerts_cfg)
-        except Exception as _e:
-            logger.warning("[Scheduler] Telegram alert failed (non-critical): %s", _e)
-        try:
             _alerts.send_scan_email_alerts(results, _alerts_cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Email alert failed (non-critical): %s", _e)
-        try:
-            _alerts.send_scan_discord_alerts(results, _alerts_cfg)
-        except Exception as _e:
-            logger.warning("[Scheduler] Discord alert failed (non-critical): %s", _e)
+        # Telegram + Discord dispatchers removed 2026-04-18.
         try:
             _alerts.check_watchlist_alerts(results, _alerts_cfg)
         except Exception as _e:

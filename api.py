@@ -210,17 +210,10 @@ def _run_scan_bg():
         # does not silently suppress the others.  Log warnings on failure.
         cfg = alerts.load_alerts_config()
         try:
-            alerts.send_scan_alerts(results, cfg)
-        except Exception as _e:
-            logger.warning("[API] Telegram alert failed: %s", _e)
-        try:
             alerts.send_scan_email_alerts(results, cfg)
         except Exception as _e:
             logger.warning("[API] Email alert failed: %s", _e)
-        try:
-            alerts.send_scan_discord_alerts(results, cfg)
-        except Exception as _e:
-            logger.warning("[API] Discord alert failed: %s", _e)
+        # Telegram + Discord dispatchers removed 2026-04-18.
     except Exception as exc:
         logger.error("[API] Background scan failed: %s", exc, exc_info=True)
         db.write_scan_status(
@@ -607,7 +600,7 @@ def tradingview_webhook(
     **What this endpoint does:**
     1. Normalises the pair symbol (BTCUSDT → BTC/USDT)
     2. Logs the webhook to the `alerts_log` table
-    3. Forwards the notification to Telegram + Discord (if configured)
+    3. (Telegram + Discord dispatch removed 2026-04-18; body logged only)
     4. Returns a JSON confirmation
 
     **Authentication:** requires `X-API-Key` header or `?token=` query param (SEC-03).
@@ -656,44 +649,15 @@ def tradingview_webhook(
         error_msg=payload.message or "",
     )
 
-    # Build human-readable notification using HTML (send_telegram uses parse_mode="HTML")
-    lines = [
-        "📡 <b>TradingView Alert</b>",
-        f"Pair: <code>{pair}</code>",
-        f"Action: <code>{action}</code>",
-    ]
-    if payload.price is not None:
-        lines.append(f"Price: <code>{payload.price:,.4f}</code>")
-    if payload.timeframe:
-        lines.append(f"TF: <code>{payload.timeframe}</code>")
-    if payload.strategy:
-        lines.append(f"Strategy: <code>{payload.strategy}</code>")
-    if payload.message:
-        lines.append(f"Note: {_html.escape(str(payload.message))}")
-
-    notification = "\n".join(lines)
-
-    # Dispatch to configured channels
-    cfg = alerts.load_alerts_config()
-    tg_ok, tg_err = False, None
-    if cfg.get("telegram_enabled") and cfg.get("telegram_token") and cfg.get("telegram_chat_id"):
-        tg_ok, tg_err = alerts.send_telegram(
-            cfg["telegram_token"], cfg["telegram_chat_id"], notification
-        )
-
-    dc_ok, dc_err = False, None
-    if cfg.get("discord_enabled") and cfg.get("discord_webhook_url"):
-        dc_ok, dc_err = alerts.send_discord(cfg["discord_webhook_url"], notification)
-
+    # TradingView notification — Telegram + Discord dispatch removed 2026-04-18.
+    # The inbound alert is still logged to the DB via log_tradingview_alert above;
+    # callers that want email dispatch here can add it later via alerts.send_email_alert.
     return {
         "status": "received",
         "pair": pair,
         "action": action,
         "price": payload.price,
-        "alerts_sent": {
-            "telegram": tg_ok,
-            "discord": dc_ok,
-        },
+        "alerts_sent": {},
     }
 
 
@@ -849,7 +813,7 @@ def get_execution_log(limit: int = 100):
 def get_alerts_log(limit: int = 100):
     """
     Returns recent alert dispatch records from all channels
-    (Telegram, Email, Discord, TradingView webhook).
+    (Email, TradingView webhook — Telegram + Discord removed 2026-04-18).
     """
     limit = min(limit, 500)
     df = db.get_alerts_log_df()
