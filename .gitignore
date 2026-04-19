@@ -11,6 +11,16 @@ kraken_testnet_keys.json
 crypto_model.db
 crypto_model.db-shm
 crypto_model.db-wal
+*.db
+*.sqlite
+*.sqlite3
+# Audit R8h: catch any wallet file that might be added later
+wallets.enc
+# Cross-app Phase 3/4 state files
+pending_multisig.json
+circuit_state.json
+wallet_reservations.json
+cross_app_positions.json
 dynamic_weights.json
 positions.json
 scan_status.json
