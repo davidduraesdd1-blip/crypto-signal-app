@@ -1,10 +1,6 @@
 """
 alerts.py — Alert system for Crypto Signal Model v5.9.13
 Handles Email notifications for scan results.
-
-Telegram + Discord channels were removed 2026-04-18 after repeated bot-token /
-webhook-URL leaks in git history. If demand resurfaces, reintroduce them with
-env-var-only config (never persisted to disk, never shipped via UI).
 """
 from __future__ import annotations
 
@@ -71,7 +67,6 @@ _DEFAULTS = {
     "email_from": "",
     "email_pass": "",
     "email_min_confidence": 70,
-    # Telegram + Discord channels removed 2026-04-18 (see module docstring).
     # Paid/free API keys (stubs — add key to activate)
     "lunarcrush_key": "",
     "coinglass_key": "",
@@ -136,8 +131,6 @@ def save_alerts_config(config: dict):
         logging.error("[alerts] Failed to save config: %s", e)
 
 
-# Telegram sender removed 2026-04-18 (see module docstring).
-
 def _fmt_price(val) -> str:
     """Format a price with auto-precision based on magnitude."""
     if val is None:
@@ -166,10 +159,7 @@ def _signal_emoji(direction: str) -> str:
 
 
 def _extract_signal_fields(r: dict) -> dict:
-    """Extract common display fields from a scan result dict.
-    Shared by format_email_body (and formerly format_scan_alert /
-    format_discord_message before those channels were removed 2026-04-18).
-    """
+    """Extract common display fields from a scan result dict, used by format_email_body."""
     lev_rec = r.get("leverage_rec") or {}
     return {
         "pair":      r.get("pair", "?"),
@@ -190,10 +180,6 @@ def _extract_signal_fields(r: dict) -> dict:
         "rr":        r.get("rr_ratios") or {},
         "high_conf": r.get("high_conf", False),
     }
-
-
-# format_scan_alert (Telegram HTML formatter) + send_scan_alerts (Telegram
-# dispatcher) removed 2026-04-18 along with the send_telegram sender above.
 
 
 # ──────────────────────────────────────────────
@@ -343,9 +329,6 @@ def send_scan_email_alerts(results: list, config: dict | None = None) -> tuple[b
     return send_email_alert(sender, app_pass, recipient, subject, body)
 
 
-# Discord sender + formatter + dispatcher removed 2026-04-18 (see module docstring).
-
-
 # ──────────────────────────────────────────────
 # WATCHLIST ALERTS
 # ──────────────────────────────────────────────
@@ -413,10 +396,7 @@ def check_watchlist_alerts(scan_results: list, config: dict | None = None) -> li
             if entry:
                 msg += f"Entry: {_fmt_price(entry)}  |  Stop: {_fmt_price(stop)}"
 
-            # PERF: fire all enabled channels concurrently. Telegram + Discord
-            # channels were removed 2026-04-18; only email remains. Keeping
-            # the ThreadPoolExecutor pattern so reintroducing another
-            # channel later is a single append.
+            # PERF: fire all enabled channels concurrently via ThreadPoolExecutor.
             _send_tasks = []
             if config.get("email_enabled"):
                 # Audit R1h HIGH #3: rule name is user-supplied free text;

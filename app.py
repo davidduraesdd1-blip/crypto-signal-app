@@ -976,8 +976,6 @@ if _em_on != _alert_cfg_sidebar.get("email_enabled", False):
     _alert_cfg_sidebar["email_enabled"] = _em_on
     _alerts_changed = True
 
-# Telegram + Discord sidebar toggles removed 2026-04-18.
-
 if _alerts_changed:
     _save_alerts_config_and_clear(_alert_cfg_sidebar)
 
@@ -4118,7 +4116,7 @@ def _progress_cb(done, total, pair_name):
 
 
 def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
-    """Send email alerts for each closed paper position (Telegram + Discord removed 2026-04-18).
+    """Send email alerts for each closed paper position.
 
     Called after model.update_positions() returns a non-empty closed list, both
     from the automated scan thread and from the manual 'Check Exits & Refresh' button.
@@ -4141,7 +4139,6 @@ def _send_exit_alerts(closed: list, cfg: dict | None = None) -> None:
             f"Entry: {_entry:,.5g}  →  Exit: {_exit_p:,.5g}\n"
             f"P&L: {_pnl:+.2f}%"
         )
-        # Email (Telegram + Discord senders removed 2026-04-18)
         if cfg.get("email_enabled"):
             try:
                 _alerts.send_email_alert(
@@ -4228,7 +4225,6 @@ def _run_scan_thread():
             _alerts.send_scan_email_alerts(results, cfg)
         except Exception as _e:
             logging.warning("[App] Email alert failed: %s", _e)
-        # Telegram + Discord dispatchers removed 2026-04-18.
         try:
             _alerts.check_watchlist_alerts(results, cfg)
         except Exception as _e:
@@ -4391,10 +4387,7 @@ def page_config():
 
     # ── ALERTS TAB content definition (full config moved from sidebar)
     def _render_alerts_tab():
-        """Alert configuration — Email only.
-        Telegram + Discord channels were removed 2026-04-18 after repeated
-        bot-token / webhook-URL leaks. If you need a third-party channel
-        again, use the generic HTTPS webhook pattern (to be added)."""
+        """Alert configuration — Email only."""
         _at_cfg = _cached_alerts_config()
 
         with st.expander("📧 Email Alerts", expanded=_at_cfg.get("email_enabled", False)):

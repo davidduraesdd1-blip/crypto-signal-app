@@ -213,7 +213,6 @@ def _run_scan_bg():
             alerts.send_scan_email_alerts(results, cfg)
         except Exception as _e:
             logger.warning("[API] Email alert failed: %s", _e)
-        # Telegram + Discord dispatchers removed 2026-04-18.
     except Exception as exc:
         logger.error("[API] Background scan failed: %s", exc, exc_info=True)
         db.write_scan_status(
@@ -600,8 +599,7 @@ def tradingview_webhook(
     **What this endpoint does:**
     1. Normalises the pair symbol (BTCUSDT → BTC/USDT)
     2. Logs the webhook to the `alerts_log` table
-    3. (Telegram + Discord dispatch removed 2026-04-18; body logged only)
-    4. Returns a JSON confirmation
+    3. Returns a JSON confirmation
 
     **Authentication:** requires `X-API-Key` header or `?token=` query param (SEC-03).
     Configure a key in Config Editor → API Server.
@@ -649,9 +647,8 @@ def tradingview_webhook(
         error_msg=payload.message or "",
     )
 
-    # TradingView notification — Telegram + Discord dispatch removed 2026-04-18.
-    # The inbound alert is still logged to the DB via log_tradingview_alert above;
-    # callers that want email dispatch here can add it later via alerts.send_email_alert.
+    # Inbound alert is logged to the DB above; add email dispatch here later
+    # via alerts.send_email_alert if needed.
     return {
         "status": "received",
         "pair": pair,
@@ -811,10 +808,7 @@ def get_execution_log(limit: int = 100):
     summary="Alert dispatch audit log",
 )
 def get_alerts_log(limit: int = 100):
-    """
-    Returns recent alert dispatch records from all channels
-    (Email, TradingView webhook — Telegram + Discord removed 2026-04-18).
-    """
+    """Returns recent alert dispatch records from all channels (Email, TradingView webhook)."""
     limit = min(limit, 500)
     df = db.get_alerts_log_df()
     if df.empty:

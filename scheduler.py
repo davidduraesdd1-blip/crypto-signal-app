@@ -157,7 +157,6 @@ def run_scan_job() -> None:
             _alerts.send_scan_email_alerts(results, _alerts_cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Email alert failed (non-critical): %s", _e)
-        # Telegram + Discord dispatchers removed 2026-04-18.
         try:
             _alerts.check_watchlist_alerts(results, _alerts_cfg)
         except Exception as _e:
