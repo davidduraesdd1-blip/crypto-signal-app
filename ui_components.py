@@ -1078,9 +1078,12 @@ def inject_beginner_mode_js(beginner_mode: bool) -> None:
         return
     st.session_state["_beginner_mode_last"] = beginner_mode
     action = "add" if beginner_mode else "remove"
-    # Use st.iframe for JS execution (replaces deprecated st.components.v1.html).
-    # st.markdown(<script>) is silently dropped by React's dangerouslySetInnerHTML.
-    st.iframe(
+    # st.markdown(<script>) is silently dropped by React's dangerouslySetInnerHTML,
+    # so use streamlit.components.v1.html which renders in a sandboxed iframe that
+    # actually executes JS. st.iframe is NOT a Streamlit API (audit R10h caught
+    # the first instance; this is the second — same fix).
+    import streamlit.components.v1 as _components
+    _components.html(
         f'<script>try{{window.parent.document.body.classList.{action}("beginner-mode");}}catch(e){{}}</script>',
         height=1,
     )

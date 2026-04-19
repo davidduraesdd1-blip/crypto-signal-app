@@ -3660,7 +3660,10 @@ def page_dashboard():
                 st.caption(
                     f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
                 )
-            st.iframe(_chart_html, height=560)
+            # Audit R10h: st.iframe is not a real Streamlit API. Use
+            # streamlit.components.v1.html which renders in a sandboxed iframe.
+            import streamlit.components.v1 as _components
+            _components.html(_chart_html, height=560)
 
         st.markdown("---")
 
