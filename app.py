@@ -7426,7 +7426,7 @@ def page_agent():
         )
     else:
         st.caption(
-            "LangGraph + Claude claude-sonnet-4-6 autonomous trading agent. "
+            "LangGraph + Claude Sonnet 4.6 autonomous trading agent. "
             "Hard Python risk gates before and after every Claude decision. "
             "Claude may only approve or reject — never place orders directly."
         )
@@ -7451,7 +7451,10 @@ def page_agent():
             st.warning("⏳ Stopping…" if _ag_lv == "beginner" else "■ STOPPING…")
         else:
             _stop_label = "⏸ AI is paused — click Start to activate" if _ag_lv == "beginner" else "▼ STOPPED"
-            st.error(_stop_label)
+            # Audit R10g: a default-state "paused" display should not render
+            # as a full-width red error bar — that reads as a real failure
+            # to a first-time demo audience. st.info is the neutral colour.
+            st.info(_stop_label)
     with col_start:
         if st.button("▶ Start", width="stretch", type="primary",
                      disabled=is_running, key="agent_start_btn"):
