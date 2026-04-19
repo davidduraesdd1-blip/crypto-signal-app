@@ -1054,11 +1054,14 @@ def inject_css():
     st.markdown(_CSS, unsafe_allow_html=True)
     st.session_state["_css_injected"] = True
     st.session_state["_css_theme_last"] = _theme
-    # Apply body.light-mode class via st.iframe (replaces deprecated st.components.v1.html).
-    # st.iframe renders HTML in a sandboxed iframe that executes JavaScript.
-    # st.markdown(<script>) is silently discarded by React's dangerouslySetInnerHTML.
+    # Apply body.light-mode class via streamlit.components.v1.html — renders
+    # the <script> inside a sandboxed iframe that actually executes JS, unlike
+    # st.markdown(<script>) which React silently strips. Audit R10h: the
+    # previous code called st.iframe(...) which is NOT a real Streamlit API
+    # and crashed on every theme change with AttributeError.
     _mode = "add" if _theme == "light" else "remove"
-    st.iframe(
+    import streamlit.components.v1 as _components
+    _components.html(
         f'<script>try{{window.parent.document.body.classList.{_mode}("light-mode");}}catch(e){{}}</script>',
         height=1,
     )
