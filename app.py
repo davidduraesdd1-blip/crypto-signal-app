@@ -714,6 +714,93 @@ try:
 except Exception as _ai_banner_err:
     logger.debug("[App] AI health banner render failed: %s", _ai_banner_err)
 
+
+# ── Compact live scan-progress (sidebar) ────────────────────────────────────
+# Mirrors the DeFi / RWA pattern: a slim progress block that renders near the
+# top of the sidebar only while a scan is active. The full rich treatment
+# (SVG ring + partial results + fun facts) lives further down the main
+# dashboard in _scan_progress; this is the "something is happening" signal
+# that's always in view no matter where the user is on the page.
+@st.fragment(run_every=2)
+def _sg_sidebar_progress():
+    _running = (
+        st.session_state.get("scan_running", False)
+        or _SCAN_STATUS.get("running", False)
+        or _scan_state.get("running", False)
+    )
+    if not _running:
+        return
+    _prog = (
+        _scan_state.get("progress")
+        or _SCAN_STATUS.get("progress", 0)
+    )
+    try:
+        _prog = int(_prog)
+    except (TypeError, ValueError):
+        _prog = 0
+    _pair = (
+        _scan_state.get("progress_pair")
+        or _SCAN_STATUS.get("current", "")
+        or "Working…"
+    )
+    _total = 0
+    try:
+        import crypto_model_core as _model
+        _total = len(getattr(_model, "PAIRS", []) or [])
+    except Exception:
+        _total = 0
+    _pct = 0
+    if _total > 0:
+        _pct = min(100, int(round(100.0 * _prog / _total)))
+    _eta_str = ""
+    _start_ts = _SCAN_STATUS.get("start_time")
+    if _start_ts and _prog > 0 and _total > 0:
+        _elapsed = time.time() - float(_start_ts)
+        _rate = _prog / max(_elapsed, 0.1)
+        _remaining = max(0.0, (_total - _prog) / _rate)
+        if _remaining > 60:
+            _eta_str = f"~{int(_remaining // 60)}m {int(_remaining % 60)}s left"
+        elif _remaining > 3:
+            _eta_str = f"~{int(_remaining)}s left"
+        else:
+            _eta_str = "almost done…"
+    _pair_escaped = _html.escape(str(_pair))
+    _eta_escaped = _html.escape(_eta_str)
+    st.sidebar.markdown(
+        f"""
+<div style="margin:8px 0 12px 0; padding:10px 12px; border-radius:8px;
+            border:1px solid rgba(0,212,170,0.25);
+            background:rgba(0,212,170,0.06);">
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              gap:8px;font-size:0.72rem;color:rgba(168,180,200,0.65);font-weight:600;
+              letter-spacing:0.3px;text-transform:uppercase;margin-bottom:6px;">
+    <span>⏳ SCANNING</span><span>{_prog}/{_total}</span>
+  </div>
+  <div style="font-size:0.78rem;color:#00d4aa;font-weight:700;line-height:1.25;
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+    {_pair_escaped}
+  </div>
+  <div style="margin-top:6px;height:6px;background:rgba(100,116,139,0.25);
+              border-radius:3px;overflow:hidden;">
+    <div style="height:100%;width:{_pct}%;background:#00d4aa;
+                transition:width 0.4s ease-out;"></div>
+  </div>
+  <div style="margin-top:4px;font-size:0.68rem;color:rgba(168,180,200,0.55);
+              display:flex;justify-content:space-between;">
+    <span>{_pct}%</span><span>{_eta_escaped}</span>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+try:
+    _sg_sidebar_progress()
+except Exception as _sg_sp_err:
+    logger.debug("[App] sidebar progress render failed: %s", _sg_sp_err)
+
+
 # ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
 # Beginner = default; persists across all pages via session_state.
 # beginner_mode kept for backward compat with inject_beginner_mode_js().
