@@ -4343,21 +4343,35 @@ def page_config():
                                     key="cfg_em_to", disabled=not em_on)
             em_from = st.text_input("Sender (Gmail)", value=_at_em.get("email_from", ""),
                                     placeholder="yourbot@gmail.com", key="cfg_em_from", disabled=not em_on)
-            em_pass = st.text_input("App Password", value=_at_em.get("email_pass", ""), type="password",
-                                    key="cfg_em_pass", disabled=not em_on)
+            # Audit R2f: never pre-fill a password into text_input — DOM-leak
+            # every rerun. Blank on load; empty submit = keep stored value.
+            _em_pass_has_value = bool(_at_em.get("email_pass"))
+            em_pass = st.text_input(
+                "App Password",
+                value="",
+                type="password",
+                key="cfg_em_pass",
+                disabled=not em_on,
+                placeholder="●●●● (saved)" if _em_pass_has_value else "",
+                help="Leave blank to keep the stored app password.",
+            )
             em_min  = st.slider("Alert threshold (%)", 50, 95, int(_at_em.get("email_min_confidence", 70)),
                                 step=5, key="cfg_em_thresh", disabled=not em_on)
             cse, cte = st.columns(2)
             with cse:
                 if st.button("Save Email", key="cfg_em_save", width="stretch"):
+                    # Blank-preserve: empty input means "don't overwrite".
+                    _new_em_pass = em_pass if em_pass else _at_em.get("email_pass", "")
                     _at_em.update({"email_enabled": em_on, "email_to": em_to.strip(),
-                                   "email_from": em_from.strip(), "email_pass": em_pass,
+                                   "email_from": em_from.strip(), "email_pass": _new_em_pass,
                                    "email_min_confidence": em_min})
                     _save_alerts_config_and_clear(_at_em)
                     st.success("Saved!")
             with cte:
                 if st.button("Test", key="cfg_em_test", width="stretch", disabled=not em_on):
-                    ok, err = _alerts.send_email_alert(em_from.strip(), em_pass, em_to.strip(),
+                    # Use entered value if present, else fall back to stored.
+                    _test_em_pass = em_pass if em_pass else _at_em.get("email_pass", "")
+                    ok, err = _alerts.send_email_alert(em_from.strip(), _test_em_pass, em_to.strip(),
                                                        "Crypto Signal Model — Test Alert",
                                                        "\u2705 Email alert test successful.")
                     st.success("Email sent!") if ok else st.error(err or "Test failed — check your Gmail App Password and email settings.")
@@ -4980,24 +4994,42 @@ def page_config():
                 "Add alerts_config.json to your .gitignore."
             )
             _ek1, _ek2, _ek3 = st.columns(3)
-            _okx_key  = _ek1.text_input("API Key",     value=_exec_ui_cfg.get("okx_api_key", ""),
-                                        type="password", placeholder="OKX API Key")
-            _okx_sec  = _ek2.text_input("Secret",      value=_exec_ui_cfg.get("okx_secret", ""),
-                                        type="password", placeholder="OKX Secret")
-            _okx_pass = _ek3.text_input("Passphrase",  value=_exec_ui_cfg.get("okx_passphrase", ""),
-                                        type="password", placeholder="API Passphrase")
+            # Audit R2f: the 3 OKX credentials were pre-filled from config on
+            # every render — each value shipped into the HTML DOM on every
+            # rerun (even type="password" renders the literal value attr).
+            # Blank fields on load; on save, empty input = keep stored value.
+            _okx_key_has  = bool(_exec_ui_cfg.get("okx_api_key"))
+            _okx_sec_has  = bool(_exec_ui_cfg.get("okx_secret"))
+            _okx_pass_has = bool(_exec_ui_cfg.get("okx_passphrase"))
+            _okx_key  = _ek1.text_input(
+                "API Key", value="", type="password",
+                placeholder="●●●● (saved)" if _okx_key_has else "OKX API Key",
+            )
+            _okx_sec  = _ek2.text_input(
+                "Secret", value="", type="password",
+                placeholder="●●●● (saved)" if _okx_sec_has else "OKX Secret",
+            )
+            _okx_pass = _ek3.text_input(
+                "Passphrase", value="", type="password",
+                placeholder="●●●● (saved)" if _okx_pass_has else "API Passphrase",
+            )
+            st.caption("Leave a field blank to keep the currently saved value.")
             _ord_type = st.selectbox(
                 "Default Order Type", ["market", "limit"],
                 index=0 if _exec_ui_cfg.get("default_order_type", "market") == "market" else 1,
             )
             if st.form_submit_button("💾 Save Execution Config", type="primary"):
+                # Blank-preserve for each OKX credential.
+                _new_okx_key  = _okx_key.strip()  if _okx_key.strip()  else _exec_ui_cfg.get("okx_api_key", "")
+                _new_okx_sec  = _okx_sec.strip()  if _okx_sec.strip()  else _exec_ui_cfg.get("okx_secret", "")
+                _new_okx_pass = _okx_pass.strip() if _okx_pass.strip() else _exec_ui_cfg.get("okx_passphrase", "")
                 _exec_ui_cfg.update({
                     "live_trading_enabled":        _live_on,
                     "auto_execute_enabled":        _auto_on,
                     "auto_execute_min_confidence": _auto_conf,
-                    "okx_api_key":                 _okx_key.strip(),
-                    "okx_secret":                  _okx_sec.strip(),
-                    "okx_passphrase":              _okx_pass.strip(),
+                    "okx_api_key":                 _new_okx_key,
+                    "okx_secret":                  _new_okx_sec,
+                    "okx_passphrase":              _new_okx_pass,
                     "default_order_type":          _ord_type,
                 })
                 _save_alerts_config_and_clear(_exec_ui_cfg)
