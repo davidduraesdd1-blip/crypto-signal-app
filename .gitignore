@@ -1,6 +1,9 @@
 # ── Secrets & credentials (NEVER commit these) ────────────────────────────────
 .env
+.env.*
 *.env
+ANTHROPIC_API_KEY*
+.streamlit/secrets.toml
 alerts_config.json
 config_overrides.json
 kraken_testnet_keys.json
@@ -62,7 +65,7 @@ venv/
 env/
 
 # ── Streamlit ─────────────────────────────────────────────────────────────────
-.streamlit/secrets.toml
+# (.streamlit/secrets.toml is listed above in the Secrets block)
 
 # ── OS / Editor ───────────────────────────────────────────────────────────────
 .DS_Store

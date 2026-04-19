@@ -41,8 +41,11 @@ def _scrub_sentry_event(event, hint):
     if "request" in event:
         event["request"].pop("cookies", None)
         event["request"].pop("headers", None)
+    # Audit R1c/R1f: broaden token list (OKX PASSPHRASE, AUTH, etc.)
+    _SENSITIVE = ("KEY", "SECRET", "TOKEN", "PASSWORD", "PASSPHRASE",
+                  "DSN", "AUTH", "BEARER", "CREDENTIAL", "PRIVATE", "MNEMONIC")
     for key in list(event.get("extra", {}).keys()):
-        if any(x in key.upper() for x in ["KEY", "SECRET", "TOKEN", "PASSWORD", "DSN"]):
+        if any(x in key.upper() for x in _SENSITIVE):
             event["extra"][key] = "[REDACTED]"
     return event
 
@@ -4159,7 +4162,9 @@ def _run_scan_thread():
         except Exception as _e:
             logging.warning("[App] Watchlist alert check failed: %s", _e)
     except Exception as e:
-        audit("scan_error", error=str(e))
+        # Audit R1f: log exception TYPE only — raw str(e) can echo API keys
+        # or URLs depending on which library raised.
+        audit("scan_error", error=type(e).__name__)
         # Don't overwrite good prior results — only update status with error
         _SCAN_STATUS["running"] = False  # PERF-30: mark in-memory as done on error
         _write_scan_status(running=False, error=str(e))

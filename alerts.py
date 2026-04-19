@@ -200,6 +200,20 @@ def _extract_signal_fields(r: dict) -> dict:
 # EMAIL (SMTP via Gmail)
 # ──────────────────────────────────────────────
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _is_valid_email(addr: str) -> bool:
+    return bool(addr and _EMAIL_RE.match(addr.strip()))
+
+
+def _strip_crlf(s: str, max_len: int = 200) -> str:
+    """Strip CR/LF from a string and truncate — used on anything that might
+    end up in an SMTP header (subject line, rule name, etc.) to block
+    header-injection (R1h HIGH #3)."""
+    return re.sub(r"[\r\n]", " ", str(s))[:max_len]
+
+
 def send_email_alert(
     sender: str, app_password: str, recipient: str,
     subject: str, body_text: str
@@ -211,6 +225,13 @@ def send_email_alert(
     """
     if not sender or not app_password or not recipient:
         return False, "Sender, app password, or recipient not configured"
+    # Audit R1h HIGH #2: port _is_valid_email from DeFi/RWA. Without this
+    # a malformed recipient goes straight to SMTP and the error response
+    # can echo the submitted address + local server state.
+    if not _is_valid_email(sender) or not _is_valid_email(recipient):
+        return False, "Sender or recipient email format is invalid — check both fields."
+    # Audit R1h HIGH #3: scrub CRLF from subject (SMTP header-injection vector).
+    subject = _strip_crlf(subject, max_len=200)
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -227,7 +248,8 @@ def send_email_alert(
     except smtplib.SMTPAuthenticationError:
         return False, "Authentication failed — check your Gmail App Password"
     except Exception as e:
-        logger.warning("[alerts] send_email_alert failed: %s", e)
+        # Audit R1f: don't raw-dump exception — type only.
+        logger.warning("[alerts] send_email_alert failed: %s", type(e).__name__)
         return False, "Send failed — check your email settings and network, then try again."
 
 
@@ -397,7 +419,10 @@ def check_watchlist_alerts(scan_results: list, config: dict | None = None) -> li
             # channel later is a single append.
             _send_tasks = []
             if config.get("email_enabled"):
-                _rule_name = rule.get("name", pair)
+                # Audit R1h HIGH #3: rule name is user-supplied free text;
+                # CRLF-strip before interpolation to block SMTP header
+                # injection via the subject line.
+                _rule_name = _strip_crlf(rule.get("name", pair), max_len=80)
                 _send_tasks.append(("email", lambda _msg=msg, _rn=_rule_name: send_email_alert(
                     sender       = config.get("email_from", ""),
                     app_password = config.get("email_pass", ""),
