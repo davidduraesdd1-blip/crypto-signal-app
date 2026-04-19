@@ -527,6 +527,24 @@ def execute_signal_plan(plan: dict, continue_on_fail: bool = True) -> dict:
         plan["blocked_count"] = plan.get("included_count", 0)
         return plan
 
+    # Circuit-breaker check: if existing daily/weekly/monthly P&L limits are
+    # tripped, block the entire plan with a clear reason — single-trade path
+    # already enforces this inside place_order, but we check up-front so the
+    # user gets one clear blocked-message instead of N "failed" per leg.
+    try:
+        _cb = check_circuit_breaker()
+        if _cb.get("triggered"):
+            for lg in plan.get("legs", []):
+                if lg.get("included"):
+                    lg["exec_status"]  = "blocked"
+                    lg["exec_message"] = f"Circuit breaker: {_cb.get('reason', 'limit hit')}"
+            plan["success_count"] = 0
+            plan["failed_count"]  = 0
+            plan["blocked_count"] = plan.get("included_count", 0)
+            return plan
+    except Exception as _cb_err:
+        logger.debug("[SignalExec] circuit breaker check failed: %s", _cb_err)
+
     cfg = get_exec_config()
     success = failed = 0
     for lg in plan.get("legs", []):
@@ -542,10 +560,13 @@ def execute_signal_plan(plan: dict, continue_on_fail: bool = True) -> dict:
                 order_type    = cfg.get("default_order_type", "market"),
                 current_price = lg.get("price_usd"),
             )
-            lg["exec_status"]  = res.get("status", "unknown")
-            lg["exec_message"] = res.get("reason") or res.get("message", "")
+            # place_order returns {"ok": bool, "error": str|None, "order_id": str|None, ...}
+            # NOT {"status": str, "reason": str} — audit caught this mismatch in v1.
+            _ok = bool(res.get("ok"))
+            lg["exec_status"]  = "success" if _ok else "failed"
+            lg["exec_message"] = str(res.get("error") or "")
             lg["order_id"]     = res.get("order_id")
-            if lg["exec_status"] in ("filled", "placed", "success"):
+            if _ok:
                 success += 1
             else:
                 failed += 1
