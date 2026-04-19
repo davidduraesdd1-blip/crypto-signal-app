@@ -42,7 +42,30 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 import os as _os
-DB_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "crypto_model.db")
+from pathlib import Path as _Path
+
+# Audit R10d: Streamlit Cloud mounts /mount/src read-only. Writing the DB
+# next to __file__ would crash on first connect. Probe for a writable dir
+# and fall back to /tmp (same pattern DeFi Model uses in config.py:12-23).
+_BASE_DIR = _Path(__file__).resolve().parent
+_PREFERRED_DATA = _BASE_DIR / "data"
+try:
+    _PREFERRED_DATA.mkdir(exist_ok=True)
+    _write_test = _PREFERRED_DATA / ".write_test"
+    _write_test.touch()
+    _write_test.unlink()
+    _DATA_DIR = _PREFERRED_DATA
+except (PermissionError, OSError):
+    _DATA_DIR = _Path("/tmp/supergrok_data")
+    _DATA_DIR.mkdir(exist_ok=True, parents=True)
+
+# Legacy DB location (next to __file__) — preserved as a fallback so existing
+# local installs keep working. New/Streamlit-Cloud installs land in _DATA_DIR.
+_LEGACY_DB = _BASE_DIR / "crypto_model.db"
+if _LEGACY_DB.exists():
+    DB_FILE = str(_LEGACY_DB)
+else:
+    DB_FILE = str(_DATA_DIR / "crypto_model.db")
 
 # Single write lock — mirrors _log_lock used in crypto_model_core.py
 _write_lock = threading.Lock()
