@@ -4891,6 +4891,28 @@ def page_config():
 
     # ── Tab 4: Dev Tools
     with _cfg_t4:
+        # ── Circuit Breakers (4A-5) ──────────────────────────────────────
+        _ui.section_header("Circuit Breakers", "Level-C 7-gate safety system", icon="🛑")
+        try:
+            from circuit_breakers import get_state as _cb_state, resume as _cb_resume
+            _cb = _cb_state()
+            if _cb.get("halted"):
+                st.error(
+                    f"**HALTED** by {_cb.get('halted_gate', '—')}\n\n"
+                    f"{_cb.get('halted_reason', '')}"
+                )
+                st.caption(f"Halted at: {_cb.get('halted_at', '—')}")
+                if st.button("▶ Resume agent", key="cb_resume_btn", type="primary"):
+                    _cb_resume("manual UI resume")
+                    st.success("Circuit cleared — agent resumes on next cycle")
+                    st.rerun()
+            else:
+                st.success("All 7 gates operational")
+                st.caption(f"Last check: {_cb.get('last_check_at', '—')}")
+                st.caption(f"Resume count (lifetime): {_cb.get('resume_count', 0)}")
+        except Exception as _cb_err:
+            logging.debug("[Settings] circuit breaker UI load failed: %s", _cb_err)
+
         # ── SQLite Database Stats ──────────────────────────────────────────────
         st.markdown("---")
         _ui.section_header("Database Health", "SQLite WAL-mode database — row counts and disk usage", icon="🗄️")
