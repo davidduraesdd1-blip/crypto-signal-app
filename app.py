@@ -1573,9 +1573,16 @@ def page_dashboard():
                 )
                 if _plan["live_trading"] and not _plan["keys_configured"]:
                     st.error("Live mode is enabled but OKX API keys not configured. Set OKX_API_KEY / OKX_SECRET / OKX_PASSPHRASE env vars.")
-                elif st.button(_exec_label, type="primary", width='stretch', key="ote_exec_go"):
-                    with st.spinner(f"Placing {_plan['included_count']} orders…"):
-                        _plan = _exec.execute_signal_plan(_plan)
+                elif st.button(
+                    _exec_label, type="primary", width='stretch', key="ote_exec_go",
+                    disabled=bool(st.session_state.get("_ote_executing", False)),
+                ):
+                    st.session_state["_ote_executing"] = True
+                    try:
+                        with st.spinner(f"Placing {_plan['included_count']} orders…"):
+                            _plan = _exec.execute_signal_plan(_plan)
+                    finally:
+                        st.session_state["_ote_executing"] = False
                     _ok_color = "#22c55e" if _plan.get("failed_count", 0) == 0 else "#f59e0b"
                     st.markdown(
                         f"<div style='background:rgba(15,23,42,0.5); border:1px solid rgba(148,163,184,0.15); "
@@ -1590,10 +1597,27 @@ def page_dashboard():
                         if lg.get("exec_status") == "failed":
                             st.error(f"{lg['pair']}: {lg.get('exec_message','')}")
 
+        # Button enabled only when there are actual high-confidence signals to
+        # execute — audit ab9c7cdc caught that empty results + empty min-confidence
+        # filter could open a dialog with no legs.
+        _ote_qualifying = sum(
+            1 for r in results
+            if r.get("high_conf") and (r.get("confidence_avg_pct") or 0) >= _ote_min_conf
+            and (_ote_include_neutrals or "NEUTRAL" not in str(r.get("direction") or ""))
+        )
+        _ote_in_progress = bool(st.session_state.get("_ote_executing", False))
+        _ote_disabled = (_ote_qualifying == 0) or _ote_in_progress
+        _ote_help = (
+            "No signals meet the current filter. Lower the confidence threshold "
+            "or include NEUTRAL signals."
+            if _ote_qualifying == 0 else
+            "Executing — please wait…" if _ote_in_progress else
+            "Build a dry-run plan and review before placing any orders."
+        )
         if st.button(
             "▶ Execute Top Signals",
             type="primary", width='stretch', key="ote_open_btn",
-            help="Build a dry-run plan and review before placing any orders.",
+            help=_ote_help, disabled=_ote_disabled,
         ):
             _ote_dialog(results, _ote_size, _ote_min_conf, _ote_include_neutrals)
 
