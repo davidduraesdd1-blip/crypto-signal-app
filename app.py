@@ -866,7 +866,7 @@ st.sidebar.markdown(
     'Data</span>',
     unsafe_allow_html=True,
 )
-if st.sidebar.button("🔄 Refresh All Data", help="Clear all caches and reload fresh data from all sources", width="stretch"):
+if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", help="Clear all caches and reload fresh data from all sources", width="stretch"):
     try:
         st.cache_data.clear()
     except Exception:
@@ -1441,7 +1441,7 @@ def page_dashboard():
         # init_state() is ever bypassed (e.g. session reset mid-run).
         scan_disabled = st.session_state.get("scan_running", False) or _scan_running_now
         _btn_label = "⏳ Analyzing... (this takes ~15-30s)" if scan_disabled else "🔍 Analyze All Coins Now"
-        if st.button(_btn_label, disabled=scan_disabled, type="primary", width="stretch"):
+        if st.button(_btn_label, key="dashboard_btn_analyze_all", disabled=scan_disabled, type="primary", width="stretch"):
             st.session_state["scan_results"] = []
             st.session_state["scan_error"] = None
             _start_scan()
@@ -4794,7 +4794,7 @@ def page_config():
             opt_tf = st.selectbox("Timeframe", model.TIMEFRAMES,
                                   index=0, key="opt_tf")
 
-        if st.button("Run Optuna Optimization", type="primary", width="stretch"):
+        if st.button("Run Optuna Optimization", key="opt_btn_run_optuna", type="primary", width="stretch"):
             with st.spinner(f"Running {opt_trials} Optuna trials on {opt_pair} {opt_tf}...", show_time=True):
                 result = model.run_optuna_weight_optimization(
                     n_trials=int(opt_trials), pair=opt_pair, tf=opt_tf
@@ -4878,7 +4878,7 @@ def page_config():
                 type="password", placeholder="Real SOPR, MVRV-Z, active addresses",
                 key="gn_key"
             )
-        if st.button("Save API Keys", width="stretch"):
+        if st.button("Save API Keys", key="api_btn_save_keys", width="stretch"):
             _api_cfg.update({
                 "lunarcrush_key":   lc_key.strip(),
                 "coinglass_key":    cgl_key.strip(),
@@ -4971,10 +4971,10 @@ def page_config():
         st.markdown("---")
         save_col, reset_col = st.columns(2)
         with save_col:
-            if st.button("💾 Save Config", type="primary", width="stretch"):
+            if st.button("💾 Save Config", key="cfg_btn_save", type="primary", width="stretch"):
                 _save_config(overrides)
         with reset_col:
-            if st.button("↺ Reset to Defaults", width="stretch"):
+            if st.button("↺ Reset to Defaults", key="cfg_btn_reset", width="stretch"):
                 _reset_config()
 
 
@@ -5176,7 +5176,7 @@ def page_config():
                 _save_alerts_config_and_clear(_exec_ui_cfg)
                 st.success("Execution config saved.")
 
-        if st.button("🔌 Test OKX Connection", width="content"):
+        if st.button("🔌 Test OKX Connection", key="exec_btn_test_okx", width="content"):
             _es = _exec.get_status()
             if not _es.get("keys_configured", False):
                 st.warning("No API keys saved — enter and save keys first.")
@@ -5294,13 +5294,13 @@ def page_config():
         else:
             _ag_c1, _ag_c2 = st.columns(2)
             with _ag_c1:
-                if st.button("▶ Start Agent Now", width="stretch",
+                if st.button("▶ Start Agent Now", key="agent_btn_start", width="stretch",
                              disabled=_agent.supervisor.is_running()):
                     _agent.supervisor.start()
                     st.success("Agent started.")
                     st.rerun()
             with _ag_c2:
-                if st.button("⏹ Stop Agent", width="stretch",
+                if st.button("⏹ Stop Agent", key="agent_btn_stop", width="stretch",
                              disabled=not _agent.supervisor.is_running()):
                     _agent.supervisor.stop()
                     st.warning("Agent stop requested.")
@@ -5452,7 +5452,7 @@ def page_backtest():
     run_col, _ = st.columns([2, 6])
     with run_col:
         bt_disabled = st.session_state.get("backtest_running", False)
-        if st.button("▶ Run Backtest", disabled=bt_disabled, type="primary", width="stretch"):
+        if st.button("▶ Run Backtest", key="bt_btn_run", disabled=bt_disabled, type="primary", width="stretch"):
             _start_backtest()
 
     # _backtest_progress is defined at module level (above page_backtest) — always called
@@ -7142,7 +7142,7 @@ def page_arbitrage():
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
     with col_btn:
-        run_scan = st.button("🔍 Scan Now", width="stretch", type="primary")
+        run_scan = st.button("🔍 Scan Now", key="watch_btn_scan_now", width="stretch", type="primary")
     with col_thresh:
         min_net = st.number_input(
             "Min Net Spread %",
