@@ -1872,7 +1872,7 @@ def beginner_welcome_html() -> str:
         </div>
         <div style="background:rgba(246,70,93,0.07);border:1px solid rgba(246,70,93,0.18);
                     border-radius:10px;padding:10px 14px;font-size:11px;color:rgba(168,180,200,0.65)">
-            ⚠️ <strong style="color:#ef4444">Risk Warning:</strong>
+            ⚠️ <strong style="color:#f59e0b">Risk Warning:</strong>
             Cryptocurrency trading carries a <strong>high level of risk</strong> and may not be
             suitable for all investors. Only invest money you can afford to lose.
             Past model performance does not guarantee future results.

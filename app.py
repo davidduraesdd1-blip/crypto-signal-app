@@ -1595,7 +1595,9 @@ def page_dashboard():
                     else "▶ Execute LIVE on OKX"
                 )
                 if _plan["live_trading"] and not _plan["keys_configured"]:
-                    st.error("Live mode is enabled but OKX API keys not configured. Set OKX_API_KEY / OKX_SECRET / OKX_PASSPHRASE env vars.")
+                    # Audit R5f: don't leak env-var names to the UI — point
+                    # the user to Settings where they can enter keys.
+                    st.error("Live trading needs your OKX API keys. Open Settings → Exchange Keys to add them.")
                 elif st.button(
                     _exec_label, type="primary", width='stretch', key="ote_exec_go",
                     disabled=bool(st.session_state.get("_ote_executing", False)),
@@ -6252,7 +6254,8 @@ def page_backtest():
                             mode='lines', name='Equity', line=dict(color='#00d4aa', width=2)
                         ))
                         fig_dbt.update_layout(
-                            template='plotly_dark', title=f"Deep Backtest Equity Curve — {db_pair} {db_tf}",
+                            template=('plotly_white' if st.session_state.get("_sg_theme") == "light" else 'plotly_dark'),
+                            title=f"Deep Backtest Equity Curve — {db_pair} {db_tf}",
                             height=350, showlegend=True,
                             xaxis_title="Date", yaxis_title="Equity ($)",
                         )
@@ -6337,7 +6340,8 @@ def page_backtest():
                     line=dict(color="#ffffff", width=1, dash="dot"),
                 ))
                 _fig_cal.update_layout(
-                    template="plotly_dark", height=340,
+                    template=("plotly_white" if st.session_state.get("_sg_theme") == "light" else "plotly_dark"),
+                    height=340,
                     title="Confidence Bucket vs Actual Win Rate (teal = over-performing, red = under-performing)",
                     xaxis_title="Predicted Confidence", yaxis_title="Actual Win Rate (%)",
                     yaxis=dict(range=[0, 110]),
