@@ -5,7 +5,8 @@ Crypto Signal Model v5.9.13
 Builds a self-contained HTML page with an embedded candlestick chart,
 volume histogram, optional entry/stop/target price lines, and synchronized
 RSI-14 + MACD(12,26,9) indicator panels.
-Use with st.iframe(build_chart_html(...), height=560, scrolling=False).
+Use with streamlit.components.v1.html(build_chart_html(...), height=560)
+(st.iframe does not exist — audit R10h corrected 2026-04-18).
 """
 
 import html
@@ -114,7 +115,7 @@ def build_chart_html(
         height: Main candlestick canvas height in pixels (indicator panel adds ~180 px)
 
     Returns:
-        HTML string for use with st.iframe(html, height=560, scrolling=False).
+        HTML string for use with streamlit.components.v1.html(html, height=560).
     """
     # Escape for safe HTML/JS embedding (pair names like BTC/USDT are benign in
     # practice but escaping is correct defensively)

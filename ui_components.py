@@ -3744,8 +3744,9 @@ def render_theme_toggle_sg() -> None:
     """Render a sun/moon theme toggle for SuperGrok sidebar.
 
     Stores theme in st.session_state["_sg_theme"].
-    The body.light-mode class is applied by inject_css() via st.iframe()
-    on the same rerun — no separate JS injection needed here.
+    The body.light-mode class is applied by inject_css() via
+    streamlit.components.v1.html() on the same rerun — no separate JS
+    injection needed here.
     """
     _is_light = st.session_state.get("_sg_theme") == "light"
     if st.sidebar.button(
