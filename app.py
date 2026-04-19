@@ -475,7 +475,18 @@ _CALIBRATION_JOB_ID = "calibration_job"
 def _get_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is None:
-        _scheduler = BackgroundScheduler(daemon=True)
+        # Audit R2g: job_defaults prevents autoscan + calibration + startup-
+        # catchup jobs from stacking when the host pauses threads (laptop
+        # sleep, Streamlit Cloud container scaling). Standalone scheduler.py
+        # already has this — in-app copy was missing it.
+        _scheduler = BackgroundScheduler(
+            daemon=True,
+            job_defaults={
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 60,
+            },
+        )
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
