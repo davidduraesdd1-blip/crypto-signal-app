@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import smtplib
 import threading
 import time
@@ -17,6 +18,17 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
+
+# Audit R2h: redact Telegram/Discord secrets from requests-exception text so
+# a connection failure doesn't dump the full URL (with bot token) to logs.
+_TG_TOKEN_RE = re.compile(r"bot\d+:[A-Za-z0-9_\-]+", re.IGNORECASE)
+_DC_WEBHOOK_RE = re.compile(r"/webhooks/\d+/[A-Za-z0-9_\-]+", re.IGNORECASE)
+
+def _redact_webhook_err(e: BaseException) -> str:
+    _s = str(e)[:400]
+    _s = _TG_TOKEN_RE.sub("bot[REDACTED]", _s)
+    _s = _DC_WEBHOOK_RE.sub("/webhooks/[REDACTED]", _s)
+    return _s
 
 # PERF: reuse TCP connections for Telegram webhook calls
 _SESSION = requests.Session()
@@ -162,7 +174,7 @@ def send_telegram(token: str, chat_id: str, message: str) -> tuple[bool, str | N
             return True, None
         return False, data.get("description", "Unknown Telegram error")
     except Exception as e:
-        logger.warning("[alerts] send_telegram failed: %s", e)
+        logger.warning("[alerts] send_telegram failed: %s", _redact_webhook_err(e))
         return False, "Connection failed — check your bot token and network, then try again."
 
 
@@ -463,7 +475,7 @@ def send_discord(webhook_url: str, message: str) -> tuple[bool, str | None]:
             return True, None
         return False, f"HTTP {resp.status_code} — check your webhook URL is correct."
     except Exception as e:
-        logger.warning("[alerts] send_discord failed: %s", e)
+        logger.warning("[alerts] send_discord failed: %s", _redact_webhook_err(e))
         return False, "Connection failed — check your webhook URL and network, then try again."
 
 
