@@ -1255,6 +1255,64 @@ def _scan_progress():
         st.rerun()  # Full page rerun — shows complete results
 
 
+# ─── Legal / Compliance Copy (R3h Tier-1 ship for April 20) ────────────────────
+
+_PAST_PERF_DISCLAIMER = (
+    "Past performance does not guarantee future results. Backtest and "
+    "signal confidence scores are hypothetical, assume zero-latency "
+    "execution at modelled prices, and do not reflect actual trading. "
+    "Real-world results may differ materially due to slippage, exchange "
+    "fees, funding rates, liquidity, and market volatility. Not investment "
+    "advice."
+)
+
+_LEGAL_TOS = """\
+**Terms of Service — Internal Beta**
+
+This application is an internal beta tool operated by David for evaluation
+purposes. It is not a production service and is not available to the public.
+
+- No formal Terms of Service have been established yet.
+- Use is at the operator's sole discretion and risk.
+- All features are subject to change without notice.
+- No warranty of any kind, express or implied.
+
+Effective: April 2026.
+"""
+
+_LEGAL_PRIVACY = """\
+**Privacy Policy — Internal Beta**
+
+This application is an internal beta tool. It does not collect personally
+identifiable information beyond what the operator voluntarily configures
+(OKX API keys, email settings) for the purpose of operating the tool.
+
+- Credentials are stored locally (see `alerts_config.json` — gitignored).
+  Nothing is transmitted to third parties except via explicit,
+  user-configured API calls (OKX, CoinGecko, Anthropic, etc.) governed
+  by those providers' own privacy policies.
+- No marketing, no analytics, no tracking pixels.
+- Audit logs remain on the operator's local disk.
+
+Effective: April 2026.
+"""
+
+
+def render_past_performance_disclaimer(context: str = "") -> None:
+    """Compact past-performance disclaimer under backtest / signal tables.
+    `context` is an optional short prefix."""
+    _prefix = (context + " ") if context else ""
+    st.caption(f"{_prefix}{_PAST_PERF_DISCLAIMER}")
+
+
+def render_legal_footer() -> None:
+    """Render Terms + Privacy expander (internal-beta stub) in the sidebar."""
+    with st.sidebar.expander("📜 Legal (Internal Beta)", expanded=False):
+        st.markdown(_LEGAL_TOS)
+        st.markdown("---")
+        st.markdown(_LEGAL_PRIVACY)
+
+
 def page_dashboard():
     # ── Welcome banner (item 19 — beginner only, once per session) ────────────
     _ui.render_welcome_banner()
@@ -1388,7 +1446,10 @@ def page_dashboard():
         if st.session_state.get("user_level", "beginner") == "beginner" and not st.session_state.get("scan_run"):
             st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         else:
-            st.info("No scan results yet — click **Run Scan** in the sidebar to begin.")
+            # Audit R3c: there is no "Run Scan" sidebar button — the scan
+            # button lives on the main page. Previous copy sent demo viewers
+            # hunting for a phantom button.
+            st.info("No scan results yet — click **🔍 Analyze All Coins Now** at the top of this page to begin.")
         return  # A4: guard — always return on empty results, prevents results[0] IndexError
 
     # PERF-A8: Inject live WebSocket prices into scan results before rendering.
@@ -7682,3 +7743,14 @@ elif page == "Arbitrage":
     page_arbitrage()
 elif page == "Agent":
     page_agent()
+
+# ── Persistent footer: past-performance disclaimer + legal (R3h Tier-1) ───────
+# Audit R3c HIGH: every main page must carry the disclaimer (compliance red flag
+# for a TAMP demo if absent). Rendered once at the bottom of whichever page
+# just ran above.
+st.markdown("---")
+render_past_performance_disclaimer()
+try:
+    render_legal_footer()
+except Exception:
+    pass
