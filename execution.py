@@ -502,18 +502,46 @@ def build_signal_plan(
     }
 
 
-def execute_signal_plan(plan: dict, continue_on_fail: bool = True) -> dict:
+def execute_signal_plan(
+    plan: dict,
+    continue_on_fail: bool = True,
+    wallet_address: Optional[str] = None,
+) -> dict:
     """
     Execute every included leg of a signal plan.
 
     Args:
         plan:             dry-run output from build_signal_plan()
         continue_on_fail: if True (default), continue past failed legs
+        wallet_address:   cross-app reservation ledger address (Phase 4A-1)
 
     Returns:
         The same dict mutated with per-leg exec_status + aggregate
         success_count / failed_count.
     """
+    # Phase 4A-1: cross-app wallet capacity gate
+    _reservation_id = None
+    if wallet_address:
+        try:
+            from utils_wallet_state import has_capacity, reserve
+            _portfolio_size = float(plan.get("portfolio_size_usd") or 0)
+            _total = float(plan.get("total_notional_usd") or 0)
+            _ok, _reason = has_capacity(wallet_address, _portfolio_size, _total)
+            if not _ok:
+                for lg in plan.get("legs", []):
+                    if lg.get("included"):
+                        lg["exec_status"] = "blocked"
+                        lg["exec_message"] = _reason
+                plan["success_count"] = 0
+                plan["failed_count"] = 0
+                plan["blocked_count"] = plan.get("included_count", 0)
+                return plan
+            _reservation_id = reserve(
+                wallet_address, "supergrok", _total, note="signal_plan"
+            )
+        except Exception as _ws_err:
+            logger.debug("[SignalExec] wallet_state gate skipped: %s", _ws_err)
+
     if plan.get("authorization_tier") == "requires_approval":
         for lg in plan.get("legs", []):
             if lg.get("included"):
@@ -582,6 +610,15 @@ def execute_signal_plan(plan: dict, continue_on_fail: bool = True) -> dict:
     plan["success_count"] = success
     plan["failed_count"]  = failed
     plan["blocked_count"] = 0
+
+    # Phase 4A-1: release the cross-app reservation
+    if _reservation_id and wallet_address:
+        try:
+            from utils_wallet_state import release
+            release(wallet_address, _reservation_id)
+        except Exception as _rel_err:
+            logger.debug("[SignalExec] wallet_state release failed: %s", _rel_err)
+
     return plan
 
 
