@@ -1483,6 +1483,29 @@ def page_dashboard():
     _exec_status = _exec.get_status()
     _exec_cfg    = _exec.get_exec_config()
 
+    # ─── Phase 4A-4: Family-Office Unified Summary PDF ─────────────────────
+    _fo_c1, _fo_c2 = st.columns([3, 2])
+    with _fo_c1:
+        st.markdown("**Family-Office Unified Summary**")
+        st.caption("One-click PDF aggregating DeFi + SuperGrok + RWA state")
+    with _fo_c2:
+        try:
+            from utils_family_office_report import render_pdf as _fo_render
+            _fo_bytes = _fo_render()
+            import datetime as _dtfo
+            st.download_button(
+                "⬇ Download Family-Office PDF",
+                data=_fo_bytes,
+                file_name=f"family_office_summary_{_dtfo.datetime.now(_dtfo.timezone.utc).strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                width='stretch',
+                help="Aggregates state across all 3 apps.",
+                key="btn_family_office_pdf",
+            )
+        except Exception:
+            st.caption("Family-office report temporarily unavailable.")
+
+
     # ─── Phase 2B: One-Click Execute Top Signals ─────────────────────────────
     # Build a dry-run plan from the current scan_results and offer a single
     # button to execute the top-N high-confidence signals through OKX.
