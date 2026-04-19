@@ -7421,7 +7421,7 @@ def page_agent():
     st.title(_ag_title)
     if _ag_lv == "beginner":
         st.caption(
-            "Your AI assistant watches the markets 24/7 and tells you when it thinks there's an opportunity. "
+            "Your AI assistant watches the markets 24/7 while the app is running and tells you when it thinks there's an opportunity. "
             "It never makes trades for you — it only gives you advice, and you decide what to do."
         )
     else:
