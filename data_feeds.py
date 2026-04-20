@@ -4788,13 +4788,24 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
             # IPs (IP-based blocking). Fail fast — no point retrying a 403 3 times.
             resp = _NO_RETRY_SESSION.get(url, params=params, timeout=12)
             if resp.status_code == 403:
-                # Fall through to Blockchain.com fallback below
+                # Fall through to Blockchain.com fallback below. IOError msg
+                # is internal — it's caught + logged, never surfaced to users.
                 raise IOError("CoinMetrics HTTP 403 (IP blocked on cloud hosting)")
             if resp.status_code != 200:
-                return {"error": f"HTTP {resp.status_code}", "source": "coinmetrics"}
+                # Per CLAUDE.md §8: user-facing error is plain English, never
+                # an HTTP code. error_code retained for programmatic handling.
+                return {
+                    "error": "BTC on-chain metrics are temporarily unavailable. Check back in a few minutes.",
+                    "error_code": f"http_{resp.status_code}",
+                    "source": "coinmetrics",
+                }
             rows = resp.json().get("data", [])
             if not rows:
-                return {"error": "empty response", "source": "coinmetrics"}
+                return {
+                    "error": "BTC on-chain metrics are temporarily unavailable. Check back in a few minutes.",
+                    "error_code": "empty_response",
+                    "source": "coinmetrics",
+                }
 
             mvrv_vals, mvrv_dates = [], []
             sopr_vals, sopr_dates = [], []
