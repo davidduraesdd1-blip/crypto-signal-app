@@ -4930,54 +4930,83 @@ def fetch_coinmetrics_onchain(days: int = 400) -> dict:
                 "error":               None,
             }
         except Exception as e:
-            logging.debug("[CoinMetrics] onchain fetch failed: %s — trying Blockchain.com fallback", e)
-            # ── Blockchain.com fallback: MVRV + active addresses (free, US-accessible) ──
-            # timespan=all requests full history so the Z-score normalization can
-            # match the primary CoinMetrics path (all-time mean/stdev) rather than
-            # a 2-year rolling window. Otherwise fallback Z-scores are miscalibrated
-            # against the published thresholds (Dec 2017 top Z≈9.5, Apr 2021 Z≈8.0).
+            logging.debug("[CoinMetrics] onchain fetch failed: %s — trying Blockchain.com fallback", type(e).__name__)
+            # ── Blockchain.com fallback ──────────────────────────────────────
+            # Historical note (fixed 2026-04-19): the previous fallback queried
+            # /charts/mvrv which Blockchain.com deprecated — endpoint now 404s,
+            # so this whole fallback was silently broken until today. No free
+            # source offers raw MVRV or SOPR. Blockchain.com DOES still serve
+            # hash-rate, miners-revenue, and n-unique-addresses, which lets us
+            # compute Hash Ribbons (Charles Edwards, 2019) and Puell Multiple
+            # (David Puell, 2019) plus active-address count. MVRV/SOPR return
+            # None with signal="—" — UI renders "—" cleanly.
             try:
-                _bc_mvrv_url = "https://api.blockchain.info/charts/mvrv?format=json&timespan=all&sampled=true&cors=true"
-                _bc_addr_url = "https://api.blockchain.info/charts/n-unique-addresses?format=json&timespan=30days&cors=true"
-                _r_mvrv = _NO_RETRY_SESSION.get(_bc_mvrv_url, timeout=8)
-                _r_addr = _NO_RETRY_SESSION.get(_bc_addr_url, timeout=8)
-                _mvrv_vals, _mvrv_dates = [], []
-                _active_addrs = None
-                if _r_mvrv.status_code == 200:
-                    for _pt in _r_mvrv.json().get("values", []):
+                def _fetch_chart(name: str, timespan: str = "2years"):
+                    _url = f"https://api.blockchain.info/charts/{name}?format=json&timespan={timespan}&sampled=true&cors=true"
+                    _r = _NO_RETRY_SESSION.get(_url, timeout=8)
+                    if _r.status_code != 200:
+                        return []
+                    _pts = []
+                    for pt in _r.json().get("values", []):
                         try:
-                            _mvrv_vals.append(float(_pt["y"]))
-                            _mvrv_dates.append(str(_pt["x"])[:10])
+                            _pts.append((int(pt["x"]), float(pt["y"])))
                         except Exception:
                             pass
-                if _r_addr.status_code == 200:
-                    _pts = _r_addr.json().get("values", [])
-                    if _pts:
-                        _active_addrs = int(_pts[-1]["y"])
-                if not _mvrv_vals:
-                    return {"error": str(e), "source": "coinmetrics"}
-                import statistics as _stats
-                # All-time normalization (matches primary CoinMetrics path at line 4846).
-                # Previously used last 365 days only, which produced Z-scores incompatible
-                # with the published Glassnode thresholds. Now consistent across both paths.
-                _cur_mvrv = _mvrv_vals[-1]
-                _mean_mv  = _stats.mean(_mvrv_vals)
-                _std_mv   = _stats.stdev(_mvrv_vals) if len(_mvrv_vals) > 1 else 1.0
-                _mvrv_z   = round((_cur_mvrv - _mean_mv) / max(_std_mv, 1e-6), 2)
-                if _mvrv_z < 0.0:   _mvrv_sig = "UNDERVALUED"
-                elif _mvrv_z < 1.5: _mvrv_sig = "FAIR_VALUE"
-                elif _mvrv_z < 3.0: _mvrv_sig = "OVERVALUED"
-                else:               _mvrv_sig = "EXTREME_HEAT"
+                    return _pts
+                _hash_pts = _fetch_chart("hash-rate",          "2years")
+                _rev_pts  = _fetch_chart("miners-revenue",     "2years")
+                _addr_pts = _fetch_chart("n-unique-addresses", "30days")
+                if not _hash_pts and not _rev_pts and not _addr_pts:
+                    return {
+                        "error": "BTC on-chain metrics are temporarily unavailable. Check back in a few minutes.",
+                        "error_code": "all_sources_failed",
+                        "source": "coinmetrics",
+                    }
+                # Hash Ribbons — match primary CoinMetrics signal values
+                _hash_signal, _hash_ma_30, _hash_ma_60 = "—", None, None
+                if len(_hash_pts) >= 61:
+                    _hv = [v for _, v in _hash_pts]
+                    _hash_ma_30 = sum(_hv[-30:]) / 30
+                    _hash_ma_60 = sum(_hv[-60:]) / 60
+                    _p30 = sum(_hv[-31:-1]) / 30
+                    _p60 = sum(_hv[-61:-1]) / 60
+                    if _hash_ma_30 >= _hash_ma_60 and _p30 < _p60:   _hash_signal = "BUY"
+                    elif _hash_ma_30 < _hash_ma_60 and _p30 >= _p60: _hash_signal = "CAPITULATION_START"
+                    elif _hash_ma_30 >= _hash_ma_60:                 _hash_signal = "RECOVERY"
+                    else:                                             _hash_signal = "CAPITULATION"
+                # Puell Multiple — match primary CoinMetrics signal values
+                _puell_val, _puell_sig = None, "—"
+                if len(_rev_pts) >= 365:
+                    _rv = [v for _, v in _rev_pts]
+                    _ma365 = sum(_rv[-365:]) / 365
+                    if _ma365 > 0:
+                        _puell_val = round(_rv[-1] / _ma365, 3)
+                        if _puell_val < 0.5:   _puell_sig = "EXTREME_BOTTOM"
+                        elif _puell_val < 1.0: _puell_sig = "ACCUMULATION"
+                        elif _puell_val < 2.0: _puell_sig = "FAIR_VALUE"
+                        elif _puell_val < 3.0: _puell_sig = "DISTRIBUTION"
+                        else:                  _puell_sig = "EXTREME_TOP"
+                _active_addrs = int(_addr_pts[-1][1]) if _addr_pts else None
                 return {
-                    "mvrv_ratio": round(_cur_mvrv, 3), "mvrv_z": _mvrv_z,
-                    "mvrv_signal": _mvrv_sig, "realized_cap": None,
-                    "sopr": None, "sopr_signal": "N/A",
-                    "active_addresses": _active_addrs, "nupl": None, "nupl_signal": "N/A",
-                    "hash_ribbon_signal": "N/A", "puell_multiple": None, "puell_signal": "N/A",
-                    "mvrv_history": {_mvrv_dates[i]: round(_mvrv_vals[i], 3) for i in range(len(_mvrv_dates))},
-                    "sopr_history": {},
-                    "source": "blockchain_com", "error": None,
-                    "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    "mvrv_ratio":         None,
+                    "mvrv_z":             None,
+                    "mvrv_signal":        "N/A",
+                    "realized_cap":       None,
+                    "sopr":               None,
+                    "sopr_signal":        "N/A",
+                    "active_addresses":   _active_addrs,
+                    "nupl":               None,
+                    "nupl_signal":        "N/A",
+                    "hash_ribbon_signal": _hash_signal,
+                    "hash_ma_30":         round(_hash_ma_30, 2) if _hash_ma_30 is not None else None,
+                    "hash_ma_60":         round(_hash_ma_60, 2) if _hash_ma_60 is not None else None,
+                    "puell_multiple":     _puell_val,
+                    "puell_signal":       _puell_sig,
+                    "mvrv_history":       {},
+                    "sopr_history":       {},
+                    "source":             "blockchain_com",
+                    "error":              None,
+                    "timestamp":          _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 }
             except Exception as e2:
                 logging.debug("[OnChain] Blockchain.com fallback also failed: %s", e2)
