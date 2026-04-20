@@ -766,7 +766,12 @@ def _sg_sidebar_progress():
             _eta_str = "almost done…"
     _pair_escaped = _html.escape(str(_pair))
     _eta_escaped = _html.escape(_eta_str)
-    st.sidebar.markdown(
+    # IMPORTANT (fixed 2026-04-20): must use st.markdown here (NOT
+    # st.sidebar.markdown). Streamlit raises StreamlitAPIException when a
+    # @st.fragment calls st.sidebar.* directly — the prescribed pattern is
+    # to wrap the fragment *call* in a `with st.sidebar:` context (done
+    # below) and have the fragment body emit to the current container.
+    st.markdown(
         f"""
 <div style="margin:8px 0 12px 0; padding:10px 12px; border-radius:8px;
             border:1px solid rgba(0,212,170,0.25);
@@ -796,7 +801,10 @@ def _sg_sidebar_progress():
 
 
 try:
-    _sg_sidebar_progress()
+    # Call the fragment inside a sidebar context so its markdown output lands
+    # in the sidebar (see fragment body note above).
+    with st.sidebar:
+        _sg_sidebar_progress()
 except Exception as _sg_sp_err:
     logger.debug("[App] sidebar progress render failed: %s", _sg_sp_err)
 
