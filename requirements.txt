@@ -12,6 +12,11 @@ statsmodels>=0.14.0
 apscheduler>=3.10.0
 optuna>=3.0.0
 reportlab>=4.0.0
+# fpdf2 — used by utils_family_office_report.py for the family-office PDF.
+# Without this the render_pdf() ImportError path returns plain-text bytes
+# with a .pdf filename, which Adobe refuses to open as "not a supported
+# file type" (reproduced 2026-04-20).
+fpdf2>=2.7.9
 anthropic>=0.40.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
