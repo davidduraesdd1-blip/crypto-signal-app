@@ -1513,21 +1513,78 @@ def page_dashboard():
             ],
         )
         # Macro strip — mirrors the mockup's 5-col strip with real data.
-        # Every call below is cached (_cached_global_market TTL 300s,
-        # _cached_macro_enrichment cached in data_feeds) so we don't add any
-        # fetch cost over the existing dashboard.
+        # Pulls from LIVE data-source functions directly (each already cached
+        # at the data_feeds module level) — no dependency on a scan having
+        # been run. Fills BTC Dom / F&G / DXY / Funding / Regime on page
+        # load for every user, every visit.
         try:
             _gm = _cached_global_market() or {}
             _me = _cached_macro_enrichment() or {}
+
+            # Direct live feeds (bypass scan-only enrichment cache)
+            _fng_dict = {}
+            _dxy_val = None
+            _dxy_30d = None
+            _funding_val = None
+            try:
+                _fng_dict = data_feeds.get_fear_greed() or {}
+            except Exception as _e_fng:
+                logger.debug("[Dashboard] F&G live fetch failed: %s", _e_fng)
+            try:
+                _yf = data_feeds.fetch_yfinance_macro() or {}
+                _dxy_val = _yf.get("dxy")
+                _dxy_30d = _yf.get("dxy_30d_change_pct") or _yf.get("dxy_30d_ret_pct")
+            except Exception as _e_yf:
+                logger.debug("[Dashboard] yfinance macro fetch failed: %s", _e_yf)
+            try:
+                _fr = data_feeds.get_funding_rate("BTC/USDT") or {}
+                _funding_val = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+            except Exception as _e_fr:
+                logger.debug("[Dashboard] funding rate fetch failed: %s", _e_fr)
+
             _btc_dom = _gm.get("btc_dominance_pct", _gm.get("btc_dominance"))
             _btc_dom_7d = _gm.get("btc_dominance_7d_change_pct", _gm.get("btc_dominance_7d_ppt"))
-            _fng = _me.get("fng_value", _me.get("fng") or {}).get("value") if isinstance(_me.get("fng"), dict) else _me.get("fng_value")
-            _fng_cat = _me.get("fng_category", _me.get("fng_classification", ""))
-            _dxy = _me.get("dxy")
-            _dxy_30d = _me.get("dxy_30d_change_pct")
-            _funding = _me.get("btc_funding_rate_pct", _me.get("funding_btc"))
+
+            # F&G from direct feed first, fall back to macro enrichment
+            _fng = _fng_dict.get("value")
+            _fng_cat = _fng_dict.get("label")
+            if _fng is None:
+                _fng = _me.get("fng_value")
+                _fng_cat = _me.get("fng_category", _me.get("fng_classification", ""))
+
+            # DXY fallback chain: yfinance → macro enrichment
+            if _dxy_val is None:
+                _dxy_val = _me.get("dxy")
+            if _dxy_30d is None:
+                _dxy_30d = _me.get("dxy_30d_change_pct")
+
+            # Funding fallback chain: direct → macro enrichment
+            if _funding_val is None:
+                _funding_val = _me.get("btc_funding_rate_pct", _me.get("funding_btc"))
+
+            _dxy = _dxy_val
+            _funding = _funding_val
             _macro_regime = _me.get("macro_regime", _me.get("macro_regime_label", "—"))
             _macro_conf = _me.get("macro_regime_confidence_pct", _me.get("macro_confidence"))
+
+            # Derive macro regime from raw indicators if enrichment hasn't run
+            if (_macro_regime in (None, "—", "")) or _macro_conf is None:
+                try:
+                    _risk_score = 0
+                    if _fng is not None:
+                        _risk_score += 1 if int(_fng) >= 55 else (-1 if int(_fng) <= 30 else 0)
+                    if _dxy_30d is not None:
+                        _risk_score += 1 if float(_dxy_30d) < 0 else -1
+                    if _funding is not None:
+                        _risk_score += 1 if float(_funding) > 0 else -1
+                    if _risk_score >= 2:
+                        _macro_regime, _macro_conf = "Risk-on", 72
+                    elif _risk_score <= -2:
+                        _macro_regime, _macro_conf = "Risk-off", 68
+                    else:
+                        _macro_regime, _macro_conf = "Mixed", 55
+                except Exception:
+                    pass
             def _fmt_pct(v, decimals=2, prefix=True):
                 if v is None:
                     return "—"
@@ -1585,13 +1642,36 @@ def page_dashboard():
             regime_cards_grid as _ds_regimes,
         )
 
+        # Lazy-load recent signals from DB so the hero cards have signal +
+        # regime info even on a fresh page load where no scan has been
+        # triggered in the current session. _cached_signals_df is already
+        # st.cache_data-wrapped (TTL controlled upstream).
+        _ds_db_signals = None
+        try:
+            _ds_db_signals = _cached_signals_df(500)
+        except Exception as _e_sig:
+            logger.debug("[Dashboard] could not load signals DF for hero cards: %s", _e_sig)
+
         def _ds_latest_result_for_pair(target_pair: str) -> dict:
-            """Return the most recent scan result for a given pair (case-insensitive, slash or dash)."""
+            """Return the most recent scan result for a given pair (case-insensitive, slash or dash).
+            Falls back to the daily_signals DB when session state is empty."""
             norm = target_pair.upper().replace("/", "").replace("-", "")
+            # 1. Current session scan results
             for r in (st.session_state.get("scan_results") or []):
                 pr = str(r.get("pair") or r.get("symbol") or "").upper().replace("/", "").replace("-", "")
                 if pr.startswith(norm):
                     return r
+            # 2. DB fallback — most recent row for the pair
+            if _ds_db_signals is not None and not _ds_db_signals.empty:
+                try:
+                    _df = _ds_db_signals
+                    _df_pair_norm = _df["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+                    _hits = _df[_df_pair_norm.str.startswith(norm)]
+                    if not _hits.empty:
+                        _row = _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
+                        return _row
+                except Exception as _e_db:
+                    logger.debug("[Dashboard] signals DB lookup for %s failed: %s", target_pair, _e_db)
             return {}
 
         def _ds_signal_label(r: dict) -> str:
@@ -1697,13 +1777,36 @@ def page_dashboard():
                 except Exception:
                     _scan_ts_label = "recent"
 
-            # Backtest KPIs — pull from session_state if available
+            # Backtest KPIs — session_state first, then compute from the
+            # backtest_trades DB table so the preview card fills in even
+            # without a manual run triggered this session.
             _bt_sess = st.session_state.get("backtest_results") or {}
             _bt_m = (_bt_sess or {}).get("metrics") or {}
             _bt_tr = _bt_m.get("total_return")
             _bt_dd = _bt_m.get("max_drawdown")
             _bt_sh = _bt_m.get("sharpe")
             _bt_wr = _bt_m.get("win_rate")
+            _bt_ntr = _bt_m.get("total_trades", 0)
+
+            if _bt_tr is None:
+                try:
+                    _bt_df = _cached_backtest_df()
+                    if _bt_df is not None and not _bt_df.empty:
+                        _pnl = _bt_df.get("pnl_pct")
+                        if _pnl is not None and len(_pnl) > 0:
+                            _bt_tr = float(_pnl.sum())
+                            _bt_wr = float((_pnl > 0).mean() * 100.0)
+                            _bt_ntr = int(len(_pnl))
+                            # Equity-curve-based max drawdown (rough)
+                            _eq = (1.0 + _pnl / 100.0).cumprod()
+                            _peak = _eq.cummax()
+                            _bt_dd = float(((_eq - _peak) / _peak * 100.0).min())
+                            # Sharpe approx — mean/std of per-trade returns
+                            _std = float(_pnl.std())
+                            if _std > 0:
+                                _bt_sh = float(_pnl.mean() / _std)
+                except Exception as _e_bt:
+                    logger.debug("[Dashboard] backtest DB fallback failed: %s", _e_bt)
             def _ds_pct(v, signed=False):
                 if v is None:
                     return "—"
@@ -1716,12 +1819,12 @@ def page_dashboard():
                 except Exception:
                     return "—"
             _ds_kpis = [
-                ("Return (90d)", _ds_pct(_bt_tr, signed=True),
-                 "vs BTC benchmark" if _bt_tr is not None else "Run backtest to populate",
+                ("Return", _ds_pct(_bt_tr, signed=True),
+                 "cumulative across all trades" if _bt_tr is not None else "Run backtest to populate",
                  "up" if (_bt_tr is not None and float(_bt_tr) > 0) else ("down" if _bt_tr is not None and float(_bt_tr) < 0 else "")),
                 ("Max drawdown", _ds_pct(_bt_dd, signed=True), "peak → trough", ""),
-                ("Sharpe", f"{float(_bt_sh):.2f}" if _bt_sh is not None else "—", "risk-free 4.5%", ""),
-                ("Win rate", _ds_pct(_bt_wr), f"n={int(_bt_m.get('total_trades', 0))} trades" if _bt_m.get("total_trades") else "no runs yet", ""),
+                ("Sharpe", f"{float(_bt_sh):.2f}" if _bt_sh is not None else "—", "per-trade basis", ""),
+                ("Win rate", _ds_pct(_bt_wr), f"n={int(_bt_ntr)} trades" if _bt_ntr else "no runs yet", ""),
             ]
 
             _ds_col1, _ds_col2 = st.columns(2)
@@ -1742,12 +1845,10 @@ def page_dashboard():
     except Exception as _ds_hero_err:
         logger.debug("[App] hero signal cards render failed: %s", _ds_hero_err)
 
-    # Legacy section header — kept as a lightweight divider below the new hero
-    # cards so the existing scan/FNG controls that follow still have context.
+    # Lightweight divider between the mockup cards above and the scan controls
+    # below. Renders as a thin 24px top-margin line instead of an h2.
     st.markdown(
-        '<h2 class="ds-legacy-divider" style="color:var(--text-primary);font-size:18px;'
-        'font-weight:600;letter-spacing:-0.01em;margin:24px 0 12px 0;">'
-        'Full scan controls</h2>',
+        '<div style="height:1px;background:var(--border);margin:24px 0 16px 0;"></div>',
         unsafe_allow_html=True,
     )
     # Animated live price ticker strip — SUPPRESSED in 2026-05 redesign.
@@ -1812,8 +1913,13 @@ def page_dashboard():
         if st.session_state.get("scan_timestamp"):
             st.caption(f"Last scan: {st.session_state['scan_timestamp']}")
 
-    # ── Fear & Greed trend — Now / 7-day avg / 30-day avg (item 26) ──────────
-    _ui.render_fear_greed_trend_sg(user_level=st.session_state.get("user_level", "beginner"))
+    # ── Fear & Greed trend — SUPPRESSED in 2026-05 redesign.
+    # The mockup's macro strip (rendered above by _ds_macro_strip) already
+    # shows the current Fear & Greed value alongside BTC dominance, DXY,
+    # funding, and macro regime. The 3-card legacy widget duplicated that.
+    # Opt back in via st.session_state["show_legacy_fng_trend"] = True.
+    if st.session_state.get("show_legacy_fng_trend", False):
+        _ui.render_fear_greed_trend_sg(user_level=st.session_state.get("user_level", "beginner"))
 
     # Progress bar while scanning — check in-memory state first (PERF-30), fall back to SQLite
     with _scan_lock:
@@ -1867,13 +1973,17 @@ def page_dashboard():
     else:
         results = st.session_state.get("scan_results", [])
     if not results:
-        if st.session_state.get("user_level", "beginner") == "beginner" and not st.session_state.get("scan_run"):
+        # 2026-05 redesign: the legacy beginner_welcome_html block
+        # (3-column "Run the Scan / Read the Results / Do Your Research"
+        # onboarding + oversized risk warning) duplicated content already
+        # present in the new page_header + hero cards + welcome banner above.
+        # Replaced by a single-line info caption.
+        if st.session_state.get("show_legacy_beginner_welcome", False) and \
+           st.session_state.get("user_level", "beginner") == "beginner" and \
+           not st.session_state.get("scan_run"):
             st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         else:
-            # Audit R3c: there is no "Run Scan" sidebar button — the scan
-            # button lives on the main page. Previous copy sent demo viewers
-            # hunting for a phantom button.
-            st.info("No scan results yet — click **🔍 Analyze All Coins Now** at the top of this page to begin.")
+            st.info("No scan results yet — click **🔍 Analyze All Coins Now** above to run a full market scan (~15-30s).")
         return  # A4: guard — always return on empty results, prevents results[0] IndexError
 
     # PERF-A8: Inject live WebSocket prices into scan results before rendering.
