@@ -265,3 +265,260 @@ def macro_strip(items: Sequence[tuple[str, str, str]]) -> None:
         f'<div class="ds-card ds-strip">{"".join(cells)}</div>',
         unsafe_allow_html=True,
     )
+
+
+# ── Hero signal cards ─────────────────────────────────────────────────
+
+def hero_signal_card_html(
+    ticker: str,
+    price: float | None,
+    change_pct: float | None,
+    signal: Literal["BUY", "HOLD", "SELL", None] = None,
+    regime_label: str = "",
+    regime_confidence: float | None = None,
+) -> str:
+    """Return HTML for a single hero signal card (matches Home mockup)."""
+    # Format price
+    if price is None:
+        price_str = "—"
+    elif price >= 1000:
+        price_str = f"{price:,.0f}"
+    elif price >= 10:
+        price_str = f"{price:,.2f}"
+    else:
+        price_str = f"{price:,.4f}"
+
+    # Format change
+    if change_pct is None:
+        change_cls = ""
+        change_str = "—"
+    elif change_pct > 0:
+        change_cls = "up"
+        change_str = f"+ {change_pct:.2f}% · 24h"
+    elif change_pct < 0:
+        change_cls = "down"
+        change_str = f"− {abs(change_pct):.2f}% · 24h"
+    else:
+        change_cls = ""
+        change_str = "0.00% · 24h"
+
+    # Signal badge (shape + color — matches mockup + CLAUDE.md §8 color-blind rule)
+    badge_html = ""
+    if signal in ("BUY", "HOLD", "SELL"):
+        shape, css_class, label = {
+            "BUY":  ("▲", "ds-sb-buy",  "Buy"),
+            "HOLD": ("■", "ds-sb-hold", "Hold"),
+            "SELL": ("▼", "ds-sb-sell", "Sell"),
+        }[signal]
+        badge_html = f'<span class="ds-signal-badge {css_class}">{shape} {label}</span>'
+
+    # Regime line
+    regime_html = ""
+    if regime_label:
+        conf_txt = f" · {int(regime_confidence)}% conf" if regime_confidence is not None else ""
+        regime_html = (
+            f'<div class="ds-regime"><span class="dot"></span> '
+            f'Regime: {regime_label}{conf_txt}</div>'
+        )
+
+    return f"""
+    <div class="ds-card ds-signal-hero">
+      <div class="ds-signal-lhs">
+        <div class="ds-signal-ticker">{ticker}</div>
+        <div class="ds-signal-big">{price_str}</div>
+        <div class="ds-signal-change {change_cls}">{change_str}</div>
+      </div>
+      <div class="ds-signal-rhs">
+        {badge_html}
+        {regime_html}
+      </div>
+    </div>
+    """
+
+
+def hero_signal_cards_row(cards: Sequence[dict]) -> None:
+    """
+    Render a 3-col row of hero signal cards.
+    Each card dict keys: ticker, price, change_pct, signal, regime_label, regime_confidence.
+    """
+    if st is None:
+        return
+    html = "".join(
+        hero_signal_card_html(
+            ticker=c.get("ticker", "—"),
+            price=c.get("price"),
+            change_pct=c.get("change_pct"),
+            signal=c.get("signal"),
+            regime_label=c.get("regime_label", ""),
+            regime_confidence=c.get("regime_confidence"),
+        )
+        for c in cards
+    )
+    st.markdown(
+        f'<div class="ds-hero-grid">{html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Watchlist ─────────────────────────────────────────────────────────
+
+def watchlist_card(
+    title: str,
+    subtitle: str,
+    rows: Sequence[dict],
+) -> None:
+    """Render the 2-col watchlist card from the Home mockup.
+    Each row dict: ticker, price, change_pct, spark_points (list of (x, y) tuples).
+    """
+    if st is None:
+        return
+    row_html = []
+    for r in rows:
+        ticker = r.get("ticker", "—")
+        price = r.get("price")
+        change = r.get("change_pct")
+        if price is None:
+            price_str = "—"
+        elif price >= 1000:
+            price_str = f"${price:,.0f}"
+        elif price >= 10:
+            price_str = f"${price:,.2f}"
+        else:
+            price_str = f"${price:,.4f}"
+        if change is None:
+            change_cls, change_str = "", "—"
+        elif change > 0:
+            change_cls, change_str = "up", f"+{change:.2f}%"
+        elif change < 0:
+            change_cls, change_str = "down", f"−{abs(change):.2f}%"
+        else:
+            change_cls, change_str = "", "0.00%"
+        spark_points = r.get("spark_points") or []
+        if spark_points:
+            stroke = "#22c55e" if (change is not None and change >= 0) else "#ef4444"
+            pts = " ".join(f"{x},{y}" for x, y in spark_points)
+            spark = (
+                f'<svg class="ds-spark" viewBox="0 0 80 22" preserveAspectRatio="none">'
+                f'<polyline fill="none" stroke="{stroke}" stroke-width="1.5" points="{pts}"/>'
+                f"</svg>"
+            )
+        else:
+            spark = '<svg class="ds-spark" viewBox="0 0 80 22"></svg>'
+        row_html.append(
+            f'<div class="ds-wl-row">'
+            f'<div class="t">{ticker}</div>'
+            f'<div class="p">{price_str}</div>'
+            f'<div class="d {change_cls}">{change_str}</div>'
+            f"{spark}"
+            f"</div>"
+        )
+    st.markdown(
+        f"""
+        <div class="ds-card">
+          <div class="ds-card-hd">
+            <div class="ds-card-title">{title}</div>
+            <div class="ds-card-sub">{subtitle}</div>
+          </div>
+          <div class="ds-watchlist">{"".join(row_html)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ── Backtest preview card (4-KPI grid) ────────────────────────────────
+
+def backtest_preview_card(
+    title: str,
+    subtitle: str,
+    kpis: Sequence[tuple[str, str, str, str]],
+) -> None:
+    """Render the 2×2 KPI grid shown next to the Watchlist on Home.
+    Each kpi: (label, value, delta_text, delta_direction ∈ {up, down, ""}).
+    """
+    if st is None:
+        return
+    cells = []
+    for label, value, delta_text, direction in kpis:
+        dc = f" {direction}" if direction in ("up", "down") else ""
+        val_color = ""
+        if direction == "up":
+            val_color = ' style="color: var(--success);"'
+        elif direction == "down":
+            val_color = ' style="color: var(--danger);"'
+        cells.append(
+            f'<div class="ds-kpi">'
+            f'<div class="ds-kpi-label">{label}</div>'
+            f'<div class="ds-kpi-value"{val_color}>{value}</div>'
+            f'<div class="ds-kpi-delta{dc}">{delta_text}</div>'
+            f"</div>"
+        )
+    st.markdown(
+        f"""
+        <div class="ds-card">
+          <div class="ds-card-hd">
+            <div class="ds-card-title">{title}</div>
+            <div class="ds-card-sub">{subtitle}</div>
+          </div>
+          <div class="ds-kpi-grid">{"".join(cells)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ── Regime card ───────────────────────────────────────────────────────
+
+REGIME_VARIANT = {
+    "bull":         "bull",
+    "bullish":      "bull",
+    "bear":         "bear",
+    "bearish":      "bear",
+    "transition":   "trans",
+    "trans":        "trans",
+    "accumulation": "accum",
+    "accum":        "accum",
+    "distribution": "dist",
+    "dist":         "dist",
+}
+
+
+def regime_card_html(
+    ticker: str,
+    state: str,
+    confidence: float | None = None,
+    since: str = "",
+) -> str:
+    """Return HTML for a single regime card. state maps to bull/bear/trans/accum/dist."""
+    variant = REGIME_VARIANT.get(str(state).strip().lower(), "trans")
+    conf = f"confidence {int(confidence)}%" if confidence is not None else ""
+    since_html = f'<div class="since">{since}</div>' if since else ""
+    return f"""
+    <div class="ds-card ds-rgm {variant}">
+      <div class="t">{ticker}</div>
+      <div class="state">{state}</div>
+      <div class="conf">{conf}</div>
+      {since_html}
+    </div>
+    """
+
+
+def regime_cards_grid(cards: Sequence[dict], cols: int = 4) -> None:
+    """Render a grid of regime cards.
+    Each card dict: ticker, state, confidence, since.
+    """
+    if st is None:
+        return
+    html = "".join(
+        regime_card_html(
+            ticker=c.get("ticker", "—"),
+            state=c.get("state", "Transition"),
+            confidence=c.get("confidence"),
+            since=c.get("since", ""),
+        )
+        for c in cards
+    )
+    st.markdown(
+        f'<div class="ds-grid ds-cols-{cols}">{html}</div>',
+        unsafe_allow_html=True,
+    )

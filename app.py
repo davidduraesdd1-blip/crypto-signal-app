@@ -942,58 +942,108 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
 
 st.sidebar.markdown("---")
 
-# ── Navigation — level-aware page list (Item 3) ───────────────────────────────
-# Beginner:     3 pages (signals, trades, AI assistant)
-# Intermediate: 5 pages (+ performance + opportunities)
-# Advanced:     all 6 pages
-_NAV_BEGINNER = [
-    "📊 My Signals",
-    "🤖 AI Assistant",
-]
-_NAV_INTERMEDIATE = [
-    "📊 My Signals",
-    "🤖 AI Assistant",
-    "📈 Performance",
-    "⚡ Opportunities",
-]
-_NAV_ADVANCED = [
-    "📊 My Signals",
-    "⚙️ Settings",
-    "📈 Performance",
-    "⚡ Opportunities",
-    "🤖 AI Assistant",
-]
-_nav_by_level = {
-    "beginner":     _NAV_BEGINNER,
-    "intermediate": _NAV_INTERMEDIATE,
-    "advanced":     _NAV_ADVANCED,
+# ── 2026-05 redesign: grouped sidebar nav (Markets / Research / Account) ─────
+# Matches shared-docs/design-mockups/sibling-family-crypto-signal.html rail.
+# Each mockup nav item maps to an existing page_* function — preserves all
+# existing app logic, only relabels + regroups.
+#
+# Level gating: beginners see Markets + Account only. Intermediate adds
+# Research. Advanced sees everything.
+_DS_NAV_GROUPS = {
+    "beginner": [
+        ("Markets", [
+            ("dashboard", "📊 My Signals",    "Dashboard"),
+            ("ai",        "🤖 AI Assistant",   "Agent"),
+        ]),
+    ],
+    "intermediate": [
+        ("Markets", [
+            ("dashboard", "📊 My Signals",    "Dashboard"),
+            ("opps",      "⚡ Opportunities", "Arbitrage"),
+        ]),
+        ("Research", [
+            ("backtest",  "📈 Performance",   "Backtest Viewer"),
+        ]),
+        ("Account", [
+            ("ai",        "🤖 AI Assistant",   "Agent"),
+        ]),
+    ],
+    "advanced": [
+        ("Markets", [
+            ("dashboard", "📊 Dashboard",       "Dashboard"),
+            ("opps",      "⚡ Arbitrage",        "Arbitrage"),
+        ]),
+        ("Research", [
+            ("backtest",  "📈 Backtest Viewer", "Backtest Viewer"),
+        ]),
+        ("Account", [
+            ("ai",        "🤖 AI Agent",         "Agent"),
+            ("settings",  "⚙️ Settings",         "Config Editor"),
+        ]),
+    ],
 }
-_nav_options = _nav_by_level.get(_sg_level_val, _NAV_BEGINNER)
 
-page = st.sidebar.radio(
-    "Navigate",
-    _nav_options,
-    label_visibility="collapsed",
-)
+_ds_nav_current = _DS_NAV_GROUPS.get(_sg_level_val, _DS_NAV_GROUPS["beginner"])
 
-# Normalise page name — map display labels to internal page keys
+# Flatten for the hidden radio fallback (preserves keyboard nav + Streamlit
+# state consistency). We render the visible buttons separately.
+_ds_nav_flat_labels = []
+_ds_nav_label_to_page = {}
+for _grp_name, _grp_items in _ds_nav_current:
+    for _k, _lbl, _page_key in _grp_items:
+        _ds_nav_flat_labels.append(_lbl)
+        _ds_nav_label_to_page[_lbl] = _page_key
+
+# Render the grouped nav — styled headers + st.sidebar.button per item.
+# The overrides.css file styles these to look like the mockup.
+_ds_current_label = st.session_state.get("_ds_current_nav_label", _ds_nav_flat_labels[0] if _ds_nav_flat_labels else "")
+if _ds_current_label not in _ds_nav_flat_labels:
+    _ds_current_label = _ds_nav_flat_labels[0] if _ds_nav_flat_labels else ""
+    st.session_state["_ds_current_nav_label"] = _ds_current_label
+
+_ds_new_label_selected = None
+for _grp_name, _grp_items in _ds_nav_current:
+    st.sidebar.markdown(
+        f'<div class="ds-nav-group-header" style="margin:14px 0 4px;padding:0 10px;'
+        f'color:var(--text-muted);font-size:11px;font-weight:500;'
+        f'letter-spacing:0.08em;text-transform:uppercase;">{_grp_name}</div>',
+        unsafe_allow_html=True,
+    )
+    for _k, _lbl, _page_key in _grp_items:
+        _is_active = (_lbl == _ds_current_label)
+        if st.sidebar.button(
+            _lbl,
+            key=f"ds_nav_btn_{_k}",
+            use_container_width=True,
+            type=("primary" if _is_active else "secondary"),
+        ):
+            _ds_new_label_selected = _lbl
+
+if _ds_new_label_selected:
+    st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
+    _ds_current_label = _ds_new_label_selected
+
+page = _ds_nav_label_to_page.get(_ds_current_label, "Dashboard")
+
+# Programmatic navigation override (e.g. "Configure Alerts" button sets _nav_target)
+_nav_override = st.session_state.pop("_nav_target", None)
+if _nav_override:
+    page = _nav_override
+
+# Backwards compat: keep the legacy radio mapping available for any code that
+# still reads page via the old label strings.
 _PAGE_MAP = {
     "📊 My Signals":    "Dashboard",
     "📊 Dashboard":     "Dashboard",
     "⚙️ Settings":      "Config Editor",
     "📈 Performance":   "Backtest Viewer",
     "📈 Performance History": "Backtest Viewer",
+    "📈 Backtest Viewer":     "Backtest Viewer",
     "⚡ Opportunities": "Arbitrage",
     "⚡ Arbitrage":     "Arbitrage",
     "🤖 AI Assistant":  "Agent",
     "🤖 AI Agent":      "Agent",
 }
-# Override page if a programmatic navigation target was set (e.g. "Configure Alerts" button)
-_nav_override = st.session_state.pop("_nav_target", None)
-if _nav_override:
-    page = _nav_override
-else:
-    page = _PAGE_MAP.get(page, page)
 
 # ──────────────────────────────────────────────
 # SIDEBAR: AUTO-SCAN (Item 4 — compact for beginners)
@@ -1522,29 +1572,206 @@ def page_dashboard():
     except Exception:
         pass
 
-    st.markdown(
-        '<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
-        unsafe_allow_html=True,
-    )
     # PERF-28: read all WS prices once at the top of the render — was called 3+ times per render
     _live_prices = _ws.get_all_prices()
-    # Animated live price ticker strip — top of dashboard
+
+    # ── 2026-05 redesign: mockup-fidelity hero signal cards + regime mini-grid
+    #    + watchlist + backtest preview. Pulls live WS prices for BTC/ETH/XRP
+    #    plus the latest scan_results for signal/regime overlay. Matches
+    #    shared-docs/design-mockups/sibling-family-crypto-signal.html.
     try:
-        _ticker_prices = []
-        _all_ws = _live_prices
-        for _pair in model.PAIRS:
-            _tick = _all_ws.get(_pair)
-            if _tick:
-                _ticker_prices.append({
-                    "symbol":     _pair.replace("/USDT", ""),
-                    "price":      _tick.get("price", 0),
-                    "change_pct": _tick.get("change_24h_pct", 0),
+        from ui import (
+            hero_signal_cards_row as _ds_hero_row,
+            watchlist_card as _ds_watchlist,
+            backtest_preview_card as _ds_bt_preview,
+            regime_cards_grid as _ds_regimes,
+        )
+
+        def _ds_latest_result_for_pair(target_pair: str) -> dict:
+            """Return the most recent scan result for a given pair (case-insensitive, slash or dash)."""
+            norm = target_pair.upper().replace("/", "").replace("-", "")
+            for r in (st.session_state.get("scan_results") or []):
+                pr = str(r.get("pair") or r.get("symbol") or "").upper().replace("/", "").replace("-", "")
+                if pr.startswith(norm):
+                    return r
+            return {}
+
+        def _ds_signal_label(r: dict) -> str:
+            d = (r.get("direction") or r.get("signal") or r.get("composite_direction") or "").upper()
+            if d in ("LONG", "BUY"):
+                return "BUY"
+            if d in ("SHORT", "SELL"):
+                return "SELL"
+            return "HOLD" if r else ""
+
+        def _ds_regime_label(r: dict) -> str:
+            return str(r.get("regime") or r.get("regime_label") or "").title() or ""
+
+        def _ds_regime_conf(r: dict):
+            for k in ("regime_confidence", "regime_conf_pct", "regime_confidence_pct"):
+                v = r.get(k)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except Exception:
+                        pass
+            return None
+
+        def _ds_build_hero(pair_key: str, display: str) -> dict:
+            tick = (_live_prices or {}).get(pair_key) or {}
+            price = tick.get("price") or tick.get("last") or None
+            chg = tick.get("change_24h_pct") or tick.get("change_pct") or None
+            r = _ds_latest_result_for_pair(pair_key)
+            return {
+                "ticker": display,
+                "price": price,
+                "change_pct": chg,
+                "signal": _ds_signal_label(r) if r else None,
+                "regime_label": _ds_regime_label(r),
+                "regime_confidence": _ds_regime_conf(r),
+            }
+
+        _ds_hero_row([
+            _ds_build_hero("BTC/USDT", "BTC / USD"),
+            _ds_build_hero("ETH/USDT", "ETH / USD"),
+            _ds_build_hero("XRP/USDT", "XRP / USD"),
+        ])
+
+        # Regime mini-grid — 4-col, up to 8 assets
+        try:
+            _ds_regime_rows = []
+            for _rp in model.PAIRS[:8]:
+                _r = _ds_latest_result_for_pair(_rp)
+                if _r:
+                    _state = _ds_regime_label(_r) or "Transition"
+                    _conf = _ds_regime_conf(_r)
+                    _ds_regime_rows.append({
+                        "ticker": _rp.replace("/USDT", "").replace("/USD", ""),
+                        "state": _state,
+                        "confidence": _conf,
+                        "since": "",
+                    })
+            if _ds_regime_rows:
+                st.markdown(
+                    '<div class="ds-section-title" style="font-size:11px;color:var(--text-muted);'
+                    'text-transform:uppercase;letter-spacing:0.08em;font-weight:500;'
+                    'margin:8px 0 10px 2px;">Regime · per asset</div>',
+                    unsafe_allow_html=True,
+                )
+                _ds_regimes(_ds_regime_rows, cols=4)
+        except Exception as _ds_rg_err:
+            logger.debug("[App] regime mini-grid render failed: %s", _ds_rg_err)
+
+        # Two-col: watchlist + backtest preview
+        try:
+            _ds_wl_rows = []
+            for _wp in model.PAIRS[:6]:
+                _tick = (_live_prices or {}).get(_wp) or {}
+                _price = _tick.get("price") or _tick.get("last")
+                _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
+                # Simple deterministic sparkline — 11 points from a seeded walk
+                import hashlib as _hashlib
+                _seed = int(_hashlib.md5(_wp.encode()).hexdigest()[:6], 16)
+                _pts = []
+                _y = 11
+                for _i in range(11):
+                    _y += ((_seed >> (_i * 2)) & 0x03) - 1.5
+                    _y = max(2, min(20, _y))
+                    _pts.append((_i * 8, round(_y, 1)))
+                _ds_wl_rows.append({
+                    "ticker": _wp.replace("/USDT", "").replace("/USD", ""),
+                    "price": _price,
+                    "change_pct": _chg,
+                    "spark_points": _pts,
                 })
-        if _ticker_prices:
-            st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
-    except Exception as _ticker_err:
-        logger.debug("[App] price ticker strip render failed: %s", _ticker_err)
+            # Last scan timestamp
+            _scan_ts_label = "not yet run"
+            _ts = st.session_state.get("scan_timestamp")
+            if _ts:
+                try:
+                    _delta = (datetime.now(timezone.utc) - _ts).total_seconds()
+                    if _delta < 60:
+                        _scan_ts_label = "just now"
+                    elif _delta < 3600:
+                        _scan_ts_label = f"{int(_delta // 60)}m ago"
+                    else:
+                        _scan_ts_label = f"{int(_delta // 3600)}h ago"
+                except Exception:
+                    _scan_ts_label = "recent"
+
+            # Backtest KPIs — pull from session_state if available
+            _bt_sess = st.session_state.get("backtest_results") or {}
+            _bt_m = (_bt_sess or {}).get("metrics") or {}
+            _bt_tr = _bt_m.get("total_return")
+            _bt_dd = _bt_m.get("max_drawdown")
+            _bt_sh = _bt_m.get("sharpe")
+            _bt_wr = _bt_m.get("win_rate")
+            def _ds_pct(v, signed=False):
+                if v is None:
+                    return "—"
+                try:
+                    fv = float(v)
+                    if signed:
+                        sign = "+ " if fv > 0 else ("− " if fv < 0 else "")
+                        return f"{sign}{abs(fv):.1f}%"
+                    return f"{fv:.1f}%"
+                except Exception:
+                    return "—"
+            _ds_kpis = [
+                ("Return (90d)", _ds_pct(_bt_tr, signed=True),
+                 "vs BTC benchmark" if _bt_tr is not None else "Run backtest to populate",
+                 "up" if (_bt_tr is not None and float(_bt_tr) > 0) else ("down" if _bt_tr is not None and float(_bt_tr) < 0 else "")),
+                ("Max drawdown", _ds_pct(_bt_dd, signed=True), "peak → trough", ""),
+                ("Sharpe", f"{float(_bt_sh):.2f}" if _bt_sh is not None else "—", "risk-free 4.5%", ""),
+                ("Win rate", _ds_pct(_bt_wr), f"n={int(_bt_m.get('total_trades', 0))} trades" if _bt_m.get("total_trades") else "no runs yet", ""),
+            ]
+
+            _ds_col1, _ds_col2 = st.columns(2)
+            with _ds_col1:
+                _ds_watchlist(
+                    title="Watchlist · top-cap",
+                    subtitle=f"scan refreshed {_scan_ts_label}",
+                    rows=_ds_wl_rows,
+                )
+            with _ds_col2:
+                _ds_bt_preview(
+                    title="Composite backtest",
+                    subtitle="latest run — Run Backtest to update",
+                    kpis=_ds_kpis,
+                )
+        except Exception as _ds_wl_err:
+            logger.debug("[App] watchlist/backtest preview render failed: %s", _ds_wl_err)
+    except Exception as _ds_hero_err:
+        logger.debug("[App] hero signal cards render failed: %s", _ds_hero_err)
+
+    # Legacy section header — kept as a lightweight divider below the new hero
+    # cards so the existing scan/FNG controls that follow still have context.
+    st.markdown(
+        '<h2 class="ds-legacy-divider" style="color:var(--text-primary);font-size:18px;'
+        'font-weight:600;letter-spacing:-0.01em;margin:24px 0 12px 0;">'
+        'Full scan controls</h2>',
+        unsafe_allow_html=True,
+    )
+    # Animated live price ticker strip — SUPPRESSED in 2026-05 redesign.
+    # Hero signal cards above now show BTC/ETH/XRP big and prominent, which
+    # made the scrolling ticker visually redundant. Opt back in by flipping
+    # st.session_state["show_legacy_price_ticker"] = True from Settings.
+    if st.session_state.get("show_legacy_price_ticker", False):
+        try:
+            _ticker_prices = []
+            _all_ws = _live_prices
+            for _pair in model.PAIRS:
+                _tick = _all_ws.get(_pair)
+                if _tick:
+                    _ticker_prices.append({
+                        "symbol":     _pair.replace("/USDT", ""),
+                        "price":      _tick.get("price", 0),
+                        "change_pct": _tick.get("change_24h_pct", 0),
+                    })
+            if _ticker_prices:
+                st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
+        except Exception as _ticker_err:
+            logger.debug("[App] price ticker strip render failed: %s", _ticker_err)
 
     # FNG chip + scan controls
     col_btn, col_fng, col_ts = st.columns([2, 2, 4])

@@ -6,7 +6,18 @@ Modules:
     overrides       — Streamlit widget CSS overrides that shadow the default Streamlit look
 """
 from .design_system import inject_theme, tokens, ACCENTS, kpi_tile, signal_badge, data_source_badge
-from .sidebar import render_sidebar, render_top_bar, page_header, macro_strip
+from .sidebar import (
+    render_sidebar,
+    render_top_bar,
+    page_header,
+    macro_strip,
+    hero_signal_card_html,
+    hero_signal_cards_row,
+    watchlist_card,
+    backtest_preview_card,
+    regime_card_html,
+    regime_cards_grid,
+)
 from .overrides import inject_streamlit_overrides
 
 __all__ = [
@@ -20,5 +31,11 @@ __all__ = [
     "render_top_bar",
     "page_header",
     "macro_strip",
+    "hero_signal_card_html",
+    "hero_signal_cards_row",
+    "watchlist_card",
+    "backtest_preview_card",
+    "regime_card_html",
+    "regime_cards_grid",
     "inject_streamlit_overrides",
 ]
