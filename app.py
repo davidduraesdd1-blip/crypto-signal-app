@@ -693,16 +693,14 @@ try:
     from ui.design_system import ACCENTS as _DS_ACCENTS
     _ds_accent = _DS_ACCENTS["crypto-signal-app"]
     st.sidebar.markdown(
-        f"""
-        <div class="ds-rail-brand">
-          <div class="ds-brand-dot" style="background:{_ds_accent['accent']};color:{_ds_accent['accent_ink']};">◈</div>
-          <div class="ds-brand-wm">Signal<span style="color:var(--text-muted);">.app</span></div>
-        </div>
-        <div style="font-size:10px;color:var(--text-muted);letter-spacing:0.08em;
-                    text-transform:uppercase;padding:0 10px 12px;">
-          v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs
-        </div>
-        """,
+        f'<div class="ds-rail-brand">'
+        f'<div class="ds-brand-dot" style="background:{_ds_accent["accent"]};color:{_ds_accent["accent_ink"]};">◈</div>'
+        f'<div class="ds-brand-wm">Signal<span style="color:var(--text-muted);">.app</span></div>'
+        f'</div>'
+        f'<div style="font-size:10px;color:var(--text-muted);letter-spacing:0.08em;'
+        f'text-transform:uppercase;padding:0 10px 12px;">'
+        f'v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs'
+        f'</div>',
         unsafe_allow_html=True,
     )
 except Exception as _ds_brand_err:

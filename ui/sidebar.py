@@ -64,7 +64,38 @@ PAGE_KEY_TO_APP: dict[str, str] = {
 }
 
 
-# ── Sidebar renderer ──────────────────────────────────────────────────
+# ── Sidebar brand block (standalone — usable without full nav swap) ──
+
+def render_sidebar_brand(
+    *,
+    app: str = "crypto-signal-app",
+    brand_name: str = "Signal",
+    brand_tld: str = ".app",
+    brand_glyph: str = "◈",
+    version: str = "",
+) -> None:
+    """Render just the mockup brand block at the top of the sidebar.
+    Use this when the caller wants to keep its existing nav but still get
+    the new branded rail. Each sibling app passes its own name/tld/glyph."""
+    if st is None:
+        return
+    accent = ACCENTS.get(app, ACCENTS["crypto-signal-app"])  # type: ignore[index]
+    st.sidebar.markdown(
+        f'<div class="ds-rail-brand">'
+        f'<div class="ds-brand-dot" style="background:{accent["accent"]};color:{accent["accent_ink"]};">{brand_glyph}</div>'
+        f'<div class="ds-brand-wm">{brand_name}<span style="color:var(--text-muted);">{brand_tld}</span></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if version:
+        st.sidebar.markdown(
+            f'<div style="font-size:10px;color:var(--text-muted);letter-spacing:0.08em;'
+            f'text-transform:uppercase;padding:0 10px 12px;">{version}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+# ── Sidebar renderer (full — brand + grouped nav + session state) ──────
 
 def render_sidebar(
     *,
@@ -88,16 +119,10 @@ def render_sidebar(
 
     # The brand card — matches the mockup "◈ Signal.app" wordmark
     st.sidebar.markdown(
-        f"""
-        <div class="ds-rail-brand">
-          <div class="ds-brand-dot" style="background:{accent['accent']};color:{accent['accent_ink']};">
-            {brand_glyph}
-          </div>
-          <div class="ds-brand-wm">
-            {brand_name}<span style="color:var(--text-muted);">{brand_tld}</span>
-          </div>
-        </div>
-        """,
+        f'<div class="ds-rail-brand">'
+        f'<div class="ds-brand-dot" style="background:{accent["accent"]};color:{accent["accent_ink"]};">{brand_glyph}</div>'
+        f'<div class="ds-brand-wm">{brand_name}<span style="color:var(--text-muted);">{brand_tld}</span></div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -185,15 +210,11 @@ def render_top_bar(
     theme_html   = '<button class="ds-chip-btn" data-action="theme">☾ Theme</button>' if show_theme else ""
 
     st.markdown(
-        f"""
-        <div class="ds-topbar">
-          <div class="ds-crumbs">{crumb_html}</div>
-          <div class="ds-topbar-spacer"></div>
-          {level_html}
-          {refresh_html}
-          {theme_html}
-        </div>
-        """,
+        f'<div class="ds-topbar">'
+        f'<div class="ds-crumbs">{crumb_html}</div>'
+        f'<div class="ds-topbar-spacer"></div>'
+        f'{level_html}{refresh_html}{theme_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -231,15 +252,13 @@ def page_header(
     sub_html = f'<div class="ds-page-sub">{subtitle}</div>' if subtitle else ""
 
     st.markdown(
-        f"""
-        <div class="ds-page-hd">
-          <div>
-            <h1 class="ds-page-title">{title}</h1>
-            {sub_html}
-          </div>
-          {pills_html}
-        </div>
-        """,
+        f'<div class="ds-page-hd">'
+        f'<div>'
+        f'<h1 class="ds-page-title">{title}</h1>'
+        f'{sub_html}'
+        f'</div>'
+        f'{pills_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -321,19 +340,19 @@ def hero_signal_card_html(
             f'Regime: {regime_label}{conf_txt}</div>'
         )
 
-    return f"""
-    <div class="ds-card ds-signal-hero">
-      <div class="ds-signal-lhs">
-        <div class="ds-signal-ticker">{ticker}</div>
-        <div class="ds-signal-big">{price_str}</div>
-        <div class="ds-signal-change {change_cls}">{change_str}</div>
-      </div>
-      <div class="ds-signal-rhs">
-        {badge_html}
-        {regime_html}
-      </div>
-    </div>
-    """
+    # Single-line to avoid Streamlit markdown's 4-space = code-block rule.
+    return (
+        f'<div class="ds-card ds-signal-hero">'
+        f'<div class="ds-signal-lhs">'
+        f'<div class="ds-signal-ticker">{ticker}</div>'
+        f'<div class="ds-signal-big">{price_str}</div>'
+        f'<div class="ds-signal-change {change_cls}">{change_str}</div>'
+        f'</div>'
+        f'<div class="ds-signal-rhs">'
+        f'{badge_html}{regime_html}'
+        f'</div>'
+        f'</div>'
+    )
 
 
 def hero_signal_cards_row(cards: Sequence[dict]) -> None:
@@ -413,15 +432,13 @@ def watchlist_card(
             f"</div>"
         )
     st.markdown(
-        f"""
-        <div class="ds-card">
-          <div class="ds-card-hd">
-            <div class="ds-card-title">{title}</div>
-            <div class="ds-card-sub">{subtitle}</div>
-          </div>
-          <div class="ds-watchlist">{"".join(row_html)}</div>
-        </div>
-        """,
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd">'
+        f'<div class="ds-card-title">{title}</div>'
+        f'<div class="ds-card-sub">{subtitle}</div>'
+        f'</div>'
+        f'<div class="ds-watchlist">{"".join(row_html)}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -454,15 +471,13 @@ def backtest_preview_card(
             f"</div>"
         )
     st.markdown(
-        f"""
-        <div class="ds-card">
-          <div class="ds-card-hd">
-            <div class="ds-card-title">{title}</div>
-            <div class="ds-card-sub">{subtitle}</div>
-          </div>
-          <div class="ds-kpi-grid">{"".join(cells)}</div>
-        </div>
-        """,
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd">'
+        f'<div class="ds-card-title">{title}</div>'
+        f'<div class="ds-card-sub">{subtitle}</div>'
+        f'</div>'
+        f'<div class="ds-kpi-grid">{"".join(cells)}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -493,14 +508,14 @@ def regime_card_html(
     variant = REGIME_VARIANT.get(str(state).strip().lower(), "trans")
     conf = f"confidence {int(confidence)}%" if confidence is not None else ""
     since_html = f'<div class="since">{since}</div>' if since else ""
-    return f"""
-    <div class="ds-card ds-rgm {variant}">
-      <div class="t">{ticker}</div>
-      <div class="state">{state}</div>
-      <div class="conf">{conf}</div>
-      {since_html}
-    </div>
-    """
+    return (
+        f'<div class="ds-card ds-rgm {variant}">'
+        f'<div class="t">{ticker}</div>'
+        f'<div class="state">{state}</div>'
+        f'<div class="conf">{conf}</div>'
+        f'{since_html}'
+        f'</div>'
+    )
 
 
 def regime_cards_grid(cards: Sequence[dict], cols: int = 4) -> None:
