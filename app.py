@@ -584,6 +584,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── 2026-05 redesign: design-system theme injection (sibling-family left-rail
+#    layout, token-based theming, Streamlit widget overrides). Runs BEFORE the
+#    legacy inject_css() so the design tokens are the base and the legacy
+#    overrides only affect components we haven't yet ported. All existing
+#    logic (data feeds, signals, scheduler, ML) is preserved — only the
+#    presentation layer changes.
+try:
+    from ui import (
+        inject_theme as _ds_inject_theme,
+        inject_streamlit_overrides as _ds_inject_overrides,
+    )
+    _ds_theme_pref = st.session_state.get("theme", "dark")
+    _ds_inject_theme("crypto-signal-app", theme=_ds_theme_pref)
+    _ds_inject_overrides()
+except Exception as _ds_err:
+    logger.debug("[App] design-system theme injection failed: %s", _ds_err)
+
 # ── Professional CSS design system (must come before any st.* calls) ──
 _ui.inject_css()
 
@@ -668,7 +685,29 @@ if _agent is not None:
 # ──────────────────────────────────────────────
 # SIDEBAR NAVIGATION
 # ──────────────────────────────────────────────
-_ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
+# 2026-05 redesign: render the new sibling-family brand block at the top of
+# the sidebar. Matches shared-docs/design-mockups/sibling-family-crypto-signal.html.
+# The legacy sidebar_header is kept below as a diagnostic block (version +
+# exchange + pair count) inside a collapsed expander for advanced users.
+try:
+    from ui.design_system import ACCENTS as _DS_ACCENTS
+    _ds_accent = _DS_ACCENTS["crypto-signal-app"]
+    st.sidebar.markdown(
+        f"""
+        <div class="ds-rail-brand">
+          <div class="ds-brand-dot" style="background:{_ds_accent['accent']};color:{_ds_accent['accent_ink']};">◈</div>
+          <div class="ds-brand-wm">Signal<span style="color:var(--text-muted);">.app</span></div>
+        </div>
+        <div style="font-size:10px;color:var(--text-muted);letter-spacing:0.08em;
+                    text-transform:uppercase;padding:0 10px 12px;">
+          v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+except Exception as _ds_brand_err:
+    logger.debug("[App] design-system brand block failed, falling back: %s", _ds_brand_err)
+    _ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
 
 # ── Paper / Live mode persistent badge ───────────────────────────────────────
 try:
@@ -1407,6 +1446,23 @@ def render_legal_footer() -> None:
 
 
 def page_dashboard():
+    # ── 2026-05 redesign: mockup-style top bar (breadcrumb + level pills) ────
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_level = st.session_state.get("user_level", "beginner")
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level)
+        _ds_page_header(
+            title="Market home",
+            subtitle="Composite signals + regime state across the top-cap set.",
+            data_sources=[
+                (str(model.TA_EXCHANGE).upper(), "live"),
+                ("Glassnode", "live"),
+                ("News sentiment", "cached"),
+            ],
+        )
+    except Exception as _ds_tb_err:
+        logger.debug("[App] top bar render failed: %s", _ds_tb_err)
+
     # ── Welcome banner (item 19 — beginner only, once per session) ────────────
     _ui.render_welcome_banner()
 
@@ -4376,13 +4432,23 @@ def _start_scan():
 # ──────────────────────────────────────────────
 def page_config():
     _cfg_lv = st.session_state.get("user_level", "beginner")
-    _cfg_title = "⚙️ Settings" if _cfg_lv in ("beginner", "intermediate") else "⚙️ Config Editor"
-    st.markdown(
-        f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
-        f'letter-spacing:-0.5px;margin-bottom:0">{_cfg_title}</h1>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Changes are saved to config_overrides.json and applied on next scan.")
+    _cfg_title = "Settings" if _cfg_lv in ("beginner", "intermediate") else "Config Editor"
+    # ── 2026-05 redesign: mockup-style top bar + page header ──
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv)
+        _ds_page_header(
+            title=_cfg_title,
+            subtitle="Changes are saved to config_overrides.json and applied on next scan.",
+        )
+    except Exception as _ds_cfg_err:
+        logger.debug("[App] config top bar failed: %s", _ds_cfg_err)
+        st.markdown(
+            f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
+            f'letter-spacing:-0.5px;margin-bottom:0">⚙️ {_cfg_title}</h1>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Changes are saved to config_overrides.json and applied on next scan.")
 
     # ── Item 14: Beginner simplified settings — 3 controls only ──────────────
     if _cfg_lv == "beginner":
@@ -5448,14 +5514,27 @@ def _backtest_progress():
 # ──────────────────────────────────────────────
 def page_backtest():
     _bt_lv = st.session_state.get("user_level", "beginner")
-    _bt_title = "Performance History" if _bt_lv in ("beginner", "intermediate") else "Backtest Viewer"
-    st.markdown(
-        f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
-        f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
-        unsafe_allow_html=True,
+    _bt_title = "Performance History" if _bt_lv in ("beginner", "intermediate") else "Backtester"
+    _bt_sub = (
+        "See how the model has performed in the past — like a report card for the AI signals."
+        if _bt_lv == "beginner"
+        else "Replay composite signals against historical OHLCV. Equity curve + metrics vs BTC benchmark."
     )
-    if _bt_lv == "beginner":
-        st.caption("See how the model has performed in the past — like a report card for the AI signals.")
+    # ── 2026-05 redesign: mockup-style top bar + page header (matches
+    #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv)
+        _ds_page_header(title=_bt_title, subtitle=_bt_sub)
+    except Exception as _ds_bt_err:
+        logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
+        st.markdown(
+            f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
+            f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
+            unsafe_allow_html=True,
+        )
+        if _bt_lv == "beginner":
+            st.caption(_bt_sub)
 
     run_col, _ = st.columns([2, 6])
     with run_col:
@@ -7133,19 +7212,23 @@ def _start_backtest():
 # ──────────────────────────────────────────────
 def page_arbitrage():
     _arb_lv = st.session_state.get("user_level", "beginner")
-    _arb_title = "⚡ Opportunities" if _arb_lv in ("beginner", "intermediate") else "⚡ Arbitrage Scanner"
-    st.title(_arb_title)
-    if _arb_lv == "beginner":
-        st.caption(
-            "Sometimes the same coin costs different amounts on different exchanges. "
-            "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another. "
-            "Each card below tells you exactly what to do in plain English."
-        )
-    else:
-        st.caption(
-            "Cross-exchange spot price spreads and funding-rate carry trades. "
-            "Net spread = gross spread − round-trip taker fees."
-        )
+    _arb_title = "Opportunities" if _arb_lv in ("beginner", "intermediate") else "Arbitrage Scanner"
+    _arb_sub = (
+        "Sometimes the same coin costs different amounts on different exchanges. "
+        "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another."
+        if _arb_lv == "beginner"
+        else "Cross-exchange spot price spreads and funding-rate carry trades. "
+             "Net spread = gross spread − round-trip taker fees."
+    )
+    # ── 2026-05 redesign: top bar + page header ──
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv)
+        _ds_page_header(title=_arb_title, subtitle=_arb_sub)
+    except Exception as _ds_arb_err:
+        logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
+        st.title(f"⚡ {_arb_title}")
+        st.caption(_arb_sub)
 
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
@@ -7531,19 +7614,24 @@ def page_arbitrage():
 # ──────────────────────────────────────────────
 def page_agent():
     _ag_lv = st.session_state.get("user_level", "beginner")
-    _ag_title = "🤖 AI Assistant" if _ag_lv in ("beginner", "intermediate") else "🤖 Autonomous Agent"
-    st.title(_ag_title)
-    if _ag_lv == "beginner":
-        st.caption(
-            "Your AI assistant watches the markets 24/7 while the app is running and tells you when it thinks there's an opportunity. "
-            "It never makes trades for you — it only gives you advice, and you decide what to do."
-        )
-    else:
-        st.caption(
-            "LangGraph + Claude Sonnet 4.6 autonomous trading agent. "
-            "Hard Python risk gates before and after every Claude decision. "
-            "Claude may only approve or reject — never place orders directly."
-        )
+    _ag_title = "AI Assistant" if _ag_lv in ("beginner", "intermediate") else "Autonomous Agent"
+    _ag_sub = (
+        "Your AI assistant watches the markets 24/7 while the app is running and tells you when it thinks there's an opportunity. "
+        "It never makes trades for you — it only gives you advice, and you decide what to do."
+        if _ag_lv == "beginner"
+        else "LangGraph + Claude Sonnet 4.6 autonomous trading agent. "
+             "Hard Python risk gates before and after every Claude decision. "
+             "Claude may only approve or reject — never place orders directly."
+    )
+    # ── 2026-05 redesign: top bar + page header ──
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv)
+        _ds_page_header(title=_ag_title, subtitle=_ag_sub)
+    except Exception as _ds_ag_err:
+        logger.debug("[App] agent top bar failed: %s", _ds_ag_err)
+        st.title(f"🤖 {_ag_title}")
+        st.caption(_ag_sub)
 
     if _agent is None:
         st.error("agent.py failed to import. Check logs for details.")
