@@ -331,13 +331,20 @@ def hero_signal_card_html(
         }[signal]
         badge_html = f'<span class="ds-signal-badge {css_class}">{shape} {label}</span>'
 
-    # Regime line
+    # Regime line — callers pass a clean label (Bull/Bear/etc). Strip any
+    # accidental "Regime" prefix so we never render "Regime: Regime Bull".
     regime_html = ""
     if regime_label:
+        _clean = str(regime_label).strip()
+        _low = _clean.lower()
+        for _prefix in ("regime: ", "regime:", "regime "):
+            if _low.startswith(_prefix):
+                _clean = _clean[len(_prefix):].strip()
+                break
         conf_txt = f" · {int(regime_confidence)}% conf" if regime_confidence is not None else ""
         regime_html = (
             f'<div class="ds-regime"><span class="dot"></span> '
-            f'Regime: {regime_label}{conf_txt}</div>'
+            f'Regime: {_clean}{conf_txt}</div>'
         )
 
     # Single-line to avoid Streamlit markdown's 4-space = code-block rule.
@@ -487,15 +494,49 @@ def backtest_preview_card(
 REGIME_VARIANT = {
     "bull":         "bull",
     "bullish":      "bull",
+    "trending":     "bull",  # generic trending — scan's default, lean bull visually
     "bear":         "bear",
     "bearish":      "bear",
     "transition":   "trans",
     "trans":        "trans",
+    "ranging":      "trans",
+    "range":        "trans",
+    "chop":         "trans",
     "accumulation": "accum",
     "accum":        "accum",
     "distribution": "dist",
     "dist":         "dist",
 }
+
+
+def _clean_regime_state(state: str) -> tuple[str, str]:
+    """Return (display_state, variant_key) for a raw regime string.
+    Strips "Regime " prefix and maps to one of the 5 mockup states."""
+    raw = str(state or "").strip()
+    low = raw.lower()
+    for prefix in ("regime: ", "regime:", "regime "):
+        if low.startswith(prefix):
+            raw = raw[len(prefix):].strip()
+            low = raw.lower()
+            break
+    # Exact taxonomy hit?
+    if low in REGIME_VARIANT:
+        return raw.title(), REGIME_VARIANT[low]
+    # Contains hit (e.g. "Trending: Bull" or "Trending Bull")
+    if "bull" in low and "bear" not in low:
+        return "Bull", "bull"
+    if "bear" in low:
+        return "Bear", "bear"
+    if "accum" in low:
+        return "Accumulation", "accum"
+    if "dist" in low:
+        return "Distribution", "dist"
+    if "trans" in low or "rang" in low or "chop" in low:
+        return "Transition", "trans"
+    if "trend" in low:
+        return "Bull", "bull"
+    # Unknown — show raw text, neutral amber border
+    return raw.title() if raw else "—", "trans"
 
 
 def regime_card_html(
@@ -504,14 +545,14 @@ def regime_card_html(
     confidence: float | None = None,
     since: str = "",
 ) -> str:
-    """Return HTML for a single regime card. state maps to bull/bear/trans/accum/dist."""
-    variant = REGIME_VARIANT.get(str(state).strip().lower(), "trans")
+    """Return HTML for a single regime card. state → bull/bear/trans/accum/dist."""
+    display_state, variant = _clean_regime_state(state)
     conf = f"confidence {int(confidence)}%" if confidence is not None else ""
     since_html = f'<div class="since">{since}</div>' if since else ""
     return (
         f'<div class="ds-card ds-rgm {variant}">'
         f'<div class="t">{ticker}</div>'
-        f'<div class="state">{state}</div>'
+        f'<div class="state">{display_state}</div>'
         f'<div class="conf">{conf}</div>'
         f'{since_html}'
         f'</div>'

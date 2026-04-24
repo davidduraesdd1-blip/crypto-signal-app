@@ -1683,7 +1683,34 @@ def page_dashboard():
             return "HOLD" if r else ""
 
         def _ds_regime_label(r: dict) -> str:
-            return str(r.get("regime") or r.get("regime_label") or "").title() or ""
+            """Return a clean regime label for mockup display.
+            Strips legacy "Regime " / "Regime: " prefixes and maps the
+            scan's Trending/Ranging/Trending:Bull taxonomy into the mockup's
+            Bull/Bear/Transition/Accumulation/Distribution vocabulary."""
+            raw = str(r.get("regime") or r.get("regime_label") or "").strip()
+            if not raw:
+                return ""
+            low = raw.lower()
+            # Strip "Regime " / "Regime: " prefix the scan writes
+            for prefix in ("regime: ", "regime:", "regime "):
+                if low.startswith(prefix):
+                    raw = raw[len(prefix):]
+                    low = raw.lower()
+                    break
+            # Map internal taxonomy → mockup states (Bull / Bear / Transition / Accumulation / Distribution)
+            if "bull" in low and "bear" not in low:
+                return "Bull"
+            if "bear" in low:
+                return "Bear"
+            if "accum" in low:
+                return "Accumulation"
+            if "dist" in low:
+                return "Distribution"
+            if "trans" in low or "rang" in low or "chop" in low:
+                return "Transition"
+            if "trend" in low:
+                return "Bull"  # Generic trending → lean bull (scan default when no direction)
+            return raw.title()
 
         def _ds_regime_conf(r: dict):
             for k in ("regime_confidence", "regime_conf_pct", "regime_confidence_pct"):
@@ -1844,6 +1871,29 @@ def page_dashboard():
             logger.debug("[App] watchlist/backtest preview render failed: %s", _ds_wl_err)
     except Exception as _ds_hero_err:
         logger.debug("[App] hero signal cards render failed: %s", _ds_hero_err)
+
+    # ── 2026-05 redesign: pure-mockup Home for beginners ─────────────────
+    # Beginners get exactly what the shared-docs/design-mockups/
+    # sibling-family-crypto-signal.html Home shows: hero cards + macro
+    # strip + regime grid + watchlist + backtest preview. Nothing else.
+    # Intermediate / advanced users still get the full scan view + PDF
+    # export + execute controls below.
+    #
+    # Opt back into the full legacy scan view via
+    #   st.session_state["show_legacy_scan_view"] = True
+    _ds_lvl_hide = st.session_state.get("user_level", "beginner")
+    if _ds_lvl_hide == "beginner" and not st.session_state.get("show_legacy_scan_view", False):
+        # Compact scan CTA — beginners who actually want to run a fresh
+        # scan (instead of relying on the scheduled one) still have a button.
+        with _scan_lock:
+            _ds_sb_running = _scan_state["running"]
+        _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
+        _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
+        if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
+            st.session_state["scan_results"] = []
+            st.session_state["scan_error"] = None
+            _start_scan()
+        return  # skip the rest of the beginner-unfriendly scan detail panels
 
     # Lightweight divider between the mockup cards above and the scan controls
     # below. Renders as a thin 24px top-margin line instead of an h2.
