@@ -5627,6 +5627,89 @@ def page_backtest():
             m = metrics
             _wr = m.get('win_rate', 0)
 
+            # ── 2026-05 redesign: mockup-style 5-col KPI grid ────────────────
+            # Mirrors the top strip of
+            # shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html.
+            # Renders above the existing level-specific metric grids so users
+            # get the signature look at every level while the existing
+            # beginner/intermediate/advanced panels below stay intact.
+            try:
+                _tr = m.get("total_return", 0)
+                _bt_btc_ret = m.get("btc_return", m.get("buy_hold_return", None))
+                _bt_cagr = m.get("cagr", None)
+                _bt_btc_cagr = m.get("btc_cagr", None)
+                _bt_sharpe = m.get("sharpe", 0)
+                _bt_dd = m.get("max_drawdown", 0)
+                _bt_btc_dd = m.get("btc_max_drawdown", m.get("benchmark_max_drawdown", None))
+                _bt_ntrades = m.get("total_trades", 0)
+
+                def _bt_fmt_pct(v, decimals=1):
+                    if v is None:
+                        return "—"
+                    try:
+                        fv = float(v)
+                        sign = "+ " if fv > 0 else ("− " if fv < 0 else "")
+                        return f"{sign}{abs(fv):.{decimals}f}%"
+                    except Exception:
+                        return "—"
+
+                _tr_color = "var(--success)" if (_tr is not None and float(_tr) > 0) else ("var(--danger)" if (_tr is not None and float(_tr) < 0) else "var(--text-primary)")
+                _dd_color = "var(--danger)" if (_bt_dd is not None and float(_bt_dd) != 0) else "var(--text-primary)"
+                _sh_color = "var(--accent)" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else "var(--text-primary)"
+
+                _bt_sub_tr = f'<div class="sub up">vs BTC {_bt_fmt_pct(_bt_btc_ret)}</div>' if _bt_btc_ret is not None else '<div class="sub">over backtest window</div>'
+                _bt_sub_cagr = f'<div class="sub">vs BTC {_bt_fmt_pct(_bt_btc_cagr)}</div>' if _bt_btc_cagr is not None else '<div class="sub">annualised</div>'
+                _bt_sub_dd = f'<div class="sub down">BTC {_bt_fmt_pct(_bt_btc_dd)}</div>' if _bt_btc_dd is not None else '<div class="sub">peak → trough</div>'
+
+                _bt_kpi_html = f"""
+                <style>
+                .ds-bt-kpis {{ display: grid; grid-template-columns: repeat(5, 1fr);
+                               gap: var(--gap); margin: 8px 0 20px 0; }}
+                .ds-bt-kpis .card {{ background: var(--bg-1); border: 1px solid var(--border);
+                                      border-radius: var(--card-radius); padding: var(--card-pad); }}
+                .ds-bt-kpis .lbl {{ font-size: 11px; color: var(--text-muted);
+                                     text-transform: uppercase; letter-spacing: 0.06em; }}
+                .ds-bt-kpis .val {{ font-size: 22px; font-weight: 600; font-family: var(--font-mono);
+                                     line-height: 1.1; margin-top: 4px; color: var(--text-primary); }}
+                .ds-bt-kpis .sub {{ font-size: 11.5px; color: var(--text-muted);
+                                     margin-top: 4px; font-family: var(--font-mono); }}
+                .ds-bt-kpis .sub.up {{ color: var(--success); }}
+                .ds-bt-kpis .sub.down {{ color: var(--danger); }}
+                @media (max-width: 1024px) {{ .ds-bt-kpis {{ grid-template-columns: repeat(2, 1fr); }} }}
+                @media (max-width: 600px) {{ .ds-bt-kpis {{ grid-template-columns: 1fr; }} }}
+                </style>
+                <div class="ds-bt-kpis">
+                  <div class="card">
+                    <div class="lbl">Total return</div>
+                    <div class="val" style="color:{_tr_color};">{_bt_fmt_pct(_tr)}</div>
+                    {_bt_sub_tr}
+                  </div>
+                  <div class="card">
+                    <div class="lbl">CAGR</div>
+                    <div class="val">{_bt_fmt_pct(_bt_cagr) if _bt_cagr is not None else _bt_fmt_pct(_tr)}</div>
+                    {_bt_sub_cagr}
+                  </div>
+                  <div class="card">
+                    <div class="lbl">Sharpe</div>
+                    <div class="val" style="color:{_sh_color};">{float(_bt_sharpe):.2f}</div>
+                    <div class="sub">risk-free 4.5%</div>
+                  </div>
+                  <div class="card">
+                    <div class="lbl">Max drawdown</div>
+                    <div class="val" style="color:{_dd_color};">{_bt_fmt_pct(_bt_dd)}</div>
+                    {_bt_sub_dd}
+                  </div>
+                  <div class="card">
+                    <div class="lbl">Win rate</div>
+                    <div class="val">{float(_wr):.0f}%</div>
+                    <div class="sub">n = {int(_bt_ntrades)} trades</div>
+                  </div>
+                </div>
+                """
+                st.markdown(_bt_kpi_html, unsafe_allow_html=True)
+            except Exception as _bt_kpi_err:
+                logger.debug("[App] backtest KPI strip render failed: %s", _bt_kpi_err)
+
             # ── Item 12: Beginner simplified view — 3 big metrics ─────────────────
             if _bt_lv == "beginner":
                 bm = st.columns(3)
