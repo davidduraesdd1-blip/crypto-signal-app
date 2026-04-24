@@ -1448,7 +1448,11 @@ def render_legal_footer() -> None:
 def page_dashboard():
     # ── 2026-05 redesign: mockup-style top bar (breadcrumb + level pills) ────
     try:
-        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            macro_strip as _ds_macro_strip,
+        )
         _ds_level = st.session_state.get("user_level", "beginner")
         _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level)
         _ds_page_header(
@@ -1460,6 +1464,52 @@ def page_dashboard():
                 ("News sentiment", "cached"),
             ],
         )
+        # Macro strip — mirrors the mockup's 5-col strip with real data.
+        # Every call below is cached (_cached_global_market TTL 300s,
+        # _cached_macro_enrichment cached in data_feeds) so we don't add any
+        # fetch cost over the existing dashboard.
+        try:
+            _gm = _cached_global_market() or {}
+            _me = _cached_macro_enrichment() or {}
+            _btc_dom = _gm.get("btc_dominance_pct", _gm.get("btc_dominance"))
+            _btc_dom_7d = _gm.get("btc_dominance_7d_change_pct", _gm.get("btc_dominance_7d_ppt"))
+            _fng = _me.get("fng_value", _me.get("fng") or {}).get("value") if isinstance(_me.get("fng"), dict) else _me.get("fng_value")
+            _fng_cat = _me.get("fng_category", _me.get("fng_classification", ""))
+            _dxy = _me.get("dxy")
+            _dxy_30d = _me.get("dxy_30d_change_pct")
+            _funding = _me.get("btc_funding_rate_pct", _me.get("funding_btc"))
+            _macro_regime = _me.get("macro_regime", _me.get("macro_regime_label", "—"))
+            _macro_conf = _me.get("macro_regime_confidence_pct", _me.get("macro_confidence"))
+            def _fmt_pct(v, decimals=2, prefix=True):
+                if v is None:
+                    return "—"
+                try:
+                    fv = float(v)
+                    sign = "+ " if (fv > 0 and prefix) else ("− " if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{decimals}f}%"
+                except Exception:
+                    return "—"
+            def _fmt_num(v, decimals=1, suffix=""):
+                if v is None:
+                    return "—"
+                try:
+                    return f"{float(v):.{decimals}f}{suffix}"
+                except Exception:
+                    return "—"
+            _ds_macro_strip([
+                ("BTC Dominance", _fmt_num(_btc_dom, 1, "%"),
+                 f"{_fmt_pct(_btc_dom_7d, 2)} · 7d" if _btc_dom_7d is not None else "7d"),
+                ("Fear & Greed",  str(int(_fng)) if _fng is not None else "—",
+                 _fng_cat or ""),
+                ("DXY",           _fmt_num(_dxy, 2),
+                 f"{_fmt_pct(_dxy_30d, 2)} · 30d" if _dxy_30d is not None else "30d"),
+                ("Funding (BTC)", _fmt_pct(_funding, 3),
+                 "8h avg"),
+                ("Regime (macro)", str(_macro_regime).title(),
+                 f"confidence {int(_macro_conf)}%" if _macro_conf is not None else ""),
+            ])
+        except Exception as _ds_strip_err:
+            logger.debug("[App] macro strip render failed: %s", _ds_strip_err)
     except Exception as _ds_tb_err:
         logger.debug("[App] top bar render failed: %s", _ds_tb_err)
 
