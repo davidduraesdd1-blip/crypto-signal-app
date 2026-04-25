@@ -885,14 +885,15 @@ _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
 # ── Theme toggle (item 18 — light/dark mode) ──────────────────────────────────
 _ui.render_theme_toggle_sg()
 
-# ── Refresh All Data (item 27) ────────────────────────────────────────────────
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Data</span>',
-    unsafe_allow_html=True,
-)
-if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", help="Clear all caches and reload fresh data from all sources", width="stretch"):
+# ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
+# 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
+# (see render_top_bar). The sidebar "Refresh All Data" button has been
+# removed so the topbar ↻ chip is the single control surface. Both the
+# topbar button and any future programmatic call invoke this handler.
+def _refresh_all_data() -> None:
+    """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
+    helpers, the data_feeds module-level dicts, and the cycle_indicators
+    in-memory caches. Caller is responsible for st.rerun()."""
     try:
         st.cache_data.clear()
     except Exception:
@@ -907,7 +908,7 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
                 _fn.clear()
             except Exception as _fc_err:
                 logger.debug("[App] cache clear failed for %s: %s", _fn, _fc_err)
-    # Also clear module-level cache dicts in data_feeds — not covered by st.cache_data.clear()
+    # Module-level cache dicts in data_feeds aren't covered by st.cache_data.clear()
     try:
         data_feeds.clear_all_module_caches()
     except Exception as _df_clr_err:
@@ -917,7 +918,6 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
         _ccc()
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
-    st.rerun()
 
 st.sidebar.markdown("---")
 
@@ -1483,7 +1483,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level)
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data)
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -4852,7 +4852,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv)
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data)
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -5940,7 +5940,7 @@ def page_backtest():
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv)
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data)
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -7722,7 +7722,7 @@ def page_arbitrage():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv)
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data)
         _ds_page_header(title=_arb_title, subtitle=_arb_sub)
     except Exception as _ds_arb_err:
         logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
@@ -8125,7 +8125,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv)
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data)
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)
