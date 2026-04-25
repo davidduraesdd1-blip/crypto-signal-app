@@ -5948,12 +5948,8 @@ def _backtest_progress():
 # ──────────────────────────────────────────────
 def page_backtest():
     _bt_lv = st.session_state.get("user_level", "beginner")
-    _bt_title = "Performance History" if _bt_lv in ("beginner", "intermediate") else "Backtester"
-    _bt_sub = (
-        "See how the model has performed in the past — like a report card for the AI signals."
-        if _bt_lv == "beginner"
-        else "Replay composite signals against historical OHLCV. Equity curve + metrics vs BTC benchmark."
-    )
+    _bt_title = "Backtester"
+    _bt_sub = "Composite signal backtested across the historical universe. Optuna-tuned hyperparams."
     # ── 2026-05 redesign: mockup-style top bar + page header (matches
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
@@ -5967,9 +5963,41 @@ def page_backtest():
             f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
             unsafe_allow_html=True,
         )
-        if _bt_lv == "beginner":
-            st.caption(_bt_sub)
 
+    # ── Controls row (Universe / Period / Initial / Rebalance / Costs) + Run button
+    try:
+        from ui import (
+            backtest_controls_row as _ds_bt_controls,
+            backtest_kpi_strip as _ds_bt_kpis,
+            optuna_top_card as _ds_bt_optuna,
+            recent_trades_card as _ds_bt_trades,
+        )
+        # Pull config-driven values where available; fall back to sensible defaults.
+        _bt_cfg = _cached_alerts_config() or {}
+        _bt_universe = _bt_cfg.get("backtest_universe", "Top 10 cap")
+        _bt_period = _bt_cfg.get("backtest_period", "2023-01-01 → today")
+        _bt_initial = _bt_cfg.get("backtest_initial_usd", "$100,000")
+        _bt_rebalance = _bt_cfg.get("backtest_rebalance", "Weekly")
+        _bt_costs = _bt_cfg.get("backtest_costs", "12 bps · realistic slippage")
+        st.markdown(
+            _ds_bt_controls(
+                [
+                    ("Universe", str(_bt_universe)),
+                    ("Period", str(_bt_period)),
+                    ("Initial", str(_bt_initial)),
+                    ("Rebalance", str(_bt_rebalance)),
+                    ("Costs", str(_bt_costs)),
+                ],
+                run_button_label="Re-run backtest →",
+            ),
+            unsafe_allow_html=True,
+        )
+    except Exception as _e_ctrl:
+        logger.debug("[Backtest] controls row failed: %s", _e_ctrl)
+
+    # The visual button in the controls row above is markup-only; the real
+    # click handler stays a Streamlit button rendered just below it so the
+    # backtest can actually be triggered.
     run_col, _ = st.columns([2, 6])
     with run_col:
         bt_disabled = st.session_state.get("backtest_running", False)
@@ -5979,6 +6007,202 @@ def page_backtest():
     # _backtest_progress is defined at module level (above page_backtest) — always called
     # here so its fragment key stays registered across rerenders (prevents $$ID KeyError).
     _backtest_progress()
+
+    # ── 2026-05 redesign: mockup-style backtester sections (matches
+    # sibling-family-crypto-signal-BACKTESTER.html: 5-col KPI strip +
+    # 2-col equity-vs-BTC + Optuna top-5 + recent-trades table). Renders
+    # above the existing tabs so users land on the mockup view first;
+    # tabs below carry the deeper Trade History / Advanced views.
+    try:
+        _bt_df = _cached_backtest_df()
+        _bt_sess = st.session_state.get("backtest_results") or {}
+        _bt_m = (_bt_sess or {}).get("metrics") or {}
+        _bt_equity = (_bt_sess or {}).get("equity")
+
+        # Derive metrics from DB if session state is empty
+        _bt_total = _bt_m.get("total_return")
+        _bt_cagr = _bt_m.get("cagr")
+        _bt_sharpe = _bt_m.get("sharpe")
+        _bt_dd = _bt_m.get("max_drawdown")
+        _bt_wr = _bt_m.get("win_rate")
+        _bt_n = _bt_m.get("total_trades", 0)
+        _bt_btc_total = _bt_m.get("btc_return", _bt_m.get("buy_hold_return"))
+        _bt_btc_cagr = _bt_m.get("btc_cagr")
+        _bt_btc_dd = _bt_m.get("btc_max_drawdown", _bt_m.get("benchmark_max_drawdown"))
+
+        if _bt_total is None and _bt_df is not None and not _bt_df.empty:
+            _pnl = _bt_df.get("pnl_pct")
+            if _pnl is not None and len(_pnl) > 0:
+                _bt_total = float(_pnl.sum())
+                _bt_wr = float((_pnl > 0).mean() * 100.0)
+                _bt_n = int(len(_pnl))
+                _eq = (1.0 + _pnl / 100.0).cumprod()
+                _peak = _eq.cummax()
+                _bt_dd = float(((_eq - _peak) / _peak * 100.0).min())
+                _std = float(_pnl.std())
+                if _std > 0:
+                    _bt_sharpe = float(_pnl.mean() / _std)
+
+        def _pct(v, d=1, signed=True):
+            if v is None:
+                return "—"
+            try:
+                fv = float(v)
+                if signed:
+                    sign = "+ " if fv > 0 else ("− " if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{d}f}%"
+                return f"{fv:.{d}f}%"
+            except Exception:
+                return "—"
+
+        # 5-col KPI strip
+        _ds_bt_kpis([
+            ("Total return",
+             _pct(_bt_total, 1),
+             f"vs BTC {_pct(_bt_btc_total, 1)}" if _bt_btc_total is not None else "over backtest window",
+             "success" if (_bt_total is not None and float(_bt_total) > 0) else ("danger" if _bt_total is not None and float(_bt_total) < 0 else "")),
+            ("CAGR",
+             _pct(_bt_cagr, 1),
+             f"vs BTC {_pct(_bt_btc_cagr, 1)}" if _bt_btc_cagr is not None else "annualised",
+             ""),
+            ("Sharpe",
+             f"{float(_bt_sharpe):.2f}" if _bt_sharpe is not None else "—",
+             "risk-free 4.5%",
+             "accent" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else ""),
+            ("Max drawdown",
+             _pct(_bt_dd, 1),
+             f"BTC {_pct(_bt_btc_dd, 1)}" if _bt_btc_dd is not None else "peak → trough",
+             "danger" if (_bt_dd is not None and float(_bt_dd) != 0) else ""),
+            ("Win rate",
+             _pct(_bt_wr, 0, signed=False) if _bt_wr is not None else "—",
+             f"n = {int(_bt_n)} trades" if _bt_n else "no runs yet",
+             ""),
+        ])
+
+        # 2-col: equity curve + Optuna top-5
+        _bt_col_l, _bt_col_r = st.columns([2, 1])
+        with _bt_col_l:
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd">'
+                '<div class="ds-card-title">Equity curve · signal vs BTC</div>'
+                f'<div style="color:var(--text-muted);font-size:12px;">{str(_bt_period) if "_bt_period" in dir() else ""}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            try:
+                if _bt_df is not None and not _bt_df.empty and "pnl_pct" in _bt_df.columns:
+                    _eq_signal = (1.0 + _bt_df["pnl_pct"].fillna(0) / 100.0).cumprod() * 100.0
+                    _x = list(range(len(_eq_signal)))
+                    import plotly.graph_objects as _go
+                    _fig = _go.Figure()
+                    _fig.add_trace(_go.Scatter(
+                        x=_x, y=_eq_signal.tolist(), mode="lines",
+                        name="Composite signal",
+                        line=dict(color="#22d36f", width=2),
+                        fill="tozeroy", fillcolor="rgba(34,211,111,0.18)",
+                        hovertemplate="%{y:.1f}<extra>signal</extra>",
+                    ))
+                    # BTC benchmark line if available
+                    try:
+                        _ex = model.get_exchange_instance(model.TA_EXCHANGE)
+                        if _ex:
+                            _btc_o = model.robust_fetch_ohlcv(_ex, "BTC/USDT", "1d", limit=len(_eq_signal) or 200)
+                            if _btc_o:
+                                _btc_closes = [float(r[4]) for r in _btc_o if len(r) >= 5]
+                                if _btc_closes:
+                                    _b0 = _btc_closes[0]
+                                    _btc_eq = [c / _b0 * 100.0 for c in _btc_closes][-len(_eq_signal):]
+                                    _fig.add_trace(_go.Scatter(
+                                        x=list(range(len(_btc_eq))),
+                                        y=_btc_eq, mode="lines",
+                                        name="BTC buy-and-hold",
+                                        line=dict(color="#8a8a9d", width=1.5, dash="dash"),
+                                    ))
+                    except Exception as _e_btc:
+                        logger.debug("[Backtest] BTC benchmark fetch failed: %s", _e_btc)
+                    _fig.update_layout(
+                        height=280, margin=dict(l=0, r=0, t=10, b=0),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(visible=False),
+                        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="left", x=0,
+                            font=dict(color="#8a8a9d", size=12),
+                            bgcolor="rgba(0,0,0,0)",
+                        ),
+                    )
+                    st.plotly_chart(_fig, width='stretch', config={"displayModeBar": False})
+                else:
+                    st.caption("Equity curve unavailable — run a backtest to populate.")
+            except Exception as _e_eq:
+                logger.debug("[Backtest] equity curve render failed: %s", _e_eq)
+                st.caption("Equity curve render failed — see logs.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with _bt_col_r:
+            # Optuna top-5 — read from optuna_studies.sqlite if available
+            _opt_rows = []
+            try:
+                import optuna as _opt
+                _study_name = getattr(model, "OPTUNA_STUDY_NAME", "optuna_cpx")
+                _study_storage = getattr(model, "OPTUNA_STORAGE", "sqlite:///optuna_studies.sqlite")
+                try:
+                    _study = _opt.load_study(study_name=_study_name, storage=_study_storage)
+                    _trials = sorted(
+                        [t for t in _study.trials if t.value is not None and t.state.name == "COMPLETE"],
+                        key=lambda t: t.value,
+                        reverse=True,
+                    )[:5]
+                    for _i, _t in enumerate(_trials, start=1):
+                        _params_str = ", ".join(f"{k}={v}" for k, v in list(_t.params.items())[:4])
+                        _opt_rows.append({
+                            "rank": _i,
+                            "star": (_i == 1),
+                            "params": _params_str,
+                            "sharpe": _t.value,
+                            "return_pct": _t.user_attrs.get("total_return") if hasattr(_t, "user_attrs") else None,
+                        })
+                except Exception as _e_load:
+                    logger.debug("[Backtest] Optuna study load failed: %s", _e_load)
+            except ImportError:
+                pass
+            _ds_bt_optuna(
+                _opt_rows,
+                title="Optuna studies · top 5 hyperparam sets",
+                footer=f"Study: {getattr(model, 'OPTUNA_STUDY_NAME', '—')} · TPE sampler" if _opt_rows else "",
+            )
+
+        # Recent trades table (last 8)
+        _trade_rows = []
+        try:
+            if _bt_df is not None and not _bt_df.empty:
+                _df_recent = _bt_df.sort_values(_bt_df.columns[0], ascending=False).head(8) if len(_bt_df.columns) else _bt_df.head(8)
+                for _, _row in _df_recent.iterrows():
+                    _date_v = _row.get("entry_time") or _row.get("date") or _row.get("timestamp")
+                    try:
+                        _date_str = str(_date_v)[:10] if _date_v is not None else "—"
+                    except Exception:
+                        _date_str = "—"
+                    _side = str(_row.get("side") or _row.get("direction") or "").upper()
+                    _trade_rows.append({
+                        "date": _date_str,
+                        "side": "BUY" if _side in ("LONG", "BUY") else ("SELL" if _side in ("SHORT", "SELL") else _side),
+                        "reason": str(_row.get("reason") or _row.get("rationale") or _row.get("pair") or "")[:80],
+                        "return_pct": _row.get("pnl_pct") or _row.get("return_pct"),
+                        "duration": _row.get("duration") or _row.get("hold_days") or "—",
+                    })
+        except Exception as _e_tr:
+            logger.debug("[Backtest] trades table prep failed: %s", _e_tr)
+        _ds_bt_trades(
+            _trade_rows,
+            title="Recent trades · signal-driven",
+            subtitle=f"last {len(_trade_rows)} of {int(_bt_n) if _bt_n else len(_trade_rows)}" if _trade_rows else "",
+        )
+        st.markdown('<div style="height:24px;"></div>', unsafe_allow_html=True)
+    except Exception as _e_mockup:
+        logger.debug("[Backtest] mockup sections failed: %s", _e_mockup)
 
     _bt_t1, _bt_t2, _bt_t3 = st.tabs([
         "📊 Summary",

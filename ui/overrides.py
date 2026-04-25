@@ -541,6 +541,95 @@ def inject_streamlit_overrides() -> None:
     .ds-hist-row .ret.up { color: var(--success); }
     .ds-hist-row .ret.down { color: var(--danger); }
 
+    /* ─── BACKTESTER page (sibling-family-crypto-signal-BACKTESTER.html) ─── */
+    .ds-bt-controls {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      margin-bottom: 20px; align-items: center;
+    }
+    .ds-bt-ctrl {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--bg-1); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 12px; font-size: 13px;
+    }
+    .ds-bt-ctrl .lbl {
+      color: var(--text-muted); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .ds-bt-ctrl .v {
+      font-family: var(--font-mono); font-weight: 500; color: var(--text-primary);
+    }
+    .ds-bt-runbtn {
+      all: unset; cursor: pointer;
+      background: var(--accent); color: var(--accent-ink);
+      padding: 8px 16px; border-radius: 8px;
+      font-weight: 600; font-size: 13px;
+    }
+    .ds-bt-runbtn:hover { filter: brightness(1.1); }
+
+    .ds-bt-kpi-grid {
+      display: grid; grid-template-columns: repeat(5, 1fr);
+      gap: var(--gap); margin: 8px 0 20px 0;
+    }
+    .ds-bt-kpi-lbl {
+      font-size: 11px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .ds-bt-kpi-val {
+      font-size: 22px; font-weight: 600; font-family: var(--font-mono);
+      line-height: 1.1; margin-top: 4px; color: var(--text-primary);
+    }
+    .ds-bt-kpi-sub {
+      font-size: 11.5px; color: var(--text-muted);
+      margin-top: 4px; font-family: var(--font-mono);
+    }
+    .ds-bt-kpi-sub.up { color: var(--success); }
+    .ds-bt-kpi-sub.down { color: var(--danger); }
+
+    .ds-bt-opt-row {
+      display: grid; grid-template-columns: 60px 1fr 90px 70px;
+      gap: 10px; align-items: center;
+      padding: 8px 4px; border-bottom: 1px solid var(--border);
+      font-size: 12.5px;
+    }
+    .ds-bt-opt-row:last-child { border-bottom: none; }
+    .ds-bt-opt-row .rank { font-family: var(--font-mono); color: var(--text-muted); }
+    .ds-bt-opt-row .params {
+      color: var(--text-secondary); font-family: var(--font-mono); font-size: 11.5px;
+    }
+    .ds-bt-opt-row .sh {
+      font-family: var(--font-mono); font-weight: 600;
+      color: var(--accent); text-align: right;
+    }
+    .ds-bt-opt-row .ret {
+      font-family: var(--font-mono); color: var(--success); text-align: right;
+    }
+
+    .ds-bt-trades { font-size: 12.5px; }
+    .ds-bt-trades-h {
+      display: grid; grid-template-columns: 100px 60px 1fr 90px 80px;
+      gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border);
+      color: var(--text-muted); font-size: 10.5px;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .ds-bt-trades-r {
+      display: grid; grid-template-columns: 100px 60px 1fr 90px 80px;
+      gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border);
+      align-items: center;
+    }
+    .ds-bt-trades-r:last-child { border-bottom: none; }
+    .ds-bt-trades-r .dt { font-family: var(--font-mono); color: var(--text-muted); }
+    .ds-bt-trades-r .s { font-weight: 600; }
+    .ds-bt-trades-r .s.buy { color: var(--success); }
+    .ds-bt-trades-r .s.sell { color: var(--danger); }
+    .ds-bt-trades-r .n { color: var(--text-secondary); }
+    .ds-bt-trades-r .p { font-family: var(--font-mono); text-align: right; }
+    .ds-bt-trades-r .p.up { color: var(--success); }
+    .ds-bt-trades-r .p.down { color: var(--danger); }
+    .ds-bt-trades-r .d {
+      font-family: var(--font-mono); text-align: right;
+      color: var(--text-muted); font-size: 11.5px;
+    }
+
     /* ─── REGIMES page (sibling-family-crypto-signal-REGIMES.html) ─── */
     .ds-rgm-bar {
       display: flex; height: 34px; border-radius: 8px;

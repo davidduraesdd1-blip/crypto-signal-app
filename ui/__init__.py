@@ -25,6 +25,10 @@ from .sidebar import (
     regime_state_bar,
     macro_regime_overlay_card,
     regime_weights_grid,
+    backtest_controls_row,
+    backtest_kpi_strip,
+    optuna_top_card,
+    recent_trades_card,
 )
 from .overrides import inject_streamlit_overrides
 
@@ -53,5 +57,9 @@ __all__ = [
     "regime_state_bar",
     "macro_regime_overlay_card",
     "regime_weights_grid",
+    "backtest_controls_row",
+    "backtest_kpi_strip",
+    "optuna_top_card",
+    "recent_trades_card",
     "inject_streamlit_overrides",
 ]

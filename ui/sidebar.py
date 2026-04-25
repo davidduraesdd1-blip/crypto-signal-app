@@ -857,6 +857,173 @@ def signal_history_table(
     )
 
 
+# ── BACKTESTER page helpers (sibling-family-crypto-signal-BACKTESTER.html) ──
+
+def backtest_controls_row(
+    items: Sequence[tuple[str, str]],
+    *,
+    run_button_label: str = "Re-run backtest →",
+) -> str:
+    """Return HTML for the inline controls row (Universe, Period, Initial, etc.).
+
+    Each item: (label, value). Visual only — pair with a real st.button if
+    the run trigger needs a click handler.
+    """
+    cells = "".join(
+        f'<div class="ds-bt-ctrl"><span class="lbl">{lbl}</span>'
+        f'<span class="v">{val}</span></div>'
+        for lbl, val in items
+    )
+    return (
+        f'<div class="ds-bt-controls">{cells}'
+        f'<button class="ds-bt-runbtn">{run_button_label}</button>'
+        f'</div>'
+    )
+
+
+def backtest_kpi_strip(
+    kpis: Sequence[tuple[str, str, str, str]],
+) -> None:
+    """Render the 5-col KPI strip (Total return / CAGR / Sharpe / Max DD / Win rate).
+
+    Each kpi: (label, value, sub_text, tone). tone ∈ {success, danger, accent, ""}.
+    """
+    if st is None:
+        return
+    cards = []
+    for label, value, sub, tone in kpis:
+        v_color = ""
+        if tone == "success":
+            v_color = ' style="color:var(--success);"'
+        elif tone == "danger":
+            v_color = ' style="color:var(--danger);"'
+        elif tone == "accent":
+            v_color = ' style="color:var(--accent);"'
+        # Sub line tone derived from the subtext content (up=green, down=red)
+        sub_cls = ""
+        sl = sub.lower()
+        if any(x in sl for x in ("vs btc +", "+ ", "tightening", "tailwind")):
+            sub_cls = " up"
+        elif any(x in sl for x in ("vs btc −", "− ", "btc −", "−")):
+            sub_cls = " down" if "btc −" in sl or sl.startswith("− ") else ""
+        cards.append(
+            f'<div class="ds-card">'
+            f'<div class="ds-bt-kpi-lbl">{label}</div>'
+            f'<div class="ds-bt-kpi-val"{v_color}>{value}</div>'
+            f'<div class="ds-bt-kpi-sub{sub_cls}">{sub}</div>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div class="ds-bt-kpi-grid">{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def optuna_top_card(
+    rows: Sequence[dict],
+    *,
+    title: str = "Optuna studies · top 5 hyperparam sets",
+    footer: str = "",
+) -> None:
+    """5-row Optuna list. Each row dict:
+        {rank: int, star: bool, params: str, sharpe: float, return_pct: float}
+    """
+    if st is None:
+        return
+    row_html = []
+    for r in rows:
+        rank = r.get("rank")
+        star = " ★" if r.get("star") else ""
+        rank_str = f"#{rank}{star}" if rank is not None else "—"
+        sh = r.get("sharpe")
+        sh_str = f"{float(sh):.2f}" if sh is not None else "—"
+        ret = r.get("return_pct")
+        if ret is None:
+            ret_str = "—"
+        else:
+            sign = "+" if float(ret) > 0 else ("−" if float(ret) < 0 else "")
+            ret_str = f"{sign}{abs(float(ret)):.1f}%"
+        row_html.append(
+            f'<div class="ds-bt-opt-row">'
+            f'<span class="rank">{rank_str}</span>'
+            f'<span class="params">{r.get("params", "—")}</span>'
+            f'<span class="sh">{sh_str}</span>'
+            f'<span class="ret">{ret_str}</span>'
+            f'</div>'
+        )
+    if not row_html:
+        body = ('<div style="color:var(--text-muted);font-size:13px;padding:8px 4px;">'
+                'No Optuna study runs yet. Trigger a tuning run from Settings → Dev Tools.</div>')
+    else:
+        body = "".join(row_html)
+    footer_html = (
+        f'<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);'
+        f'font-size:11.5px;color:var(--text-muted);">{footer}</div>' if footer else ""
+    )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd"><div class="ds-card-title">{title}</div></div>'
+        f'<div>{body}</div>{footer_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def recent_trades_card(
+    rows: Sequence[dict],
+    *,
+    title: str = "Recent trades · signal-driven",
+    subtitle: str = "",
+) -> None:
+    """5-col trades table. Each row dict:
+        {date, side: BUY/SELL, reason, return_pct, duration}
+    """
+    if st is None:
+        return
+    head = (
+        '<div class="ds-bt-trades-h">'
+        '<span>Date</span><span>Side</span><span>Reason</span>'
+        '<span>Return</span><span>Duration</span>'
+        '</div>'
+    )
+    rh = []
+    for r in rows:
+        side = (r.get("side") or "").upper()
+        s_cls = "buy" if side in ("BUY", "LONG") else ("sell" if side in ("SELL", "SHORT") else "")
+        ret = r.get("return_pct")
+        if ret is None:
+            ret_str, ret_cls = "—", ""
+        else:
+            sign = "+" if float(ret) > 0 else ("−" if float(ret) < 0 else "")
+            ret_str = f"{sign}{abs(float(ret)):.1f}%"
+            ret_cls = "up" if float(ret) > 0 else ("down" if float(ret) < 0 else "")
+        rh.append(
+            f'<div class="ds-bt-trades-r">'
+            f'<span class="dt">{r.get("date","—")}</span>'
+            f'<span class="s {s_cls}">{side or "—"}</span>'
+            f'<span class="n">{r.get("reason","")}</span>'
+            f'<span class="p {ret_cls}">{ret_str}</span>'
+            f'<span class="d">{r.get("duration","—")}</span>'
+            f'</div>'
+        )
+    if not rh:
+        body = ('<div style="color:var(--text-muted);font-size:13px;padding:14px 4px;">'
+                'No trades recorded yet — run a backtest to populate.</div>')
+    else:
+        body = head + "".join(rh)
+    sub_html = (
+        f'<div style="color:var(--text-muted);font-size:12px;">{subtitle}</div>'
+        if subtitle else ""
+    )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd"><div class="ds-card-title">{title}</div>{sub_html}</div>'
+        f'<div class="ds-bt-trades">{body}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ── REGIMES page helpers (sibling-family-crypto-signal-REGIMES.html) ──
 
 def regime_state_bar(
