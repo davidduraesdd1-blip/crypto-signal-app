@@ -848,34 +848,15 @@ except Exception as _sg_sp_err:
 
 # ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
 # Beginner = default; persists across all pages via session_state.
-# beginner_mode kept for backward compat with inject_beginner_mode_js().
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Experience Level</span>',
-    unsafe_allow_html=True,
-)
+# 2026-04-24 redesign: the visible level selector lives in the topbar (see
+# render_top_bar). The sidebar radio has been removed so there's a single
+# control surface. We still init the session-state default + beginner_mode
+# side-effect here so first-render code paths and inject_beginner_mode_js()
+# behave identically.
 _LEVEL_OPTIONS = ["beginner", "intermediate", "advanced"]
-_LEVEL_LABELS  = {
-    "beginner":     "🟢 Beginner",
-    "intermediate": "🟡 Intermediate",
-    "advanced":     "🔴 Advanced",
-}
-_cur_sg_level = st.session_state.get("user_level", "beginner")
-_sg_level_val = st.sidebar.radio(
-    "User Level",
-    options=_LEVEL_OPTIONS,
-    format_func=lambda lv: _LEVEL_LABELS[lv],
-    index=_LEVEL_OPTIONS.index(_cur_sg_level) if _cur_sg_level in _LEVEL_OPTIONS else 0,
-    key="sg_user_level_radio",
-    label_visibility="collapsed",
-    help=(
-        "Beginner: plain-English view, tooltips always visible, simplified signals. "
-        "Intermediate: key numbers + condensed explanations. "
-        "Advanced: full technical detail, all raw numbers."
-    ),
-)
-st.session_state["user_level"]    = _sg_level_val
+if st.session_state.get("user_level") not in _LEVEL_OPTIONS:
+    st.session_state["user_level"] = "beginner"
+_sg_level_val = st.session_state["user_level"]
 # Backward compat: beginner_mode = True when NOT Advanced (drives inject_beginner_mode_js)
 _bm_val = (_sg_level_val != "advanced")
 st.session_state["beginner_mode"] = _bm_val
@@ -897,21 +878,33 @@ if _demo_val:
     )
 _demo_mode = _demo_val
 
-# ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
-st.sidebar.markdown("")
-_ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+# Note: the Crypto Glossary popover used to live here (always-visible top-of-
+# sidebar slot). It's been moved to the sidebar footer (see render_legal_footer
+# below) — the topbar handles the primary controls now, and the footer group
+# is the right home for reference / legal links.
 
-# ── Theme toggle (item 18 — light/dark mode) ──────────────────────────────────
-_ui.render_theme_toggle_sg()
+# ── Theme-toggle handler (shared by topbar ☾ Theme button) ───────────────────
+# 2026-04-24 redesign: the visible theme toggle now lives in the topbar.
+# The sidebar render_theme_toggle_sg() call has been removed. Both keys
+# ("_sg_theme" used by ui_components/Plotly templates and "theme" used by
+# ui.design_system.inject_theme) are kept in sync here.
+def _toggle_theme() -> None:
+    cur = st.session_state.get("_sg_theme", "dark")
+    new = "light" if cur != "light" else "dark"
+    st.session_state["_sg_theme"] = new
+    st.session_state["theme"]     = new
+    # Reset CSS injection guard so inject_css() re-fires on next rerun.
+    st.session_state["_css_injected"] = False
 
-# ── Refresh All Data (item 27) ────────────────────────────────────────────────
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Data</span>',
-    unsafe_allow_html=True,
-)
-if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", help="Clear all caches and reload fresh data from all sources", width="stretch"):
+# ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
+# 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
+# (see render_top_bar). The sidebar "Refresh All Data" button has been
+# removed so the topbar ↻ chip is the single control surface. Both the
+# topbar button and any future programmatic call invoke this handler.
+def _refresh_all_data() -> None:
+    """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
+    helpers, the data_feeds module-level dicts, and the cycle_indicators
+    in-memory caches. Caller is responsible for st.rerun()."""
     try:
         st.cache_data.clear()
     except Exception:
@@ -926,7 +919,7 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
                 _fn.clear()
             except Exception as _fc_err:
                 logger.debug("[App] cache clear failed for %s: %s", _fn, _fc_err)
-    # Also clear module-level cache dicts in data_feeds — not covered by st.cache_data.clear()
+    # Module-level cache dicts in data_feeds aren't covered by st.cache_data.clear()
     try:
         data_feeds.clear_all_module_caches()
     except Exception as _df_clr_err:
@@ -936,7 +929,6 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
         _ccc()
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
-    st.rerun()
 
 st.sidebar.markdown("---")
 
@@ -1486,7 +1478,16 @@ def render_past_performance_disclaimer(context: str = "") -> None:
 
 
 def render_legal_footer() -> None:
-    """Render Terms + Privacy expander (internal-beta stub) in the sidebar."""
+    """Render the sidebar footer cluster — small Glossary link + Legal stub.
+
+    The Glossary lives here (rather than the top of the sidebar) because the
+    topbar holds the primary controls now; reference / legal links belong in
+    a footer group. Depth of glossary content scales with user_level.
+    """
+    try:
+        _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+    except Exception as _gloss_err:
+        logger.debug("[App] sidebar glossary render failed: %s", _gloss_err)
     with st.sidebar.expander("📜 Legal (Internal Beta)", expanded=False):
         st.markdown(_LEGAL_TOS)
         st.markdown("---")
@@ -1502,7 +1503,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level)
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -1617,15 +1618,6 @@ def page_dashboard():
             logger.debug("[App] macro strip render failed: %s", _ds_strip_err)
     except Exception as _ds_tb_err:
         logger.debug("[App] top bar render failed: %s", _ds_tb_err)
-
-    # ── Welcome banner (item 19 — beginner only, once per session) ────────────
-    _ui.render_welcome_banner()
-
-    # ── Quick-access popover row (ToS #7) — flush right, top of page ──────────
-    try:
-        _ui.render_quick_access_row()
-    except Exception:
-        pass
 
     # PERF-28: read all WS prices once at the top of the render — was called 3+ times per render
     _live_prices = _ws.get_all_prices()
@@ -1769,26 +1761,55 @@ def page_dashboard():
 
         # Two-col: watchlist + backtest preview
         try:
+            # Sparkline points come from real 24×1h OHLCV closes
+            # (data_feeds.fetch_sparkline_closes — OKX → Gate.io fallback,
+            # cached 5 minutes per pair via the module-level _SPARKLINE_CACHE).
+            # If the fetch fails the row simply omits spark_points and the
+            # watchlist card renders an empty SVG — never fake data.
+            def _spark_points_from_closes(closes, width: int = 80, height: int = 22):
+                if not closes or len(closes) < 2:
+                    return None
+                lo, hi = min(closes), max(closes)
+                span = hi - lo
+                n = len(closes)
+                pad_top, pad_bot = 2.0, 2.0
+                inner = height - pad_top - pad_bot  # 18
+                pts = []
+                for _idx, _c in enumerate(closes):
+                    _x = (_idx / (n - 1)) * width
+                    if span <= 0:
+                        _y_pt = pad_top + inner / 2
+                    else:
+                        # Invert: high price → low y (SVG y=0 is top)
+                        _y_pt = pad_top + (1.0 - (_c - lo) / span) * inner
+                    pts.append((round(_x, 1), round(_y_pt, 1)))
+                return pts
+
             _ds_wl_rows = []
             for _wp in model.PAIRS[:6]:
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
-                # Simple deterministic sparkline — 11 points from a seeded walk
-                import hashlib as _hashlib
-                _seed = int(_hashlib.md5(_wp.encode()).hexdigest()[:6], 16)
-                _pts = []
-                _y = 11
-                for _i in range(11):
-                    _y += ((_seed >> (_i * 2)) & 0x03) - 1.5
-                    _y = max(2, min(20, _y))
-                    _pts.append((_i * 8, round(_y, 1)))
-                _ds_wl_rows.append({
+                try:
+                    _closes = data_feeds.fetch_sparkline_closes(_wp, n=24)
+                except Exception as _spark_err:
+                    logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
+                    _closes = []
+                _pts = _spark_points_from_closes(_closes)
+                # Derive 24h change from closes only if WS didn't supply one
+                if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
+                    try:
+                        _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
+                    except Exception:
+                        pass
+                _wl_row = {
                     "ticker": _wp.replace("/USDT", "").replace("/USD", ""),
                     "price": _price,
                     "change_pct": _chg,
-                    "spark_points": _pts,
-                })
+                }
+                if _pts:
+                    _wl_row["spark_points"] = _pts
+                _ds_wl_rows.append(_wl_row)
             # Last scan timestamp
             _scan_ts_label = "not yet run"
             _ts = st.session_state.get("scan_timestamp")
@@ -4871,7 +4892,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv)
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -5959,7 +5980,7 @@ def page_backtest():
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv)
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -7741,7 +7762,7 @@ def page_arbitrage():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv)
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_arb_title, subtitle=_arb_sub)
     except Exception as _ds_arb_err:
         logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
@@ -8144,7 +8165,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv)
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)

@@ -186,10 +186,21 @@ def render_top_bar(
     show_level: bool = True,
     show_refresh: bool = True,
     show_theme: bool = True,
+    on_refresh=None,
+    on_theme=None,
 ) -> None:
     """
-    Render the top bar: breadcrumb + level pills + refresh + theme. Renders
-    into the main column (must be called BEFORE any other page markdown).
+    Render the top bar: breadcrumb + level pills + refresh + theme.
+
+    Level pills are real Streamlit buttons that write to
+    `st.session_state["user_level"]` and trigger a rerun on click.
+
+    Refresh and theme are real Streamlit buttons when `on_refresh` /
+    `on_theme` callbacks are provided; otherwise they fall back to a
+    decorative chip and the user is expected to use the legacy sidebar
+    controls.
+
+    Must be called BEFORE any other main-column markdown.
     """
     if st is None:
         return
@@ -197,26 +208,62 @@ def render_top_bar(
     *rest, last = list(breadcrumb) or ["", ""]
     crumb_html = " / ".join(rest) + (" / " if rest else "") + f"<b>{last}</b>"
 
-    level_html = ""
+    # 6-col row: breadcrumb (wide) + 3 level pills + refresh + theme.
+    cols = st.columns([6, 1, 1, 1, 1, 1])
+
+    with cols[0]:
+        st.markdown(
+            f'<div class="ds-crumbs" style="padding-top:8px;">{crumb_html}</div>',
+            unsafe_allow_html=True,
+        )
+
     if show_level:
         lvls = [("beginner", "Beginner"), ("intermediate", "Intermediate"), ("advanced", "Advanced")]
-        buttons = "".join(
-            f'<button class="{"on" if user_level == k else ""}" data-level="{k}">{lbl}</button>'
-            for k, lbl in lvls
-        )
-        level_html = f'<div class="ds-level-group">{buttons}</div>'
+        for idx, (k, lbl) in enumerate(lvls, start=1):
+            with cols[idx]:
+                if st.button(
+                    lbl,
+                    key=f"ds_topbar_lvl_{k}",
+                    use_container_width=True,
+                    type=("primary" if user_level == k else "secondary"),
+                    help=f"Switch to {lbl} view",
+                ):
+                    st.session_state["user_level"] = k
+                    st.rerun()
 
-    refresh_html = '<button class="ds-chip-btn" data-action="refresh">↻ Refresh</button>' if show_refresh else ""
-    theme_html   = '<button class="ds-chip-btn" data-action="theme">☾ Theme</button>' if show_theme else ""
+    if show_refresh:
+        with cols[4]:
+            if on_refresh is not None:
+                if st.button(
+                    "↻ Refresh",
+                    key="ds_topbar_refresh",
+                    use_container_width=True,
+                    help="Clear all caches and reload data from all sources",
+                ):
+                    on_refresh()
+                    st.rerun()
+            else:
+                st.markdown(
+                    '<div class="ds-chip-btn" style="text-align:center;opacity:0.5;">↻ Refresh</div>',
+                    unsafe_allow_html=True,
+                )
 
-    st.markdown(
-        f'<div class="ds-topbar">'
-        f'<div class="ds-crumbs">{crumb_html}</div>'
-        f'<div class="ds-topbar-spacer"></div>'
-        f'{level_html}{refresh_html}{theme_html}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    if show_theme:
+        with cols[5]:
+            if on_theme is not None:
+                if st.button(
+                    "☾ Theme",
+                    key="ds_topbar_theme",
+                    use_container_width=True,
+                    help="Toggle light / dark mode",
+                ):
+                    on_theme()
+                    st.rerun()
+            else:
+                st.markdown(
+                    '<div class="ds-chip-btn" style="text-align:center;opacity:0.5;">☾ Theme</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ── Page header ───────────────────────────────────────────────────────
