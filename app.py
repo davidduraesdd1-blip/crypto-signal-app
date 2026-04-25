@@ -1478,20 +1478,23 @@ def render_past_performance_disclaimer(context: str = "") -> None:
 
 
 def render_legal_footer() -> None:
-    """Render the sidebar footer cluster — small Glossary link + Legal stub.
+    """Render the sidebar footer cluster — Glossary popover + Legal stub.
 
-    The Glossary lives here (rather than the top of the sidebar) because the
-    topbar holds the primary controls now; reference / legal links belong in
-    a footer group. Depth of glossary content scales with user_level.
+    Both items are explicitly scoped to st.sidebar via the `with st.sidebar:`
+    context. The previous version called _ui.glossary_popover(...) outside any
+    sidebar context, so the popover dropdown rendered at the bottom of the
+    main page area below the legal disclaimer instead of in the sidebar.
+    Depth of glossary content scales with user_level.
     """
-    try:
-        _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
-    except Exception as _gloss_err:
-        logger.debug("[App] sidebar glossary render failed: %s", _gloss_err)
-    with st.sidebar.expander("📜 Legal (Internal Beta)", expanded=False):
-        st.markdown(_LEGAL_TOS)
-        st.markdown("---")
-        st.markdown(_LEGAL_PRIVACY)
+    with st.sidebar:
+        try:
+            _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+        except Exception as _gloss_err:
+            logger.debug("[App] sidebar glossary render failed: %s", _gloss_err)
+        with st.expander("📜 Legal (Internal Beta)", expanded=False):
+            st.markdown(_LEGAL_TOS)
+            st.markdown("---")
+            st.markdown(_LEGAL_PRIVACY)
 
 
 def page_dashboard():
