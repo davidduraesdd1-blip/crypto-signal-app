@@ -857,6 +857,147 @@ def signal_history_table(
     )
 
 
+# ── REGIMES page helpers (sibling-family-crypto-signal-REGIMES.html) ──
+
+def regime_state_bar(
+    segments: Sequence[tuple[str, float]],
+    *,
+    title: str = "Regime state · last 90d",
+    date_labels: Sequence[str] | None = None,
+    note: str = "",
+) -> None:
+    """Stacked horizontal bar of regime segments (Bear / Trans / Accum / Bull / Dist).
+
+    Each segment: (state_name, percentage_0_100). Color is derived from the
+    state name. date_labels render evenly spaced under the bar.
+    """
+    if st is None:
+        return
+    _color_map = {
+        "bull":         "#22c55e",
+        "bear":         "#ef4444",
+        "trans":        "#f59e0b",
+        "transition":   "#f59e0b",
+        "accum":        "#3b82f6",
+        "accumulation": "#3b82f6",
+        "dist":         "#f59e0b",
+        "distribution": "#f59e0b",
+    }
+    seg_html = []
+    for name, pct in segments:
+        c = _color_map.get(str(name).lower(), "#5d5d6e")
+        label = str(name).title()[:5]
+        seg_html.append(
+            f'<div class="ds-rgm-seg" style="background:{c};width:{max(0,min(100,pct))}%;">'
+            f'{label}</div>'
+        )
+    label_html = ""
+    if date_labels:
+        cells = "".join(f'<span>{d}</span>' for d in date_labels)
+        label_html = (
+            f'<div style="display:flex;justify-content:space-between;'
+            f'font-size:11px;color:var(--text-muted);margin-top:6px;">{cells}</div>'
+        )
+    note_html = (
+        f'<div style="margin-top:20px;font-size:12px;color:var(--text-muted);'
+        f'line-height:1.5;">{note}</div>' if note else ""
+    )
+    st.markdown(
+        f'<div class="ds-card" style="padding:20px;">'
+        f'<div style="font-size:13px;color:var(--text-muted);text-transform:uppercase;'
+        f'letter-spacing:0.06em;margin-bottom:14px;">{title}</div>'
+        f'<div class="ds-rgm-bar">{"".join(seg_html)}</div>'
+        f'{label_html}{note_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def macro_regime_overlay_card(
+    rows: Sequence[dict],
+    *,
+    title: str = "Macro regime · overlay",
+    overall_label: str = "",
+    overall_confidence: float | None = None,
+) -> None:
+    """List card showing macro indicators. Each row dict:
+        {name, value, delta_text, delta_dir: up|down|""}, sentiment: bull|bear|neut, sentiment_label}
+    """
+    if st is None:
+        return
+    row_html = []
+    for r in rows:
+        d_dir = (r.get("delta_dir") or "").lower()
+        d_cls = "up" if d_dir == "up" else ("down" if d_dir == "down" else "")
+        s_class = (r.get("sentiment") or "neut").lower()
+        if s_class not in ("bull", "bear", "neut"):
+            s_class = "neut"
+        row_html.append(
+            f'<div class="ds-macro-row">'
+            f'<span class="n">{r.get("name","")}</span>'
+            f'<span class="v">{r.get("value","—")}</span>'
+            f'<span class="d {d_cls}">{r.get("delta_text","")}</span>'
+            f'<span class="s {s_class}">{r.get("sentiment_label","")}</span>'
+            f'</div>'
+        )
+    overall_html = ""
+    if overall_label:
+        conf_txt = f" · {int(overall_confidence)}%" if overall_confidence is not None else ""
+        overall_html = (
+            f'<div style="color:var(--accent);font-weight:600;">'
+            f'{overall_label}{conf_txt}</div>'
+        )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd">'
+        f'<div class="ds-card-title">{title}</div>'
+        f'{overall_html}'
+        f'</div>'
+        f'<div style="margin-top:8px;">{"".join(row_html)}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def regime_weights_grid(
+    weights_by_regime: Sequence[tuple[str, str, dict]],
+    *,
+    title: str = "Signal weights by regime",
+    subtitle: str = "auto-adjusted by HMM state",
+) -> None:
+    """4-col grid showing layer weights per regime.
+
+    Each entry: (regime_name, color_token, weights_dict).
+    color_token: success | danger | warning | info.
+    weights_dict: {"Tech": 0.30, "Macro": 0.15, ...}
+    """
+    if st is None:
+        return
+    cells = []
+    for name, tone, weights in weights_by_regime:
+        wlines = "<br>".join(
+            f'{k}: {v:.2f}' for k, v in weights.items()
+        )
+        cells.append(
+            f'<div>'
+            f'<div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--{tone});">{name}</div>'
+            f'<div style="font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--text-secondary);">{wlines}</div>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd">'
+        f'<div class="ds-card-title">{title}</div>'
+        f'<div style="color:var(--text-muted);font-size:12px;">{subtitle}</div>'
+        f'</div>'
+        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px;">'
+        f'{"".join(cells)}'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def regime_cards_grid(cards: Sequence[dict], cols: int = 4) -> None:
     """Render a grid of regime cards.
     Each card dict: ticker, state, confidence, since.

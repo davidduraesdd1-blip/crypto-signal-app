@@ -8772,25 +8772,278 @@ def page_signals():
 
 
 # ──────────────────────────────────────────────
-# PAGE: REGIMES (placeholder — full port lands in next commit)
+# PAGE: REGIMES (sibling-family-crypto-signal-REGIMES.html)
 # ──────────────────────────────────────────────
 def page_regimes():
-    """Stub page. Real port follows in the REGIMES commit on this branch."""
+    """Per-asset regime grid + macro overlay + per-regime weights.
+
+    Pulls regime state per asset from latest scan_results / DB. Macro
+    overlay rows pulled live from data_feeds. Regime-weight grid pulled
+    from the model's REGIME_WEIGHTS config (or defaults if absent).
+    """
     try:
-        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(
-            breadcrumb=("Markets", "Regimes"),
-            user_level=st.session_state.get("user_level", "beginner"),
-            on_refresh=_refresh_all_data,
-            on_theme=_toggle_theme,
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            regime_cards_grid as _ds_regimes,
+            regime_state_bar as _ds_state_bar,
+            macro_regime_overlay_card as _ds_macro_overlay,
+            regime_weights_grid as _ds_weights_grid,
         )
-        _ds_page_header(
-            title="Regimes",
-            subtitle="Per-asset regime detail (full port shipping next on this branch).",
-        )
-    except Exception as _e:
-        logger.debug("[Regimes] stub render failed: %s", _e)
-    st.info("Regimes page port lands in the next commit on this branch.")
+    except Exception as _e_imp:
+        logger.error("[Regimes] import failed: %s", _e_imp)
+        st.error("Regimes page failed to load — check logs.")
+        return
+
+    _ds_level = st.session_state.get("user_level", "beginner")
+    _ds_top_bar(
+        breadcrumb=("Markets", "Regimes"),
+        user_level=_ds_level,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+    )
+    _ds_page_header(
+        title="Regimes",
+        subtitle="HMM-inferred market regime per asset + macro overlay. Regime-specific signal weights auto-adjust.",
+        data_sources=[
+            (str(model.TA_EXCHANGE).upper(), "live"),
+            ("Glassnode", "live"),
+            ("FRED", "cached"),
+        ],
+    )
+
+    # ── Top: 8-card regime grid ──
+    try:
+        _df_sig = _cached_signals_df(500)
+        _seen_pairs: set[str] = set()
+        _regime_rows: list[dict] = []
+        # Prefer current session results, then fall back to DB
+        for _r in (st.session_state.get("scan_results") or []):
+            _p = str(_r.get("pair") or _r.get("symbol") or "").upper()
+            _ticker = _p.split("/")[0].split("-")[0]
+            if not _ticker or _ticker in _seen_pairs:
+                continue
+            _state_raw = str(_r.get("regime") or _r.get("regime_label") or "").strip()
+            for _pre in ("Regime: ", "Regime:", "Regime "):
+                if _state_raw.lower().startswith(_pre.lower()):
+                    _state_raw = _state_raw[len(_pre):].strip()
+                    break
+            _conf = _r.get("regime_confidence") or _r.get("regime_conf_pct")
+            _regime_rows.append({
+                "ticker": _ticker,
+                "state": _state_raw or "Transition",
+                "confidence": _conf,
+                "since": "",
+            })
+            _seen_pairs.add(_ticker)
+            if len(_regime_rows) >= 8:
+                break
+        # DB fallback if scan results don't fill 8
+        if len(_regime_rows) < 8 and _df_sig is not None and not _df_sig.empty:
+            _df_sorted = _df_sig.sort_values("scan_timestamp", ascending=False)
+            for _, _row in _df_sorted.iterrows():
+                _p = str(_row.get("pair") or "").upper()
+                _ticker = _p.split("/")[0].split("-")[0]
+                if not _ticker or _ticker in _seen_pairs:
+                    continue
+                _state_raw = str(_row.get("regime") or _row.get("regime_label") or "").strip()
+                for _pre in ("Regime: ", "Regime:", "Regime "):
+                    if _state_raw.lower().startswith(_pre.lower()):
+                        _state_raw = _state_raw[len(_pre):].strip()
+                        break
+                _regime_rows.append({
+                    "ticker": _ticker,
+                    "state": _state_raw or "Transition",
+                    "confidence": _row.get("regime_confidence") or _row.get("regime_conf_pct"),
+                    "since": "",
+                })
+                _seen_pairs.add(_ticker)
+                if len(_regime_rows) >= 8:
+                    break
+        if not _regime_rows:
+            # No data yet — show placeholder cards for the must-have set
+            for _t in ["BTC", "ETH", "XRP", "SOL", "AVAX", "LINK", "DOGE", "BNB"]:
+                _regime_rows.append({"ticker": _t, "state": "Transition", "confidence": None, "since": "no scan yet"})
+        _ds_regimes(_regime_rows[:8], cols=4)
+    except Exception as _e_rgrid:
+        logger.debug("[Regimes] regime grid render failed: %s", _e_rgrid)
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── 2-col: state-bar timeline (BTC) + macro overlay ──
+    _col_l, _col_r = st.columns([1.2, 1])
+
+    with _col_l:
+        # Compute approximate state-bar segments for BTC over the last 90d.
+        # If we have a regime_history table or per-day regimes in scan_results,
+        # use it. Otherwise show a representative example using the latest
+        # known state (single 100% segment) so the layout still renders.
+        try:
+            _segments: list[tuple[str, float]] = []
+            _btc_state = "bull"
+            _btc_conf = None
+            for _r in (st.session_state.get("scan_results") or []):
+                _p = str(_r.get("pair") or "").upper()
+                if _p.startswith("BTC"):
+                    _state_raw = str(_r.get("regime") or _r.get("regime_label") or "").strip()
+                    for _pre in ("Regime: ", "Regime:", "Regime "):
+                        if _state_raw.lower().startswith(_pre.lower()):
+                            _state_raw = _state_raw[len(_pre):].strip()
+                            break
+                    _btc_state = (_state_raw or "bull").lower()
+                    _btc_conf = _r.get("regime_confidence")
+                    break
+            # Without a regime history table, render the current state full-width
+            _segments = [(_btc_state, 100.0)]
+            _note = (f"HMM 4-state model over composite score + on-chain + macro features. "
+                     f"Current state: {_btc_state.title()}"
+                     f"{f', confidence {int(_btc_conf)}%' if _btc_conf is not None else ''}.")
+            _ds_state_bar(
+                _segments,
+                title="BTC regime state · last 90d",
+                date_labels=None,  # Only show labels when we have real segmentation
+                note=_note,
+            )
+        except Exception as _e_sbar:
+            logger.debug("[Regimes] state bar render failed: %s", _e_sbar)
+
+    with _col_r:
+        # Macro overlay card — pulls live values
+        try:
+            _gm = _cached_global_market() or {}
+            _me = _cached_macro_enrichment() or {}
+            _btc_dom = _gm.get("btc_dominance_pct", _gm.get("btc_dominance"))
+            _btc_dom_7d = _gm.get("btc_dominance_7d_change_pct", _gm.get("btc_dominance_7d_ppt"))
+            _yf = {}
+            try:
+                _yf = data_feeds.fetch_yfinance_macro() or {}
+            except Exception:
+                pass
+            _dxy = _yf.get("dxy") or _me.get("dxy")
+            _dxy_30d = _yf.get("dxy_30d_change_pct") or _yf.get("dxy_30d_ret_pct") or _me.get("dxy_30d_change_pct")
+            _vix = _yf.get("vix") or _me.get("vix")
+            _vix_30d = _yf.get("vix_30d_change_pct") or _me.get("vix_30d_change_pct")
+            _ust10 = _yf.get("treasury_10y") or _me.get("treasury_10y")
+            _ust10_7d = _yf.get("treasury_10y_7d_change_bps") or _me.get("treasury_10y_7d_change_bps")
+            _fng_d = data_feeds.get_fear_greed() or {}
+            _fng_v = _fng_d.get("value")
+            _fng_7d = _fng_d.get("change_7d") or _me.get("fng_7d_change")
+            _hy = _yf.get("hy_spread_bps") or _me.get("hy_spread_bps")
+            _hy_30d = _yf.get("hy_spread_30d_change_bps") or _me.get("hy_spread_30d_change_bps")
+
+            def _fmt_pct(v, decimals=1, suffix=" ppts"):
+                if v is None:
+                    return ""
+                try:
+                    fv = float(v)
+                    sign = "+" if fv > 0 else ("−" if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{decimals}f}{suffix}"
+                except Exception:
+                    return ""
+            def _delta_dir(v):
+                if v is None:
+                    return ""
+                try:
+                    return "up" if float(v) > 0 else ("down" if float(v) < 0 else "")
+                except Exception:
+                    return ""
+
+            _rows = []
+            if _btc_dom is not None:
+                _rows.append({
+                    "name": "BTC Dominance",
+                    "value": f"{float(_btc_dom):.1f}%",
+                    "delta_text": f"{_fmt_pct(_btc_dom_7d, 1, ' ppts · 7d')}" if _btc_dom_7d is not None else "",
+                    "delta_dir": _delta_dir(_btc_dom_7d),
+                    "sentiment": "bull" if (_btc_dom_7d is not None and float(_btc_dom_7d) > 0) else "neut",
+                    "sentiment_label": "bullish" if (_btc_dom_7d is not None and float(_btc_dom_7d) > 0) else "neutral",
+                })
+            if _dxy is not None:
+                _rows.append({
+                    "name": "DXY",
+                    "value": f"{float(_dxy):.2f}",
+                    "delta_text": f"{_fmt_pct(_dxy_30d, 1, '% · 30d')}" if _dxy_30d is not None else "",
+                    "delta_dir": _delta_dir(_dxy_30d),
+                    "sentiment": "bull" if (_dxy_30d is not None and float(_dxy_30d) < 0) else "bear",
+                    "sentiment_label": "risk-on" if (_dxy_30d is not None and float(_dxy_30d) < 0) else "risk-off",
+                })
+            if _vix is not None:
+                _rows.append({
+                    "name": "VIX",
+                    "value": f"{float(_vix):.1f}",
+                    "delta_text": f"{_fmt_pct(_vix_30d, 0, '% · 30d')}" if _vix_30d is not None else "",
+                    "delta_dir": _delta_dir(_vix_30d),
+                    "sentiment": "bull" if (_vix_30d is not None and float(_vix_30d) < 0) else "bear",
+                    "sentiment_label": "risk-on" if (_vix_30d is not None and float(_vix_30d) < 0) else "risk-off",
+                })
+            if _ust10 is not None:
+                _rows.append({
+                    "name": "10Y yield",
+                    "value": f"{float(_ust10):.2f}%",
+                    "delta_text": f"{_fmt_pct(_ust10_7d, 0, 'bps · 7d')}" if _ust10_7d is not None else "",
+                    "delta_dir": _delta_dir(_ust10_7d),
+                    "sentiment": "bull" if (_ust10_7d is not None and float(_ust10_7d) < 0) else "bear",
+                    "sentiment_label": "tailwind" if (_ust10_7d is not None and float(_ust10_7d) < 0) else "headwind",
+                })
+            if _fng_v is not None:
+                _rows.append({
+                    "name": "Fear & Greed",
+                    "value": str(int(_fng_v)),
+                    "delta_text": f"{_fmt_pct(_fng_7d, 0, ' · 7d')}" if _fng_7d is not None else "",
+                    "delta_dir": _delta_dir(_fng_7d),
+                    "sentiment": "neut" if 35 <= float(_fng_v) <= 65 else ("bull" if float(_fng_v) > 65 else "bear"),
+                    "sentiment_label": _fng_d.get("label") or "",
+                })
+            if _hy is not None:
+                _rows.append({
+                    "name": "HY spreads",
+                    "value": f"{int(float(_hy))} bps",
+                    "delta_text": f"{_fmt_pct(_hy_30d, 0, ' bps · 30d')}" if _hy_30d is not None else "",
+                    "delta_dir": _delta_dir(_hy_30d),
+                    "sentiment": "bull" if (_hy_30d is not None and float(_hy_30d) < 0) else "bear",
+                    "sentiment_label": "tightening" if (_hy_30d is not None and float(_hy_30d) < 0) else "widening",
+                })
+
+            # Overall macro regime label
+            _macro_regime = _me.get("macro_regime") or _me.get("macro_regime_label") or ""
+            _macro_conf = _me.get("macro_regime_confidence_pct") or _me.get("macro_confidence")
+            _ds_macro_overlay(
+                _rows,
+                title="Macro regime · overlay",
+                overall_label=str(_macro_regime).title() if _macro_regime else "",
+                overall_confidence=_macro_conf,
+            )
+        except Exception as _e_macro:
+            logger.debug("[Regimes] macro overlay failed: %s", _e_macro)
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── Signal weights by regime ──
+    try:
+        # Try to read REGIME_WEIGHTS from model; fall back to mockup defaults.
+        _weights = getattr(model, "REGIME_WEIGHTS", None)
+        if not isinstance(_weights, dict) or not _weights:
+            _weights = {
+                "Bull":         {"Tech": 0.30, "Macro": 0.15, "Sent": 0.20, "On-chain": 0.35},
+                "Accumulation": {"Tech": 0.20, "Macro": 0.15, "Sent": 0.15, "On-chain": 0.50},
+                "Distribution": {"Tech": 0.35, "Macro": 0.25, "Sent": 0.25, "On-chain": 0.15},
+                "Bear":         {"Tech": 0.40, "Macro": 0.35, "Sent": 0.15, "On-chain": 0.10},
+            }
+        _tone_for = {
+            "Bull": "success", "bull": "success",
+            "Accumulation": "info", "accum": "info", "accumulation": "info",
+            "Distribution": "warning", "dist": "warning", "distribution": "warning",
+            "Bear": "danger", "bear": "danger",
+            "Transition": "warning", "trans": "warning", "transition": "warning",
+        }
+        _entries = []
+        for _name, _w in _weights.items():
+            if isinstance(_w, dict):
+                _entries.append((_name, _tone_for.get(_name, _tone_for.get(str(_name).lower(), "warning")), _w))
+        if _entries:
+            _ds_weights_grid(_entries[:4])
+    except Exception as _e_wgrid:
+        logger.debug("[Regimes] weights grid failed: %s", _e_wgrid)
 
 
 # ──────────────────────────────────────────────

@@ -22,6 +22,9 @@ from .sidebar import (
     composite_score_card,
     indicator_card,
     signal_history_table,
+    regime_state_bar,
+    macro_regime_overlay_card,
+    regime_weights_grid,
 )
 from .overrides import inject_streamlit_overrides
 
@@ -47,5 +50,8 @@ __all__ = [
     "composite_score_card",
     "indicator_card",
     "signal_history_table",
+    "regime_state_bar",
+    "macro_regime_overlay_card",
+    "regime_weights_grid",
     "inject_streamlit_overrides",
 ]

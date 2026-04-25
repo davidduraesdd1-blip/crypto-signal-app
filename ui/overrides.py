@@ -541,6 +541,44 @@ def inject_streamlit_overrides() -> None:
     .ds-hist-row .ret.up { color: var(--success); }
     .ds-hist-row .ret.down { color: var(--danger); }
 
+    /* ─── REGIMES page (sibling-family-crypto-signal-REGIMES.html) ─── */
+    .ds-rgm-bar {
+      display: flex; height: 34px; border-radius: 8px;
+      overflow: hidden; margin-top: 8px;
+    }
+    .ds-rgm-seg {
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-size: 11px; font-weight: 600;
+    }
+    .ds-macro-row {
+      display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr;
+      gap: 12px; align-items: center;
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .ds-macro-row:last-child { border-bottom: none; }
+    .ds-macro-row .n { font-weight: 500; color: var(--text-primary); }
+    .ds-macro-row .v { font-family: var(--font-mono); color: var(--text-primary); }
+    .ds-macro-row .d { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+    .ds-macro-row .d.up { color: var(--success); }
+    .ds-macro-row .d.down { color: var(--danger); }
+    .ds-macro-row .s {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11.5px; color: var(--text-muted);
+    }
+    .ds-macro-row .s.bull::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--success);
+    }
+    .ds-macro-row .s.bear::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--danger);
+    }
+    .ds-macro-row .s.neut::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--warning);
+    }
+
     /* ─── Regime cards (from REGIMES mockup) ─── */
     .ds-rgm {
       padding: 16px; display: flex; flex-direction: column; gap: 6px;
