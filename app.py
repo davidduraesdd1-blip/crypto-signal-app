@@ -1761,26 +1761,55 @@ def page_dashboard():
 
         # Two-col: watchlist + backtest preview
         try:
+            # Sparkline points come from real 24×1h OHLCV closes
+            # (data_feeds.fetch_sparkline_closes — OKX → Gate.io fallback,
+            # cached 5 minutes per pair via the module-level _SPARKLINE_CACHE).
+            # If the fetch fails the row simply omits spark_points and the
+            # watchlist card renders an empty SVG — never fake data.
+            def _spark_points_from_closes(closes, width: int = 80, height: int = 22):
+                if not closes or len(closes) < 2:
+                    return None
+                lo, hi = min(closes), max(closes)
+                span = hi - lo
+                n = len(closes)
+                pad_top, pad_bot = 2.0, 2.0
+                inner = height - pad_top - pad_bot  # 18
+                pts = []
+                for _idx, _c in enumerate(closes):
+                    _x = (_idx / (n - 1)) * width
+                    if span <= 0:
+                        _y_pt = pad_top + inner / 2
+                    else:
+                        # Invert: high price → low y (SVG y=0 is top)
+                        _y_pt = pad_top + (1.0 - (_c - lo) / span) * inner
+                    pts.append((round(_x, 1), round(_y_pt, 1)))
+                return pts
+
             _ds_wl_rows = []
             for _wp in model.PAIRS[:6]:
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
-                # Simple deterministic sparkline — 11 points from a seeded walk
-                import hashlib as _hashlib
-                _seed = int(_hashlib.md5(_wp.encode()).hexdigest()[:6], 16)
-                _pts = []
-                _y = 11
-                for _i in range(11):
-                    _y += ((_seed >> (_i * 2)) & 0x03) - 1.5
-                    _y = max(2, min(20, _y))
-                    _pts.append((_i * 8, round(_y, 1)))
-                _ds_wl_rows.append({
+                try:
+                    _closes = data_feeds.fetch_sparkline_closes(_wp, n=24)
+                except Exception as _spark_err:
+                    logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
+                    _closes = []
+                _pts = _spark_points_from_closes(_closes)
+                # Derive 24h change from closes only if WS didn't supply one
+                if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
+                    try:
+                        _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
+                    except Exception:
+                        pass
+                _wl_row = {
                     "ticker": _wp.replace("/USDT", "").replace("/USD", ""),
                     "price": _price,
                     "change_pct": _chg,
-                    "spark_points": _pts,
-                })
+                }
+                if _pts:
+                    _wl_row["spark_points"] = _pts
+                _ds_wl_rows.append(_wl_row)
             # Last scan timestamp
             _scan_ts_label = "not yet run"
             _ts = st.session_state.get("scan_timestamp")
