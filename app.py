@@ -1609,9 +1609,6 @@ def page_dashboard():
     except Exception as _ds_tb_err:
         logger.debug("[App] top bar render failed: %s", _ds_tb_err)
 
-    # ── Welcome banner (item 19 — beginner only, once per session) ────────────
-    _ui.render_welcome_banner()
-
     # ── Quick-access popover row (ToS #7) — flush right, top of page ──────────
     try:
         _ui.render_quick_access_row()
