@@ -9271,25 +9271,170 @@ def page_regimes():
 
 
 # ──────────────────────────────────────────────
-# PAGE: ON-CHAIN (placeholder — thin DS pass lands in last commit)
+# PAGE: ON-CHAIN (thin design-system pass — no dedicated mockup)
 # ──────────────────────────────────────────────
 def page_onchain():
-    """Stub page. The thin design-system pass lands in the last commit."""
+    """On-chain metrics page — thin design-system pass per Cowork directive.
+
+    No dedicated mockup exists for ON-CHAIN; this page applies the design-
+    system topbar + page header + ds-card primitives over the existing
+    on-chain data sources. Content surface stays close to the existing
+    on-chain section that used to live inside the Dashboard tabs — we
+    don't redesign the data, just the chrome around it.
+    """
     try:
-        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(
-            breadcrumb=("Research", "On-chain"),
-            user_level=st.session_state.get("user_level", "beginner"),
-            on_refresh=_refresh_all_data,
-            on_theme=_toggle_theme,
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            indicator_card as _ds_ind_card,
         )
-        _ds_page_header(
-            title="On-chain",
-            subtitle="On-chain metrics (page in build — thin design-system pass shipping last on this branch).",
+    except Exception as _e_imp:
+        logger.error("[On-chain] import failed: %s", _e_imp)
+        st.error("On-chain page failed to load — check logs.")
+        return
+
+    _oc_lv = st.session_state.get("user_level", "beginner")
+    _ds_top_bar(
+        breadcrumb=("Research", "On-chain"),
+        user_level=_oc_lv,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+    )
+    _ds_page_header(
+        title="On-chain",
+        subtitle="Glassnode + Dune metrics for the major majors. MVRV-Z, SOPR, exchange flows, active addresses.",
+        data_sources=[
+            ("Glassnode", "live"),
+            ("Dune", "cached"),
+            ("Native RPC", "live"),
+        ],
+    )
+
+    # Pull on-chain data per coin from the latest scan result (or DB fallback).
+    def _result_for(ticker: str) -> dict:
+        for _r in (st.session_state.get("scan_results") or []):
+            _p = str(_r.get("pair") or _r.get("symbol") or "").upper()
+            if _p.startswith(ticker):
+                return _r
+        try:
+            _df = _cached_signals_df(500)
+            if _df is not None and not _df.empty:
+                _df_pn = _df["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+                _hits = _df[_df_pn.str.startswith(ticker)]
+                if not _hits.empty:
+                    return _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
+        except Exception as _e:
+            logger.debug("[On-chain] DB lookup for %s failed: %s", ticker, _e)
+        return {}
+
+    def _v(x, fmt="{:.2f}"):
+        if x is None:
+            return "—"
+        try:
+            return fmt.format(float(x))
+        except Exception:
+            return str(x)
+
+    # Three indicator cards — BTC / ETH / overall flow snapshot.
+    _btc = _result_for("BTC")
+    _eth = _result_for("ETH")
+    _xrp = _result_for("XRP")
+
+    _c1, _c2, _c3 = st.columns(3)
+    with _c1:
+        _ds_ind_card(
+            "BTC · valuation & flows",
+            [
+                ("MVRV-Z",        _v(_btc.get("mvrv_z") or _btc.get("mvrv"), "{:.2f}"),
+                 "mid-cycle" if (_btc.get("mvrv_z") and 1 < float(_btc.get("mvrv_z") or 0) < 5) else "",
+                 ""),
+                ("SOPR",          _v(_btc.get("sopr"), "{:.3f}"),
+                 "profit taking" if (_btc.get("sopr") and float(_btc.get("sopr") or 0) > 1) else "",
+                 ""),
+                ("Exch. reserve", _v(_btc.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _btc.get("exchange_reserve_delta_7d") is not None else "—",
+                 "outflow 7d" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else "inflow 7d",
+                 "success" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
+                ("Active addr.",  _v(_btc.get("active_addresses_24h"), "{:,.0f}") if _btc.get("active_addresses_24h") is not None else "—",
+                 "24h",
+                 ""),
+            ],
         )
-    except Exception as _e:
-        logger.debug("[On-chain] stub render failed: %s", _e)
-    st.info("On-chain page port lands in the last commit on this branch.")
+    with _c2:
+        _ds_ind_card(
+            "ETH · valuation & flows",
+            [
+                ("MVRV-Z",        _v(_eth.get("mvrv_z") or _eth.get("mvrv"), "{:.2f}"),                            "", ""),
+                ("SOPR",          _v(_eth.get("sopr"), "{:.3f}"),                                                  "", ""),
+                ("Exch. reserve", _v(_eth.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _eth.get("exchange_reserve_delta_7d") is not None else "—", "7d", "success" if (_eth.get("exchange_reserve_delta_7d") and float(_eth.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
+                ("Active addr.",  _v(_eth.get("active_addresses_24h"), "{:,.0f}") if _eth.get("active_addresses_24h") is not None else "—", "24h", ""),
+            ],
+        )
+    with _c3:
+        _ds_ind_card(
+            "XRP · valuation & flows",
+            [
+                ("MVRV-Z",        _v(_xrp.get("mvrv_z") or _xrp.get("mvrv"), "{:.2f}"), "", ""),
+                ("SOPR",          _v(_xrp.get("sopr"), "{:.3f}"),                       "", ""),
+                ("Exch. reserve", _v(_xrp.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _xrp.get("exchange_reserve_delta_7d") is not None else "—", "7d", ""),
+                ("Active addr.",  _v(_xrp.get("active_addresses_24h"), "{:,.0f}") if _xrp.get("active_addresses_24h") is not None else "—", "24h", ""),
+            ],
+        )
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # Whale activity / large transfers (using existing whale_tracker if available)
+    try:
+        _whale = _cached_whale_activity()
+        if _whale and isinstance(_whale, list) and len(_whale) > 0:
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd">'
+                '<div class="ds-card-title">Whale activity · large transfers (last 24h)</div>'
+                f'<div style="color:var(--text-muted);font-size:12px;">{len(_whale)} events</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            for _w in _whale[:8]:
+                _amt = _w.get("amount_usd") or _w.get("value_usd") or 0
+                _coin = _w.get("symbol") or _w.get("coin") or "—"
+                _direction = _w.get("direction") or _w.get("flow") or ""
+                _time = str(_w.get("timestamp") or "")[:16]
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:110px 60px 1fr 100px;gap:12px;'
+                    f'padding:8px 4px;border-bottom:1px solid var(--border);font-size:12.5px;">'
+                    f'<span style="font-family:var(--font-mono);color:var(--text-muted);">{_time}</span>'
+                    f'<span style="font-weight:600;">{_coin}</span>'
+                    f'<span style="color:var(--text-secondary);">{_direction}</span>'
+                    f'<span style="font-family:var(--font-mono);text-align:right;">${float(_amt):,.0f}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd"><div class="ds-card-title">Whale activity</div></div>'
+                '<div style="color:var(--text-muted);font-size:13px;padding:12px 4px;">'
+                'No large transfers in the last 24h, or whale tracker is offline.'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as _e_w:
+        logger.debug("[On-chain] whale activity render failed: %s", _e_w)
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # Footnote about data freshness
+    st.markdown(
+        '<div class="ds-card" style="background:rgba(99,102,241,0.06);'
+        'border:1px solid rgba(99,102,241,0.20);font-size:12px;color:var(--text-muted);'
+        'padding:12px 16px;">'
+        'On-chain data is rate-limited on Glassnode\'s free tier (cached 1h). '
+        'A dedicated On-chain page mockup is on the design backlog; this thin pass '
+        'applies the design-system tokens to the existing data sources.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ──────────────────────────────────────────────
