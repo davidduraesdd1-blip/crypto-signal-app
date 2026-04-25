@@ -594,10 +594,15 @@ try:
     from ui import (
         inject_theme as _ds_inject_theme,
         inject_streamlit_overrides as _ds_inject_overrides,
+        register_plotly_template as _ds_register_plotly,
     )
     _ds_theme_pref = st.session_state.get("theme", "dark")
     _ds_inject_theme("crypto-signal-app", theme=_ds_theme_pref)
     _ds_inject_overrides()
+    # Register the design-system Plotly template + set as default so every
+    # chart inherits it. Per-chart update_layout(...) calls still win where
+    # specific overrides are needed (transparent bg + tight margins, etc.).
+    _ds_register_plotly(theme=_ds_theme_pref)
 except Exception as _ds_err:
     logger.debug("[App] design-system theme injection failed: %s", _ds_err)
 
@@ -877,6 +882,13 @@ def _toggle_theme() -> None:
     st.session_state["theme"]     = new
     # Reset CSS injection guard so inject_css() re-fires on next rerun.
     st.session_state["_css_injected"] = False
+    # Flip the Plotly default template so every chart created on the next
+    # rerun picks up the new theme automatically.
+    try:
+        from ui import register_plotly_template as _ds_reset_plotly
+        _ds_reset_plotly(theme=new)
+    except Exception as _e_plt:
+        logger.debug("[App] Plotly template re-register failed: %s", _e_plt)
 
 # ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
 # 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
@@ -2974,8 +2986,8 @@ def page_dashboard():
             _hm_fig.update_layout(
                 height=max(250, 32 * len(_hm_pairs) + 60),
                 margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="#0d0e14",
-                plot_bgcolor="#0d0e14",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(color="#f8fafc", size=9),
                 xaxis=dict(side="top", tickfont=dict(size=9)),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
@@ -7760,8 +7772,8 @@ def page_backtest():
                                     title="IS Sharpe vs OOS Sharpe per Window",
                                     height=240,
                                     margin=dict(l=10, r=10, t=36, b=10),
-                                    paper_bgcolor="#0d0e14",
-                                    plot_bgcolor="#0d0e14",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
                                     font=dict(color="#f8fafc", size=11),
                                     legend=dict(orientation="h", y=1.12, x=0),
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
@@ -7790,8 +7802,8 @@ def page_backtest():
                                     title="WFE Ratio per Window  (green ≥0.7 · yellow ≥0.5 · red <0.5)",
                                     height=220,
                                     margin=dict(l=10, r=80, t=36, b=10),
-                                    paper_bgcolor="#0d0e14",
-                                    plot_bgcolor="#0d0e14",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
                                     font=dict(color="#f8fafc", size=11),
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
                                     yaxis=dict(title="WFE", range=[0, max(max(_wfv_wfes) * 1.2, 1.1)],

@@ -31,6 +31,12 @@ from .sidebar import (
     recent_trades_card,
 )
 from .overrides import inject_streamlit_overrides
+from .plotly_template import (
+    register_default as register_plotly_template,
+    template_for as plotly_template_for,
+    apply as apply_plotly_template,
+    colors as plotly_colors,
+)
 
 __all__ = [
     "inject_theme",
@@ -62,4 +68,8 @@ __all__ = [
     "optuna_top_card",
     "recent_trades_card",
     "inject_streamlit_overrides",
+    "register_plotly_template",
+    "plotly_template_for",
+    "apply_plotly_template",
+    "plotly_colors",
 ]
