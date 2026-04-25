@@ -1178,6 +1178,27 @@ def _render_relocated_sidebar_widgets() -> None:
     with st.expander("🛠️ Build Info", expanded=False):
         st.caption(f"v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs")
 
+    with st.expander("🧪 Legacy views (advanced)", expanded=False):
+        st.caption(
+            "The 2026-05 redesign moved per-coin detail, regime detail, and "
+            "backtest detail to dedicated pages (Signals / Regimes / Backtester). "
+            "If you want the old Home dashboard's 5-tab structure back "
+            "(Today / All Coins / Coin Detail / Market Intel / Analysis), "
+            "toggle it on here."
+        )
+        _legacy_on = st.toggle(
+            "Show legacy 5-tab Dashboard view on Home",
+            value=st.session_state.get("show_legacy_scan_view", False),
+            key="show_legacy_scan_view_toggle",
+        )
+        st.session_state["show_legacy_scan_view"] = _legacy_on
+        _legacy_ticker_on = st.toggle(
+            "Show animated price-ticker strip on Home",
+            value=st.session_state.get("show_legacy_price_ticker", False),
+            key="show_legacy_price_ticker_toggle",
+        )
+        st.session_state["show_legacy_price_ticker"] = _legacy_ticker_on
+
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -1866,15 +1887,17 @@ def page_dashboard():
     # Beginners get exactly what the shared-docs/design-mockups/
     # sibling-family-crypto-signal.html Home shows: hero cards + macro
     # strip + regime grid + watchlist + backtest preview. Nothing else.
-    # Intermediate / advanced users still get the full scan view + PDF
-    # export + execute controls below.
-    #
-    # Opt back into the full legacy scan view via
+    # 2026-04-25: extended the gate from beginner-only to ALL levels by
+    # default. The legacy 5-tab dashboard structure (Today / All Coins /
+    # Coin Detail / Market Intel / Analysis) duplicates content that now
+    # lives on the dedicated SIGNALS / REGIMES / BACKTESTER pages, and
+    # was making Home read as cluttered for every user. Power users who
+    # explicitly want the legacy view can flip
     #   st.session_state["show_legacy_scan_view"] = True
+    # from Settings → Dev Tools.
     _ds_lvl_hide = st.session_state.get("user_level", "beginner")
-    if _ds_lvl_hide == "beginner" and not st.session_state.get("show_legacy_scan_view", False):
-        # Compact scan CTA — beginners who actually want to run a fresh
-        # scan (instead of relying on the scheduled one) still have a button.
+    if not st.session_state.get("show_legacy_scan_view", False):
+        # Compact scan CTA so users can still trigger a fresh scan from Home.
         with _scan_lock:
             _ds_sb_running = _scan_state["running"]
         _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
@@ -1883,7 +1906,7 @@ def page_dashboard():
             st.session_state["scan_results"] = []
             st.session_state["scan_error"] = None
             _start_scan()
-        return  # skip the rest of the beginner-unfriendly scan detail panels
+        return  # skip the legacy scan/tabs section — see flag above
 
     # Lightweight divider between the mockup cards above and the scan controls
     # below. Renders as a thin 24px top-margin line instead of an h2.
