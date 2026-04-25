@@ -188,6 +188,7 @@ def render_top_bar(
     show_theme: bool = True,
     on_refresh=None,
     on_theme=None,
+    status_pills: Sequence[dict] | None = None,
 ) -> None:
     """
     Render the top bar: breadcrumb + level pills + refresh + theme.
@@ -217,8 +218,28 @@ def render_top_bar(
         # data-topbar="1" is the CSS hook for scoped topbar-button styling
         # (see ui/overrides.py — the rule targets buttons in the same
         # stHorizontalBlock as this marker so they get nowrap + tighter padding).
+        _pills_html = ""
+        if status_pills:
+            _tone_to_cls = {
+                "info":    "ds-status-pill info",
+                "success": "ds-status-pill success",
+                "warning": "ds-status-pill warning",
+                "danger":  "ds-status-pill danger",
+                "muted":   "ds-status-pill muted",
+            }
+            _pp = []
+            for p in status_pills:
+                cls = _tone_to_cls.get(p.get("tone", "muted"), "ds-status-pill muted")
+                icon = p.get("icon", "")
+                lbl = p.get("label", "")
+                _pp.append(f'<span class="{cls}">{icon} {lbl}</span>')
+            _pills_html = (
+                f'<span style="display:inline-flex;gap:6px;margin-left:12px;'
+                f'vertical-align:middle;">{"".join(_pp)}</span>'
+            )
         st.markdown(
-            f'<div class="ds-crumbs" data-topbar="1" style="padding-top:8px;">{crumb_html}</div>',
+            f'<div class="ds-crumbs" data-topbar="1" style="padding-top:8px;">'
+            f'{crumb_html}{_pills_html}</div>',
             unsafe_allow_html=True,
         )
 

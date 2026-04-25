@@ -692,14 +692,13 @@ if _agent is not None:
 try:
     from ui.design_system import ACCENTS as _DS_ACCENTS
     _ds_accent = _DS_ACCENTS["crypto-signal-app"]
+    # Mockup brand block — wordmark only. Version / exchange / pair-count
+    # diagnostic line was removed in 2026-04-25 redesign; that info is
+    # available in Settings → Dev Tools when needed.
     st.sidebar.markdown(
         f'<div class="ds-rail-brand">'
         f'<div class="ds-brand-dot" style="background:{_ds_accent["accent"]};color:{_ds_accent["accent_ink"]};">◈</div>'
         f'<div class="ds-brand-wm">Signal<span style="color:var(--text-muted);">.app</span></div>'
-        f'</div>'
-        f'<div style="font-size:10px;color:var(--text-muted);letter-spacing:0.08em;'
-        f'text-transform:uppercase;padding:0 10px 12px;">'
-        f'v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -707,49 +706,43 @@ except Exception as _ds_brand_err:
     logger.debug("[App] design-system brand block failed, falling back: %s", _ds_brand_err)
     _ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
 
-# ── Paper / Live mode persistent badge ───────────────────────────────────────
+# ── Module-level status flags (consumed by topbar status pills) ──────────────
+# These used to render as full-width banners in the sidebar; now they fold into
+# small pills next to the breadcrumb in render_top_bar (see _topbar_pills below).
 try:
     _exec_mode_cfg = _cached_alerts_config()
     _is_live_mode  = _exec_mode_cfg.get("live_trading_enabled", False)
-    if _is_live_mode:
-        st.sidebar.markdown(
-            '<div style="background:rgba(246,70,93,0.15);border:1px solid rgba(246,70,93,0.4);'
-            'border-radius:8px;padding:7px 12px;text-align:center;margin-bottom:8px">'
-            '<span style="color:#ef4444;font-size:11px;font-weight:800;letter-spacing:0.8px">'
-            '🔴 LIVE TRADING ACTIVE — Real money at risk</span></div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.sidebar.markdown(
-            '<div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);'
-            'border-radius:8px;padding:6px 12px;text-align:center;margin-bottom:8px">'
-            '<span style="color:#a78bfa;font-size:11px;font-weight:700;letter-spacing:0.5px">'
-            '📄 Paper Mode — Simulated trades only</span></div>',
-            unsafe_allow_html=True,
-        )
 except Exception as _mode_badge_err:
-    logger.debug("[App] paper/live mode badge render failed: %s", _mode_badge_err)
+    logger.debug("[App] paper/live mode flag read failed: %s", _mode_badge_err)
+    _is_live_mode = False
 
-# ── AI / API Health Banner ─────────────────────────────────────────────────────
 try:
     from config import ANTHROPIC_ENABLED as _sg_ai_enabled, ANTHROPIC_API_KEY as _sg_ai_key
     _sg_ai_key_present = bool(_sg_ai_key)
-    if _sg_ai_enabled and _sg_ai_key_present:
-        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#22c55e", "✅", "Claude AI active"
-    elif _sg_ai_enabled and not _sg_ai_key_present:
-        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#ef4444", "🔴", "Claude AI: key missing"
+except Exception as _ai_flag_err:
+    logger.debug("[App] AI status flag read failed: %s", _ai_flag_err)
+    _sg_ai_enabled, _sg_ai_key_present = False, False
+
+def _topbar_pills() -> list[dict]:
+    """Compact status pills for the topbar — Paper/Live + Claude AI status.
+
+    Returns a list of {label, icon, tone} dicts. tone ∈ {info, success,
+    warning, danger, muted}. render_top_bar maps tone → CSS class.
+    """
+    pills: list[dict] = []
+    if _is_live_mode:
+        pills.append({"label": "Live", "icon": "🔴", "tone": "danger"})
     else:
-        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#64748b", "⚫", "Claude AI disabled"
-    st.sidebar.markdown(
-        f"<div style='background:rgba(0,0,0,0.15);border:1px solid {_sg_ai_col}44;"
-        f"border-left:3px solid {_sg_ai_col};border-radius:6px;"
-        f"padding:4px 10px;margin:4px 0;font-size:0.85rem;"
-        f"color:{_sg_ai_col};font-weight:600;'>"
-        f"{_sg_ai_icon} {_sg_ai_txt}</div>",
-        unsafe_allow_html=True,
-    )
-except Exception as _ai_banner_err:
-    logger.debug("[App] AI health banner render failed: %s", _ai_banner_err)
+        pills.append({"label": "Paper", "icon": "📄", "tone": "info"})
+    if _sg_ai_enabled and _sg_ai_key_present:
+        pills.append({"label": "Claude", "icon": "✅", "tone": "success"})
+    elif _sg_ai_enabled and not _sg_ai_key_present:
+        pills.append({"label": "Claude", "icon": "🔴", "tone": "danger"})
+    else:
+        pills.append({"label": "Claude", "icon": "⚫", "tone": "muted"})
+    if st.session_state.get("demo_mode"):
+        pills.append({"label": "Demo", "icon": "⚠️", "tone": "warning"})
+    return pills
 
 
 # ── Compact live scan-progress (sidebar) ────────────────────────────────────
@@ -862,21 +855,10 @@ _bm_val = (_sg_level_val != "advanced")
 st.session_state["beginner_mode"] = _bm_val
 _ui.inject_beginner_mode_js(_bm_val)
 
-# ── Demo / Sandbox mode toggle (#67) ─────────────────────────────────────────
-_demo_val = st.sidebar.toggle(
-    "Demo / Sandbox",
-    value=st.session_state.get("demo_mode", False),
-    key="demo_mode_toggle",
-    help="Demo mode: shows synthetic placeholder data — no real API calls. Safe for screenshots and onboarding.",
-)
-st.session_state["demo_mode"] = _demo_val
-if _demo_val:
-    st.sidebar.markdown(
-        '<div style="background:#1e293b;border:1px solid rgba(251,191,36,0.3);border-radius:6px;'
-        'padding:6px 10px;font-size:11px;color:#FBBF24;margin-top:-6px">⚠️ DEMO MODE — synthetic data</div>',
-        unsafe_allow_html=True,
-    )
-_demo_mode = _demo_val
+# Demo / Sandbox mode toggle relocated to Settings → Dev Tools.
+# st.session_state["demo_mode"] is the single source of truth (defaults to
+# False); the topbar shows a "Demo" pill when on (see _topbar_pills above).
+st.session_state.setdefault("demo_mode", False)
 
 # Note: the Crypto Glossary popover used to live here (always-visible top-of-
 # sidebar slot). It's been moved to the sidebar footer (see render_legal_footer
@@ -937,43 +919,30 @@ st.sidebar.markdown("---")
 # Each mockup nav item maps to an existing page_* function — preserves all
 # existing app logic, only relabels + regroups.
 #
-# Level gating: beginners see Markets + Account only. Intermediate adds
-# Research. Advanced sees everything.
-_DS_NAV_GROUPS = {
-    "beginner": [
-        ("Markets", [
-            ("dashboard", "📊 My Signals",    "Dashboard"),
-            ("ai",        "🤖 AI Assistant",   "Agent"),
-        ]),
-    ],
-    "intermediate": [
-        ("Markets", [
-            ("dashboard", "📊 My Signals",    "Dashboard"),
-            ("opps",      "⚡ Opportunities", "Arbitrage"),
-        ]),
-        ("Research", [
-            ("backtest",  "📈 Performance",   "Backtest Viewer"),
-        ]),
-        ("Account", [
-            ("ai",        "🤖 AI Assistant",   "Agent"),
-        ]),
-    ],
-    "advanced": [
-        ("Markets", [
-            ("dashboard", "📊 Dashboard",       "Dashboard"),
-            ("opps",      "⚡ Arbitrage",        "Arbitrage"),
-        ]),
-        ("Research", [
-            ("backtest",  "📈 Backtest Viewer", "Backtest Viewer"),
-        ]),
-        ("Account", [
-            ("ai",        "🤖 AI Agent",         "Agent"),
-            ("settings",  "⚙️ Settings",         "Config Editor"),
-        ]),
-    ],
-}
-
-_ds_nav_current = _DS_NAV_GROUPS.get(_sg_level_val, _DS_NAV_GROUPS["beginner"])
+# Same nav for every user level — the level controls main-column content
+# density, not which pages exist. Home / Signals / Regimes / On-chain all
+# resolve to the Dashboard page (different sections of it). Alerts opens
+# Config Editor pre-pivoted to its Alerts tab via _ds_nav_after_select.
+# AI Agent and Arbitrage are kept reachable since they're real pages even
+# though the static mockup doesn't list them.
+_DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
+    ("Markets", [
+        ("home",     "Home",       "Dashboard"),
+        ("signals",  "Signals",    "Dashboard"),
+        ("regimes",  "Regimes",    "Dashboard"),
+    ]),
+    ("Research", [
+        ("backtester", "Backtester", "Backtest Viewer"),
+        ("onchain",    "On-chain",   "Dashboard"),
+    ]),
+    ("Account", [
+        ("alerts",   "Alerts",     "Config Editor"),
+        ("settings", "Settings",   "Config Editor"),
+        ("agent",    "AI Agent",   "Agent"),
+        ("opps",     "Arbitrage",  "Arbitrage"),
+    ]),
+]
+_ds_nav_current = _DS_NAV
 
 # Flatten for the hidden radio fallback (preserves keyboard nav + Streamlit
 # state consistency). We render the visible buttons separately.
@@ -1008,6 +977,10 @@ for _grp_name, _grp_items in _ds_nav_current:
             type=("primary" if _is_active else "secondary"),
         ):
             _ds_new_label_selected = _lbl
+            # Side-effect routing for items that share a target page —
+            # e.g. "Alerts" should land on the Alerts tab inside Settings.
+            if _k == "alerts":
+                st.session_state["_settings_tab"] = "🔔 Alerts"
 
 if _ds_new_label_selected:
     st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
@@ -1036,198 +1009,171 @@ _PAGE_MAP = {
 }
 
 # ──────────────────────────────────────────────
-# SIDEBAR: AUTO-SCAN (Item 4 — compact for beginners)
+# RELOCATED LEGACY SIDEBAR WIDGETS
 # ──────────────────────────────────────────────
-st.sidebar.markdown("---")
-# CQ-10: Load alerts config once per sidebar render; reused by all expander sections.
-# Each expander that needs to mutate gets its own .copy() or re-reads when saving.
-_sidebar_alerts_cfg = _cached_alerts_config()
+# 2026-04-25 redesign: the sidebar now matches the mockup (brand → Markets /
+# Research / Account → footer). The legacy widgets that lived under the nav
+# (Auto-Scan, Email Alerts toggle, API Health, Wallet Import, API Keys, plus
+# the Demo / Sandbox toggle removed above) are exposed inside Settings →
+# Dev Tools via _render_relocated_sidebar_widgets() instead.
+def _render_relocated_sidebar_widgets() -> None:
+    """Render the legacy sidebar widgets in the main column.
 
-# Item 4: beginners see a simple ON/OFF toggle; intermediate/advanced get full expander.
-_is_beginner_sidebar = (_sg_level_val == "beginner")
+    Called from page_config()'s Dev Tools tab. Each widget keeps the same
+    session-state key as before so the saved settings survived the move.
+    Email Alerts toggle is dropped entirely — Settings → Alerts has the
+    full email config and the sidebar quick-toggle was a duplicate.
+    """
+    _legacy_alerts_cfg = _cached_alerts_config()
 
-with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
-    _alert_cfg = _sidebar_alerts_cfg.copy()
-
-    autoscan_on = st.toggle(
-        "Enable Auto-Scan",
-        value=_alert_cfg.get("autoscan_enabled", False),
-        key="autoscan_toggle",
-    )
-    interval_options = {
-        "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
-        "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
-    }
-    interval_label = st.selectbox(
-        "Scan Interval",
-        options=list(interval_options.keys()),
-        index=list(interval_options.values()).index(
-            min(interval_options.values(),
-                key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
-        ),
-        key="autoscan_interval",
-        disabled=not autoscan_on,
-    )
-    interval_min = interval_options[interval_label]
-
-    quiet_on = st.toggle(
-        "Quiet Hours (UTC)",
-        value=_alert_cfg.get("autoscan_quiet_hours_enabled", False),
-        key="autoscan_quiet_on",
-        disabled=not autoscan_on,
-        help="Skip scheduled scans during these hours (times are UTC).",
-    )
-    _qc1, _qc2 = st.columns(2)
-    with _qc1:
-        quiet_start = st.text_input(
-            "Start HH:MM", value=_alert_cfg.get("autoscan_quiet_start", "22:00"),
-            key="autoscan_quiet_start", disabled=not (autoscan_on and quiet_on),
+    with st.expander("⏰ Auto-Scan", expanded=False):
+        _alert_cfg = _legacy_alerts_cfg.copy()
+        autoscan_on = st.toggle(
+            "Enable Auto-Scan",
+            value=_alert_cfg.get("autoscan_enabled", False),
+            key="autoscan_toggle",
         )
-    with _qc2:
-        quiet_end = st.text_input(
-            "End HH:MM", value=_alert_cfg.get("autoscan_quiet_end", "06:00"),
-            key="autoscan_quiet_end", disabled=not (autoscan_on and quiet_on),
+        interval_options = {
+            "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
+            "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
+        }
+        interval_label = st.selectbox(
+            "Scan Interval",
+            options=list(interval_options.keys()),
+            index=list(interval_options.values()).index(
+                min(interval_options.values(),
+                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
+            ),
+            key="autoscan_interval",
+            disabled=not autoscan_on,
         )
+        interval_min = interval_options[interval_label]
 
-    # Apply scheduler changes only when job doesn't exist or interval has changed
-    # (avoid resetting next_run_time on every Streamlit rerun, which prevents the job from ever firing)
-    if autoscan_on:
-        _job_exists = bool(_get_scheduler().get_job(_AUTOSCAN_JOB_ID))
-        _interval_changed = interval_min != _alert_cfg.get("autoscan_interval_minutes")
-        if not _job_exists or _interval_changed:
-            _setup_autoscan(interval_min)
-        next_t = _get_next_autoscan_time()
-        if next_t:
-            # Use timezone-aware comparison (APScheduler may return tz-aware)
-            try:
-                if next_t.tzinfo is None:
-                    next_t = next_t.replace(tzinfo=timezone.utc)
-                delta = next_t - datetime.now(timezone.utc)
-            except Exception:
-                delta = timedelta(0)
-            total_secs = delta.total_seconds()
-            # BUG-L05: clamp negative deltas (overdue jobs) before computing mins/secs
-            total_secs = max(0.0, total_secs)
-            mins_left = int(total_secs // 60)
-            secs_left = int(total_secs % 60)
-            st.caption(f"Next scan in: {mins_left}m {secs_left}s")
-    else:
-        _stop_autoscan()
-        st.caption("Auto-scan is off.")
+        quiet_on = st.toggle(
+            "Quiet Hours (UTC)",
+            value=_alert_cfg.get("autoscan_quiet_hours_enabled", False),
+            key="autoscan_quiet_on",
+            disabled=not autoscan_on,
+            help="Skip scheduled scans during these hours (times are UTC).",
+        )
+        _qc1, _qc2 = st.columns(2)
+        with _qc1:
+            quiet_start = st.text_input(
+                "Start HH:MM", value=_alert_cfg.get("autoscan_quiet_start", "22:00"),
+                key="autoscan_quiet_start", disabled=not (autoscan_on and quiet_on),
+            )
+        with _qc2:
+            quiet_end = st.text_input(
+                "End HH:MM", value=_alert_cfg.get("autoscan_quiet_end", "06:00"),
+                key="autoscan_quiet_end", disabled=not (autoscan_on and quiet_on),
+            )
 
-    # Save autoscan config when changed
-    if (autoscan_on  != _alert_cfg.get("autoscan_enabled")
-            or interval_min != _alert_cfg.get("autoscan_interval_minutes")
-            or quiet_on      != _alert_cfg.get("autoscan_quiet_hours_enabled")
-            or quiet_start   != _alert_cfg.get("autoscan_quiet_start")
-            or quiet_end     != _alert_cfg.get("autoscan_quiet_end")):
-        _alert_cfg["autoscan_enabled"]            = autoscan_on
-        _alert_cfg["autoscan_interval_minutes"]   = interval_min
-        _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
-        _alert_cfg["autoscan_quiet_start"]        = quiet_start.strip()
-        _alert_cfg["autoscan_quiet_end"]          = quiet_end.strip()
-        _save_alerts_config_and_clear(_alert_cfg)
-
-# ──────────────────────────────────────────────
-# SIDEBAR: ALERT TOGGLES (compact — full config in Settings → Alerts)
-# ──────────────────────────────────────────────
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Alerts</span>',
-    unsafe_allow_html=True,
-)
-_alert_cfg_sidebar = _sidebar_alerts_cfg.copy()
-_alerts_changed = False
-
-_em_on = st.sidebar.toggle(
-    "📧 Email",
-    value=_alert_cfg_sidebar.get("email_enabled", False),
-    key="sb_em_toggle",
-    help="Enable email alerts. Configure in Settings → Alerts.",
-)
-if _em_on != _alert_cfg_sidebar.get("email_enabled", False):
-    _alert_cfg_sidebar["email_enabled"] = _em_on
-    _alerts_changed = True
-
-if _alerts_changed:
-    _save_alerts_config_and_clear(_alert_cfg_sidebar)
-
-if st.sidebar.button("⚙️ Configure Alerts", key="sb_cfg_alerts_btn", width="stretch"):
-    st.session_state["_nav_target"] = "Config Editor"
-    st.session_state["_settings_tab"] = "Alerts"
-    st.rerun()
-
-
-
-# ──────────────────────────────────────────────
-# SIDEBAR: API HEALTH CHECK (#17 security hardening)
-# ──────────────────────────────────────────────
-with st.sidebar.expander("🔌 API Health", expanded=False):
-    _api_health = _cached_api_health()
-    _health_rows = []
-    for _svc, _status in _api_health.items():
-        _dot = "🟢" if _status in ("ok", "configured") else "🟠" if _status.startswith("HTTP") else "🔴"
-        _health_rows.append(f"{_dot} **{_svc.capitalize()}** — {_status}")
-    st.markdown("\n\n".join(_health_rows) if _health_rows else "No results")
-    if st.button("Recheck", key="api_health_recheck", width="stretch"):
-        _cached_api_health.clear()
-        st.rerun()
-
-# ──────────────────────────────────────────────
-# SIDEBAR: WALLET PORTFOLIO IMPORT (#110 / #111)
-# ──────────────────────────────────────────────
-with st.sidebar.expander("🔗 Wallet Import (Beta)", expanded=False):
-    _wallet_addr = st.text_input(
-        "EVM Wallet Address",
-        placeholder="0x...",
-        key="wallet_address",
-        help="Read-only portfolio import. We never request signing or private keys.",
-    )
-    if _wallet_addr and len(_wallet_addr) == 42 and _wallet_addr.startswith("0x"):
-        st.caption("✓ Valid Ethereum address")
-        if st.button("Import Positions", key="btn_import_wallet"):
-            with st.spinner("Fetching wallet holdings..."):
+        if autoscan_on:
+            _job_exists = bool(_get_scheduler().get_job(_AUTOSCAN_JOB_ID))
+            _interval_changed = interval_min != _alert_cfg.get("autoscan_interval_minutes")
+            if not _job_exists or _interval_changed:
+                _setup_autoscan(interval_min)
+            next_t = _get_next_autoscan_time()
+            if next_t:
                 try:
-                    _wallet_data = data_feeds.fetch_wallet_holdings(_wallet_addr)
-                    if _wallet_data:
-                        st.session_state["wallet_holdings"] = _wallet_data
-                        st.success(f"Imported {len(_wallet_data.get('tokens', []))} positions")
-                    else:
-                        st.warning("No holdings found or fetch failed.")
-                except Exception as _we:
-                    logger.warning("[Wallet] import error: %s", _we)
-                    st.error("Could not import wallet data — check the address is valid and try again.")
-        # Also offer full Zerion portfolio
-        if st.button("Full Portfolio (Zerion)", key="btn_zerion_portfolio"):
-            with st.spinner("Fetching full portfolio..."):
-                try:
-                    _zerion_data = data_feeds.fetch_zerion_portfolio(_wallet_addr)
-                    if _zerion_data:
-                        st.session_state["zerion_portfolio"] = _zerion_data
-                        st.success(f"Loaded portfolio: ${_zerion_data.get('total_value_usd', 0):,.2f}")
-                    else:
-                        st.warning("No portfolio data found.")
-                except Exception as _ze:
-                    logger.warning("[Zerion] fetch error: %s", _ze)
-                    st.error("Portfolio data temporarily unavailable — try again in a moment.")
-    elif _wallet_addr:
-        st.error("Invalid Ethereum address format")
+                    if next_t.tzinfo is None:
+                        next_t = next_t.replace(tzinfo=timezone.utc)
+                    delta = next_t - datetime.now(timezone.utc)
+                except Exception:
+                    delta = timedelta(0)
+                total_secs = max(0.0, delta.total_seconds())
+                mins_left = int(total_secs // 60)
+                secs_left = int(total_secs % 60)
+                st.caption(f"Next scan in: {mins_left}m {secs_left}s")
+        else:
+            _stop_autoscan()
+            st.caption("Auto-scan is off.")
 
-# ──────────────────────────────────────────────
-# SIDEBAR: PERSONAL API KEYS (#18)
-# Stored in session state only — never written to disk.
-# ──────────────────────────────────────────────
-with st.sidebar.expander("🔑 API Keys (Session Only)", expanded=False):
-    st.caption("Keys stored in session only — never saved to disk.")
-    _user_cg = st.text_input("CoinGecko Pro Key", type="password", key="user_cg_key")
-    _user_ant = st.text_input("Anthropic Key (override)", type="password", key="user_anthropic_key")
-    if st.button("Apply", key="btn_apply_user_keys"):
-        if _user_cg:
-            st.session_state["runtime_coingecko_key"] = _user_cg
-        if _user_ant:
-            st.session_state["runtime_anthropic_key"] = _user_ant
-        st.success("Applied for this session")
+        if (autoscan_on  != _alert_cfg.get("autoscan_enabled")
+                or interval_min != _alert_cfg.get("autoscan_interval_minutes")
+                or quiet_on      != _alert_cfg.get("autoscan_quiet_hours_enabled")
+                or quiet_start   != _alert_cfg.get("autoscan_quiet_start")
+                or quiet_end     != _alert_cfg.get("autoscan_quiet_end")):
+            _alert_cfg["autoscan_enabled"]             = autoscan_on
+            _alert_cfg["autoscan_interval_minutes"]    = interval_min
+            _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
+            _alert_cfg["autoscan_quiet_start"]         = quiet_start.strip()
+            _alert_cfg["autoscan_quiet_end"]           = quiet_end.strip()
+            _save_alerts_config_and_clear(_alert_cfg)
+
+    with st.expander("🎭 Demo / Sandbox mode", expanded=False):
+        _demo_val = st.toggle(
+            "Demo / Sandbox",
+            value=st.session_state.get("demo_mode", False),
+            key="demo_mode_toggle",
+            help="Demo mode: shows synthetic placeholder data — no real API calls. "
+                 "Safe for screenshots and onboarding.",
+        )
+        st.session_state["demo_mode"] = _demo_val
+        if _demo_val:
+            st.caption("⚠️ DEMO MODE — synthetic data, no live calls.")
+
+    with st.expander("🔌 API Health", expanded=False):
+        _api_health = _cached_api_health()
+        _health_rows = []
+        for _svc, _status in _api_health.items():
+            _dot = "🟢" if _status in ("ok", "configured") else "🟠" if _status.startswith("HTTP") else "🔴"
+            _health_rows.append(f"{_dot} **{_svc.capitalize()}** — {_status}")
+        st.markdown("\n\n".join(_health_rows) if _health_rows else "No results")
+        if st.button("Recheck", key="api_health_recheck", width="stretch"):
+            _cached_api_health.clear()
+            st.rerun()
+
+    with st.expander("🔗 Wallet Import (Beta)", expanded=False):
+        _wallet_addr = st.text_input(
+            "EVM Wallet Address",
+            placeholder="0x...",
+            key="wallet_address",
+            help="Read-only portfolio import. We never request signing or private keys.",
+        )
+        if _wallet_addr and len(_wallet_addr) == 42 and _wallet_addr.startswith("0x"):
+            st.caption("✓ Valid Ethereum address")
+            if st.button("Import Positions", key="btn_import_wallet"):
+                with st.spinner("Fetching wallet holdings..."):
+                    try:
+                        _wallet_data = data_feeds.fetch_wallet_holdings(_wallet_addr)
+                        if _wallet_data:
+                            st.session_state["wallet_holdings"] = _wallet_data
+                            st.success(f"Imported {len(_wallet_data.get('tokens', []))} positions")
+                        else:
+                            st.warning("No holdings found or fetch failed.")
+                    except Exception as _we:
+                        logger.warning("[Wallet] import error: %s", _we)
+                        st.error("Could not import wallet data — check the address is valid and try again.")
+            if st.button("Full Portfolio (Zerion)", key="btn_zerion_portfolio"):
+                with st.spinner("Fetching full portfolio..."):
+                    try:
+                        _zerion_data = data_feeds.fetch_zerion_portfolio(_wallet_addr)
+                        if _zerion_data:
+                            st.session_state["zerion_portfolio"] = _zerion_data
+                            st.success(f"Loaded portfolio: ${_zerion_data.get('total_value_usd', 0):,.2f}")
+                        else:
+                            st.warning("No portfolio data found.")
+                    except Exception as _ze:
+                        logger.warning("[Zerion] fetch error: %s", _ze)
+                        st.error("Portfolio data temporarily unavailable — try again in a moment.")
+        elif _wallet_addr:
+            st.error("Invalid Ethereum address format")
+
+    with st.expander("🔑 API Keys (Session Only)", expanded=False):
+        st.caption("Keys stored in session only — never saved to disk.")
+        _user_cg = st.text_input("CoinGecko Pro Key", type="password", key="user_cg_key")
+        _user_ant = st.text_input("Anthropic Key (override)", type="password", key="user_anthropic_key")
+        if st.button("Apply", key="btn_apply_user_keys"):
+            if _user_cg:
+                st.session_state["runtime_coingecko_key"] = _user_cg
+            if _user_ant:
+                st.session_state["runtime_anthropic_key"] = _user_ant
+            st.success("Applied for this session")
+
+    with st.expander("🛠️ Build Info", expanded=False):
+        st.caption(f"v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs")
+
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -1506,7 +1452,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -4895,7 +4841,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -5514,6 +5460,15 @@ def page_config():
 
     # ── Tab 4: Dev Tools
     with _cfg_t4:
+        # ── Sidebar legacy widgets (relocated from sidebar in 2026-04-25 redesign)
+        _ui.section_header("Sidebar tools", "Auto-Scan, Demo / Sandbox, API Health, Wallet Import, API Keys, Build Info", icon="🧰")
+        try:
+            _render_relocated_sidebar_widgets()
+        except Exception as _rsl_err:
+            logger.warning("[Settings] relocated sidebar widgets failed: %s", _rsl_err)
+            st.warning("Sidebar tools temporarily unavailable.")
+
+        st.markdown("---")
         # ── Circuit Breakers (4A-5) ──────────────────────────────────────
         _ui.section_header("Circuit Breakers", "Level-C 7-gate safety system", icon="🛑")
         try:
@@ -5983,7 +5938,7 @@ def page_backtest():
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -7765,7 +7720,7 @@ def page_arbitrage():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
         _ds_page_header(title=_arb_title, subtitle=_arb_sub)
     except Exception as _ds_arb_err:
         logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
@@ -8168,7 +8123,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)

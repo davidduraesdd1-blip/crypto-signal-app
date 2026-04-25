@@ -127,6 +127,22 @@ def inject_streamlit_overrides() -> None:
     }
     .ds-chip-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
 
+    /* Topbar status pills (Paper / Live, Claude AI status, Demo).
+       Compact inline chips that sit next to the breadcrumb. */
+    .ds-status-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; line-height: 1; font-weight: 600;
+      padding: 3px 7px; border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-2); color: var(--text-secondary);
+      letter-spacing: 0.02em; white-space: nowrap;
+    }
+    .ds-status-pill.info    { color: #a78bfa; border-color: rgba(167,139,250,0.35); background: rgba(99,102,241,0.10); }
+    .ds-status-pill.success { color: #22c55e; border-color: rgba(34,197,94,0.35);  background: rgba(34,197,94,0.10); }
+    .ds-status-pill.warning { color: #f59e0b; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.10); }
+    .ds-status-pill.danger  { color: #ef4444; border-color: rgba(239,68,68,0.40);  background: rgba(239,68,68,0.10); }
+    .ds-status-pill.muted   { color: var(--text-muted); }
+
     /* Page header */
     .ds-page-hd {
       display: flex; justify-content: space-between; align-items: flex-end;
