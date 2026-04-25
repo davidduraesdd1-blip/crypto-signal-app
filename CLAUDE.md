@@ -17,7 +17,7 @@
 
 ```
   Name:          Crypto Signal App
-  Path:          C:\Users\david\OneDrive\Desktop\Cowork\crypto-signal-app
+  Path:          C:\dev\Cowork\crypto-signal-app
   Repo:          github.com/davidduraesdd1-blip/crypto-signal-app
   Deploy:        https://cryptosignal-ddb1.streamlit.app/
   User role:     builder / designer / reviewer
