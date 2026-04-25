@@ -208,12 +208,17 @@ def render_top_bar(
     *rest, last = list(breadcrumb) or ["", ""]
     crumb_html = " / ".join(rest) + (" / " if rest else "") + f"<b>{last}</b>"
 
-    # 6-col row: breadcrumb (wide) + 3 level pills + refresh + theme.
-    cols = st.columns([6, 1, 1, 1, 1, 1])
+    # 6-col row: breadcrumb + 3 level pills + refresh + theme. Ratios are
+    # tuned so "Intermediate" (longest label) fits on one line at 12.5px font
+    # without ellipsis on a typical desktop viewport.
+    cols = st.columns([3, 1.4, 1.7, 1.4, 1.2, 1.2])
 
     with cols[0]:
+        # data-topbar="1" is the CSS hook for scoped topbar-button styling
+        # (see ui/overrides.py — the rule targets buttons in the same
+        # stHorizontalBlock as this marker so they get nowrap + tighter padding).
         st.markdown(
-            f'<div class="ds-crumbs" style="padding-top:8px;">{crumb_html}</div>',
+            f'<div class="ds-crumbs" data-topbar="1" style="padding-top:8px;">{crumb_html}</div>',
             unsafe_allow_html=True,
         )
 

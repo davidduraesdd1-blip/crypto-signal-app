@@ -213,6 +213,21 @@ def inject_streamlit_overrides() -> None:
       border-color: var(--accent);
     }
 
+    /* Topbar buttons (Beginner / Intermediate / Advanced / ↻ Refresh / ☾ Theme).
+       Scoped via the data-topbar="1" hook on the breadcrumb cell so the rule
+       only affects buttons in the same stHorizontalBlock. Without nowrap +
+       compact padding, "Intermediate" wraps to 2-3 lines in the 1/11-width
+       column. */
+    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) [data-testid="stButton"] > button {
+      white-space: nowrap;
+      padding: 4px 8px;
+      font-size: 12.5px;
+      min-width: 0;
+      line-height: 1.4;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     /* Inputs */
     [data-testid="stTextInput"] input,
     [data-testid="stNumberInput"] input,
