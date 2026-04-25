@@ -284,9 +284,12 @@ h3 {
 
 /* ═══════════════════════════════════════════════
    BUTTONS — gradient primary, ghost secondary
+   2026-04-25 redesign: scoped to `section.main` so the design-system
+   sidebar overrides (ui/overrides.py) win in the rail. Without the
+   scope, the gradient leaked onto the active nav item.
 ═══════════════════════════════════════════════ */
-.stButton > button[kind="primary"],
-button[kind="primary"] {
+section.main .stButton > button[kind="primary"],
+section.main button[kind="primary"] {
     background: linear-gradient(135deg, #00d4aa 0%, #10b981 60%, #a78bfa 100%) !important;
     border: none !important;
     color: #0d0e14 !important;
@@ -298,21 +301,22 @@ button[kind="primary"] {
     box-shadow: 0 2px 14px rgba(0,212,170,0.25) !important;
     padding: 8px 18px !important;
 }
-.stButton > button[kind="primary"]:hover,
-button[kind="primary"]:hover {
+section.main .stButton > button[kind="primary"]:hover,
+section.main button[kind="primary"]:hover {
     box-shadow: 0 4px 28px rgba(0,212,170,0.45), 0 0 0 1px rgba(0,212,170,0.3) !important;
     transform: translateY(-2px) !important;
 }
-.stButton > button[kind="primary"]:active,
-button[kind="primary"]:active {
+section.main .stButton > button[kind="primary"]:active,
+section.main button[kind="primary"]:active {
     transform: translateY(0) !important;
     box-shadow: 0 1px 8px rgba(0,212,170,0.25) !important;
 }
 
-/* Secondary / ghost buttons */
-.stButton > button[kind="secondary"],
-button[kind="secondary"],
-.stButton > button:not([kind]) {
+/* Secondary / ghost buttons (also scoped — sidebar nav uses its own
+   plain text-link look in ui/overrides.py). */
+section.main .stButton > button[kind="secondary"],
+section.main button[kind="secondary"],
+section.main .stButton > button:not([kind]) {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.1) !important;
     color: rgba(168,180,200,0.75) !important;
@@ -321,14 +325,14 @@ button[kind="secondary"],
     transition: all var(--t-base) !important;
     backdrop-filter: blur(8px) !important;
 }
-.stButton > button[kind="secondary"]:hover,
-.stButton > button:not([kind]):hover {
+section.main .stButton > button[kind="secondary"]:hover,
+section.main .stButton > button:not([kind]):hover {
     border-color: rgba(0,212,170,0.35) !important;
     color: var(--primary) !important;
     background: rgba(0,212,170,0.06) !important;
     box-shadow: 0 0 12px rgba(0,212,170,0.1) !important;
 }
-.stButton > button:disabled { opacity: 0.32 !important; cursor: not-allowed !important; }
+section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not-allowed !important; }
 
 /* Download buttons */
 .stDownloadButton > button {
@@ -630,8 +634,9 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 @media (max-width: 768px) {
     .stApp { font-size: var(--fs-sm) !important; }
     .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
-    /* 44px minimum tap targets */
-    div[data-testid="stButton"] > button { min-height: 44px !important; }
+    /* 44px minimum tap targets — scoped to main section so sidebar nav
+       can stay compact at the design-system 30px height. */
+    section.main div[data-testid="stButton"] > button { min-height: 44px !important; }
     [data-testid="stRadio"] label { min-height: 44px !important; padding: 10px 0 !important; }
     [data-testid="stCheckbox"] label { min-height: 44px !important; padding: 10px 0 !important; }
     [data-testid="stToggle"] label { min-height: 44px !important; }
@@ -661,8 +666,9 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
     .rank-stop-col { display: none !important; }
     /* Sidebar: smaller text */
     [data-testid="stSidebar"] { font-size: 12px !important; }
-    /* Buttons: full width, 44px minimum height */
-    div[data-testid="stButton"] > button {
+    /* Buttons: full width, 44px minimum height (main section only —
+       sidebar keeps the design-system compact nav style). */
+    section.main div[data-testid="stButton"] > button {
         min-height: 44px !important;
         width: 100% !important;
         font-size: 14px !important;
@@ -809,15 +815,15 @@ body.light-mode [data-baseweb="menu-item"] { color: #1e293b !important; }
 body.light-mode [data-baseweb="list"] li:hover,
 body.light-mode [data-baseweb="menu-item"]:hover { background-color: rgba(0,212,170,0.07) !important; }
 
-/* 10. Buttons */
-body.light-mode .stButton > button[kind="secondary"],
-body.light-mode .stButton > button:not([kind]) {
+/* 10. Buttons — scoped to main section so sidebar nav uses design-system look */
+body.light-mode section.main .stButton > button[kind="secondary"],
+body.light-mode section.main .stButton > button:not([kind]) {
     background: rgba(255,255,255,0.92) !important;
     border: 1px solid rgba(0,0,0,0.12) !important;
     color: #334155 !important;
 }
-body.light-mode .stButton > button[kind="secondary"]:hover,
-body.light-mode .stButton > button:not([kind]):hover {
+body.light-mode section.main .stButton > button[kind="secondary"]:hover,
+body.light-mode section.main .stButton > button:not([kind]):hover {
     border-color: rgba(0,212,170,0.4) !important;
     color: #10b981 !important;
     background: rgba(0,212,170,0.06) !important;
