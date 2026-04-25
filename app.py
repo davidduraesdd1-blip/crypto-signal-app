@@ -878,9 +878,10 @@ if _demo_val:
     )
 _demo_mode = _demo_val
 
-# ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
-st.sidebar.markdown("")
-_ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+# Note: the Crypto Glossary popover used to live here (always-visible top-of-
+# sidebar slot). It's been moved to the sidebar footer (see render_legal_footer
+# below) — the topbar handles the primary controls now, and the footer group
+# is the right home for reference / legal links.
 
 # ── Theme-toggle handler (shared by topbar ☾ Theme button) ───────────────────
 # 2026-04-24 redesign: the visible theme toggle now lives in the topbar.
@@ -1477,7 +1478,16 @@ def render_past_performance_disclaimer(context: str = "") -> None:
 
 
 def render_legal_footer() -> None:
-    """Render Terms + Privacy expander (internal-beta stub) in the sidebar."""
+    """Render the sidebar footer cluster — small Glossary link + Legal stub.
+
+    The Glossary lives here (rather than the top of the sidebar) because the
+    topbar holds the primary controls now; reference / legal links belong in
+    a footer group. Depth of glossary content scales with user_level.
+    """
+    try:
+        _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+    except Exception as _gloss_err:
+        logger.debug("[App] sidebar glossary render failed: %s", _gloss_err)
     with st.sidebar.expander("📜 Legal (Internal Beta)", expanded=False):
         st.markdown(_LEGAL_TOS)
         st.markdown("---")
@@ -1608,12 +1618,6 @@ def page_dashboard():
             logger.debug("[App] macro strip render failed: %s", _ds_strip_err)
     except Exception as _ds_tb_err:
         logger.debug("[App] top bar render failed: %s", _ds_tb_err)
-
-    # ── Quick-access popover row (ToS #7) — flush right, top of page ──────────
-    try:
-        _ui.render_quick_access_row()
-    except Exception:
-        pass
 
     # PERF-28: read all WS prices once at the top of the render — was called 3+ times per render
     _live_prices = _ws.get_all_prices()
