@@ -1452,7 +1452,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -1551,7 +1551,11 @@ def page_dashboard():
                     return f"{float(v):.{decimals}f}{suffix}"
                 except Exception:
                     return "—"
-            _ds_macro_strip([
+            # Build the macro strip rows here but DON'T render yet — the
+            # mockup order is hero cards first, macro strip second. The
+            # actual _ds_macro_strip(...) call happens after the hero row,
+            # below.
+            _ds_macro_strip_rows = [
                 ("BTC Dominance", _fmt_num(_btc_dom, 1, "%"),
                  f"{_fmt_pct(_btc_dom_7d, 2)} · 7d" if _btc_dom_7d is not None else "7d"),
                 ("Fear & Greed",  str(int(_fng)) if _fng is not None else "—",
@@ -1562,11 +1566,13 @@ def page_dashboard():
                  "8h avg"),
                 ("Regime (macro)", str(_macro_regime).title(),
                  f"confidence {int(_macro_conf)}%" if _macro_conf is not None else ""),
-            ])
+            ]
         except Exception as _ds_strip_err:
-            logger.debug("[App] macro strip render failed: %s", _ds_strip_err)
+            logger.debug("[App] macro strip prep failed: %s", _ds_strip_err)
+            _ds_macro_strip_rows = None
     except Exception as _ds_tb_err:
         logger.debug("[App] top bar render failed: %s", _ds_tb_err)
+        _ds_macro_strip_rows = None
 
     # PERF-28: read all WS prices once at the top of the render — was called 3+ times per render
     _live_prices = _ws.get_all_prices()
@@ -1682,6 +1688,16 @@ def page_dashboard():
             _ds_build_hero("ETH/USDT", "ETH / USD"),
             _ds_build_hero("XRP/USDT", "XRP / USD"),
         ])
+
+        # Macro strip — rendered AFTER hero cards to match the mockup order.
+        # Rows were prepped earlier inside the topbar try block.
+        _ds_strip_rows = locals().get("_ds_macro_strip_rows")
+        if _ds_strip_rows:
+            try:
+                from ui import macro_strip as _ds_macro_strip
+                _ds_macro_strip(_ds_strip_rows)
+            except Exception as _ds_strip_render_err:
+                logger.debug("[App] macro strip render failed: %s", _ds_strip_render_err)
 
         # Regime mini-grid — 4-col, up to 8 assets
         try:
@@ -4841,7 +4857,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -5938,7 +5954,7 @@ def page_backtest():
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -7720,7 +7736,7 @@ def page_arbitrage():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_arb_title, subtitle=_arb_sub)
     except Exception as _ds_arb_err:
         logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
@@ -8123,7 +8139,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_topbar_pills())
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)

@@ -144,8 +144,19 @@ def inject_streamlit_overrides() -> None:
       display: flex; justify-content: space-between; align-items: flex-end;
       gap: 16px; margin: 0 0 20px 0; flex-wrap: wrap;
     }
-    .ds-page-title { margin: 0; font-size: 22px; font-weight: 600;
-      letter-spacing: -0.01em; color: var(--text-primary); }
+    /* High-specificity selectors so we win against Streamlit's default h1
+       styling (which would otherwise blow this up to ~46px). */
+    .stApp .ds-page-hd h1.ds-page-title,
+    [data-testid="stMarkdown"] h1.ds-page-title,
+    h1.ds-page-title {
+      margin: 0 !important;
+      padding: 0 !important;
+      font-size: 22px !important;
+      font-weight: 600 !important;
+      letter-spacing: -0.01em !important;
+      line-height: 1.25 !important;
+      color: var(--text-primary) !important;
+    }
     .ds-page-sub { color: var(--text-muted); font-size: 13.5px; margin-top: 4px; }
 
     /* Data-source pills */
