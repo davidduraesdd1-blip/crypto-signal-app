@@ -882,8 +882,18 @@ _demo_mode = _demo_val
 st.sidebar.markdown("")
 _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
 
-# ── Theme toggle (item 18 — light/dark mode) ──────────────────────────────────
-_ui.render_theme_toggle_sg()
+# ── Theme-toggle handler (shared by topbar ☾ Theme button) ───────────────────
+# 2026-04-24 redesign: the visible theme toggle now lives in the topbar.
+# The sidebar render_theme_toggle_sg() call has been removed. Both keys
+# ("_sg_theme" used by ui_components/Plotly templates and "theme" used by
+# ui.design_system.inject_theme) are kept in sync here.
+def _toggle_theme() -> None:
+    cur = st.session_state.get("_sg_theme", "dark")
+    new = "light" if cur != "light" else "dark"
+    st.session_state["_sg_theme"] = new
+    st.session_state["theme"]     = new
+    # Reset CSS injection guard so inject_css() re-fires on next rerun.
+    st.session_state["_css_injected"] = False
 
 # ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
 # 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
@@ -1483,7 +1493,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data)
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -4852,7 +4862,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data)
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -5940,7 +5950,7 @@ def page_backtest():
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data)
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -7722,7 +7732,7 @@ def page_arbitrage():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data)
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_arb_title, subtitle=_arb_sub)
     except Exception as _ds_arb_err:
         logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
@@ -8125,7 +8135,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data)
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)
