@@ -928,12 +928,12 @@ st.sidebar.markdown("---")
 _DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Markets", [
         ("home",     "Home",       "Dashboard"),
-        # Signals / Regimes will return here when their dedicated pages
-        # ship in the next porting PR (per the original handoff).
+        ("signals",  "Signals",    "Signals"),
+        ("regimes",  "Regimes",    "Regimes"),
     ]),
     ("Research", [
         ("backtester", "Backtester", "Backtest Viewer"),
-        # On-chain will be added when its dedicated page exists.
+        ("onchain",    "On-chain",   "On-chain"),
     ]),
     ("Account", [
         ("alerts",   "Alerts",     "Config Editor"),
@@ -8423,11 +8423,410 @@ def page_agent():
 
 
 # ──────────────────────────────────────────────
+# PAGE: SIGNALS (sibling-family-crypto-signal-SIGNALS.html)
+# ──────────────────────────────────────────────
+def page_signals():
+    """Per-coin signal detail — hero + composite + indicators + history.
+
+    Pulls data from latest scan_results (in-session) → daily_signals DB
+    fallback. Where a metric isn't available, the cell shows "—" so the
+    layout is preserved and the user gets a clear "no data yet" state
+    rather than a missing card.
+    """
+    try:
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            coin_picker as _ds_coin_picker,
+            signal_hero_detail_card as _ds_signal_hero,
+            composite_score_card as _ds_composite,
+            indicator_card as _ds_ind_card,
+            signal_history_table as _ds_sig_hist,
+        )
+    except Exception as _e_imp:
+        logger.error("[Signals] import failed: %s", _e_imp)
+        st.error("Signal page failed to load — check logs.")
+        return
+
+    _ds_level = st.session_state.get("user_level", "beginner")
+    _ds_top_bar(
+        breadcrumb=("Markets", "Signals"),
+        user_level=_ds_level,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+    )
+
+    # Coin picker — top of page. The chip-group HTML is rendered alongside
+    # a real Streamlit selectbox (label hidden) so clicks actually register.
+    _signals_coins = ["BTC", "ETH", "XRP", "SOL", "AVAX"]
+    _signals_pair_map = {
+        "BTC": "BTC/USDT", "ETH": "ETH/USDT", "XRP": "XRP/USDT",
+        "SOL": "SOL/USDT", "AVAX": "AVAX/USDT",
+    }
+    _signals_active = st.session_state.get("signals_active_coin", "BTC")
+    if _signals_active not in _signals_coins:
+        _signals_active = "BTC"
+
+    _hd_l, _hd_r = st.columns([4, 2])
+    with _hd_l:
+        _ds_page_header(
+            title="Signal detail",
+            subtitle="Layer-by-layer composite signal breakdown for a single coin.",
+            data_sources=[
+                (str(model.TA_EXCHANGE).upper(), "live"),
+                ("Glassnode", "live"),
+                ("News sentiment", "cached"),
+            ],
+        )
+    with _hd_r:
+        # Real Streamlit-button row that mirrors the .ds-coin-pick mockup chip group.
+        _cp_cols = st.columns(len(_signals_coins))
+        for _i, _c in enumerate(_signals_coins):
+            with _cp_cols[_i]:
+                if st.button(
+                    _c,
+                    key=f"signals_coin_{_c}",
+                    use_container_width=True,
+                    type=("primary" if _c == _signals_active else "secondary"),
+                ):
+                    st.session_state["signals_active_coin"] = _c
+                    st.rerun()
+
+    _coin = _signals_active
+    _pair = _signals_pair_map.get(_coin, f"{_coin}/USDT")
+
+    # ── Pull data: latest scan result (or DB fallback) for the active pair ──
+    _result = {}
+    try:
+        for _r in (st.session_state.get("scan_results") or []):
+            _pr = str(_r.get("pair") or _r.get("symbol") or "").upper().replace("/", "").replace("-", "")
+            if _pr.startswith(_coin):
+                _result = _r
+                break
+        if not _result:
+            _df_sig = _cached_signals_df(500)
+            if _df_sig is not None and not _df_sig.empty:
+                _df_pair_norm = _df_sig["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+                _hits = _df_sig[_df_pair_norm.str.startswith(_coin)]
+                if not _hits.empty:
+                    _result = _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
+    except Exception as _e_lookup:
+        logger.debug("[Signals] result lookup failed: %s", _e_lookup)
+
+    # Live price + 24h change from WebSocket
+    _live = _ws.get_all_prices() or {}
+    _tick = _live.get(_pair) or {}
+    _price = _tick.get("price") or _tick.get("last") or _result.get("price")
+    _chg_24h = _tick.get("change_24h_pct") or _tick.get("change_pct") or _result.get("change_24h_pct")
+
+    # 30d / 1Y change from OHLCV
+    _chg_30d = None
+    _chg_1y = None
+    _closes_90d = []
+    try:
+        _ex = model.get_exchange_instance(model.TA_EXCHANGE)
+        if _ex:
+            _ohlcv_d = model.robust_fetch_ohlcv(_ex, _pair, "1d", limit=400)
+            if _ohlcv_d:
+                _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
+                if _closes_d:
+                    if _price is None:
+                        _price = _closes_d[-1]
+                    if len(_closes_d) >= 30 and _closes_d[-30]:
+                        _chg_30d = (_closes_d[-1] - _closes_d[-30]) / _closes_d[-30] * 100.0
+                    if len(_closes_d) >= 365 and _closes_d[-365]:
+                        _chg_1y = (_closes_d[-1] - _closes_d[-365]) / _closes_d[-365] * 100.0
+                    elif len(_closes_d) >= 2:
+                        _chg_1y = (_closes_d[-1] - _closes_d[0]) / _closes_d[0] * 100.0
+                    _closes_90d = _closes_d[-90:]
+    except Exception as _e_ohlcv:
+        logger.debug("[Signals] OHLCV fetch for %s failed: %s", _pair, _e_ohlcv)
+
+    # Signal + regime from result
+    _sig_raw = (_result.get("direction") or _result.get("signal") or _result.get("composite_direction") or "").upper()
+    _signal_letter = "BUY" if _sig_raw in ("LONG", "BUY") else ("SELL" if _sig_raw in ("SHORT", "SELL") else ("HOLD" if _result else None))
+    _conf = _result.get("confidence") or _result.get("composite_confidence")
+    _strength = ""
+    try:
+        _conf_f = float(_conf) if _conf is not None else None
+        if _conf_f is not None:
+            _strength = "strong" if _conf_f >= 75 else ("moderate" if _conf_f >= 60 else "weak")
+    except Exception:
+        pass
+    _regime_raw = str(_result.get("regime") or _result.get("regime_label") or "").strip()
+    _regime_clean = _regime_raw
+    for _p in ("Regime: ", "Regime:", "Regime "):
+        if _regime_clean.lower().startswith(_p.lower()):
+            _regime_clean = _regime_clean[len(_p):].strip()
+            break
+    _regime_conf = _result.get("regime_confidence") or _result.get("regime_conf_pct")
+
+    _coin_full = {"BTC": "Bitcoin", "ETH": "Ethereum", "XRP": "Ripple", "SOL": "Solana", "AVAX": "Avalanche"}.get(_coin, _coin)
+
+    st.markdown(
+        _ds_signal_hero(
+            ticker=f"{_coin} / USD",
+            name=_coin_full,
+            price=_price,
+            change_24h=_chg_24h,
+            change_30d=_chg_30d,
+            change_1y=_chg_1y,
+            signal=_signal_letter,
+            signal_strength=_strength,
+            regime_label=_regime_clean.title() if _regime_clean else "",
+            regime_confidence=_regime_conf,
+            regime_since="",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # ── Two-col: price chart + composite score ──
+    _col1, _col2 = st.columns([1.2, 1])
+    with _col1:
+        st.markdown(
+            f'<div class="ds-card">'
+            f'<div class="ds-card-hd"><div class="ds-card-title">Price · last 90d</div>'
+            f'<div style="color:var(--text-muted);font-size:12px;">{str(model.TA_EXCHANGE).upper()} · live</div></div>',
+            unsafe_allow_html=True,
+        )
+        if _closes_90d:
+            try:
+                import plotly.graph_objects as _go
+                _x = list(range(len(_closes_90d)))
+                _fig = _go.Figure()
+                _fig.add_trace(_go.Scatter(
+                    x=_x, y=_closes_90d, mode="lines",
+                    line=dict(color="#22d36f", width=2),
+                    fill="tozeroy", fillcolor="rgba(34,211,111,0.10)",
+                    showlegend=False, hovertemplate="%{y:,.2f}<extra></extra>",
+                ))
+                _fig.update_layout(
+                    height=200, margin=dict(l=0, r=0, t=0, b=0),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False, range=[min(_closes_90d) * 0.98, max(_closes_90d) * 1.02]),
+                )
+                st.plotly_chart(_fig, width='stretch', config={"displayModeBar": False})
+            except Exception as _e_plot:
+                logger.debug("[Signals] price chart render failed: %s", _e_plot)
+                st.caption("Chart unavailable — try refreshing.")
+        else:
+            st.caption("Price history unavailable — try refreshing.")
+
+        # 4-cell info strip below the chart (Vol / ATR / Beta / Funding)
+        try:
+            _vol = _result.get("volume_24h_usd") or _result.get("vol_24h")
+            _atr = _result.get("atr_14") or _result.get("atr")
+            _beta = _result.get("beta_spy")
+            _fund = None
+            try:
+                _fr = data_feeds.get_funding_rate(_pair) or {}
+                _fund = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+            except Exception:
+                pass
+            def _fmt_vol(v):
+                if v is None:
+                    return "—"
+                v = float(v)
+                if v >= 1e9:
+                    return f"${v/1e9:.1f}B"
+                if v >= 1e6:
+                    return f"${v/1e6:.0f}M"
+                return f"${v:,.0f}"
+            def _fmt_pct(v, decimals=3):
+                if v is None:
+                    return "—"
+                try:
+                    fv = float(v)
+                    sign = "+" if fv > 0 else ("−" if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{decimals}f}%"
+                except Exception:
+                    return "—"
+            _ind_html = (
+                '<div class="ds-ind-grid" style="margin-top:16px;">'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Vol (24h)</div><div class="ds-ind-val">{_fmt_vol(_vol)}</div><div class="ds-ind-sub"></div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">ATR (14d)</div><div class="ds-ind-val">{("$" + f"{float(_atr):,.0f}") if _atr is not None else "—"}</div><div class="ds-ind-sub"></div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Beta vs S&amp;P</div><div class="ds-ind-val">{(f"{float(_beta):.2f}") if _beta is not None else "—"}</div><div class="ds-ind-sub">90d rolling</div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Funding (8h)</div><div class="ds-ind-val">{_fmt_pct(_fund)}</div><div class="ds-ind-sub"></div></div>'
+                '</div>'
+            )
+            st.markdown(_ind_html, unsafe_allow_html=True)
+        except Exception as _e_strip:
+            logger.debug("[Signals] info strip failed: %s", _e_strip)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with _col2:
+        # Layer scores from result; if absent, derive composite from confidence
+        _l_tech = _result.get("layer_technical") or _result.get("tech_score")
+        _l_macro = _result.get("layer_macro") or _result.get("macro_score")
+        _l_sent = _result.get("layer_sentiment") or _result.get("sentiment_score")
+        _l_onch = _result.get("layer_onchain") or _result.get("onchain_score")
+        _composite = _result.get("composite_score") or _conf
+        try:
+            _composite_f = float(_composite) if _composite is not None else None
+        except Exception:
+            _composite_f = None
+        _ds_composite(
+            score=_composite_f,
+            layers=[
+                ("Layer 1 · Technical", float(_l_tech) if _l_tech is not None else None),
+                ("Layer 2 · Macro",     float(_l_macro) if _l_macro is not None else None),
+                ("Layer 3 · Sentiment", float(_l_sent) if _l_sent is not None else None),
+                ("Layer 4 · On-chain",  float(_l_onch) if _l_onch is not None else None),
+            ],
+            weights_note=("Composite = weighted avg per regime-adjusted weights. "
+                         "Weights are config-driven and tuned by Optuna."),
+        )
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── Three-col: Technical / On-chain / Sentiment indicator cards ──
+    _ic1, _ic2, _ic3 = st.columns(3)
+    with _ic1:
+        _rsi = _result.get("rsi_14") or _result.get("rsi")
+        _macd_h = _result.get("macd_hist")
+        _supert = _result.get("supertrend_signal") or _result.get("supertrend")
+        _adx = _result.get("adx_14") or _result.get("adx")
+        def _v(x, fmt="{:.1f}"):
+            if x is None:
+                return "—"
+            try:
+                return fmt.format(float(x))
+            except Exception:
+                return str(x)
+        _rsi_tone = "warning" if (_rsi is not None and float(_rsi) >= 70) else ("danger" if (_rsi is not None and float(_rsi) <= 30) else "")
+        _macd_tone = "success" if (_macd_h is not None and float(_macd_h) > 0) else ("danger" if (_macd_h is not None and float(_macd_h) < 0) else "")
+        _supert_str = (str(_supert).title() if _supert is not None else "—")
+        _supert_tone = "success" if str(_supert).upper() in ("BUY", "LONG", "BULL") else ("danger" if str(_supert).upper() in ("SELL", "SHORT", "BEAR") else "")
+        _ds_ind_card(
+            "Technical indicators",
+            [
+                ("RSI (14)",   _v(_rsi),    "overbought" if _rsi_tone == "warning" else ("oversold" if _rsi_tone == "danger" else ""),  _rsi_tone),
+                ("MACD hist",  _v(_macd_h, "{:+.0f}") if _macd_h is not None else "—", "bullish cross" if _macd_tone == "success" else ("bearish cross" if _macd_tone == "danger" else ""), _macd_tone),
+                ("Supertrend", _supert_str, "",                                                                                  _supert_tone),
+                ("ADX (14)",   _v(_adx),    "strong trend" if (_adx is not None and float(_adx) >= 25) else "no trend",          ""),
+            ],
+        )
+    with _ic2:
+        _mvrv = _result.get("mvrv_z") or _result.get("mvrv")
+        _sopr = _result.get("sopr")
+        _exch = _result.get("exchange_reserve_delta_7d")
+        _addr = _result.get("active_addresses_24h")
+        _ds_ind_card(
+            "On-chain",
+            [
+                ("MVRV-Z",        _v(_mvrv, "{:.2f}"),                                "mid-cycle" if (_mvrv is not None and 1 < float(_mvrv) < 5) else "",       ""),
+                ("SOPR",          _v(_sopr, "{:.3f}"),                                "profit taking" if (_sopr is not None and float(_sopr) > 1) else "",        ""),
+                ("Exch. reserve", _v(_exch, "{:+,.0f}") if _exch is not None else "—", "outflow 7d" if (_exch is not None and float(_exch) < 0) else "inflow 7d", "success" if (_exch is not None and float(_exch) < 0) else ""),
+                ("Active addr.",  _v(_addr, "{:,.0f}") if _addr is not None else "—",  "",                                                                       ""),
+            ],
+        )
+    with _ic3:
+        _fng_d = data_feeds.get_fear_greed() or {} if hasattr(data_feeds, "get_fear_greed") else {}
+        _fng_v = _fng_d.get("value")
+        _fund_v = None
+        try:
+            _fr = data_feeds.get_funding_rate(_pair) or {}
+            _fund_v = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+        except Exception:
+            pass
+        _trends = _result.get("google_trends_score") or _result.get("trends_score")
+        _news = _result.get("news_sentiment_score") or _result.get("news_sent")
+        _ds_ind_card(
+            "Sentiment",
+            [
+                ("Fear & Greed",  _v(_fng_v, "{:.0f}"),                                 (_fng_d.get("label") or "").lower(),          "warning" if (_fng_v is not None and float(_fng_v) >= 60) else ("danger" if (_fng_v is not None and float(_fng_v) <= 30) else "")),
+                ("Funding",       _v(_fund_v, "{:+.3f}%") if _fund_v is not None else "—", "neutral",                                  ""),
+                ("Google trends", _v(_trends, "{:.0f}"),                                "",                                          ""),
+                ("News sent.",    _v(_news, "{:+.2f}"),                                 "positive" if (_news is not None and float(_news) > 0) else ("negative" if (_news is not None and float(_news) < 0) else ""), "success" if (_news is not None and float(_news) > 0) else ("danger" if (_news is not None and float(_news) < 0) else "")),
+            ],
+        )
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── Recent signal history table ──
+    try:
+        _df_sig = _cached_signals_df(50)
+        _hist_rows: list[dict] = []
+        if _df_sig is not None and not _df_sig.empty:
+            _df_pair_norm = _df_sig["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+            _hits = _df_sig[_df_pair_norm.str.startswith(_coin)].sort_values("scan_timestamp", ascending=False).head(8)
+            for _, _row in _hits.iterrows():
+                _ts = _row.get("scan_timestamp", "")
+                try:
+                    _t_str = str(_ts)[:16].replace("T", " ")
+                except Exception:
+                    _t_str = "—"
+                _d = str(_row.get("direction") or "").upper()
+                _sig = "BUY" if _d in ("LONG", "BUY") else ("SELL" if _d in ("SHORT", "SELL") else "HOLD")
+                _hist_rows.append({
+                    "time": _t_str,
+                    "signal": _sig,
+                    "note": (_row.get("rationale") or _row.get("note") or "")[:80],
+                    "return_pct": _row.get("return_pct") or _row.get("realized_return_pct"),
+                })
+        _ds_sig_hist(_hist_rows, title=f"Recent signal history · {_coin}", subtitle="last 8 state transitions")
+    except Exception as _e_hist:
+        logger.debug("[Signals] history table failed: %s", _e_hist)
+        _ds_sig_hist([], title=f"Recent signal history · {_coin}", subtitle="No history available yet.")
+
+
+# ──────────────────────────────────────────────
+# PAGE: REGIMES (placeholder — full port lands in next commit)
+# ──────────────────────────────────────────────
+def page_regimes():
+    """Stub page. Real port follows in the REGIMES commit on this branch."""
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(
+            breadcrumb=("Markets", "Regimes"),
+            user_level=st.session_state.get("user_level", "beginner"),
+            on_refresh=_refresh_all_data,
+            on_theme=_toggle_theme,
+        )
+        _ds_page_header(
+            title="Regimes",
+            subtitle="Per-asset regime detail (full port shipping next on this branch).",
+        )
+    except Exception as _e:
+        logger.debug("[Regimes] stub render failed: %s", _e)
+    st.info("Regimes page port lands in the next commit on this branch.")
+
+
+# ──────────────────────────────────────────────
+# PAGE: ON-CHAIN (placeholder — thin DS pass lands in last commit)
+# ──────────────────────────────────────────────
+def page_onchain():
+    """Stub page. The thin design-system pass lands in the last commit."""
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(
+            breadcrumb=("Research", "On-chain"),
+            user_level=st.session_state.get("user_level", "beginner"),
+            on_refresh=_refresh_all_data,
+            on_theme=_toggle_theme,
+        )
+        _ds_page_header(
+            title="On-chain",
+            subtitle="On-chain metrics (page in build — thin design-system pass shipping last on this branch).",
+        )
+    except Exception as _e:
+        logger.debug("[On-chain] stub render failed: %s", _e)
+    st.info("On-chain page port lands in the last commit on this branch.")
+
+
+# ──────────────────────────────────────────────
 # ROUTER
 # ──────────────────────────────────────────────
 audit("page_view", page=page, level=st.session_state.get("user_level", "beginner"))
 if page == "Dashboard":
     page_dashboard()
+elif page == "Signals":
+    page_signals()
+elif page == "Regimes":
+    page_regimes()
+elif page == "On-chain":
+    page_onchain()
 elif page == "Config Editor":
     page_config()
 elif page == "Backtest Viewer":

@@ -17,6 +17,11 @@ from .sidebar import (
     backtest_preview_card,
     regime_card_html,
     regime_cards_grid,
+    coin_picker,
+    signal_hero_detail_card,
+    composite_score_card,
+    indicator_card,
+    signal_history_table,
 )
 from .overrides import inject_streamlit_overrides
 
@@ -37,5 +42,10 @@ __all__ = [
     "backtest_preview_card",
     "regime_card_html",
     "regime_cards_grid",
+    "coin_picker",
+    "signal_hero_detail_card",
+    "composite_score_card",
+    "indicator_card",
+    "signal_history_table",
     "inject_streamlit_overrides",
 ]

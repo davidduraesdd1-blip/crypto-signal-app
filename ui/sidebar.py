@@ -632,6 +632,231 @@ def regime_card_html(
     )
 
 
+# ── SIGNALS page (sibling-family-crypto-signal-SIGNALS.html) helpers ──
+
+def coin_picker(coins: Sequence[str], active: str) -> str:
+    """Return HTML for the chip-group coin picker shown on the Signals page.
+
+    Visual only — clicks are wired by a separate st.button column rendered
+    next to it (Streamlit can't capture clicks on raw HTML buttons). The
+    helper is here so the layout matches the mockup exactly when no
+    interaction is needed (e.g. screenshots / printouts).
+    """
+    btns = "".join(
+        f'<button class="{"on" if c == active else ""}">{c}</button>'
+        for c in coins
+    )
+    return f'<div class="ds-coin-pick">{btns}</div>'
+
+
+def signal_hero_detail_card(
+    *,
+    ticker: str,
+    name: str,
+    price: float | None,
+    change_24h: float | None = None,
+    change_30d: float | None = None,
+    change_1y: float | None = None,
+    signal: Literal["BUY", "HOLD", "SELL", None] = None,
+    signal_strength: str = "",
+    regime_label: str = "",
+    regime_confidence: float | None = None,
+    regime_since: str = "",
+) -> str:
+    """Big hero card for the Signals detail page.
+
+    Mirrors the mockup .hero block — left side has ticker / price / 3 timeframe
+    changes; right side has the large signal badge + a regime line.
+    """
+    if price is None:
+        price_str = "—"
+    elif price >= 1000:
+        price_str = f"{price:,.0f}"
+    elif price >= 10:
+        price_str = f"{price:,.2f}"
+    else:
+        price_str = f"{price:,.4f}"
+
+    def _fmt(pct, label):
+        if pct is None:
+            return f'<span style="color:var(--text-muted);">—</span> · {label}'
+        sign = "+ " if pct > 0 else ("− " if pct < 0 else "")
+        cls = "up" if pct > 0 else ("down" if pct < 0 else "")
+        return f'<span class="{cls}">{sign}{abs(pct):.2f}%</span> · {label}'
+
+    chg_cls = "up" if (change_24h or 0) > 0 else ("down" if (change_24h or 0) < 0 else "")
+    chg_html = (
+        f'<div class="ds-signal-detail-chg {chg_cls}">'
+        f'{_fmt(change_24h, "24h")} &nbsp;·&nbsp; '
+        f'{_fmt(change_30d, "30d")} &nbsp;·&nbsp; '
+        f'{_fmt(change_1y, "1Y")}</div>'
+    )
+
+    badge_html = ""
+    if signal in ("BUY", "HOLD", "SELL"):
+        shape, css_class, label = {
+            "BUY":  ("▲", "ds-sb-buy",  "Buy"),
+            "HOLD": ("■", "ds-sb-hold", "Hold"),
+            "SELL": ("▼", "ds-sb-sell", "Sell"),
+        }[signal]
+        strength = f" · {signal_strength}" if signal_strength else ""
+        badge_html = f'<span class="ds-signal-badge ds-signal-badge-lg {css_class}">{shape} {label}{strength}</span>'
+
+    regime_html = ""
+    if regime_label:
+        conf_txt = f" · {int(regime_confidence)}% conf" if regime_confidence is not None else ""
+        since_txt = f" · {regime_since}" if regime_since else ""
+        regime_html = (
+            f'<div class="ds-regime"><span class="dot"></span> '
+            f'Regime: {regime_label}{conf_txt}{since_txt}</div>'
+        )
+
+    return (
+        f'<div class="ds-card ds-signal-detail-hero">'
+        f'<div class="ds-signal-detail-lhs">'
+        f'<div class="ds-signal-detail-ticker">{ticker} · {name}</div>'
+        f'<div class="ds-signal-detail-price">{price_str}</div>'
+        f'{chg_html}'
+        f'</div>'
+        f'<div class="ds-signal-detail-rhs">'
+        f'{badge_html}{regime_html}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def composite_score_card(
+    *,
+    score: float | None,
+    layers: Sequence[tuple[str, float | None]],
+    weights_note: str = "",
+) -> None:
+    """Render the composite score card with N layer progress bars."""
+    if st is None:
+        return
+    score_html = f'{score:.1f}' if score is not None else '—'
+    bars_html = []
+    for name, val in layers:
+        v = val if val is not None else 0
+        cls = "ds-bar-fill"
+        if v < 60:
+            cls += " mid"
+        if v < 40:
+            cls = "ds-bar-fill low"
+        val_text = f"{v:.0f}" if val is not None else "—"
+        bars_html.append(
+            f'<div class="ds-layer">'
+            f'<div class="ds-layer-hd"><div class="ds-layer-name">{name}</div>'
+            f'<div class="ds-layer-val">{val_text}</div></div>'
+            f'<div class="ds-bar"><div class="{cls}" style="width:{max(0,min(100,v))}%;"></div></div>'
+            f'</div>'
+        )
+    note_html = ""
+    if weights_note:
+        note_html = (
+            f'<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);'
+            f'font-size:12px;color:var(--text-muted);">{weights_note}</div>'
+        )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd">'
+        f'<div class="ds-card-title">Composite score · 0–100</div>'
+        f'<div style="color:var(--accent);font-family:var(--font-mono);font-weight:600;">{score_html}</div>'
+        f'</div>'
+        f'<div style="display:flex;flex-direction:column;gap:14px;margin-top:8px;">'
+        f'{"".join(bars_html)}'
+        f'</div>'
+        f'{note_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def indicator_card(
+    title: str,
+    items: Sequence[tuple[str, str, str, str]],
+) -> None:
+    """Indicator-grid card (used 3× on Signals page: Technical / On-chain / Sentiment).
+
+    Each item: (label, value, sub, color_token). color_token is one of
+    'success' / 'danger' / 'warning' / '' (default text-primary).
+    """
+    if st is None:
+        return
+    cells = []
+    for label, value, sub, tone in items:
+        color_style = ""
+        if tone in ("success", "danger", "warning"):
+            color_style = f' style="color:var(--{tone});"'
+        cells.append(
+            f'<div class="ds-ind">'
+            f'<div class="ds-ind-lbl">{label}</div>'
+            f'<div class="ds-ind-val"{color_style}>{value}</div>'
+            f'<div class="ds-ind-sub">{sub}</div>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd"><div class="ds-card-title">{title}</div></div>'
+        f'<div class="ds-ind-grid ds-ind-grid-2col">{"".join(cells)}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def signal_history_table(
+    rows: Sequence[dict],
+    *,
+    title: str = "Recent signal history",
+    subtitle: str = "",
+) -> None:
+    """4-col history row table — time / signal / note / return.
+
+    Each row dict: {time, signal: BUY/HOLD/SELL, note, return_pct}.
+    """
+    if st is None:
+        return
+    row_html = []
+    for r in rows:
+        sig = (r.get("signal") or "").upper()
+        sig_cls = {"BUY": "buy", "SELL": "sell", "HOLD": "hold"}.get(sig, "hold")
+        sig_glyph = {"BUY": "▲", "SELL": "▼", "HOLD": "■"}.get(sig, "•")
+        ret = r.get("return_pct")
+        if ret is None:
+            ret_str = "—"
+            ret_cls = ""
+        else:
+            ret_cls = "up" if ret > 0 else ("down" if ret < 0 else "")
+            sign = "+ " if ret > 0 else ("− " if ret < 0 else "")
+            ret_str = f"{sign}{abs(ret):.1f}%"
+        row_html.append(
+            f'<div class="ds-hist-row">'
+            f'<span class="t">{r.get("time", "—")}</span>'
+            f'<span class="s {sig_cls}">{sig_glyph} {sig or "—"}</span>'
+            f'<span class="note">{r.get("note", "")}</span>'
+            f'<span class="ret {ret_cls}">{ret_str}</span>'
+            f'</div>'
+        )
+    sub_html = (
+        f'<div style="color:var(--text-muted);font-size:12px;">{subtitle}</div>'
+        if subtitle else ""
+    )
+    if row_html:
+        body_html = "".join(row_html)
+    else:
+        body_html = (
+            '<div style="color:var(--text-muted);font-size:13px;padding:8px 4px;">'
+            'No signal history yet.</div>'
+        )
+    st.markdown(
+        f'<div class="ds-card">'
+        f'<div class="ds-card-hd"><div class="ds-card-title">{title}</div>{sub_html}</div>'
+        f'<div class="ds-hist">{body_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def regime_cards_grid(cards: Sequence[dict], cols: int = 4) -> None:
     """Render a grid of regime cards.
     Each card dict: ticker, state, confidence, since.

@@ -438,6 +438,109 @@ def inject_streamlit_overrides() -> None:
     .ds-grid.ds-cols-3 { grid-template-columns: repeat(3, 1fr); }
     .ds-grid.ds-cols-4 { grid-template-columns: repeat(4, 1fr); }
 
+    /* ─── SIGNALS page (sibling-family-crypto-signal-SIGNALS.html) ─── */
+    .ds-coin-pick {
+      display: inline-flex; gap: 6px;
+      background: var(--bg-1); border: 1px solid var(--border);
+      border-radius: 10px; padding: 4px;
+    }
+    .ds-coin-pick button {
+      all: unset; cursor: pointer;
+      padding: 6px 14px; border-radius: 6px;
+      font-size: 13px; color: var(--text-muted);
+      font-weight: 600; font-family: var(--font-mono);
+    }
+    .ds-coin-pick button.on {
+      background: var(--accent-soft); color: var(--text-primary);
+    }
+    .ds-signal-detail-hero {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 24px; margin-bottom: 20px; gap: 24px; flex-wrap: wrap;
+    }
+    .ds-signal-detail-lhs { display: flex; flex-direction: column; gap: 0; }
+    .ds-signal-detail-ticker {
+      color: var(--text-secondary); font-weight: 500; font-size: 14px;
+    }
+    .ds-signal-detail-price {
+      font-size: 52px; font-weight: 600; font-family: var(--font-mono);
+      letter-spacing: -0.02em; line-height: 1; margin-top: 6px;
+      color: var(--text-primary);
+    }
+    .ds-signal-detail-chg {
+      font-family: var(--font-mono); font-size: 14px; margin-top: 6px;
+      color: var(--text-muted);
+    }
+    .ds-signal-detail-chg .up { color: var(--success); }
+    .ds-signal-detail-chg .down { color: var(--danger); }
+    .ds-signal-detail-rhs {
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    }
+    .ds-signal-badge.ds-signal-badge-lg {
+      padding: 10px 18px; font-size: 15px;
+    }
+
+    /* Composite score layer bars */
+    .ds-layer { display: flex; flex-direction: column; gap: 8px; }
+    .ds-layer-hd {
+      display: flex; justify-content: space-between; align-items: baseline;
+    }
+    .ds-layer-name {
+      font-size: 13px; font-weight: 500; color: var(--text-secondary);
+    }
+    .ds-layer-val {
+      font-family: var(--font-mono); font-size: 16px; font-weight: 600;
+      color: var(--text-primary);
+    }
+    .ds-bar {
+      height: 6px; background: var(--bg-2);
+      border-radius: 3px; overflow: hidden;
+    }
+    .ds-bar-fill {
+      height: 100%; background: var(--accent); border-radius: 3px;
+      transition: width 240ms;
+    }
+    .ds-bar-fill.mid { background: var(--warning); }
+    .ds-bar-fill.low { background: var(--danger); }
+
+    /* Indicator grid */
+    .ds-ind-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    }
+    .ds-ind-grid.ds-ind-grid-2col { grid-template-columns: repeat(2, 1fr); }
+    .ds-ind {
+      padding: 12px; background: var(--bg-2); border-radius: 8px;
+    }
+    .ds-ind-lbl {
+      font-size: 11px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .ds-ind-val {
+      font-family: var(--font-mono); font-size: 16px; font-weight: 600;
+      margin-top: 4px; color: var(--text-primary);
+    }
+    .ds-ind-sub {
+      font-size: 11.5px; color: var(--text-muted);
+      margin-top: 2px; font-family: var(--font-mono);
+    }
+
+    /* Signal history rows */
+    .ds-hist { display: flex; flex-direction: column; }
+    .ds-hist-row {
+      display: grid; grid-template-columns: 110px 90px 1fr 90px;
+      gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--border);
+      font-size: 12.5px; align-items: center;
+    }
+    .ds-hist-row:last-child { border-bottom: none; }
+    .ds-hist-row .t { font-family: var(--font-mono); color: var(--text-muted); }
+    .ds-hist-row .s { font-weight: 600; }
+    .ds-hist-row .s.buy { color: var(--success); }
+    .ds-hist-row .s.sell { color: var(--danger); }
+    .ds-hist-row .s.hold { color: var(--warning); }
+    .ds-hist-row .note { color: var(--text-secondary); }
+    .ds-hist-row .ret { font-family: var(--font-mono); text-align: right; }
+    .ds-hist-row .ret.up { color: var(--success); }
+    .ds-hist-row .ret.down { color: var(--danger); }
+
     /* ─── Regime cards (from REGIMES mockup) ─── */
     .ds-rgm {
       padding: 16px; display: flex; flex-direction: column; gap: 6px;
