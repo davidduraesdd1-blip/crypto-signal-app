@@ -961,11 +961,13 @@ if _ds_current_label not in _ds_nav_flat_labels:
     st.session_state["_ds_current_nav_label"] = _ds_current_label
 
 _ds_new_label_selected = None
+_ds_new_key_selected = None
 for _grp_name, _grp_items in _ds_nav_current:
+    # Section header — visual styling lives entirely in ui/overrides.py
+    # under .ds-nav-group-header. Keeping inline style here would beat the
+    # class rule and revert the section headers to tiny/muted.
     st.sidebar.markdown(
-        f'<div class="ds-nav-group-header" style="margin:14px 0 4px;padding:0 10px;'
-        f'color:var(--text-muted);font-size:11px;font-weight:500;'
-        f'letter-spacing:0.08em;text-transform:uppercase;">{_grp_name}</div>',
+        f'<div class="ds-nav-group-header">{_grp_name}</div>',
         unsafe_allow_html=True,
     )
     for _k, _lbl, _page_key in _grp_items:
@@ -977,6 +979,7 @@ for _grp_name, _grp_items in _ds_nav_current:
             type=("primary" if _is_active else "secondary"),
         ):
             _ds_new_label_selected = _lbl
+            _ds_new_key_selected = _k
             # Side-effect routing for items that share a target page —
             # e.g. "Alerts" should land on the Alerts tab inside Settings.
             if _k == "alerts":
@@ -984,6 +987,7 @@ for _grp_name, _grp_items in _ds_nav_current:
 
 if _ds_new_label_selected:
     st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
+    st.session_state["_ds_current_nav_key"] = _ds_new_key_selected
     _ds_current_label = _ds_new_label_selected
 
 page = _ds_nav_label_to_page.get(_ds_current_label, "Dashboard")
@@ -1445,6 +1449,23 @@ def render_legal_footer() -> None:
 
 def page_dashboard():
     # ── 2026-05 redesign: mockup-style top bar (breadcrumb + level pills) ────
+    # Visible feedback for the nav clicks: Home / Signals / Regimes / On-chain
+    # all route to this same function (the dedicated Signals / Regimes / On-chain
+    # pages are scheduled for the next port PR). Until they exist, switch the
+    # breadcrumb + page title + subtitle so each nav click visibly changes the
+    # page header and a "page being built" banner appears for the unbuilt views.
+    _ds_view = st.session_state.get("_ds_current_nav_key", "home")
+    _DS_VIEW_META = {
+        "home":    ("Markets",  "Home",     "Market home",
+                    "Composite signals + regime state across the top-cap set."),
+        "signals": ("Markets",  "Signals",  "Signals · preview",
+                    "Per-coin signal detail — full port shipping in the next PR. Home content shown below."),
+        "regimes": ("Markets",  "Regimes",  "Regimes · preview",
+                    "Regime state per asset — full port shipping in the next PR. Regime grid shown below."),
+        "onchain": ("Research", "On-chain", "On-chain · placeholder",
+                    "On-chain metrics page is being built. Home content shown below as a placeholder."),
+    }
+    _ds_grp, _ds_crumb, _ds_title, _ds_subtitle = _DS_VIEW_META.get(_ds_view, _DS_VIEW_META["home"])
     try:
         from ui import (
             render_top_bar as _ds_top_bar,
@@ -1452,16 +1473,30 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=(_ds_grp, _ds_crumb), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
         _ds_page_header(
-            title="Market home",
-            subtitle="Composite signals + regime state across the top-cap set.",
+            title=_ds_title,
+            subtitle=_ds_subtitle,
             data_sources=[
                 (str(model.TA_EXCHANGE).upper(), "live"),
                 ("Glassnode", "live"),
                 ("News sentiment", "cached"),
             ],
         )
+        # "Page being built" banner for the not-yet-ported views. The banner
+        # disappears when the user is on Home, so it never gets in the way of
+        # the canonical home view.
+        if _ds_view in ("signals", "regimes", "onchain"):
+            st.markdown(
+                '<div class="ds-card" style="background:var(--accent-soft);'
+                'border:1px solid transparent;border-left:3px solid var(--accent);'
+                'padding:10px 14px;margin:0 0 16px 0;font-size:12.5px;'
+                'color:var(--text-secondary);">'
+                f'<b style="color:var(--text-primary);">{_ds_crumb}</b> page is being built. '
+                'You\'re seeing the Home view below until the dedicated port ships.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
         # Macro strip — mirrors the mockup's 5-col strip with real data.
         # Pulls from LIVE data-source functions directly (each already cached
         # at the data_feeds module level) — no dependency on a scan having

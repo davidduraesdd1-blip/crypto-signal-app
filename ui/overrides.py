@@ -57,23 +57,34 @@ def inject_streamlit_overrides() -> None:
       letter-spacing: 0.08em; text-transform: uppercase;
     }
 
-    /* Sidebar nav buttons — match the mockup's .nav-item visual: text-secondary
-       label, subtle hover, accent-soft background on active. We use plain
-       st.sidebar.button() now (no marker/overlay pattern) so the button itself
-       carries the visual. The legacy ds-nav-marker pattern was removed in the
-       2026-04-25 redesign — its CSS is dropped here too. */
+    /* Sidebar nav buttons — compact left-aligned items so the whole rail
+       fits without scroll. Uses plain st.sidebar.button() now (no
+       marker/overlay pattern). */
     [data-testid="stSidebar"] [data-testid="stButton"] > button {
       width: 100%;
-      justify-content: flex-start;
-      padding: 8px 10px;
-      border-radius: 8px;
-      font-size: 13.5px;
+      min-height: 30px !important;
+      height: auto !important;
+      padding: 4px 10px !important;
+      border-radius: 6px;
+      font-size: 13px !important;
       font-weight: 500;
       background: transparent;
       border: 1px solid transparent;
       color: var(--text-secondary);
       box-shadow: none;
+      text-align: left !important;
+      justify-content: flex-start !important;
       transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    /* Force the inner span/div inside the button to left-align too, since
+       Streamlit wraps the label in a flex container that defaults to center. */
+    [data-testid="stSidebar"] [data-testid="stButton"] > button > div,
+    [data-testid="stSidebar"] [data-testid="stButton"] > button > div > p,
+    [data-testid="stSidebar"] [data-testid="stButton"] > button > span {
+      width: 100%;
+      text-align: left !important;
+      justify-content: flex-start !important;
+      margin: 0 !important;
     }
     [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
       background: var(--bg-2);
@@ -84,9 +95,37 @@ def inject_streamlit_overrides() -> None:
       background: var(--accent-soft);
       color: var(--text-primary);
       border-color: transparent;
+      font-weight: 600;
     }
-    [data-testid="stSidebar"] [data-testid="stButton"] {
-      margin-top: 0 !important;
+    /* Remove default margin/padding on each sidebar widget container so
+       items pack tightly. */
+    [data-testid="stSidebar"] [data-testid="stButton"],
+    [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(> [data-testid="stButton"]) {
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+    /* Tighten the vertical gap between sidebar items globally — the default
+       stVerticalBlock gap is 1rem which makes the rail very tall. */
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 2px; }
+
+    /* Section headers — visually distinct from the nav items below them.
+       Uppercase, bolder, slightly larger text-secondary color, with a thin
+       divider above each section so the boundary is unambiguous. */
+    .ds-nav-group-header {
+      font-size: 11.5px !important;
+      font-weight: 700 !important;
+      color: var(--text-secondary) !important;
+      margin: 10px 0 2px 0 !important;
+      padding: 6px 10px 4px 10px !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.14em !important;
+      border-top: 1px solid var(--border) !important;
+    }
+    /* No top border on the very first section header — it sits right
+       under the brand block already. */
+    [data-testid="stSidebar"] .ds-nav-group-header:first-of-type {
+      border-top: none !important;
+      margin-top: 4px !important;
     }
 
     /* Top bar */
