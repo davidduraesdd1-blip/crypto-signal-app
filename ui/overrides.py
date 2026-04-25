@@ -108,6 +108,29 @@ def inject_streamlit_overrides() -> None:
        stVerticalBlock gap is 1rem which makes the rail very tall. */
     [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 2px; }
 
+    /* Sidebar popover trigger (Glossary lives in the footer cluster).
+       Plain text-link look matching the nav buttons — no ghost-button
+       chrome (the legacy stylesheet's popover rule is scoped to
+       section.main so it doesn't touch this). */
+    [data-testid="stSidebar"] [data-testid="stPopover"] button {
+      width: 100%;
+      min-height: 30px !important;
+      padding: 4px 10px !important;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      font-size: 12.5px !important;
+      font-weight: 500;
+      border-radius: 6px;
+      text-align: left !important;
+      justify-content: flex-start !important;
+      box-shadow: none;
+    }
+    [data-testid="stSidebar"] [data-testid="stPopover"] button:hover {
+      background: var(--bg-2);
+      color: var(--text-primary);
+    }
+
     /* Section headers — visually distinct from the nav items below them.
        Uppercase, bolder, slightly larger text-secondary color, with a thin
        divider above each section so the boundary is unambiguous. */

@@ -12,14 +12,57 @@ logger = logging.getLogger(__name__)
 
 _CSS = """
 <style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   2026-04-25 LEGACY-CSS AUDIT (Cowork directive: a=keep / b=delete / c=flag).
+   The design system (ui/design_system.py) + overrides (ui/overrides.py) own
+   the look of the redesign. This file is the legacy stylesheet trimmed to
+   the rules that are still load-bearing or whose purpose is unclear enough
+   that we'd rather keep them with a flag than risk a regression.
+
+   DELETED (b) — covered by ui/design_system.py + ui/overrides.py:
+     * html/body font-family declaration (DS sets it)
+     * .stApp radial-mesh background (mockup uses solid bg-0)
+     * h1 / h2 / h3 gradient & sizing (overrides.py .ds-page-title wins;
+       the legacy h1 gradient was actively fighting the redesign)
+     * [data-testid="metric-container"] glassmorphic + ::before bar
+       (overrides.py styles stMetric simpler; the gradient border was
+       fighting the mockup card look)
+     * stMetricLabel / stMetricValue / stMetricDelta sizing
+       (overrides.py covers these)
+     * [data-testid="stExpander"] glassmorphic gradient border + summary
+       padding (overrides.py styles expander as a plain card)
+     * Global 0.85rem rules for stMarkdownContainer / stMain / stSidebar
+       (DS controls font sizes via the page-level Inter/Mono stack +
+       per-component rules in overrides.py; the blanket 0.85rem was
+       shrinking nav items + page headers in unwanted places)
+     * Sidebar radial-gradient background + stRadio styling
+       (DS sets sidebar bg; no radio widgets remain in the rail post
+       2026-04-25 redesign)
+     * Sidebar [data-testid="stExpander"] override — Legal expander now
+       inherits its style from the main expander rules in overrides.py
+
+   KEPT (a/c) — see inline comments below.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════
    GOOGLE FONTS — Inter (UI) + JetBrains Mono (data)
+   AUDIT (a) load-bearing: design system imports the same font families
+   but extra weights here are still referenced by inline styles using
+   font-weight: 800. Cheap to keep.
 ═══════════════════════════════════════════════ */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* ═══════════════════════════════════════════════
-   DESIGN TOKENS — single source of truth
+   DESIGN TOKENS — legacy :root variables
+   AUDIT (c) flag: dozens of inline-style strings across app.py and the
+   helper functions in this file reference --primary, --bull, --bear,
+   --bg-glass, --r-sm, --t-base, etc. Cannot delete safely without a
+   sweep through every inline style. The redesign tokens (--accent,
+   --bg-0, --text-primary, etc.) are added BY ui/design_system.py at
+   page-load time and shadow these where they overlap. Both sets live
+   side-by-side — legacy code keeps working, redesign code uses DS
+   tokens. Future cleanup: migrate inline styles to DS tokens, then
+   delete this :root block.
 ═══════════════════════════════════════════════ */
 :root {
     /* backgrounds */
@@ -35,7 +78,7 @@ _CSS = """
     --primary-dim:   #10b981;
     --primary-glow:  rgba(0, 212, 170, 0.18);
     --primary-glow2: rgba(0, 212, 170, 0.06);
-    --accent:        #8b5cf6;   /* indigo accent — dYdX-inspired */
+    --accent:        #8b5cf6;   /* indigo accent — dYdX-inspired (legacy) */
     --accent-glow:   rgba(99, 102, 241, 0.14);
 
     /* signal */
@@ -92,201 +135,42 @@ _CSS = """
     --t-slow:  0.38s ease;
 }
 
-/* ═══════════════════════════════════════════════
-   BASE — typography & font
-═══════════════════════════════════════════════ */
-html, body, [class*="css"], .stApp {
-    font-family: var(--font-ui) !important;
-    -webkit-font-smoothing: antialiased !important;
-    text-rendering: optimizeLegibility !important;
-}
+/* AUDIT (b) DELETED — html/body font-family / antialias / text-rendering:
+   ui/design_system.py inject_theme already sets these. */
 
-/* ═══════════════════════════════════════════════
-   APP BACKGROUND — radial mesh (dYdX / KOI style)
-   Two subtle color orbs give depth without distraction
-═══════════════════════════════════════════════ */
-.stApp {
-    background:
-        radial-gradient(ellipse 80% 50% at 15% 0%,   rgba(99,102,241,0.07) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 40% at 85% 100%, rgba(0,212,170,0.06)  0%, transparent 55%),
-        radial-gradient(ellipse 100% 80% at 50% 0%,  rgba(0,0,0,0.3)        0%, transparent 100%),
-        #0d0e14 !important;
-    background-attachment: fixed !important;
-}
-[data-testid="stAppViewContainer"] > .main {
-    background: transparent !important;
-}
+/* AUDIT (b) DELETED — .stApp radial mesh background:
+   The mockup uses solid var(--bg-0). The radial gradient was darkening the
+   home page and not matching the design. DS now drives .stApp background. */
 
-/* ═══════════════════════════════════════════════
-   HEADINGS — fluid + gradient on h1
-═══════════════════════════════════════════════ */
-h1 {
-    font-size: var(--fs-xl) !important;
-    font-weight: 800 !important;
-    letter-spacing: -0.6px !important;
-    background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%) !important;
-    -webkit-background-clip: text !important;
-    -webkit-text-fill-color: transparent !important;
-    background-clip: text !important;
-    padding-bottom: 2px !important;
-}
-h2 {
-    font-size: var(--fs-md) !important;
-    font-weight: 600 !important;
-    color: #cbd5e1 !important;
-    letter-spacing: -0.2px !important;
-}
-h3 {
-    font-size: var(--fs-sm) !important;
-    font-weight: 600 !important;
-    color: #94a3b8 !important;
-}
+/* AUDIT (b) DELETED — h1 gradient + h2/h3 sizing:
+   overrides.py .ds-page-title wins for redesigned page headers. The legacy
+   h1 gradient was actively fighting our 22px h1 in the page header. */
 
-/* ═══════════════════════════════════════════════
-   METRIC CARDS — glassmorphic + gradient border
-   Technique: gradient background-box + padding-box clipping
-═══════════════════════════════════════════════ */
-[data-testid="metric-container"] {
-    background:
-        linear-gradient(var(--bg-glass), var(--bg-glass)) padding-box,
-        linear-gradient(135deg, rgba(0,212,170,0.22) 0%, rgba(99,102,241,0.15) 50%, rgba(255,255,255,0.04) 100%) border-box !important;
-    border: 1px solid transparent !important;
-    border-radius: var(--r-md) !important;
-    padding: 18px 20px !important;
-    position: relative !important;
-    overflow: hidden !important;
-    backdrop-filter: blur(16px) !important;
-    -webkit-backdrop-filter: blur(16px) !important;
-    transition: box-shadow var(--t-base), transform var(--t-fast) !important;
-    box-shadow: var(--shadow-card) !important;
-}
-/* teal top accent bar */
-[data-testid="metric-container"]::before {
-    content: '' !important;
-    position: absolute !important;
-    top: 0; left: 0; right: 0 !important;
-    height: 2px !important;
-    background: linear-gradient(90deg, var(--primary) 0%, var(--accent) 100%) !important;
-    opacity: 0.7 !important;
-    border-radius: var(--r-md) var(--r-md) 0 0 !important;
-}
-[data-testid="metric-container"]:hover {
-    box-shadow: var(--shadow-glow), var(--shadow-card) !important;
-    transform: translateY(-2px) !important;
-}
+/* AUDIT (b) DELETED — [data-testid="metric-container"] glassmorphic frame
+   + ::before teal bar + hover lift. overrides.py .ds-card/.ds-strip + the
+   stMetric rule cover the redesigned cards. */
 
-/* Metric label */
-[data-testid="stMetricLabel"],
-[data-testid="stMetricLabel"] > div {
-    color: rgba(168,180,200,0.7) !important;
-    font-size: var(--fs-xxs) !important;
-    font-weight: 600 !important;
-    letter-spacing: 1.1px !important;
-    text-transform: uppercase !important;
-}
+/* AUDIT (b) DELETED — stMetricLabel / stMetricValue / stMetricDelta:
+   overrides.py [data-testid="stMetricValue"]/[data-testid="stMetricLabel"]
+   covers the redesigned metric look. */
 
-/* Metric value */
-[data-testid="stMetricValue"] > div,
-[data-testid="stMetricValue"] {
-    color: var(--text-1) !important;
-    font-size: clamp(20px, 1.5vw, 26px) !important;
-    font-weight: 700 !important;
-    letter-spacing: -0.5px !important;
-    font-family: var(--font-mono) !important;
-}
+/* AUDIT (b) DELETED — [data-testid="stExpander"] glassmorphic gradient.
+   overrides.py styles expander as a plain ds-card. */
 
-/* Deltas */
-[data-testid="stMetricDelta"][data-direction="positive"] { color: #22c55e !important; }
-[data-testid="stMetricDelta"][data-direction="negative"] { color: #ef4444 !important; }
+/* AUDIT (b) DELETED — global 0.85rem font-size rules across stMarkdown,
+   stMain labels/inputs, stSidebar, stExpander summary. The blanket
+   shrinking conflicted with the redesign's per-component sizing
+   (page header 22px, sidebar nav 13px, etc.). DS + overrides set sizes
+   explicitly where they matter. */
 
-/* ═══════════════════════════════════════════════
-   EXPANDERS / PAIR CARDS — glassmorphic panels
-═══════════════════════════════════════════════ */
-[data-testid="stExpander"] {
-    background:
-        linear-gradient(rgba(14,18,30,0.8), rgba(14,18,30,0.8)) padding-box,
-        linear-gradient(160deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%) border-box !important;
-    border: 1px solid transparent !important;
-    border-radius: var(--r-md) !important;
-    margin-bottom: 8px !important;
-    overflow: hidden !important;
-    backdrop-filter: blur(12px) !important;
-    -webkit-backdrop-filter: blur(12px) !important;
-    transition: box-shadow var(--t-base), border-color var(--t-fast) !important;
-    box-shadow: var(--shadow-sm) !important;
-}
-[data-testid="stExpander"]:hover {
-    background:
-        linear-gradient(rgba(16,20,34,0.85), rgba(16,20,34,0.85)) padding-box,
-        linear-gradient(160deg, rgba(0,212,170,0.25) 0%, rgba(99,102,241,0.15) 100%) border-box !important;
-    box-shadow: 0 0 0 0 transparent, 0 4px 20px rgba(0,0,0,0.5) !important;
-}
-[data-testid="stExpander"] > details[open] {
-    background:
-        linear-gradient(rgba(14,18,30,0.9), rgba(14,18,30,0.9)) padding-box,
-        linear-gradient(160deg, rgba(0,212,170,0.3) 0%, rgba(99,102,241,0.18) 60%, rgba(255,255,255,0.06) 100%) border-box !important;
-    box-shadow: var(--shadow-glow) !important;
-}
-[data-testid="stExpander"] > details > summary {
-    padding: 13px 18px !important;
-    font-weight: 600 !important;
-    font-size: var(--fs-sm) !important;
-    cursor: pointer !important;
-    color: var(--text-2) !important;
-}
-[data-testid="stExpander"] > details > div {
-    padding: 4px 18px 18px 18px !important;
-}
-
-/* ═══════════════════════════════════════════════
-   GLOBAL BASE FONT — 0.85rem for all interactive + body elements
-   Metric values (1rem+) and page titles kept large intentionally.
-   Captions/badges kept at 0.75rem for visual hierarchy.
-═══════════════════════════════════════════════ */
-[data-testid="stMarkdownContainer"] div,
-[data-testid="stMarkdownContainer"] span { font-size: 0.85rem; }
-[data-testid="stMain"] label, [data-testid="stMain"] label p, [data-testid="stMain"] label span { font-size: 0.85rem !important; }
-[data-testid="stMain"] input, [data-testid="stMain"] textarea { font-size: 0.85rem !important; }
-[data-testid="stMain"] [data-baseweb="select"] span, [data-testid="stMain"] [data-baseweb="select"] div, [data-testid="stMain"] [data-baseweb="select"] input { font-size: 0.85rem !important; }
-[data-testid="stMain"] [role="listbox"] li, [data-testid="stMain"] [role="option"], [data-testid="stMain"] [role="option"] * { font-size: 0.85rem !important; }
-[data-testid="stMain"] button p, [data-testid="stMain"] button span, [data-testid="stFormSubmitButton"] button p { font-size: 0.85rem !important; }
-[data-testid="stMain"] [data-testid="stTab"] p, [data-testid="stMain"] [data-testid="stTab"] span { font-size: 0.85rem !important; }
-[data-testid="stMain"] p { font-size: 0.85rem !important; }
-[data-testid="stSidebar"] label, [data-testid="stSidebar"] label p, [data-testid="stSidebar"] label span { font-size: 0.85rem !important; }
-[data-testid="stSidebar"] p { font-size: 0.85rem !important; }
-[data-testid="stExpander"] > details > summary { font-size: 0.85rem !important; }
-[data-testid="stCaptionContainer"] p, [data-testid="stMain"] small { font-size: 0.75rem !important; }
-
-/* ═══════════════════════════════════════════════
-   SIDEBAR — deeper glass panel
-═══════════════════════════════════════════════ */
-[data-testid="stSidebar"] {
-    background:
-        radial-gradient(ellipse 120% 60% at 50% 0%, rgba(0,212,170,0.05) 0%, transparent 60%),
-        #0d0e14 !important;
-    border-right: 1px solid rgba(255,255,255,0.06) !important;
-}
-[data-testid="stSidebar"] .stRadio label {
-    font-size: var(--fs-sm) !important;
-    color: rgba(168,180,200,0.65) !important;
-    padding: 6px 0 !important;
-    transition: color var(--t-fast) !important;
-}
-[data-testid="stSidebar"] .stRadio label:hover {
-    color: var(--primary) !important;
-}
-[data-testid="stSidebar"] [data-testid="stExpander"] {
-    background: rgba(255,255,255,0.025) !important;
-    border-color: rgba(255,255,255,0.05) !important;
-    border-radius: var(--r-sm) !important;
-    backdrop-filter: none !important;
-}
+/* AUDIT (b) DELETED — sidebar radial bg, stRadio rules, stExpander rule.
+   ui/design_system.py + ui/overrides.py own the rail look post-redesign. */
 
 /* ═══════════════════════════════════════════════
    BUTTONS — gradient primary, ghost secondary
-   2026-04-25 redesign: scoped to `section.main` so the design-system
-   sidebar overrides (ui/overrides.py) win in the rail. Without the
-   scope, the gradient leaked onto the active nav item.
+   AUDIT (a) load-bearing: main-area buttons (scan, run backtest,
+   etc.) want the gradient look. Scoped to `section.main` post-2026-04-25
+   so ui/overrides.py wins for the sidebar nav.
 ═══════════════════════════════════════════════ */
 section.main .stButton > button[kind="primary"],
 section.main button[kind="primary"] {
@@ -334,8 +218,8 @@ section.main .stButton > button:not([kind]):hover {
 }
 section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not-allowed !important; }
 
-/* Download buttons */
-.stDownloadButton > button {
+/* Download buttons — AUDIT (a) load-bearing, scoped to section.main */
+section.main .stDownloadButton > button {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.1) !important;
     color: rgba(168,180,200,0.7) !important;
@@ -343,7 +227,7 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
     font-size: var(--fs-sm) !important;
     transition: all var(--t-base) !important;
 }
-.stDownloadButton > button:hover {
+section.main .stDownloadButton > button:hover {
     border-color: var(--bull-border) !important;
     color: var(--primary) !important;
     box-shadow: 0 0 10px var(--primary-glow2) !important;
@@ -351,6 +235,8 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
 
 /* ═══════════════════════════════════════════════
    TABS — pill-style active indicator (KOI-inspired)
+   AUDIT (a) load-bearing: Settings + Backtester pages use st.tabs
+   extensively. overrides.py doesn't restyle tabs.
 ═══════════════════════════════════════════════ */
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
     background: rgba(255,255,255,0.025) !important;
@@ -383,6 +269,9 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
 
 /* ═══════════════════════════════════════════════
    INPUT FIELDS — glass style + teal focus ring
+   AUDIT (a) load-bearing: overrides.py sets bg/border but no focus ring.
+   The teal focus halo is the only signal that an input is keyboard-focused
+   inside Settings forms.
 ═══════════════════════════════════════════════ */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input {
@@ -416,7 +305,7 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
     border-radius: var(--r-sm) !important;
 }
 
-/* Slider */
+/* Slider — AUDIT (a) load-bearing: weight slider, threshold slider in Settings */
 [data-baseweb="slider"] [role="slider"] {
     background: var(--primary) !important;
     border-color: var(--primary) !important;
@@ -424,7 +313,7 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
 }
 
 /* ═══════════════════════════════════════════════
-   DATA TABLES / DATAFRAMES
+   DATA TABLES / DATAFRAMES — AUDIT (a) load-bearing, not in overrides
 ═══════════════════════════════════════════════ */
 [data-testid="stDataFrame"],
 [data-testid="stDataFrameResizable"] {
@@ -435,7 +324,8 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
 }
 
 /* ═══════════════════════════════════════════════
-   PROGRESS BAR — animated gradient
+   PROGRESS BAR — animated shimmer gradient
+   AUDIT (a) load-bearing: scan progress + backtest progress bars use this.
 ═══════════════════════════════════════════════ */
 @keyframes shimmer-bar {
     0%   { background-position: -200% center; }
@@ -454,6 +344,8 @@ section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not
 
 /* ═══════════════════════════════════════════════
    ALERTS / STATUS BANNERS
+   AUDIT (a) load-bearing: st.success / st.error / st.warning / st.info
+   semantic colors. overrides.py doesn't restyle these.
 ═══════════════════════════════════════════════ */
 [data-testid="stAlert"] {
     border-radius: var(--r-sm) !important;
@@ -535,8 +427,12 @@ footer    { visibility: hidden; }
 
 /* ═══════════════════════════════════════════════
    POPOVER
+   AUDIT (a) load-bearing for main-area popovers (e.g. account menu).
+   Scoped to section.main so the sidebar Glossary popover gets the
+   design-system look from ui/overrides.py instead of this ghost-button
+   chrome.
 ═══════════════════════════════════════════════ */
-[data-testid="stPopover"] button {
+section.main [data-testid="stPopover"] button {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.09) !important;
     border-radius: var(--r-xs) !important;
@@ -545,13 +441,14 @@ footer    { visibility: hidden; }
     padding: 3px 10px !important;
     transition: all var(--t-fast) !important;
 }
-[data-testid="stPopover"] button:hover {
+section.main [data-testid="stPopover"] button:hover {
     border-color: rgba(0,212,170,0.4) !important;
     color: var(--primary) !important;
 }
 
 /* ═══════════════════════════════════════════════
-   PULSING LIVE DOT — expanded glow ring
+   PULSING LIVE DOT — AUDIT (a): used by live_dot_html() helper for
+   "data is live" indicators across the dashboard.
 ═══════════════════════════════════════════════ */
 @keyframes pulse-dot {
     0%   { box-shadow: 0 0 0 0   rgba(0,212,170,0.8); }
@@ -570,7 +467,7 @@ footer    { visibility: hidden; }
 }
 
 /* ═══════════════════════════════════════════════
-   FADE-IN-UP — applied to custom HTML cards
+   FADE-IN-UP — AUDIT (a): used by .fade-up class on custom cards.
 ═══════════════════════════════════════════════ */
 @keyframes fade-up {
     from { opacity: 0; transform: translateY(10px); }
@@ -579,7 +476,7 @@ footer    { visibility: hidden; }
 .fade-up { animation: fade-up 0.35s ease forwards; }
 
 /* ═══════════════════════════════════════════════
-   SHIMMER GRADIENT — loading skeleton style
+   SHIMMER — AUDIT (a): used by .shimmer class on loading skeletons.
 ═══════════════════════════════════════════════ */
 @keyframes shimmer {
     0%   { background-position: -400px 0; }
@@ -596,7 +493,9 @@ footer    { visibility: hidden; }
 }
 
 /* ═══════════════════════════════════════════════
-   GLOBAL UTILITY CLASSES
+   GLOBAL UTILITY CLASSES — AUDIT (a): .mono / .bull / .bear / .warn /
+   .muted / .upper used pervasively in inline-style HTML across app.py
+   helpers (signal pills, regime labels, value chips).
 ═══════════════════════════════════════════════ */
 .mono  { font-family: var(--font-mono) !important; }
 .bull  { color: var(--bull) !important; }
@@ -606,10 +505,9 @@ footer    { visibility: hidden; }
 .upper { text-transform: uppercase; letter-spacing: 0.8px; font-size: 10px; font-weight: 600; }
 
 /* ═══════════════════════════════════════════════
-   BEGINNER MODE — hide advanced elements
-   Toggle via st.session_state["beginner_mode"]
-   Inject class "advanced-only" on elements to hide in simple view.
-   JS reads session state cookie to apply/remove body class.
+   BEGINNER MODE — AUDIT (a) load-bearing: drives the user_level system
+   from CLAUDE.md §7. inject_beginner_mode_js() toggles body.beginner-mode
+   based on level; .advanced-only elements vanish in beginner view.
 ═══════════════════════════════════════════════ */
 body.beginner-mode .advanced-only {
     display: none !important;
@@ -630,6 +528,8 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 /* ═══════════════════════════════════════════════
    MOBILE — 768px breakpoint + 44px tap targets
+   AUDIT (a) load-bearing: WCAG AA compliance per CLAUDE.md §8.
+   Button rule already scoped to section.main so sidebar nav stays compact.
 ═══════════════════════════════════════════════ */
 @media (max-width: 768px) {
     .stApp { font-size: var(--fs-sm) !important; }
@@ -648,7 +548,7 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 /* ═══════════════════════════════════════════════
    PHONE — 375px breakpoint (iPhone SE / small Android)
-   Item 16: Small-phone layout hardening
+   AUDIT (a) load-bearing: small-phone hardening per CLAUDE.md §8.
 ═══════════════════════════════════════════════ */
 @media (max-width: 390px) {
     /* Tighter padding on very small screens */
@@ -685,7 +585,13 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 /* ═══════════════════════════════════════════════
    LIGHT MODE — full WCAG AA implementation
-   Body class toggled by render_theme_toggle_sg() JS
+   AUDIT (c) flag: ui/design_system.py inject_theme also handles theme
+   tokens by rebuilding :root variables when theme="light". The legacy
+   body.light-mode rules below are STILL needed for components that hit
+   hardcoded dark colors via inline styles (sections 19-20 do explicit
+   dark-color → light-color mappings on inline `style="color:#..."`).
+   Once the inline-color sweep is done (post May 1 demo), most of this
+   block can collapse to just the design-token mappings. Keep for now.
 ═══════════════════════════════════════════════ */
 
 /* 1. Override all design token variables so every var() flips automatically */
