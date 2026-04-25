@@ -57,37 +57,33 @@ def inject_streamlit_overrides() -> None:
       letter-spacing: 0.08em; text-transform: uppercase;
     }
 
-    /* Nav item (we render markdown + button, markdown holds the visual, button
-       catches clicks; we hide the button's default chrome and overlay it on
-       top of the marker) */
-    .ds-nav-marker {
-      display: flex; align-items: center; gap: 10px;
-      padding: 8px 10px; border-radius: 8px;
-      color: var(--text-secondary); font-size: 13.5px; font-weight: 500;
-      cursor: pointer; user-select: none;
-      transition: background 120ms, color 120ms;
-      margin-bottom: -40px;  /* pull the following stButton up over the marker */
-      position: relative; z-index: 1;
+    /* Sidebar nav buttons — match the mockup's .nav-item visual: text-secondary
+       label, subtle hover, accent-soft background on active. We use plain
+       st.sidebar.button() now (no marker/overlay pattern) so the button itself
+       carries the visual. The legacy ds-nav-marker pattern was removed in the
+       2026-04-25 redesign — its CSS is dropped here too. */
+    [data-testid="stSidebar"] [data-testid="stButton"] > button {
+      width: 100%;
+      justify-content: flex-start;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 500;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      box-shadow: none;
+      transition: background 120ms, color 120ms, border-color 120ms;
     }
-    .ds-nav-marker:hover { background: var(--bg-2); color: var(--text-primary); }
-    .ds-nav-marker.active {
+    [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
+      background: var(--bg-2);
+      color: var(--text-primary);
+      border-color: transparent;
+    }
+    [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] {
       background: var(--accent-soft);
       color: var(--text-primary);
-    }
-    .ds-nav-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: 0; }
-    .ds-nav-marker.active .ds-nav-dot { opacity: 1; }
-    .ds-nav-icon { opacity: 0.8; width: 16px; display: inline-block; text-align: center; }
-
-    /* Hide the underlying sidebar buttons but keep them clickable over the
-       marker; they inherit the marker's visual footprint */
-    [data-testid="stSidebar"] [data-testid="stButton"] > button {
-      opacity: 0;
-      height: 34px;
-      margin-top: 0;
-      position: relative; z-index: 2;
-      background: transparent !important;
-      border: none !important;
-      box-shadow: none !important;
+      border-color: transparent;
     }
     [data-testid="stSidebar"] [data-testid="stButton"] {
       margin-top: 0 !important;
