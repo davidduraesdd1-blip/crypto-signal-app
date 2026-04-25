@@ -848,34 +848,15 @@ except Exception as _sg_sp_err:
 
 # ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
 # Beginner = default; persists across all pages via session_state.
-# beginner_mode kept for backward compat with inject_beginner_mode_js().
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Experience Level</span>',
-    unsafe_allow_html=True,
-)
+# 2026-04-24 redesign: the visible level selector lives in the topbar (see
+# render_top_bar). The sidebar radio has been removed so there's a single
+# control surface. We still init the session-state default + beginner_mode
+# side-effect here so first-render code paths and inject_beginner_mode_js()
+# behave identically.
 _LEVEL_OPTIONS = ["beginner", "intermediate", "advanced"]
-_LEVEL_LABELS  = {
-    "beginner":     "🟢 Beginner",
-    "intermediate": "🟡 Intermediate",
-    "advanced":     "🔴 Advanced",
-}
-_cur_sg_level = st.session_state.get("user_level", "beginner")
-_sg_level_val = st.sidebar.radio(
-    "User Level",
-    options=_LEVEL_OPTIONS,
-    format_func=lambda lv: _LEVEL_LABELS[lv],
-    index=_LEVEL_OPTIONS.index(_cur_sg_level) if _cur_sg_level in _LEVEL_OPTIONS else 0,
-    key="sg_user_level_radio",
-    label_visibility="collapsed",
-    help=(
-        "Beginner: plain-English view, tooltips always visible, simplified signals. "
-        "Intermediate: key numbers + condensed explanations. "
-        "Advanced: full technical detail, all raw numbers."
-    ),
-)
-st.session_state["user_level"]    = _sg_level_val
+if st.session_state.get("user_level") not in _LEVEL_OPTIONS:
+    st.session_state["user_level"] = "beginner"
+_sg_level_val = st.session_state["user_level"]
 # Backward compat: beginner_mode = True when NOT Advanced (drives inject_beginner_mode_js)
 _bm_val = (_sg_level_val != "advanced")
 st.session_state["beginner_mode"] = _bm_val
