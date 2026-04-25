@@ -238,7 +238,7 @@ def render_top_bar(
                 f'vertical-align:middle;">{"".join(_pp)}</span>'
             )
         st.markdown(
-            f'<div class="ds-crumbs" data-topbar="1" style="padding-top:8px;">'
+            f'<div class="ds-crumbs" data-topbar="1">'
             f'{crumb_html}{_pills_html}</div>',
             unsafe_allow_html=True,
         )

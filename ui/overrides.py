@@ -229,6 +229,17 @@ def inject_streamlit_overrides() -> None:
       border-color: var(--accent);
     }
 
+    /* Topbar row container — matches mockup .topbar (bg-0 + border-bottom +
+       16px gap + center alignment). Scoped via the data-topbar="1" hook on
+       the breadcrumb cell so it only restyles the topbar's stHorizontalBlock. */
+    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) {
+      background: var(--bg-0);
+      border-bottom: 1px solid var(--border);
+      padding: 4px 0 10px 0;
+      margin-bottom: 18px;
+      align-items: center;
+    }
+
     /* Topbar buttons (Beginner / Intermediate / Advanced / ↻ Refresh / ☾ Theme).
        Scoped via the data-topbar="1" hook on the breadcrumb cell so the rule
        only affects buttons in the same stHorizontalBlock. Without nowrap +
@@ -242,6 +253,11 @@ def inject_streamlit_overrides() -> None:
       line-height: 1.4;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    /* Tighten the vertical block element wrapping each button so the row
+       feels like a topbar, not a stack of inputs. */
+    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) [data-testid="stButton"] {
+      margin: 0;
     }
 
     /* Inputs */
@@ -411,6 +427,17 @@ def inject_streamlit_overrides() -> None:
       .ds-hero-grid { grid-template-columns: 1fr !important; }
       .ds-grid.ds-cols-2, .ds-grid.ds-cols-3, .ds-grid.ds-cols-4 { grid-template-columns: 1fr !important; }
       .ds-signal-big { font-size: 32px; }
+      /* Hide the level pills in the topbar on mobile (mockup behaviour).
+         The level can still be changed via Settings. Refresh + Theme stay. */
+      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+        > [data-testid="column"]:nth-child(2),
+      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+        > [data-testid="column"]:nth-child(3),
+      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+        > [data-testid="column"]:nth-child(4) {
+        display: none !important;
+      }
+      .ds-status-pill { font-size: 10px; padding: 2px 6px; }
     }
     """
 

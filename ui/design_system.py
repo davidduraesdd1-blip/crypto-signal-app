@@ -193,6 +193,9 @@ def _build_css(app: AppId, fam: str, accent: dict, scale: dict, theme: str) -> s
       font-family: var(--font-ui);
       color: var(--text-primary);
       background: var(--bg-0);
+      /* Mockup type-rendering parity (Inter stylistic set + cv11 alt 4) */
+      font-feature-settings: "ss01", "cv11";
+      -webkit-font-smoothing: antialiased;
     }}
     .stApp {{ background: var(--bg-0); }}
 
@@ -212,6 +215,7 @@ def _build_css(app: AppId, fam: str, accent: dict, scale: dict, theme: str) -> s
       border-radius: var(--card-radius);
       padding: var(--card-pad);
     }}
+    {('/* Light-mode card shadow — mockup parity */ .ds-card { box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 2px 8px rgba(0,0,0,0.04); border-color: transparent; }' if theme == "light" else '')}
     """
 
 
