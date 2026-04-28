@@ -1562,13 +1562,13 @@ def plain_english_box(text: str, direction: str) -> None:
     """
     d = (direction or "").upper()
     if "BUY" in d:
-        accent = "#00d4aa"
+        accent = "var(--accent)"
         bg     = "rgba(0,212,170,0.05)"
     elif "SELL" in d:
-        accent = "#ef4444"
+        accent = "var(--danger)"
         bg     = "rgba(246,70,93,0.05)"
     else:
-        accent = "#f59e0b"
+        accent = "var(--warning)"
         bg     = "rgba(245,158,11,0.05)"
     st.markdown(
         f'<div style="background:{bg};border-left:3px solid {accent};'
@@ -1775,11 +1775,11 @@ def risk_level_badge_html(conf: float, pos_pct: float = None) -> str:
     # Determine risk: low conf or large position = higher risk
     size = pos_pct if pos_pct else 10.0
     if conf >= 70 and size <= 15:
-        label, bg, border, tc, shape = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "#00d4aa", "●"
+        label, bg, border, tc, shape = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "var(--accent)", "●"
     elif conf >= 55 and size <= 25:
-        label, bg, border, tc, shape = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "#f59e0b", "●●"
+        label, bg, border, tc, shape = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "var(--warning)", "●●"
     else:
-        label, bg, border, tc, shape = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "#ef4444", "●●●"
+        label, bg, border, tc, shape = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "var(--danger)", "●●●"
 
     return (
         f'<span style="display:inline-block;background:{bg};border:1px solid {border};'
@@ -1856,13 +1856,13 @@ def scan_action_cta(pair: str, direction: str, conf: float,
     d = (direction or "").upper()
     if "BUY" in d:
         action_verb = "Consider Buying"
-        accent      = "#00d4aa"
+        accent      = "var(--accent)"
         bg          = "rgba(0,212,170,0.07)"
         border      = "rgba(0,212,170,0.25)"
         arrow       = "▲"
     elif "SELL" in d:
         action_verb = "Consider Reducing / Selling"
-        accent      = "#ef4444"
+        accent      = "var(--danger)"
         bg          = "rgba(246,70,93,0.07)"
         border      = "rgba(246,70,93,0.25)"
         arrow       = "▼"
@@ -4655,25 +4655,25 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
         )
 
     _m2t  = macro_data.get("m2_trend", "—")
-    _m2c  = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_m2t, "#6b7280")
+    _m2c  = {"EXPANDING": "var(--accent)", "CONTRACTING": "var(--danger)", "FLAT": "var(--text-muted)"}.get(_m2t, "var(--text-muted)")
     _m2p  = macro_data.get("m2_pct_change_90d", 0.0)
     _mini_card(_c1, "Global M2", _m2t, f"{_m2p:+.2f}% (90d)", _m2c,
                "Expanding = more liquidity = crypto tailwind" if user_level == "beginner" else "")
 
     _yct  = macro_data.get("yield_curve", "—")
-    _ycc  = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_yct, "#6b7280")
+    _ycc  = {"NORMAL": "var(--success)", "FLAT": "var(--warning)", "INVERTED": "var(--danger)"}.get(_yct, "var(--text-muted)")
     _spr  = macro_data.get("yield_spread_pp", 0.0)
     _mini_card(_c2, "Yield Curve (10Y–2Y)", _yct, f"Spread {_spr:+.2f}pp", _ycc,
                "Inverted = recession warning" if user_level == "beginner" else "")
 
     _dxt  = macro_data.get("dxy_trend", "—")
-    _dxc  = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_dxt, "#6b7280")
+    _dxc  = {"STRONG_DOLLAR": "var(--danger)", "NEUTRAL": "var(--text-muted)", "WEAK_DOLLAR": "var(--accent)"}.get(_dxt, "var(--text-muted)")
     _dxv  = macro_data.get("dxy", 104.0)
     _mini_card(_c3, "US Dollar (DXY)", _dxt.replace("_", " "), f"DXY {_dxv:.1f}", _dxc,
                "Weak dollar = crypto tailwind" if user_level == "beginner" else "")
 
     _vxt  = macro_data.get("vix_structure", "—")
-    _vxc  = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_vxt, "#6b7280")
+    _vxc  = {"CONTANGO": "var(--success)", "FLAT": "var(--text-muted)", "BACKWARDATION": "var(--danger)"}.get(_vxt, "var(--text-muted)")
     _vxv  = macro_data.get("vix", 18.0)
     _vx3  = macro_data.get("vix3m", 20.0)
     _mini_card(_c4, "VIX Term Structure", _vxt, f"VIX {_vxv:.1f} · VIX3M {_vx3:.1f}", _vxc,
@@ -4755,7 +4755,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
         _adj = _df.get_macro_signal_adjustment()
         _adj_pts = _adj.get("adjustment", 0)
         _adj_regime = _adj.get("regime", "MACRO_NEUTRAL")
-        _adj_col = "#00d4aa" if _adj_pts > 0 else ("#ef4444" if _adj_pts < 0 else "#6b7280")
+        _adj_col = "var(--accent)" if _adj_pts > 0 else ("var(--danger)" if _adj_pts < 0 else "var(--text-muted)")
         _st.markdown(
             f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);'
             f'border-radius:8px;padding:10px 14px;margin-top:8px;font-size:11px;'
