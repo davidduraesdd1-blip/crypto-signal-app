@@ -1419,10 +1419,14 @@ def compute_stochastic(df, k_period=14, d_period=3):
     return float(k.iloc[-1]), float(d.iloc[-1])
 
 def compute_atr(df, period=14):
+    # P0 audit fix — was rolling SMA (Cutler ATR). _enrich_df at line ~2163
+    # uses Wilder EWM (com=period-1), so two callers got two different ATR
+    # values for the same input. Wilder (1978) RMA via ewm(alpha=1/period)
+    # is the canonical ATR and is now used consistently everywhere.
     tr = pd.concat([df['high'] - df['low'],
                     abs(df['high'] - df['close'].shift()),
                     abs(df['low'] - df['close'].shift())], axis=1).max(axis=1)
-    return tr.rolling(period).mean()  # Returns Series for SuperTrend; use .iloc[-1] for scalars
+    return tr.ewm(alpha=1/period, adjust=False).mean()
 
 def compute_supertrend(df, period=10, multiplier=3.0):
     if len(df) < period:
@@ -1526,19 +1530,24 @@ def compute_fib_levels(df):
     return closest, levels[closest]
 
 def compute_adx(df, period=14):
+    # P0 audit fix — was rolling SMA throughout (TR, DM smoothing, DX smoothing).
+    # _enrich_df at lines ~2163-2173 uses Wilder EWM (com=period-1), so the
+    # two implementations returned different ADX values. Canonical Wilder
+    # ADX uses RMA (EWM with alpha=1/period) for all three smoothings —
+    # applied uniformly here so compute_adx() == df['adx'] for any df.
     tr = pd.concat([df['high'] - df['low'],
                     abs(df['high'] - df['close'].shift()),
                     abs(df['low'] - df['close'].shift())], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
     up = df['high'] - df['high'].shift()
     down = df['low'].shift() - df['low']
     plus_dm = np.where((up > down) & (up > 0), up, 0)
     minus_dm = np.where((down > up) & (down > 0), down, 0)
     atr_safe = atr.replace(0, np.nan)  # CM-01/02: avoid inf/NaN when price has zero range
-    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period).mean() / atr_safe
-    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period).mean() / atr_safe
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean() / atr_safe
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean() / atr_safe
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-6)
-    result = dx.rolling(period).mean()
+    result = dx.ewm(alpha=1/period, adjust=False).mean()
     val = result.iloc[-1]
     return float(val) if not pd.isna(val) else 20.0
 

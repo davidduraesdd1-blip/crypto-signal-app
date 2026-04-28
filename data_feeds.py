@@ -7266,15 +7266,24 @@ def fetch_wallet_holdings(address: str) -> dict:
     except ImportError:
         _eth_key = ""
 
-    _eth_url = (
-        f"https://api.etherscan.io/v2/api"
-        f"?chainid=1&module=account&action=tokenlist"
-        f"&address={address}&apikey={_eth_key}"
-    )
+    # P0 audit fix — was building URL with apikey={_eth_key} interpolated into
+    # the path. _SESSION's retry logic (status_forcelist=[429, 500, 502, 503,
+    # 504], total=3) would emit the literal URL into debug/proxy logs on every
+    # retry, leaking the API key. Move key to params= so requests builds the
+    # query string and any logging adapter that scrubs `headers` / `params`
+    # also scrubs the key.
+    _eth_url = "https://api.etherscan.io/v2/api"
+    _eth_params = {
+        "chainid": "1",
+        "module":  "account",
+        "action":  "tokenlist",
+        "address": address,
+        "apikey":  _eth_key,
+    }
     # Etherscan is a known-safe domain — add inline guard
     if "api.etherscan.io" in _eth_url:
         try:
-            resp = _SESSION.get(_eth_url, timeout=10)
+            resp = _SESSION.get(_eth_url, params=_eth_params, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 tokens = []
