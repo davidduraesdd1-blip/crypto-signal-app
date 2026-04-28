@@ -1400,19 +1400,15 @@ def _fetch_okx_fr(pair: str, now: float) -> dict:
 
 
 def _fetch_binance_fr(pair: str, now: float) -> dict:
-    """Fetch funding rate via Bybit v5 (no US geo-block — replaces fapi.binance.com)."""
-    try:
-        symbol = _binance_symbol(pair)
-        resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
-        if resp.status_code == 200:
-            items = resp.json().get("result", {}).get("list", [])
-            if items:
-                parsed = _parse_bybit_item(items[0], now)
-                if parsed:
-                    return parsed
-    except Exception as _e:
-        logging.debug("_fetch_binance_fr (bybit) %s: %s", pair, _e)
-    return _empty_result("Bybit N/A", now)
+    """Fetch funding rate via Bybit v5 (no US geo-block — replaces fapi.binance.com).
+
+    NOTE: Despite the legacy `_fetch_binance_fr` name (kept for back-compat
+    with existing callers in `get_multi_exchange_funding_rates`), this
+    function actually queries Bybit. The original Binance Futures path
+    was retired due to US datacenter-IP geo-blocks. The newer
+    `_fetch_binance_us_fr` below is the legitimate Binance.US path.
+    """
+    return _fetch_bybit_fr(pair, now)  # P1 audit fix — single source of truth
 
 
 def _fetch_bybit_fr(pair: str, now: float) -> dict:
@@ -7099,10 +7095,21 @@ def _get_runtime_key(key_name: str, default: str = "") -> str:
     so that keys set at deploy time are used automatically without manual paste.
     """
     import os as _os
+    # P1 audit fix — was 3-key map; per-session UI-paste flow silently
+    # bypassed for every other paid API. Expanded to cover the full
+    # set of API keys referenced elsewhere in this file so the Settings
+    # page paste-in workflow works uniformly.
     _ENV_MAP = {
-        "coingecko_key":  "SUPERGROK_COINGECKO_API_KEY",
-        "lunarcrush_key": "LUNARCRUSH_API_KEY",
-        "tiingo_key":     "SUPERGROK_TIINGO_API_KEY",
+        "coingecko_key":     "SUPERGROK_COINGECKO_API_KEY",
+        "lunarcrush_key":    "LUNARCRUSH_API_KEY",
+        "tiingo_key":        "SUPERGROK_TIINGO_API_KEY",
+        "coinmarketcap_key": "COINMARKETCAP_API_KEY",
+        "glassnode_key":     "GLASSNODE_API_KEY",
+        "cryptoquant_key":   "CRYPTOQUANT_API_KEY",
+        "coinglass_key":     "COINGLASS_API_KEY",
+        "coinalyze_key":     "SUPERGROK_COINALYZE_API_KEY",
+        "tokenomist_key":    "TOKENOMIST_API_KEY",
+        "etherscan_key":     "ETHERSCAN_API_KEY",
     }
     try:
         import streamlit as st

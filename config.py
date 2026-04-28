@@ -102,8 +102,14 @@ TIER2_COINGECKO_IDS: dict[str, str] = {
     "CC/USDT":   "canton",         # Canton Network (§13 must-have); Bybit CC/USDT
 }
 
-# Default equal weights for Tier 2
-TIER2_DEFAULT_WEIGHTS: dict[str, float] = {pair: 1.0 / 20 for pair in TIER2_PAIRS}
+# Default equal weights for Tier 2 — P1 audit fix: was hard-coded `1.0 / 20`
+# even after CC/USDT was added (TIER2_PAIRS has 21 entries), so weights
+# summed to 1.05 — the comment "20 mid-cap alts added" was stale.
+# Derive the divisor from the actual pair count so future additions stay
+# normalized.
+TIER2_DEFAULT_WEIGHTS: dict[str, float] = {
+    pair: 1.0 / len(TIER2_PAIRS) for pair in TIER2_PAIRS
+}
 
 # ─── Feature Flags ────────────────────────────────────────────────────────────
 # auto-enabled when the corresponding key is set — no code changes needed
