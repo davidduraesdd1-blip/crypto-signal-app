@@ -504,7 +504,7 @@ section.main [data-testid="stPopover"] button:hover {
 .bear  { color: var(--bear) !important; }
 .warn  { color: var(--warn) !important; }
 .muted { color: var(--text-3) !important; }
-.upper { text-transform: uppercase; letter-spacing: 0.8px; font-size: 10px; font-weight: 600; }
+.upper { text-transform: uppercase; letter-spacing: 0.8px; font-size: var(--fs-xs); font-weight: 600; }  /* P1-32 */
 
 /* ═══════════════════════════════════════════════
    BEGINNER MODE — AUDIT (a) load-bearing: drives the user_level system
@@ -1173,7 +1173,7 @@ def market_stat_bar(stats: dict):
         _stat_items.append(f"""
         <div style="display:flex;flex-direction:column;align-items:center;
                     padding:0 18px;flex-shrink:0;gap:3px">
-            <span style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+            <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                          letter-spacing:1.1px;font-weight:600">{k}</span>
             <span style="font-size:14px;font-weight:700;color:#e2e8f0;
                          font-family:'JetBrains Mono',monospace;letter-spacing:-0.3px">{v}</span>
@@ -1224,7 +1224,7 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
     hc_badge = (
         '<span style="background:rgba(0,212,170,0.12);color:#00d4aa;'
         'border:1px solid rgba(0,212,170,0.3);'
-        'padding:2px 10px;border-radius:999px;font-size:10px;font-weight:700;'
+        'padding:2px 10px;border-radius:999px;font-size:var(--fs-xs);font-weight:700;'
         'letter-spacing:0.6px;margin-left:8px;'
         'box-shadow:0 0 8px rgba(0,212,170,0.15)">⚡ TOP PICK</span>'
         if is_hc else ""
@@ -1252,7 +1252,7 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
                 <div style="font-size:11px;color:rgba(168,180,200,0.55);
                             display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                     <span style="background:{regime_color};padding:2px 9px;border-radius:999px;
-                                font-size:10px;font-weight:600;color:rgba(168,180,200,0.75)">{regime_display}</span>
+                                font-size:var(--fs-xs);font-weight:600;color:rgba(168,180,200,0.75)">{regime_display}</span>
                     <span style="opacity:0.4">·</span>
                     <span>{bias_display}</span>
                     <span style="opacity:0.4">·</span>
@@ -1296,7 +1296,7 @@ def kpi_card_html(label: str, value: str, delta: str = None,
                     background:linear-gradient(90deg,{accent},{accent}88,transparent);
                     border-radius:12px 12px 0 0"></div>
         {icon_html}
-        <div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+        <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                     letter-spacing:1.1px;font-weight:600;margin-bottom:6px">{label}</div>
         <div style="font-size:22px;font-weight:700;color:#e2e8f0;
                     font-family:'JetBrains Mono',monospace;letter-spacing:-0.5px">{value}</div>
@@ -1329,7 +1329,7 @@ def badge_row_html(badges: list[tuple]) -> str:
         <div style="display:flex;flex-direction:column;align-items:center;gap:1px;
                     background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.07);
                     border-radius:8px;padding:5px 12px;flex-shrink:0">
-            <span style="font-size:9px;color:rgba(168,180,200,0.42);text-transform:uppercase;
+            <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.42);text-transform:uppercase;
                          letter-spacing:0.9px;font-weight:600">{label}</span>
             <span style="font-size:13px;font-weight:700;color:{color};
                          font-family:'JetBrains Mono',monospace">{value}</span>
@@ -1395,7 +1395,7 @@ def sidebar_header(version: str, exchange: str, n_pairs: int):
                 </div>
                 <!-- version + model tag -->
                 <div style="
-                    font-size: 9px;
+                    font-size: var(--fs-xs);
                     color: rgba(168,180,200,0.35);
                     letter-spacing: 1.3px;
                     text-transform: uppercase;
@@ -1698,7 +1698,7 @@ def fng_gauge_html(fng_value: int, fng_category: str) -> str:
         </div>
         <!-- Scale labels -->
         <div style="display:flex;justify-content:space-between;
-                    font-size:9px;color:rgba(168,180,200,0.35);margin-top:6px">
+                    font-size:var(--fs-xs);color:rgba(168,180,200,0.35);margin-top:6px">
             <span>😱 Extreme Fear</span><span>😐 Neutral</span><span>🤑 Extreme Greed</span>
         </div>
         <div style="margin-top:8px;font-size:11px;color:rgba(168,180,200,0.55);
@@ -1864,7 +1864,7 @@ def scan_action_cta(pair: str, direction: str, conf: float,
         f"""
         <div style="background:{bg};border:1px solid {border};border-radius:14px;
                     padding:18px 22px;margin:12px 0 16px 0">
-            <div style="font-size:10px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+            <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                         letter-spacing:1.1px;font-weight:600;margin-bottom:6px">
                 ⚡ Today's Best Opportunity
             </div>
@@ -2539,7 +2539,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
         hc_badge = (
             f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
             f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
-            f'font-size:9px;font-weight:800;padding:2px 8px;margin-left:6px;'
+            f'font-size:var(--fs-xs);font-weight:800;padding:2px 8px;margin-left:6px;'
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
         ) if is_hc else ""
 
@@ -2548,7 +2548,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
         liq_badge = (
             '<span style="background:rgba(239,68,68,0.15);color:#ef4444;'
             'border:1px solid rgba(239,68,68,0.35);border-radius:99px;'
-            'font-size:9px;font-weight:800;padding:2px 7px;margin-left:4px;'
+            'font-size:var(--fs-xs);font-weight:800;padding:2px 7px;margin-left:4px;'
             'letter-spacing:0.4px">⚠ LIQ RISK</span>'
         ) if _sq_sig in ("HIGH_RISK", "EXTREME") else ""
 
@@ -2590,7 +2590,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
       <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:-0.5px">{sym}</div>
-      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}{liq_badge}</div>
+      <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}{liq_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
@@ -2599,7 +2599,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
                  font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {label}</span>
   </div>
   <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
-  <div style="display:flex;gap:10px;font-size:10px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
+  <div style="display:flex;gap:10px;font-size:var(--fs-xs);font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
          <span style="color:#e2e8f0;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
@@ -2778,7 +2778,7 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
       padding:14px 18px;
       text-align:left;
   ">
-    <div style="font-size:10px;color:rgba(0,212,170,0.7);font-weight:700;
+    <div style="font-size:var(--fs-xs);color:rgba(0,212,170,0.7);font-weight:700;
                 text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">
       💡 Did you know?
     </div>
@@ -2835,8 +2835,8 @@ def scan_sparkline_card_html(pair: str, direction: str, conf: float,
         f'border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center">'
         f'<div>'
         f'<div style="font-size:12px;font-weight:700;color:#E2E8F0">{pair}</div>'
-        f'<div style="font-size:10px;color:{d_col};margin-top:1px">{direction}</div>'
-        f'<div style="font-size:10px;color:#6B7280;margin-top:1px">{conf_int}% conf</div>'
+        f'<div style="font-size:var(--fs-xs);color:{d_col};margin-top:1px">{direction}</div>'
+        f'<div style="font-size:var(--fs-xs);color:#6B7280;margin-top:1px">{conf_int}% conf</div>'
         f'</div>'
         f'<div>{spk_svg}</div>'
         f'</div>'
@@ -3049,7 +3049,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
         hc_badge = (
             f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
             f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
-            f'font-size:9px;font-weight:800;padding:2px 8px;margin-left:6px;'
+            f'font-size:var(--fs-xs);font-weight:800;padding:2px 8px;margin-left:6px;'
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
         ) if is_hc else ""
 
@@ -3069,7 +3069,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
       <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:-0.5px">{sym}</div>
-      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
+      <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
@@ -3078,7 +3078,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
                  font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {dirn}</span>
   </div>
   <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
-  <div style="display:flex;gap:10px;font-size:10px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
+  <div style="display:flex;gap:10px;font-size:var(--fs-xs);font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
          <span style="color:#e2e8f0;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
@@ -3092,12 +3092,12 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
 
     return f"""
 <div style="margin:0 0 20px 0">
-  <div style="font-size:10px;color:rgba(168,180,200,0.4);text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.4);text-transform:uppercase;
               letter-spacing:1px;font-weight:600;margin-bottom:10px">
     ⚡ Today's Top Picks — model's highest-confidence signals
   </div>
   <div style="display:flex;gap:12px;flex-wrap:wrap">{cards_html}</div>
-  <div style="font-size:10px;color:rgba(168,180,200,0.3);margin-top:8px">
+  <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.3);margin-top:8px">
     Score 7–10/10 = actionable signal &nbsp;·&nbsp; 5–6 = watch &nbsp;·&nbsp;
     1–4 = avoid &nbsp;·&nbsp; Always set a Stop Loss before entering any trade
   </div>
@@ -3170,7 +3170,7 @@ def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
             border-left:3px solid {accent};border-radius:10px;
             padding:12px 16px;margin:8px 0 12px 0;font-size:12px;
             color:rgba(200,210,230,0.85);line-height:1.7">
-  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:{accent};font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:4px">💡 What Does This Mean For Me?</div>
   The model thinks this coin has a <strong style="color:{accent}">{conf:.0f}%</strong>
   chance of {verb}. Confidence score: <strong style="color:{accent}">{score}/10</strong>
@@ -3247,7 +3247,7 @@ def why_signal_html(
 <div style="background:rgba(20,24,36,0.6);border:1px solid rgba(255,255,255,0.06);
             border-radius:10px;padding:14px 16px;margin:4px 0 8px 0;font-size:12.5px;
             color:rgba(200,210,230,0.85);line-height:1.65">
-  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:{accent};font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:10px">🔍 Why HOLD?</div>
   {bullet_html}
 </div>"""
@@ -3334,7 +3334,7 @@ def why_signal_html(
 <div style="background:rgba(20,24,36,0.6);border:1px solid rgba(255,255,255,0.06);
             border-radius:10px;padding:14px 16px;margin:4px 0 8px 0;font-size:12.5px;
             color:rgba(200,210,230,0.85);line-height:1.65">
-  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:{accent};font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:10px">🔍 Why this signal?</div>
   {bullet_html}
 </div>"""
@@ -3499,7 +3499,7 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
 
         score    = max(1, min(10, round(conf / 10)))
         bar_w    = max(4, int(conf))
-        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:#00d4aa;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
+        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:#00d4aa;font-size:var(--fs-xs);padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
 
         entry_str = f"${entry:,.4f}" if entry else "—"
         stop_str  = f"${stop:,.4f}"  if stop  else "—"
@@ -3518,8 +3518,8 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
                 transition:width 0.3s ease"></div>
   </div>
   <span style="font-size:11px;color:{bar_color};font-weight:700;min-width:32px;text-align:right">{score}/10</span>
-  <span style="font-size:10px;color:rgba(168,180,200,0.5);min-width:80px">▶ {entry_str}</span>
-  <span style="font-size:10px;color:rgba(246,70,93,0.7);min-width:80px">✕ {stop_str}</span>
+  <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);min-width:80px">▶ {entry_str}</span>
+  <span style="font-size:var(--fs-xs);color:rgba(246,70,93,0.7);min-width:80px">✕ {stop_str}</span>
   {hc_badge}
 </div>"""
 
@@ -3527,7 +3527,7 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
 <div style="background:#0d0e14;border:1px solid rgba(255,255,255,0.07);border-radius:10px;
             overflow:hidden;margin-bottom:8px">
   <div style="display:flex;gap:10px;padding:6px 10px;background:rgba(255,255,255,0.03);
-              border-bottom:1px solid rgba(255,255,255,0.06);font-size:10px;
+              border-bottom:1px solid rgba(255,255,255,0.06);font-size:var(--fs-xs);
               color:rgba(168,180,200,0.4);font-weight:600;text-transform:uppercase;
               letter-spacing:0.6px">
     <span style="min-width:18px">#</span>
@@ -3673,7 +3673,7 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
             st.markdown(
                 f"<div style='text-align:center;padding:12px;"
                 f"background:var(--bg-1);border-radius:8px;border:1px solid var(--border);'>"
-                f"<div style='font-size:0.62rem;color:var(--text-3);text-transform:uppercase;"
+                f"<div style='font-size:var(--fs-xs);color:var(--text-3);text-transform:uppercase;"
                 f"letter-spacing:0.8px;margin-bottom:4px'>{_period}</div>"
                 f"<div style='font-size:1.9rem;font-weight:800;color:{_chex};"
                 f"font-family:var(--font-mono)'>{_val:.0f}</div>"
@@ -3867,7 +3867,7 @@ def render_ttm_squeeze_panel(sparkline_data: dict, results: list,
                 f"<div style='font-size:12px;color:#9ca3af'>{_sp['pair'].replace('/USDT','')}</div>"
                 f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_sp['state']}</div>"
                 f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_sp['direction']}</div>"
-                f"<div style='font-size:10px;color:#475569;margin-top:2px'>"
+                f"<div style='font-size:var(--fs-xs);color:#475569;margin-top:2px'>"
                 f"BB width: {_sp['bb_width_pct']:.2f}% · Mom: {_sp['momentum']:+.1f}%</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -4602,7 +4602,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
         f'border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;'
         f'justify-content:space-between;align-items:center">'
         f'<div>'
-        f'<span style="font-size:10px;color:rgba(168,180,200,0.5);text-transform:uppercase;'
+        f'<span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);text-transform:uppercase;'
         f'letter-spacing:1px;font-weight:600">Macro Environment</span><br/>'
         f'<span style="font-size:22px;font-weight:800;color:{_sig_col}">'
         f'{_ms.replace("_", " ")}</span>'
@@ -4621,17 +4621,17 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
 
     def _mini_card(col, label, value, sub, color, plain=""):
         _plain_div = (
-            '<div style="font-size:9px;color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3">'
+            '<div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3">'
             + plain + '</div>'
         ) if plain else ""
         col.markdown(
             f'<div style="background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));'
             f'border:1px solid rgba(255,255,255,0.06);border-top:3px solid {color};'
             f'border-radius:10px;padding:12px 14px">'
-            f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;'
+            f'<div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;'
             f'letter-spacing:0.8px;font-weight:600;margin-bottom:4px">{label}</div>'
             f'<div style="font-size:15px;font-weight:700;color:{color}">{value}</div>'
-            f'<div style="font-size:10px;color:rgba(168,180,200,0.55);margin-top:3px">{sub}</div>'
+            f'<div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.55);margin-top:3px">{sub}</div>'
             f'{_plain_div}'
             f'</div>',
             unsafe_allow_html=True,
