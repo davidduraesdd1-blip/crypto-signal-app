@@ -2435,14 +2435,14 @@ def price_ticker_strip_html(prices: list[dict]) -> str:
         sym    = p.get("symbol", "?").upper()
         price  = p.get("price", 0.0) or 0.0
         chg    = p.get("change_pct", 0.0) or 0.0
-        color  = "#22c55e" if chg >= 0 else "#ef4444"
+        color  = "var(--success)" if chg >= 0 else "var(--danger)"
         arrow  = "▲" if chg >= 0 else "▼"
         sign   = "+" if chg >= 0 else ""
         pf     = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         items.append(
             f'<span class="ticker-item">'
-            f'<span style="color:#94a3b8;">{sym}</span>'
-            f'<span style="color:#e2e8f0;">{pf}</span>'
+            f'<span style="color:var(--text-secondary);">{sym}</span>'
+            f'<span style="color:var(--text-primary);">{pf}</span>'
             f'<span style="color:{color};">{arrow} {sign}{chg:.2f}%</span>'
             f'</span>'
         )
@@ -2554,7 +2554,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
 
         # TOP PICK badge
         hc_badge = (
-            f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            f'<span style="background:rgba(0,212,170,0.15);color:var(--accent);'
             f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
             f'font-size:var(--fs-xs);font-weight:800;padding:2px 8px;margin-left:6px;'
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
@@ -2563,7 +2563,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
         # Cascade risk badge (shown when squeeze_data says HIGH_RISK)
         _sq_sig = (squeeze_data or {}).get(pair, "NORMAL")
         liq_badge = (
-            '<span style="background:rgba(239,68,68,0.15);color:#ef4444;'
+            '<span style="background:rgba(239,68,68,0.15);color:var(--danger);'
             'border:1px solid rgba(239,68,68,0.35);border-radius:99px;'
             'font-size:var(--fs-xs);font-weight:800;padding:2px 7px;margin-left:4px;'
             'letter-spacing:0.4px">⚠ LIQ RISK</span>'
@@ -2579,7 +2579,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
         ws        = ws_prices.get(pair, {})
         price     = ws.get("price") or r.get("price_usd")
         chg       = ws.get("change_24h_pct", 0) or 0
-        chg_c     = "#00d4aa" if chg >= 0 else "#ef4444"
+        chg_c     = "var(--accent)" if chg >= 0 else "var(--danger)"
         price_str = _fmt(price) if price else "—"
         chg_str   = (
             f'<span style="color:{chg_c};font-size:11px">{chg:+.2f}%</span>'
@@ -2606,25 +2606,25 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
 ">
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
-      <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:18px;font-weight:800;color:var(--text-primary);letter-spacing:-0.5px">{sym}</div>
       <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}{liq_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
   <div style="margin:8px 0 6px">
-    <span style="background:{color};color:#0d0e14;border-radius:999px;padding:4px 12px;
+    <span style="background:{color};color:var(--bg-0);border-radius:999px;padding:4px 12px;
                  font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {label}</span>
   </div>
   <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
   <div style="display:flex;gap:10px;font-size:var(--fs-xs);font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
-         <span style="color:#e2e8f0;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
+         <span style="color:var(--text-primary);font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
          <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
-         <span style="color:#ef4444;font-weight:600">{_fmt(stop)}</span></div>
+         <span style="color:var(--danger);font-weight:600">{_fmt(stop)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Target</span><br/>
-         <span style="color:#00d4aa;font-weight:600">{_fmt(tgt)}</span></div>
+         <span style="color:var(--accent);font-weight:600">{_fmt(tgt)}</span></div>
   </div>
 </div>"""
 
@@ -2776,11 +2776,11 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
               stroke-linecap="round" style="transition:stroke-dasharray 0.4s ease;"/>
     </svg>
     <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-                font-size:16px;font-weight:800;color:#00d4aa;
+                font-size:16px;font-weight:800;color:var(--accent);
                 font-family:JetBrains Mono,monospace;">{pct}%</div>
   </div>
 
-  <div style="font-size:14px;font-weight:600;color:#e2e8f0;margin-bottom:6px;">
+  <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">
     🔍 Scanning the market...
   </div>
   <div style="font-size:12px;color:rgba(168,180,200,0.6);margin-bottom:20px;">
@@ -2799,7 +2799,7 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
                 text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">
       💡 Did you know?
     </div>
-    <div style="font-size:13px;color:#94a3b8;line-height:1.5;">{fact}</div>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.5;">{fact}</div>
   </div>
 </div>"""
 
@@ -2841,19 +2841,19 @@ def scan_sparkline_card_html(pair: str, direction: str, conf: float,
     Compact scan-mode card with pair name, direction badge, confidence and sparkline.
     Used in scan overview mini-grid (#60).
     """
-    dir_colors = {"BUY": "#2dd4bf", "STRONG BUY": "#00D4AA",
-                  "SELL": "#ef4444", "STRONG SELL": "#EF4444"}
+    dir_colors = {"BUY": "var(--success)", "STRONG BUY": "var(--accent)",
+                  "SELL": "var(--danger)", "STRONG SELL": "var(--danger)"}
     d_upper = direction.upper()
-    d_col   = next((v for k, v in dir_colors.items() if k in d_upper), "#9CA3AF")
+    d_col   = next((v for k, v in dir_colors.items() if k in d_upper), "var(--text-secondary)")
     spk_svg = sparkline_svg(closes)
     conf_int = int(conf)
     return (
-        f'<div style="background:#111827;border:1px solid #1F2937;border-left:3px solid {d_col};'
+        f'<div style="background:var(--bg-1);border:1px solid var(--border);border-left:3px solid {d_col};'
         f'border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center">'
         f'<div>'
-        f'<div style="font-size:12px;font-weight:700;color:#E2E8F0">{pair}</div>'
+        f'<div style="font-size:12px;font-weight:700;color:var(--text-primary)">{pair}</div>'
         f'<div style="font-size:var(--fs-xs);color:{d_col};margin-top:1px">{direction}</div>'
-        f'<div style="font-size:var(--fs-xs);color:#6B7280;margin-top:1px">{conf_int}% conf</div>'
+        f'<div style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:1px">{conf_int}% conf</div>'
         f'</div>'
         f'<div>{spk_svg}</div>'
         f'</div>'
@@ -2873,15 +2873,15 @@ def gradient_confidence_bar_html(conf: float) -> str:
     pct = max(0, min(int(conf), 100))
     if pct >= 70:
         bar_color  = "linear-gradient(90deg,#2dd4bf,#00D4AA)"
-        label_color = "#2dd4bf"
+        label_color = "var(--success)"
         label_text  = "Strong signal"
     elif pct >= 50:
         bar_color  = "linear-gradient(90deg,#FBBF24,#f59e0b)"
-        label_color = "#FBBF24"
+        label_color = "var(--warning)"
         label_text  = "Moderate signal"
     else:
         bar_color  = "linear-gradient(90deg,#EF4444,#f59e0b)"
-        label_color = "#EF4444"
+        label_color = "var(--danger)"
         label_text  = "Weak — use caution"
     score_10 = max(0, min(10, round(pct / 10)))
     return (
@@ -2889,9 +2889,9 @@ def gradient_confidence_bar_html(conf: float) -> str:
         f'<div style="display:flex;justify-content:space-between;margin-bottom:4px">'
         f'<span style="font-size:12px;color:{label_color};font-weight:600">'
         f'Confidence: {score_10}/10 ({pct}%)</span>'
-        f'<span style="font-size:11px;color:#6B7280">{label_text}</span>'
+        f'<span style="font-size:11px;color:var(--text-muted)">{label_text}</span>'
         f'</div>'
-        f'<div style="background:#1F2937;border-radius:6px;height:10px;overflow:hidden">'
+        f'<div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">'
         f'<div style="background:{bar_color};width:{pct}%;height:100%;border-radius:6px;'
         f'transition:width 0.5s ease;box-shadow:0 0 8px rgba(52,211,153,0.3)"></div>'
         f'</div>'
@@ -2922,17 +2922,17 @@ def render_confidence_bar(confidence: float, signal: str = "") -> str:
     if "BUY" in sig_upper:
         # BUY: light green → dark green
         bar_color   = f"linear-gradient(90deg,#86efac,#00D4AA)"
-        label_color = "#00D4AA"
+        label_color = "var(--accent)"
         label_text  = "BUY Signal"
     elif "SELL" in sig_upper:
         # SELL: light red → deep red
         bar_color   = "linear-gradient(90deg,#FCA5A5,#EF4444)"
-        label_color = "#EF4444"
+        label_color = "var(--danger)"
         label_text  = "SELL Signal"
     else:
         # HOLD / NEUTRAL: amber → orange
         bar_color   = "linear-gradient(90deg,#FDE68A,#F59E0B)"
-        label_color = "#F59E0B"
+        label_color = "var(--warning)"
         label_text  = "HOLD / Neutral"
 
     score_10 = max(0, min(10, round(pct / 10)))
@@ -2942,7 +2942,7 @@ def render_confidence_bar(confidence: float, signal: str = "") -> str:
         f'<span style="font-size:12px;color:{label_color};font-weight:600">'
         f'Confidence: {score_10}/10 ({pct}%) — {label_text}</span>'
         f'</div>'
-        f'<div style="background:#1F2937;border-radius:6px;height:10px;overflow:hidden">'
+        f'<div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">'
         f'<div style="background:{bar_color};width:{pct}%;height:100%;border-radius:6px;'
         f'transition:width 0.5s ease;"></div>'
         f'</div>'
@@ -3064,7 +3064,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
         )
 
         hc_badge = (
-            f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            f'<span style="background:rgba(0,212,170,0.15);color:var(--accent);'
             f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
             f'font-size:var(--fs-xs);font-weight:800;padding:2px 8px;margin-left:6px;'
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
@@ -3085,25 +3085,25 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
             border-radius:12px;padding:14px;box-sizing:border-box;position:relative">
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
-      <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:18px;font-weight:800;color:var(--text-primary);letter-spacing:-0.5px">{sym}</div>
       <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
   <div style="margin:8px 0 6px">
-    <span style="background:{color};color:#0d0e14;border-radius:999px;padding:4px 12px;
+    <span style="background:{color};color:var(--bg-0);border-radius:999px;padding:4px 12px;
                  font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {dirn}</span>
   </div>
   <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
   <div style="display:flex;gap:10px;font-size:var(--fs-xs);font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
-         <span style="color:#e2e8f0;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
+         <span style="color:var(--text-primary);font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
          <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
-         <span style="color:#ef4444;font-weight:600">{_fmt(stop)}</span></div>
+         <span style="color:var(--danger);font-weight:600">{_fmt(stop)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Target</span><br/>
-         <span style="color:#00d4aa;font-weight:600">{_fmt(tgt)}</span></div>
+         <span style="color:var(--accent);font-weight:600">{_fmt(tgt)}</span></div>
   </div>
 </div>"""
 
@@ -3131,15 +3131,15 @@ def how_it_works_html(win_rate: float = 0, n_months: int = 0,
     mo_str = f"{n_months} months" if n_months else "extensive history"
     return f"""
 <div style="background:rgba(0,212,170,0.04);border:1px solid rgba(0,212,170,0.15);
-            border-left:3px solid #00d4aa;border-radius:10px;padding:14px 18px;
+            border-left:3px solid var(--accent);border-radius:10px;padding:14px 18px;
             margin:0 0 16px 0;font-size:12px;color:rgba(200,210,230,0.8);line-height:1.7">
-  <div style="font-size:11px;color:#00d4aa;font-weight:700;text-transform:uppercase;
+  <div style="font-size:11px;color:var(--accent);font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:6px">🔬 How This Model Works</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
-    <div>📊 Watches <strong style="color:#e2e8f0">{n_indicators} indicators</strong>
+    <div>📊 Watches <strong style="color:var(--text-primary)">{n_indicators} indicators</strong>
          across 4 timeframes</div>
-    <div>🕐 Backtested over <strong style="color:#e2e8f0">{mo_str}</strong> of data</div>
-    <div>🎯 Win rate in backtesting: <strong style="color:#00d4aa">{wr_str}</strong></div>
+    <div>🕐 Backtested over <strong style="color:var(--text-primary)">{mo_str}</strong> of data</div>
+    <div>🎯 Win rate in backtesting: <strong style="color:var(--accent)">{wr_str}</strong></div>
     <div>🛡️ Signals 7/10+ confidence have historically been most reliable</div>
   </div>
 </div>"""
@@ -3154,11 +3154,11 @@ def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
     """
     d = (direction or "").upper()
     if "BUY" in d:
-        accent = "#00d4aa"
+        accent = "var(--accent)"
         verb   = "going UP"
         action = "BUY"
     elif "SELL" in d:
-        accent = "#ef4444"
+        accent = "var(--danger)"
         verb   = "going DOWN"
         action = "SELL (or skip)"
     else:
@@ -3173,11 +3173,11 @@ def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
         risk_usd   = portfolio_usd * (risk_pct / 100)
         reward_usd = portfolio_usd * (reward_pct / 100)
         numbers = (
-            f"On a <strong style='color:#e2e8f0'>${portfolio_usd:,.0f}</strong> position — "
-            f"risk up to <strong style='color:#ef4444'>${risk_usd:,.0f}</strong> "
+            f"On a <strong style='color:var(--text-primary)'>${portfolio_usd:,.0f}</strong> position — "
+            f"risk up to <strong style='color:var(--danger)'>${risk_usd:,.0f}</strong> "
             f"({risk_pct:.1f}%) to potentially gain "
-            f"<strong style='color:#00d4aa'>${reward_usd:,.0f}</strong> "
-            f"({reward_pct:.1f}%). Risk/reward = <strong style='color:#e2e8f0'>{rr:.1f}×</strong>."
+            f"<strong style='color:var(--accent)'>${reward_usd:,.0f}</strong> "
+            f"({reward_pct:.1f}%). Risk/reward = <strong style='color:var(--text-primary)'>{rr:.1f}×</strong>."
         )
     else:
         numbers = "Set your portfolio size in Settings to see your personal dollar figures."
@@ -3218,7 +3218,7 @@ def why_signal_html(
     is_sell = "SELL" in d
     is_hold = not is_buy and not is_sell
 
-    accent = "#00d4aa" if is_buy else "#ef4444" if is_sell else "#f59e0b"
+    accent = "var(--accent)" if is_buy else "var(--danger)" if is_sell else "var(--warning)"
     reasons: list[str] = []
 
     # ── HOLD-specific reasons ─────────────────────────────────────────────────
@@ -3499,24 +3499,24 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
         hc    = r.get("high_conf", False)
 
         if "BUY" in d:
-            dir_color  = "#00d4aa"
+            dir_color  = "var(--accent)"
             dir_symbol = "▲"
             dir_label  = "BUY" if "STRONG" not in d else "STRONG BUY"
-            bar_color  = "#00d4aa"
+            bar_color  = "var(--accent)"
         elif "SELL" in d:
-            dir_color  = "#ef4444"
+            dir_color  = "var(--danger)"
             dir_symbol = "▼"
             dir_label  = "SELL" if "STRONG" not in d else "STRONG SELL"
-            bar_color  = "#ef4444"
+            bar_color  = "var(--danger)"
         else:
-            dir_color  = "#888"
+            dir_color  = "var(--text-muted)"
             dir_symbol = "■"
             dir_label  = "WAIT"
-            bar_color  = "#888"
+            bar_color  = "var(--text-muted)"
 
         score    = max(1, min(10, round(conf / 10)))
         bar_w    = max(4, int(conf))
-        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:#00d4aa;font-size:var(--fs-xs);padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
+        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:var(--accent);font-size:var(--fs-xs);padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
 
         entry_str = f"${entry:,.4f}" if entry else "—"
         stop_str  = f"${stop:,.4f}"  if stop  else "—"
@@ -3526,7 +3526,7 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
             border-bottom:1px solid rgba(255,255,255,0.04);
             background:{'rgba(0,212,170,0.03)' if hc else 'transparent'}">
   <span style="color:rgba(168,180,200,0.35);font-size:11px;min-width:18px;text-align:right">{i}</span>
-  <span style="font-size:13px;font-weight:700;color:#e2e8f0;min-width:52px">{coin}</span>
+  <span style="font-size:13px;font-weight:700;color:var(--text-primary);min-width:52px">{coin}</span>
   <span style="background:rgba({('0,212,170' if 'BUY' in d else ('246,70,93' if 'SELL' in d else '136,136,136'))},0.15);
               color:{dir_color};border-radius:5px;padding:2px 7px;font-size:11px;
               font-weight:700;min-width:70px;text-align:center">{dir_symbol} {dir_label}</span>
@@ -3541,7 +3541,7 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
 </div>"""
 
     return f"""
-<div style="background:#0d0e14;border:1px solid rgba(255,255,255,0.07);border-radius:10px;
+<div style="background:var(--bg-0);border:1px solid rgba(255,255,255,0.07);border-radius:10px;
             overflow:hidden;margin-bottom:8px">
   <div style="display:flex;gap:10px;padding:6px 10px;background:rgba(255,255,255,0.03);
               border-bottom:1px solid rgba(255,255,255,0.06);font-size:var(--fs-xs);
@@ -3572,14 +3572,14 @@ def arb_opportunity_story_html(pair: str, buy_ex: str, sell_ex: str,
             border-left:3px solid {color};border-radius:12px;
             padding:16px 20px;margin:8px 0;font-size:13px;
             color:rgba(200,210,230,0.9)">
-  <div style="font-weight:700;font-size:15px;color:#e2e8f0;margin-bottom:6px">
+  <div style="font-weight:700;font-size:15px;color:var(--text-primary);margin-bottom:6px">
     {pair.replace('/USDT','')} &nbsp;
     <span style="color:{color};font-size:13px">{net_spread_pct:.2f}% profit</span>
   </div>
-  Buy on <strong style="color:#e2e8f0">{buy_ex}</strong> at
-  <strong style="color:#e2e8f0">${buy_price:,.4f}</strong>,
-  sell on <strong style="color:#e2e8f0">{sell_ex}</strong> at
-  <strong style="color:#e2e8f0">${sell_price:,.4f}</strong> —
+  Buy on <strong style="color:var(--text-primary)">{buy_ex}</strong> at
+  <strong style="color:var(--text-primary)">${buy_price:,.4f}</strong>,
+  sell on <strong style="color:var(--text-primary)">{sell_ex}</strong> at
+  <strong style="color:var(--text-primary)">${sell_price:,.4f}</strong> —
   pocket <strong style="color:{color}">{net_spread_pct:.2f}%</strong> after fees.<br/>
   <span style="font-size:11px;color:rgba(168,180,200,0.5)">
     On a $1,000 trade that's approximately
@@ -3598,13 +3598,13 @@ def signal_badge_html(direction: str, label: str = "") -> str:
     """
     _dir = direction.upper().strip()
     if _dir in {"BUY", "BULLISH", "BULL", "LONG", "STRONG_BUY"}:
-        _shape, _bg, _txt, _border = "▲", "rgba(0,212,170,0.12)", "#00d4aa", "rgba(0,212,170,0.35)"
+        _shape, _bg, _txt, _border = "▲", "rgba(0,212,170,0.12)", "var(--accent)", "rgba(0,212,170,0.35)"
         _default = "BUY"
     elif _dir in {"SELL", "BEARISH", "BEAR", "SHORT", "STRONG_SELL"}:
-        _shape, _bg, _txt, _border = "▼", "rgba(246,70,93,0.12)", "#ef4444", "rgba(246,70,93,0.35)"
+        _shape, _bg, _txt, _border = "▼", "rgba(246,70,93,0.12)", "var(--danger)", "rgba(246,70,93,0.35)"
         _default = "SELL"
     else:
-        _shape, _bg, _txt, _border = "■", "rgba(100,116,139,0.12)", "#64748b", "rgba(100,116,139,0.3)"
+        _shape, _bg, _txt, _border = "■", "rgba(100,116,139,0.12)", "var(--text-muted)", "rgba(100,116,139,0.3)"
         _default = "NEUTRAL"
     _display = label if label else _default
     return (
