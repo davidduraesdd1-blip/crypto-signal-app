@@ -88,10 +88,41 @@ _ETH_TOKEN_CONTRACTS = {
     "ETH": None,   # native — use eth_getBlockByNumber approach
 }
 
+# P1 audit fix (item 42) — ETH whale activity was previously sampled
+# from ONE hardcoded address (Ethereum Foundation donation wallet),
+# which made every "ETH whale" reading derive from a single low-volume
+# wallet and totally misrepresented network-wide activity. Now sampling
+# across a basket of well-known high-volume ETH addresses (top CEX hot
+# wallets + visible whale entities), then aggregating. None of these
+# are secret — every entry below is on Etherscan's public Top-Holders
+# / labelled-address pages.
+_ETH_WHALE_PROXY_ADDRESSES = [
+    # Top CEX hot wallets (heaviest aggregate flow)
+    ("Binance hot 14",     "0x28C6c06298d514Db089934071355E5743bf21d60"),
+    ("Binance hot 7",      "0xDFd5293D8e347dFe59E90eFd55b2956a1343963d"),
+    ("Coinbase hot 4",     "0x71660c4005BA85c37ccec55d0C4493E66Fe775d3"),
+    ("Coinbase hot 6",     "0x503828976D22510aad0201ac7EC88293211D23Da"),
+    ("Kraken hot 4",       "0x2910543Af39abA0Cd09dBb2D50200b3E800A63D2"),
+    ("Bitfinex MultiSig",  "0x1151314c646Ce4E0eFD76d1aF4760aE66a9Fe30F"),
+    ("OKX hot",            "0x868dab0b8E21EC0a48b76A7E10f4c662F1F1a76d"),
+    # Visible whale identities (large, slow-moving, occasional moves)
+    ("Vitalik Buterin",    "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"),
+    ("Ethereum Foundation","0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe"),
+]
+
+
 def _fetch_eth_whales(price_usd: float) -> list[dict]:
-    """Fetch large recent ETH transactions from Etherscan public API."""
+    """Fetch large recent ETH transactions from Etherscan public API.
+
+    Samples a basket of well-known high-volume ETH addresses (top CEX
+    hot wallets + visible whale identities) rather than a single proxy
+    address. The flow direction inference is best-effort: a contract
+    call (methodId != "0x") is tagged as accumulation, a plain ETH
+    transfer as distribution. Aggregates txs across the basket and
+    returns the top moves above WHALE_THRESHOLD_USD.
+    """
     try:
-        # Get latest block number
+        # Get latest block number once
         resp = _SESSION.get(
             "https://api.etherscan.io/v2/api",
             params={"chainid": 1, "module": "proxy", "action": "eth_blockNumber"},
@@ -107,47 +138,61 @@ def _fetch_eth_whales(price_usd: float) -> list[dict]:
             logger.debug("ETH whale: invalid block number hex %r", hex_block)
             return _estimate_eth_whale_activity(price_usd)
 
-        # Fetch recent large txs via Etherscan v2 (multi-chain aware)
-        resp2 = _SESSION.get(
-            "https://api.etherscan.io/v2/api",
-            params={
-                "chainid":    1,
-                "module":     "account",
-                "action":     "txlist",
-                "address":    "0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe",  # EF donation addr as proxy
-                "startblock": max(0, block_num - 200),
-                "endblock":   block_num,
-                "sort":       "desc",
-                "offset":     20,
-                "page":       1,
-            },
-            timeout=_TIMEOUT,
-        )
-        # Etherscan may return rate-limit errors without key — graceful fallback
-        data = resp2.json()
-        if data.get("status") != "1":
-            return _estimate_eth_whale_activity(price_usd)
-
-        moves = []
-        for tx in data.get("result", [])[:20]:
+        moves: list[dict] = []
+        for label, address in _ETH_WHALE_PROXY_ADDRESSES:
             try:
-                raw_val = tx.get("value", "0") or "0"
-                # Etherscan returns decimal wei strings; guard against hex or empty values
-                val_eth = int(raw_val, 0) / 1e18 if str(raw_val).startswith("0x") else int(raw_val) / 1e18
-            except (ValueError, TypeError):
+                # Fetch recent txs for this proxy address
+                resp2 = _SESSION.get(
+                    "https://api.etherscan.io/v2/api",
+                    params={
+                        "chainid":    1,
+                        "module":     "account",
+                        "action":     "txlist",
+                        "address":    address,
+                        "startblock": max(0, block_num - 500),
+                        "endblock":   block_num,
+                        "sort":       "desc",
+                        "offset":     10,
+                        "page":       1,
+                    },
+                    timeout=_TIMEOUT,
+                )
+                data = resp2.json()
+                if data.get("status") != "1":
+                    continue
+                for tx in data.get("result", [])[:10]:
+                    try:
+                        raw_val = tx.get("value", "0") or "0"
+                        val_eth = (
+                            int(raw_val, 0) / 1e18
+                            if str(raw_val).startswith("0x")
+                            else int(raw_val) / 1e18
+                        )
+                    except (ValueError, TypeError):
+                        continue
+                    amount_usd = val_eth * price_usd
+                    if amount_usd < WHALE_THRESHOLD_USD:
+                        continue
+                    method_id = tx.get("methodId", "0x")
+                    direction = (
+                        "accumulation" if method_id != "0x" else "distribution"
+                    )
+                    moves.append({
+                        "amount_usd": round(amount_usd, 0),
+                        "direction":  direction,
+                        "txid":       tx.get("hash", "")[:16] + "...",
+                        "source":     label,
+                    })
+            except Exception as _addr_err:
+                logger.debug("ETH whale fetch for %s failed: %s", label, _addr_err)
                 continue
-            amount_usd = val_eth * price_usd
-            if amount_usd >= WHALE_THRESHOLD_USD:
-                n_internal = int(tx.get("methodId", "0x") != "0x")
-                # Plain ETH transfer (methodId=="0x") → likely send-to-exchange = distribution
-                # Contract call (methodId!="0x") → likely DEX buy / DeFi deposit = accumulation
-                direction = "accumulation" if n_internal else "distribution"
-                moves.append({
-                    "amount_usd": round(amount_usd, 0),
-                    "direction":  direction,
-                    "txid":       tx.get("hash", "")[:16] + "...",
-                })
-        return moves
+
+        if not moves:
+            # All proxies returned nothing useful — fall back to estimator
+            return _estimate_eth_whale_activity(price_usd)
+        # Sort by size and cap
+        moves.sort(key=lambda m: m["amount_usd"], reverse=True)
+        return moves[:25]
     except Exception as e:
         logger.debug("ETH whale fetch failed: %s", e)
         return []
