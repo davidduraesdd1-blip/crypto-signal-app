@@ -497,7 +497,10 @@ def get_funding_rate(pair: str) -> dict:
 # ──────────────────────────────────────────────
 
 _ONCHAIN_CACHE: dict = {}
-_ONCHAIN_TTL = 300  # 5-minute cache
+# P1 audit fix — was 300s (5min); CLAUDE.md §12 mandates 1h cache for
+# on-chain. Glassnode/CoinMetrics community endpoints update much
+# slower than 5min and the old TTL was burning rate-limit headroom.
+_ONCHAIN_TTL = 3600  # 1-hour cache (per CLAUDE.md §12)
 
 _COIN_MAP = {
     # Core
@@ -2826,7 +2829,10 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
 
 _FNG_CACHE: dict = {}
 _FNG_LOCK  = threading.Lock()
-_FNG_TTL   = 900   # 15-minute cache (index only updates daily but we cache shorter so first load is fast)
+# P1 audit fix — was 900s (15min); CLAUDE.md §12 mandates 24h F&G
+# cache. The alternative.me index only updates once daily so any
+# sub-day TTL was wasted bandwidth and rate-limit headroom.
+_FNG_TTL   = 86_400  # 24-hour cache (per CLAUDE.md §12)
 
 _FNG_NEUTRAL = {
     "value": 50,
@@ -3204,7 +3210,8 @@ _NEWS_CACHE_TTL    = 900  # 15-minute cache
 
 _FNG2_CACHE: dict = {"value": None, "label": None, "_ts": 0.0}
 _FNG2_LOCK = threading.Lock()
-_FNG2_TTL  = 3600  # 1-hour cache (index updates daily — no need to hammer)
+# P1 audit fix — was 3600s (1h); CLAUDE.md §12 mandates 24h F&G cache.
+_FNG2_TTL  = 86_400  # 24-hour cache (per CLAUDE.md §12)
 
 
 def get_fear_greed() -> dict:
@@ -3889,7 +3896,10 @@ _FRED_MACRO_FALLBACKS_SG = {
 _MACRO_CACHE_SG: dict = {}
 _MACRO_CACHE_LOCK_SG = threading.Lock()
 _MACRO_INFLIGHT: dict = {}   # key → threading.Event sentinel (TOCTOU guard)
-_MACRO_TTL = 3600  # 1 hour
+# P1 audit fix — was 3600s (1h); CLAUDE.md §12 mandates 2h macro cache.
+# FRED/yfinance macro series rarely change intraday (DXY/VIX excepted,
+# which have shorter dedicated caches elsewhere).
+_MACRO_TTL = 7_200  # 2-hour cache (per CLAUDE.md §12)
 
 
 def get_cache_age_seconds(key: str) -> float | None:

@@ -829,6 +829,32 @@ def _signal_label(score: float) -> str:
     return "STRONG_RISK_OFF"
 
 
+# P0 audit fix — CLAUDE.md §9 mandates that every signal output is one of
+# BUY / HOLD / SELL with a confidence in [0, 100]. The legacy 7-state
+# RISK_ON/OFF labels above are kept for back-compat (UI sidebar pills,
+# logs, and downstream regression diffs all read them) but the canonical
+# decision exposed to callers is now this 3-state mapping.
+#
+# Threshold rationale (from research/2026-04-23-redesign-research.md +
+# the historical AGENT thresholds in agent.py): mild risk-on/off (±0.10)
+# is intentionally HOLD — too noisy to act on. Anything stronger is a
+# directional decision. Confidence = abs(score) * 100, capped at 100.
+
+def _decision_from_score(score: float) -> str:
+    """Map composite score [-1, +1] to BUY / HOLD / SELL."""
+    if score >= +0.30:  return "BUY"
+    if score <= -0.30:  return "SELL"
+    return "HOLD"
+
+
+def _confidence_from_score(score: float) -> float:
+    """Confidence in [0, 100] derived from |score|."""
+    try:
+        return round(min(100.0, abs(float(score)) * 100.0), 1)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _beginner_label(score: float) -> str:
     if score >= +0.30:  return "Market conditions look good for trading — macro and on-chain are aligned"
     if score >= +0.10:  return "Conditions are slightly favorable for new positions"
@@ -935,14 +961,44 @@ def compute_composite_signal(
     sentiment_layer["weight"]   = w_sent; sentiment_layer["weighted"]   = round(sent_score * w_sent, 4)
     onchain_layer["weight"]     = w_oc;   onchain_layer["weighted"]     = round(oc_score   * w_oc,   4)
 
-    total = (
-        ta_layer["weighted"] + macro_layer["weighted"] +
-        sentiment_layer["weighted"] + onchain_layer["weighted"]
+    # P1 audit fix — when a layer fell back to score=0.0 due to an
+    # exception (try/except block above), the legacy code still
+    # multiplied 0 by the FULL layer weight, diluting the composite
+    # toward neutral whenever a single data source dropped offline.
+    # Now: re-derive the weight basis from layers that actually
+    # produced data (any layer with a non-empty `components` dict
+    # OR a non-zero raw `score`), and renormalize the surviving
+    # layers to sum to 1.0 so a single-layer outage doesn't push
+    # the whole composite to neutral.
+    _layer_specs = (
+        (ta_layer,        w_ta),
+        (macro_layer,     w_mac),
+        (sentiment_layer, w_sent),
+        (onchain_layer,   w_oc),
     )
+    _surviving = [
+        (lyr, w) for lyr, w in _layer_specs
+        if (lyr.get("components") or 0.0) or float(lyr.get("score") or 0.0) != 0.0
+    ]
+    if _surviving and len(_surviving) < 4:
+        _surv_w = sum(w for _, w in _surviving)
+        if _surv_w > 0:
+            total = sum(float(lyr["score"]) * (w / _surv_w) for lyr, w in _surviving)
+        else:
+            total = 0.0
+    else:
+        total = (
+            ta_layer["weighted"] + macro_layer["weighted"] +
+            sentiment_layer["weighted"] + onchain_layer["weighted"]
+        )
     total = _clamp(total)
 
     return {
         "score":            round(total, 4),
+        # P0 audit fix — emit canonical BUY/HOLD/SELL + confidence per
+        # CLAUDE.md §9. Legacy 7-state `signal` is kept alongside.
+        "decision":         _decision_from_score(total),
+        "confidence":       _confidence_from_score(total),
         "signal":           _signal_label(total),
         "risk_off":         is_risk_off(total),
         "beginner_summary": _beginner_label(total),

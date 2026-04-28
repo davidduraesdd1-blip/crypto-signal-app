@@ -945,7 +945,11 @@ def detect_wyckoff_spring_upthrust(df: pd.DataFrame, lookback: int = 60,
 
     current = float(close.iloc[-1])
     recent_low  = float(low.iloc[-3:].min())
-    recent_high = float(high.iloc[-3:].min())
+    # P1 audit fix — was `.min()` (typo); the Wyckoff Upthrust check below
+    # requires the HIGHEST high in the lookback window. With min() the
+    # comparison `recent_high > range_high * 1.002` almost never fired,
+    # leaving Upthrust signal effectively dead code.
+    recent_high = float(high.iloc[-3:].max())
 
     # Spring: recent low broke below range_low, but current close back inside range
     if recent_low < range_low - 0.002 * range_low and current > range_low:
@@ -1651,7 +1655,11 @@ def compute_composite_top_bottom_score(
     ]
     struct_w_sum  = sum(w for _, c, w in struct_pairs if c > 0) or 1.0
     struct_score  = sum(s * w for s, c, w in struct_pairs if c > 0) / struct_w_sum
-    struct_conf   = int(sum(c * w for _, c, w in struct_pairs) / 1.0)
+    # P1 audit fix — was `/ 1.0` no-op which inflated confidence ~5x by
+    # summing weighted confidences without normalizing. Use the same
+    # struct_w_sum denominator so confidence is a proper weighted mean
+    # of the participating layer confidences.
+    struct_conf   = int(sum(c * w for _, c, w in struct_pairs if c > 0) / struct_w_sum)
 
     layers_raw["structure"]  = _clamp(struct_score)
     layers_conf["structure"] = min(80, struct_conf)
@@ -1674,7 +1682,8 @@ def compute_composite_top_bottom_score(
     ]
     vol_w_sum  = sum(w for _, c, w in vol_pairs if c > 0) or 1.0
     vol_score  = sum(s * w for s, c, w in vol_pairs if c > 0) / vol_w_sum
-    vol_conf   = int(sum(c * w for _, c, w in vol_pairs) / 1.0)
+    # P1 audit fix — same `/ 1.0` no-op as struct_conf above.
+    vol_conf   = int(sum(c * w for _, c, w in vol_pairs if c > 0) / vol_w_sum)
 
     layers_raw["volatility"]  = _clamp(vol_score)
     layers_conf["volatility"] = min(75, vol_conf)
