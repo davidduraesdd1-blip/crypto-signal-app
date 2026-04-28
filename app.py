@@ -609,18 +609,26 @@ except Exception as _ds_err:
 # ── Professional CSS design system (must come before any st.* calls) ──
 _ui.inject_css()
 
-# ── #59 UI/UX Refresh — global signal/card color variables ────────────────────
-SIGNAL_CSS = """
-<style>
-.signal-buy  { color: #22c55e; font-weight: bold; }
-.signal-sell { color: #ef4444; font-weight: bold; }
-.signal-hold { color: #f59e0b; font-weight: bold; }
-.metric-positive { color: #22c55e; }
-.metric-negative { color: #ef4444; }
-.card-container  { background: #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
-</style>
-"""
-st.markdown(SIGNAL_CSS, unsafe_allow_html=True)
+# ── Signal/card color tokens come from ui/design_system.py (P0 audit fix) ─────
+# Removed legacy SIGNAL_CSS that hard-coded dark hex over the design tokens —
+# `.signal-buy/.signal-sell/.signal-hold` now use `var(--success)/--danger/
+# --warning` defined by ui/design_system.inject_theme. `.card-container`
+# rendering should use the `.ds-card` class from design_system.
+st.markdown(
+    """
+    <style>
+    .signal-buy      { color: var(--success); font-weight: 600; }
+    .signal-sell     { color: var(--danger);  font-weight: 600; }
+    .signal-hold     { color: var(--warning); font-weight: 600; }
+    .metric-positive { color: var(--success); }
+    .metric-negative { color: var(--danger); }
+    .card-container  { background: var(--bg-1); border: 1px solid var(--border);
+                       border-radius: var(--card-radius); padding: 12px;
+                       margin-bottom: 8px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ── Beginner / Advanced mode toggle (persisted in session state) ──────────────
 if "beginner_mode" not in st.session_state:

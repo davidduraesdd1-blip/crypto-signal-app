@@ -47,7 +47,7 @@ DEFAULTS = {
     "variance_mult":         3.0,    # halt if realized-vol > 3x baseline
 }
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / "data" / "circuit_state.json"
+_STATE_FILE = Path(__file__).resolve().parent / "data" / "circuit_state.json"
 _LOCK = threading.Lock()
 
 
