@@ -429,6 +429,64 @@ def _cached_signal_win_rate(pair: str, direction: str, days: int = 90) -> dict:
     return _db.get_signal_win_rate(pair=pair, direction=direction, days=days)
 
 
+# ── P1 audit fix (P1-25) — wrappers for hot-path data_feeds calls that
+# were previously invoked uncached on render-path hits, violating the
+# §12 cache-window matrix. Each wrapper's TTL matches the §12 spec.
+# Rendering code should call the _sg_cached_* helpers, not data_feeds
+# directly.
+@st.cache_data(ttl=86_400, show_spinner=False, max_entries=2)
+def _sg_cached_fear_greed() -> dict:
+    """Fear & Greed index — 24h TTL per CLAUDE.md §12."""
+    try:
+        return data_feeds.get_fear_greed() or {}
+    except Exception as _e:
+        logger.debug("[App] cached F&G fetch failed: %s", _e)
+        return {}
+
+
+@st.cache_data(ttl=600, show_spinner=False, max_entries=120)
+def _sg_cached_funding_rate(pair: str) -> dict:
+    """Funding rate for a single pair — 10-min TTL per CLAUDE.md §12."""
+    try:
+        return data_feeds.get_funding_rate(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] cached funding fetch %s failed: %s", pair, _e)
+        return {}
+
+
+@st.cache_data(ttl=600, show_spinner=False, max_entries=20)
+def _sg_cached_multi_exchange_funding(pair: str) -> dict:
+    """Multi-exchange funding aggregator — 10-min TTL per CLAUDE.md §12.
+
+    The audit flagged the Funding Rates scan page firing up to ~32
+    sequential HTTP calls per click (8 pairs × 4 exchanges). With this
+    wrapper, repeated clicks within a 10-minute window cost zero
+    network round-trips.
+    """
+    try:
+        return data_feeds.get_multi_exchange_funding_rates(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] cached multi-fr fetch %s failed: %s", pair, _e)
+        return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=200)
+def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 400):
+    """OHLCV — 5-min TTL per CLAUDE.md §12 (intraday).
+
+    Wraps model.robust_fetch_ohlcv so dashboard / signals / backtester
+    pages don't refetch identical (exchange, pair, tf, limit) tuples on
+    every Streamlit rerun. Returns whatever robust_fetch_ohlcv returns
+    (DataFrame or empty list); errors fall through to None.
+    """
+    try:
+        return model.robust_fetch_ohlcv(exchange_id, pair, timeframe, limit=limit)
+    except Exception as _e:
+        logger.debug("[App] cached OHLCV %s %s %s failed: %s",
+                     exchange_id, pair, timeframe, _e)
+        return None
+
+
 # ──────────────────────────────────────────────
 # MODULE-LEVEL THREAD STATE (progress only — results go to file)
 # ──────────────────────────────────────────────
@@ -1522,7 +1580,9 @@ def page_dashboard():
             _dxy_30d = None
             _funding_val = None
             try:
-                _fng_dict = data_feeds.get_fear_greed() or {}
+                # P1-25 audit fix — was uncached F&G fetch on every Dashboard
+                # render. §12 says 24h cache.
+                _fng_dict = _sg_cached_fear_greed()
             except Exception as _e_fng:
                 logger.debug("[Dashboard] F&G live fetch failed: %s", _e_fng)
             try:
@@ -1532,7 +1592,8 @@ def page_dashboard():
             except Exception as _e_yf:
                 logger.debug("[Dashboard] yfinance macro fetch failed: %s", _e_yf)
             try:
-                _fr = data_feeds.get_funding_rate("BTC/USDT") or {}
+                # P1-25 audit fix — funding was uncached at render time. §12: 10min.
+                _fr = _sg_cached_funding_rate("BTC/USDT")
                 _funding_val = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
             except Exception as _e_fr:
                 logger.debug("[Dashboard] funding rate fetch failed: %s", _e_fr)
@@ -8903,7 +8964,8 @@ def page_signals():
             _beta = _result.get("beta_spy")
             _fund = None
             try:
-                _fr = data_feeds.get_funding_rate(_pair) or {}
+                # P1-25 audit fix — Signals page funding fetch now cached 10min.
+                _fr = _sg_cached_funding_rate(_pair)
                 _fund = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
             except Exception:
                 pass
@@ -9005,11 +9067,12 @@ def page_signals():
             ],
         )
     with _ic3:
-        _fng_d = data_feeds.get_fear_greed() or {} if hasattr(data_feeds, "get_fear_greed") else {}
+        # P1-25 audit fix — F&G + funding via cached helpers (24h / 10min).
+        _fng_d = _sg_cached_fear_greed() if hasattr(data_feeds, "get_fear_greed") else {}
         _fng_v = _fng_d.get("value")
         _fund_v = None
         try:
-            _fr = data_feeds.get_funding_rate(_pair) or {}
+            _fr = _sg_cached_funding_rate(_pair)
             _fund_v = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
         except Exception:
             pass
@@ -9208,7 +9271,8 @@ def page_regimes():
             _vix_30d = _yf.get("vix_30d_change_pct") or _me.get("vix_30d_change_pct")
             _ust10 = _yf.get("treasury_10y") or _me.get("treasury_10y")
             _ust10_7d = _yf.get("treasury_10y_7d_change_bps") or _me.get("treasury_10y_7d_change_bps")
-            _fng_d = data_feeds.get_fear_greed() or {}
+            # P1-25 audit fix — On-chain page F&G now via cached helper (24h).
+            _fng_d = _sg_cached_fear_greed()
             _fng_v = _fng_d.get("value")
             _fng_7d = _fng_d.get("change_7d") or _me.get("fng_7d_change")
             _hy = _yf.get("hy_spread_bps") or _me.get("hy_spread_bps")

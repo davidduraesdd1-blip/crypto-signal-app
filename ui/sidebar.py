@@ -641,12 +641,22 @@ def regime_card_html(
 ) -> str:
     """Return HTML for a single regime card. state → bull/bear/trans/accum/dist."""
     display_state, variant = _clean_regime_state(state)
-    conf = f"confidence {int(confidence)}%" if confidence is not None else ""
-    since_html = f'<div class="since">{since}</div>' if since else ""
+    # P1 audit fix — escape every interpolated caller string. ticker can
+    # come from a data source list, state/since from upstream regime
+    # classifier output. confidence is numeric, sanitize via int().
+    try:
+        _conf_int = int(confidence) if confidence is not None else None
+    except (TypeError, ValueError):
+        _conf_int = None
+    conf = f"confidence {_conf_int}%" if _conf_int is not None else ""
+    since_html = (
+        f'<div class="since">{_html.escape(str(since))}</div>'
+        if since else ""
+    )
     return (
-        f'<div class="ds-card ds-rgm {variant}">'
-        f'<div class="t">{ticker}</div>'
-        f'<div class="state">{display_state}</div>'
+        f'<div class="ds-card ds-rgm {_html.escape(variant)}">'
+        f'<div class="t">{_html.escape(str(ticker))}</div>'
+        f'<div class="state">{_html.escape(str(display_state))}</div>'
         f'<div class="conf">{conf}</div>'
         f'{since_html}'
         f'</div>'
@@ -663,8 +673,9 @@ def coin_picker(coins: Sequence[str], active: str) -> str:
     helper is here so the layout matches the mockup exactly when no
     interaction is needed (e.g. screenshots / printouts).
     """
+    # P1 audit fix — escape coin labels (caller data).
     btns = "".join(
-        f'<button class="{"on" if c == active else ""}">{c}</button>'
+        f'<button class="{"on" if c == active else ""}">{_html.escape(str(c))}</button>'
         for c in coins
     )
     return f'<div class="ds-coin-pick">{btns}</div>'
