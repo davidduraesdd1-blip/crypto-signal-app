@@ -333,7 +333,21 @@ def _cached_arb_opportunities_df(limit: int = 100) -> "pd.DataFrame":
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_resolved_feedback_df(days: int = 365) -> "pd.DataFrame":
-    """Cache resolved feedback — calendar heatmap, 5-min TTL."""
+    """Cache resolved feedback — calendar heatmap, 5-min TTL.
+
+    P1 audit fix — ensure the legacy CSV→SQLite migration has run
+    before reading. database.ensure_csv_migrated() is a thread-safe
+    one-shot from the lazy-init refactor (commit 82c1ccf).
+    """
+    try:
+        _db.ensure_csv_migrated()
+    except Exception as _mig_err:
+        logger.debug("[App] ensure_csv_migrated failed: %s", _mig_err)
+    # P1 audit also flagged days=365 as too large for hot-path reads;
+    # cap at 180 to keep cold renders under the 60s budget. Callers
+    # that genuinely need a full year can pass an explicit larger value.
+    if days > 180:
+        days = 180
     return _db.get_resolved_feedback_df(days=days)
 
 

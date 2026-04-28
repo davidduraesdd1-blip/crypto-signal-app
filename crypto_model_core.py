@@ -1720,10 +1720,25 @@ def compute_chandelier_exit(df: pd.DataFrame,
         price  = float(close.iloc[-1])
         prev   = float(close.iloc[-2]) if len(df) > 1 else price
 
-        # Direction: are we above the long stop?
-        direction_now  = "LONG" if price  > ls_val else "SHORT"
-        direction_prev = "LONG" if prev   > float(long_stop.iloc[-2]) else "SHORT"
-        flip_signal = direction_now != direction_prev
+        # Direction: above the long stop = LONG; below the short stop = SHORT;
+        # otherwise carry the previous direction (Chandelier convention).
+        # P1 audit fix — was `direction_prev = LONG if prev > long_stop[-2] else SHORT`,
+        # which only flagged crossings of the LONG stop. Bearish flips that
+        # crossed the SHORT stop were silently missed, so the flip_signal
+        # boolean under-reported reversals. Now compares to BOTH stops.
+        ls_prev = float(long_stop.iloc[-2])
+        ss_prev = float(short_stop.iloc[-2])
+
+        def _resolve_dir(p: float, ls: float, ss: float, fallback: str) -> str:
+            if p > ls:
+                return "LONG"
+            if p < ss:
+                return "SHORT"
+            return fallback
+
+        direction_now  = _resolve_dir(price, ls_val, ss_val, fallback="LONG")
+        direction_prev = _resolve_dir(prev,  ls_prev, ss_prev, fallback=direction_now)
+        flip_signal    = direction_now != direction_prev
 
         return {
             "long_stop":   round(ls_val, 6),
