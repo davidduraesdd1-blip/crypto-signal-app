@@ -30,6 +30,7 @@ from __future__ import annotations
 import hmac
 import html as _html
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -49,6 +50,31 @@ import crypto_model_core as model
 import database as db
 import websocket_feeds as ws_feeds
 import execution as exec_engine
+
+# P0 audit fix — refuse to start the FastAPI process when live trading
+# is enabled but no api_key is configured. Pre-fix the docker-compose
+# stack would happily expose :8000 with /execute/order callable by any
+# unauthenticated client. The check is a hard fail at process start so
+# operators cannot ignore it. CRYPTO_SIGNAL_ALLOW_UNAUTH=true overrides
+# only for local development (matches require_api_key).
+try:
+    _startup_cfg = alerts.load_alerts_config()
+    _startup_live = bool(_startup_cfg.get("live_trading_enabled", False))
+    _startup_key = (_startup_cfg.get("api_key") or "").strip()
+    _startup_allow_unauth = (
+        os.environ.get("CRYPTO_SIGNAL_ALLOW_UNAUTH", "").strip().lower() == "true"
+    )
+    if _startup_live and not _startup_key and not _startup_allow_unauth:
+        raise RuntimeError(
+            "FastAPI refusing to start: live_trading_enabled=True but no api_key "
+            "is configured. Either set 'api_key' in alerts_config.json (recommended), "
+            "disable live_trading_enabled, or export CRYPTO_SIGNAL_ALLOW_UNAUTH=true "
+            "for local development."
+        )
+except RuntimeError:
+    raise
+except Exception as _cfg_err:
+    logger.warning("Startup auth-config check skipped (non-fatal): %s", _cfg_err)
 
 # Start WebSocket feed when API server loads
 try:
@@ -110,11 +136,32 @@ def _get_configured_api_key() -> str:
 
 
 def require_api_key(x_api_key: str = Header(default="")):
-    """Dependency: validates X-API-Key header if a key is configured.
-    SEC-MEDIUM-03: uses hmac.compare_digest() to prevent timing-based key enumeration.
+    """Dependency: validates X-API-Key header on auth-required endpoints.
+
+    SEC-MEDIUM-03: uses hmac.compare_digest() to prevent timing-based
+    key enumeration.
+
+    P0 audit fix — pre-fix this was an empty no-op when `api_key` was
+    unset, exposing POST /execute/order, /scan/trigger, and the
+    /tradingview_webhook path to any caller who could reach :8000.
+    Default is now FAIL-CLOSED: if no key is configured, every
+    auth-required endpoint returns 503 with operator guidance. To
+    intentionally run without auth (e.g. local-only development),
+    set CRYPTO_SIGNAL_ALLOW_UNAUTH=true in the environment.
     """
     expected = _get_configured_api_key()
-    if expected and not hmac.compare_digest(x_api_key, expected):
+    if not expected:
+        if os.environ.get("CRYPTO_SIGNAL_ALLOW_UNAUTH", "").strip().lower() == "true":
+            return  # explicit opt-out — local-dev only
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "API key not configured. Set 'api_key' in alerts_config.json "
+                "(or via the Settings page) to enable authenticated access, "
+                "or export CRYPTO_SIGNAL_ALLOW_UNAUTH=true for local development."
+            ),
+        )
+    if not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
