@@ -2706,9 +2706,20 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
             logging.debug("[Core] allora price bias failed for %s: %s", pair, _allora_err)
 
         score = max(0, min(100, score))
-        # T2-A: Sigmoid calibration — converts raw score to a more decisive probability-like value.
-        # Maps: 50→50, 65→72, 75→80, 45→28, 35→20. Scale=20 keeps changes moderate.
-        score = round(100.0 / (1.0 + np.exp(-(score - 50.0) / 20.0)), 1)
+        # T2-A: Sigmoid calibration — converts raw score to a more decisive
+        # probability-like value. Maps: 50→50, 65→72, 75→80, 45→28, 35→20.
+        # Scale=20 keeps changes moderate.
+        #
+        # P0 audit fix — pre-fix this was applied unconditionally, which
+        # pushed scores at the edges of the HOLD band (raw 45 → 43.78,
+        # raw 54 → 54.98) just outside [45, 55), reclassifying many
+        # HOLD signals as SELL/BUY downstream in get_signal_direction().
+        # Now applied only OUTSIDE the HOLD band so genuine HOLD signals
+        # stay HOLD; BUY/SELL still get the calibration boost.
+        if 45 <= score < 55:
+            score = round(score, 1)
+        else:
+            score = round(100.0 / (1.0 + np.exp(-(score - 50.0) / 20.0)), 1)
         # F4: agent_votes is 12th return value — passed through to _scan_pair for feedback logging
         return (round(score, 1), volume_passed, macd_div, div_strength,
                 supertrend_str, sr_str, regime_str, strategy_bias,
