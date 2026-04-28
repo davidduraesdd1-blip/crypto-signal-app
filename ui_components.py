@@ -1192,7 +1192,7 @@ def market_stat_bar(stats: dict):
                     padding:0 18px;flex-shrink:0;gap:3px">
             <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                          letter-spacing:1.1px;font-weight:600">{k}</span>
-            <span style="font-size:14px;font-weight:700;color:#e2e8f0;
+            <span style="font-size:14px;font-weight:700;color:var(--text-primary);
                          font-family:'JetBrains Mono',monospace;letter-spacing:-0.3px">{v}</span>
         </div>
         {sep}""")
@@ -1239,7 +1239,7 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
         regime_color    = "rgba(245,158,11,0.08)"
 
     hc_badge = (
-        '<span style="background:rgba(0,212,170,0.12);color:#00d4aa;'
+        '<span style="background:rgba(0,212,170,0.12);color:var(--accent);'
         'border:1px solid rgba(0,212,170,0.3);'
         'padding:2px 10px;border-radius:999px;font-size:var(--fs-xs);font-weight:700;'
         'letter-spacing:0.6px;margin-left:8px;'
@@ -1262,7 +1262,7 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
                         box-shadow:0 0 8px rgba(0,212,170,0.3)"></div>
             <div style="flex:1;min-width:0">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:5px">
-                    <span style="font-size:17px;font-weight:800;color:#e2e8f0;
+                    <span style="font-size:17px;font-weight:800;color:var(--text-primary);
                                 font-family:'JetBrains Mono',monospace;
                                 letter-spacing:-0.3px">{pair}</span>{hc_badge}
                 </div>
@@ -1292,7 +1292,7 @@ def kpi_card_html(label: str, value: str, delta: str = None,
     Return HTML for a standalone glassmorphic KPI card.
     Render with st.markdown(..., unsafe_allow_html=True).
     """
-    delta_color = "#22c55e" if delta_positive else ("#ef4444" if delta_positive is False else "#64748b")
+    delta_color = "var(--success)" if delta_positive else ("var(--danger)" if delta_positive is False else "var(--text-muted)")
     delta_html  = (
         f'<div style="font-size:11px;color:{delta_color};margin-top:4px;'
         f'font-family:\'JetBrains Mono\',monospace;font-weight:600">{delta}</div>'
@@ -1315,7 +1315,7 @@ def kpi_card_html(label: str, value: str, delta: str = None,
         {icon_html}
         <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                     letter-spacing:1.1px;font-weight:600;margin-bottom:6px">{label}</div>
-        <div style="font-size:22px;font-weight:700;color:#e2e8f0;
+        <div style="font-size:22px;font-weight:700;color:var(--text-primary);
                     font-family:'JetBrains Mono',monospace;letter-spacing:-0.5px">{value}</div>
         {delta_html}
     </div>"""
@@ -1799,7 +1799,7 @@ def beginner_welcome_html() -> str:
                 padding:28px 32px;margin:8px 0 24px 0;
                 box-shadow:0 4px 32px rgba(0,0,0,0.4)">
         <div style="font-size:28px;margin-bottom:10px">👋</div>
-        <div style="font-size:20px;font-weight:800;color:#e2e8f0;margin-bottom:6px">
+        <div style="font-size:20px;font-weight:800;color:var(--text-primary);margin-bottom:6px">
             Welcome to Family Office · Signal Intelligence
         </div>
         <div style="font-size:13px;color:rgba(168,180,200,0.75);line-height:1.7;margin-bottom:18px">
@@ -1810,34 +1810,34 @@ def beginner_welcome_html() -> str:
             <div style="background:rgba(0,212,170,0.07);border:1px solid rgba(0,212,170,0.15);
                         border-radius:10px;padding:14px 16px">
                 <div style="font-size:20px;margin-bottom:6px">1️⃣</div>
-                <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px">Run the Scan</div>
+                <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Run the Scan</div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.6)">
-                    Click <strong style="color:#00d4aa">▶ Analyze Market Now</strong> above.
+                    Click <strong style="color:var(--accent)">▶ Analyze Market Now</strong> above.
                     The model will fetch live market data for all coins (~1–3 min).
                 </div>
             </div>
             <div style="background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.15);
                         border-radius:10px;padding:14px 16px">
                 <div style="font-size:20px;margin-bottom:6px">2️⃣</div>
-                <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px">Read the Results</div>
+                <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Read the Results</div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.6)">
-                    Each coin gets a <strong style="color:#e2e8f0">BUY / SELL / HOLD</strong> signal
+                    Each coin gets a <strong style="color:var(--text-primary)">BUY / SELL / HOLD</strong> signal
                     with a plain-English explanation. Look for ⚡ Top Picks.
                 </div>
             </div>
             <div style="background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.15);
                         border-radius:10px;padding:14px 16px">
                 <div style="font-size:20px;margin-bottom:6px">3️⃣</div>
-                <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px">Do Your Research</div>
+                <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Do Your Research</div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.6)">
-                    This model is a research tool — <strong style="color:#f59e0b">not financial advice.</strong>
+                    This model is a research tool — <strong style="color:var(--warning)">not financial advice.</strong>
                     Always do your own due diligence before trading.
                 </div>
             </div>
         </div>
         <div style="background:rgba(246,70,93,0.07);border:1px solid rgba(246,70,93,0.18);
                     border-radius:10px;padding:10px 14px;font-size:11px;color:rgba(168,180,200,0.65)">
-            ⚠️ <strong style="color:#f59e0b">Risk Warning:</strong>
+            ⚠️ <strong style="color:var(--warning)">Risk Warning:</strong>
             Cryptocurrency trading carries a <strong>high level of risk</strong> and may not be
             suitable for all investors. Only invest money you can afford to lose.
             Past model performance does not guarantee future results.
@@ -1886,9 +1886,9 @@ def scan_action_cta(pair: str, direction: str, conf: float,
                 ⚡ Today's Best Opportunity
             </div>
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                <span style="font-size:22px;font-weight:800;color:#e2e8f0;
+                <span style="font-size:22px;font-weight:800;color:var(--text-primary);
                              font-family:'JetBrains Mono',monospace">{base}</span>
-                <span style="background:{accent};color:#0d0e14;border-radius:999px;
+                <span style="background:{accent};color:var(--bg-0);border-radius:999px;
                              padding:4px 14px;font-size:13px;font-weight:800;
                              letter-spacing:0.3px">{arrow} {direction}</span>
                 <span style="font-size:13px;color:rgba(168,180,200,0.7)">
@@ -1995,21 +1995,21 @@ def top_movers_card_html(gainers: list, losers: list) -> str:
         pct    = coin.get("price_change_24h_pct", 0.0) or 0.0
         price  = coin.get("current_price", 0.0) or 0.0
         arrow  = "▲" if is_gainer else "▼"
-        color  = "#22c55e" if is_gainer else "#ef4444"
+        color  = "var(--success)" if is_gainer else "var(--danger)"
         sign   = "+" if pct >= 0 else ""
         price_fmt = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         return (
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">'
-            f'<span style="font-weight:600;color:#e2e8f0;font-size:0.88rem;">{sym}</span>'
-            f'<span style="color:#94a3b8;font-size:0.85rem;">{price_fmt}</span>'
+            f'<span style="font-weight:600;color:var(--text-primary);font-size:0.88rem;">{sym}</span>'
+            f'<span style="color:var(--text-secondary);font-size:0.85rem;">{price_fmt}</span>'
             f'<span style="color:{color};font-weight:700;font-size:0.88rem;">'
             f'{arrow} {sign}{pct:.2f}%</span>'
             f'</div>'
         )
 
-    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:#64748b;font-size:0.85rem;padding:8px 0;">No data</div>'
-    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:#64748b;font-size:0.85rem;padding:8px 0;">No data</div>'
+    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0;">No data</div>'
+    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0;">No data</div>'
 
     return f"""
 <div style="
@@ -2024,16 +2024,16 @@ def top_movers_card_html(gainers: list, losers: list) -> str:
 ">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
     <span style="font-size:1.1rem;">🔥</span>
-    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;letter-spacing:0.02em;">Top Movers — 24h</span>
+    <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;letter-spacing:0.02em;">Top Movers — 24h</span>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     <div>
-      <div style="color:#22c55e;font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
+      <div style="color:var(--success);font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
                   text-transform:uppercase;margin-bottom:6px;">▲ Gainers</div>
       {gainer_rows}
     </div>
     <div>
-      <div style="color:#ef4444;font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
+      <div style="color:var(--danger);font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
                   text-transform:uppercase;margin-bottom:6px;">▼ Losers</div>
       {loser_rows}
     </div>
@@ -2092,7 +2092,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
             rows.append(
                 f'<div style="display:flex;justify-content:space-between;'
                 f'font-size:0.85rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
-                f'<span style="color:#94a3b8;">{lbl}</span>'
+                f'<span style="color:var(--text-secondary);">{lbl}</span>'
                 f'<span style="color:{color};font-weight:600;">{val:.0f}</span>'
                 f'</div>'
             )
@@ -2116,7 +2116,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="font-size:1.1rem;">⚡</span>
-      <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Liquidation Cascade Risk</span>
+      <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;">Liquidation Cascade Risk</span>
     </div>
     <span style="background:{bg};color:{color};border:1px solid {color}66;border-radius:20px;
                  padding:3px 10px;font-size:0.85rem;font-weight:700;">{icon} {risk_level}</span>
@@ -2130,8 +2130,8 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
   </div>
 
   <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.85rem;">
-    <span style="color:{color};font-weight:700;font-size:1.1rem;">{score:.0f}<span style="font-size:0.75rem;color:#94a3b8;">/100</span></span>
-    <span style="color:#94a3b8;">{label}</span>
+    <span style="color:{color};font-weight:700;font-size:1.1rem;">{score:.0f}<span style="font-size:0.75rem;color:var(--text-secondary);">/100</span></span>
+    <span style="color:var(--text-secondary);">{label}</span>
   </div>
   {comp_html}
 </div>
@@ -2175,7 +2175,7 @@ def signal_accuracy_badge_html(win_rate: float, sample_size: int,
         f'background:rgba(15,23,42,0.8);border:1px solid {color}44;border-radius:20px;'
         f'padding:3px 9px;font-size:0.85rem;cursor:help;">'
         f'<span style="color:{color};font-weight:700;">{shape} {pct:.0f}%</span>'
-        f'<span style="color:#94a3b8;">{label} · {n_text}</span>'
+        f'<span style="color:var(--text-secondary);">{label} · {n_text}</span>'
         f'</span>'
     )
 
@@ -2217,7 +2217,7 @@ def regime_banner_html(regime: str, hurst: float | None = None,
             f'<span style="background:rgba(255,255,255,0.05);border-radius:8px;'
             f'padding:3px 8px;font-size:0.85rem;margin-left:10px;">'
             f'Hurst: <span style="color:{h_color};font-weight:700;">{h_shape} {hurst:.2f}</span>'
-            f' <span style="color:#64748b;">({h_label})</span></span>'
+            f' <span style="color:var(--text-muted);">({h_label})</span></span>'
         )
 
     squeeze_html = ""
@@ -2226,8 +2226,8 @@ def regime_banner_html(regime: str, hurst: float | None = None,
             '<span style="background:rgba(255,215,64,0.15);border:1px solid #f59e0b66;'
             'border-radius:8px;padding:3px 8px;font-size:0.85rem;margin-left:10px;'
             'animation:pulse 1.5s ease-in-out infinite;">'
-            '🗜 <span style="color:#f59e0b;font-weight:700;">SQUEEZE</span>'
-            ' <span style="color:#94a3b8;">— breakout imminent</span></span>'
+            '🗜 <span style="color:var(--warning);font-weight:700;">SQUEEZE</span>'
+            ' <span style="color:var(--text-secondary);">— breakout imminent</span></span>'
         )
 
     return f"""
@@ -2245,7 +2245,7 @@ def regime_banner_html(regime: str, hurst: float | None = None,
 ">
   <span style="font-size:1.2rem;">{icon}</span>
   <span style="color:{color};font-weight:700;font-size:0.95rem;">{title}</span>
-  <span style="color:#64748b;font-size:0.85rem;">— {advice}</span>
+  <span style="color:var(--text-muted);font-size:0.85rem;">— {advice}</span>
   {hurst_html}
   {squeeze_html}
 </div>
@@ -2269,22 +2269,22 @@ def position_size_card_html(recommended_pct: float, rationale: str,
     """
     if circuit_breaker_active:
         bg_color    = "rgba(255,82,82,0.08)"
-        border_col  = "#ef4444"
-        size_color  = "#ef4444"
+        border_col  = "var(--danger)"
+        size_color  = "var(--danger)"
         status_html = (
             '<div style="background:rgba(255,82,82,0.15);border:1px solid #ef444466;'
             'border-radius:8px;padding:8px 12px;margin-top:10px;font-size:0.85rem;">'
-            '🚨 <span style="color:#ef4444;font-weight:700;">Circuit Breaker ACTIVE</span>'
+            '🚨 <span style="color:var(--danger);font-weight:700;">Circuit Breaker ACTIVE</span>'
             ' — all new signals suppressed until daily/weekly loss limit resets.</div>'
         )
     else:
         bg_color    = "rgba(15,23,42,0.7)"
         border_col  = "rgba(255,255,255,0.08)"
-        size_color  = "#22c55e" if recommended_pct >= 1.0 else "#f59e0b"
-        pnl_color   = "#22c55e" if daily_pnl_pct >= 0 else "#ef4444"
+        size_color  = "var(--success)" if recommended_pct >= 1.0 else "var(--warning)"
+        pnl_color   = "var(--success)" if daily_pnl_pct >= 0 else "var(--danger)"
         pnl_sign    = "+" if daily_pnl_pct >= 0 else ""
         status_html = (
-            f'<div style="font-size:0.85rem;color:#94a3b8;margin-top:8px;">'
+            f'<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:8px;">'
             f'Today\'s P&L: <span style="color:{pnl_color};font-weight:600;">'
             f'{pnl_sign}{daily_pnl_pct:.2f}%</span>'
             f'</div>'
@@ -2305,17 +2305,17 @@ def position_size_card_html(recommended_pct: float, rationale: str,
 ">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
     <span style="font-size:1.1rem;">⚖</span>
-    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Position Size (Vol-Adjusted)</span>
+    <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;">Position Size (Vol-Adjusted)</span>
   </div>
   <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:8px;">
     <span style="color:{size_color};font-weight:800;font-size:2rem;">{recommended_pct:.1f}%</span>
-    <span style="color:#64748b;font-size:0.85rem;">of account</span>
+    <span style="color:var(--text-muted);font-size:0.85rem;">of account</span>
   </div>
   <div style="background:rgba(255,255,255,0.06);border-radius:6px;height:6px;margin-bottom:8px;overflow:hidden;">
     <div style="width:{bar_pct}%;height:100%;border-radius:6px;
                 background:linear-gradient(90deg,#8b5cf6,{size_color});"></div>
   </div>
-  <div style="color:#94a3b8;font-size:0.85rem;">{rationale}</div>
+  <div style="color:var(--text-secondary);font-size:0.85rem;">{rationale}</div>
   {status_html}
 </div>
 """
@@ -2337,7 +2337,7 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
 
     Returns HTML string.
     """
-    _SIG_COLORS = {"BUY": "#22c55e", "SELL": "#ef4444", "NEUTRAL": "#94a3b8"}
+    _SIG_COLORS = {"BUY": "var(--success)", "SELL": "var(--danger)", "NEUTRAL": "var(--text-secondary)"}
     _SIG_ICONS  = {"BUY": "▲", "SELL": "▼", "NEUTRAL": "—"}
 
     rows = []
@@ -2346,7 +2346,7 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
         signal  = ag.get("signal", "NEUTRAL").upper()
         weight  = float(ag.get("weight", 0.5))
         contrib = float(ag.get("contrib", 0.0))
-        color   = _SIG_COLORS.get(signal, "#94a3b8")
+        color   = _SIG_COLORS.get(signal, "var(--text-secondary)")
         icon    = _SIG_ICONS.get(signal, "—")
         bar_w   = int(weight * 100)
         c_sign  = "+" if contrib >= 0 else ""
@@ -2356,16 +2356,16 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
     <span style="font-size:0.85rem;color:#cbd5e1;font-weight:500;">{name}</span>
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="color:{color};font-size:0.85rem;font-weight:700;">{icon} {signal}</span>
-      <span style="color:#64748b;font-size:0.75rem;">contrib: <span style="color:{color};">{c_sign}{contrib:.1f}</span></span>
+      <span style="color:var(--text-muted);font-size:0.75rem;">contrib: <span style="color:{color};">{c_sign}{contrib:.1f}</span></span>
     </div>
   </div>
   <div style="background:rgba(255,255,255,0.05);border-radius:4px;height:4px;overflow:hidden;">
     <div style="width:{bar_w}%;height:100%;border-radius:4px;background:{color};opacity:0.7;"></div>
   </div>
-  <div style="text-align:right;font-size:0.85rem;color:#475569;margin-top:1px;">weight {weight:.0%}</div>
+  <div style="text-align:right;font-size:0.85rem;color:var(--text-muted);margin-top:1px;">weight {weight:.0%}</div>
 </div>""")
 
-    rows_html = "".join(rows) if rows else '<div style="color:#64748b;font-size:0.85rem;">No agent data</div>'
+    rows_html = "".join(rows) if rows else '<div style="color:var(--text-muted);font-size:0.85rem;">No agent data</div>'
 
     return f"""
 <div style="
@@ -2380,8 +2380,8 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
 ">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
     <span style="font-size:1.1rem;">🤖</span>
-    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">AI Agent Votes</span>
-    <span style="color:#475569;font-size:0.75rem;">(Sharpe-weighted)</span>
+    <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;">AI Agent Votes</span>
+    <span style="color:var(--text-muted);font-size:0.75rem;">(Sharpe-weighted)</span>
   </div>
   {rows_html}
 </div>
