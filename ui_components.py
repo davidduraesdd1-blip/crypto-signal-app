@@ -4,6 +4,7 @@ Glass-morphism, gradient borders, fluid typography, animated backgrounds.
 Inspired by KOI, Flare Network, dYdX, and Uniswap visual design systems.
 """
 import logging
+from html import escape as _esc
 import streamlit as st
 
 logger = logging.getLogger(__name__)
@@ -1034,10 +1035,14 @@ def section_header(title: str, subtitle: str = None, icon: str = None):
     Render a styled section header.
     Uses gradient text for title, teal left-border + muted subtitle.
     """
-    icon_html = f'<span style="margin-right:8px;font-size:15px;opacity:0.85">{icon}</span>' if icon else ''
+    # P1-34/P1-35: escape caller-derived strings before HTML interpolation.
+    _icon_safe     = _esc(str(icon)) if icon else ""
+    _title_safe    = _esc(str(title)) if title else ""
+    _subtitle_safe = _esc(str(subtitle)) if subtitle else ""
+    icon_html = f'<span style="margin-right:8px;font-size:15px;opacity:0.85">{_icon_safe}</span>' if icon else ''
     subtitle_html = (
         f'<p style="color:rgba(168,180,200,0.45);font-size:12px;margin:4px 0 0 0;'
-        f'font-weight:400;letter-spacing:0.2px;line-height:1.4">{subtitle}</p>'
+        f'font-weight:400;letter-spacing:0.2px;line-height:1.4">{_subtitle_safe}</p>'
     ) if subtitle else ''
     st.markdown(
         f"""
@@ -1055,7 +1060,7 @@ def section_header(title: str, subtitle: str = None, icon: str = None):
                 -webkit-text-fill-color: transparent;
                 background-clip: text;
                 display: inline-block">
-                {icon_html}{title}
+                {icon_html}{_title_safe}
             </div>
             {subtitle_html}
         </div>
@@ -1090,7 +1095,10 @@ def render_card(title: str = None, icon: str = None, accent: str = "#00d4aa",
     pad = "12px 14px" if compact else padding
     header_html = ""
     if icon or title:
-        label = f"{icon} {title}" if icon and title else (icon or title)
+        # P1-34/P1-35: escape caller-supplied title/icon before HTML interpolation.
+        _icon_safe  = _esc(str(icon)) if icon else ""
+        _title_safe = _esc(str(title)) if title else ""
+        label = f"{_icon_safe} {_title_safe}" if icon and title else (_icon_safe or _title_safe)
         header_html = (
             f'<div style="font-size:11px;font-weight:600;color:rgba(168,180,200,0.55);'
             f'text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px">{label}</div>'
@@ -1248,8 +1256,11 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
     )
 
     # Plain English labels
-    regime_display = REGIME_PLAIN.get(regime, regime or "—")
-    bias_display   = BIAS_PLAIN.get(bias, bias or "—")
+    # P1-34/P1-35: escape caller-derived strings (regime/bias may be user-supplied
+    # or come from upstream model output that includes free-form text).
+    regime_display = _esc(str(REGIME_PLAIN.get(regime, regime or "—")))
+    bias_display   = _esc(str(BIAS_PLAIN.get(bias, bias or "—")))
+    _pair_safe     = _esc(str(pair)) if pair else ""
 
     st.markdown(
         f"""
@@ -1264,7 +1275,7 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:5px">
                     <span style="font-size:17px;font-weight:800;color:var(--text-primary);
                                 font-family:'JetBrains Mono',monospace;
-                                letter-spacing:-0.3px">{pair}</span>{hc_badge}
+                                letter-spacing:-0.3px">{_pair_safe}</span>{hc_badge}
                 </div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.55);
                             display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -1431,7 +1442,7 @@ def sidebar_header(version: str, exchange: str, n_pairs: int):
                         color: #00d4aa;
                         font-weight: 700;
                         letter-spacing: 0.3px">
-                        {exchange.upper()}
+                        {_esc(str(exchange).upper())}
                     </div>
                     <div style="
                         background: rgba(255,255,255,0.04);
@@ -3440,10 +3451,13 @@ def tt(term: str, definition: str, color: str = "var(--accent)") -> str:
     underline and HTML title attribute (hover tooltip).
     Returns HTML string: <span title="definition">term</span>
     """
-    safe_def = definition.replace('"', '&quot;').replace("'", "&#39;")
+    # P1-34/P1-35: escape both the definition (used in attribute) and term
+    # (used in element body). Caller may supply arbitrary strings.
+    safe_def  = _esc(str(definition), quote=True)
+    safe_term = _esc(str(term))
     return (
         f'<span title="{safe_def}" style="border-bottom:1px dashed {color};'
-        f'cursor:help;color:inherit">{term}</span>'
+        f'cursor:help;color:inherit">{safe_term}</span>'
     )
 
 
