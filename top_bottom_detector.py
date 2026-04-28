@@ -309,10 +309,13 @@ def compute_cvd_divergence(df: pd.DataFrame, lookback: int = 20) -> dict:
     cvd   = delta.cumsum()
 
     close = tail["close"]
-    n = lookback
 
-    # Compare last half vs first half
-    mid = n // 2
+    # P1 audit fix — `n = lookback` (20) but tail has lookback+5 (25) rows,
+    # so `mid = n // 2 = 10` produced halves of 10 and 15 bars (asymmetric)
+    # which skewed the divergence detection toward the longer back-half.
+    # Compute mid from the actual tail length so the two halves stay
+    # within ±1 bar of each other.
+    mid = len(tail) // 2
     p_recent = close.iloc[mid:].max()
     p_prior  = close.iloc[:mid].max()
     c_recent = cvd.iloc[mid:].max()

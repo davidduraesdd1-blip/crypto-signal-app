@@ -346,6 +346,20 @@ def place_order(
                 f"Aborting to prevent silent oversizing."
             )
         qty       = max(1, round(_raw_qty))
+        # P1 audit fix — even after the < 0.5 reject above, _raw_qty=0.7
+        # rounds UP to 1 (43% over-execution); for coins where ct_size=10
+        # the user receives 10× their intended notional. Reject any order
+        # where rounding inflates the notional by more than 20%, forcing
+        # the caller to size up or pick a smaller-contract instrument.
+        if _raw_qty > 0:
+            _round_inflation = abs(qty - _raw_qty) / _raw_qty
+            if _round_inflation > 0.20:
+                raise ValueError(
+                    f"Rounding qty from {_raw_qty:.4f} to {qty} would inflate "
+                    f"notional by {_round_inflation*100:.1f}% (size_usd=${size_usd}, "
+                    f"price={price_now}, ct_size={ct_size}). Increase size_usd "
+                    f"or pick an instrument with smaller contract size."
+                )
         # EXEC-02: hard cap on contract qty to prevent runaway orders from bad data
         if qty > 1000:
             raise ValueError(
