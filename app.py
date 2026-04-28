@@ -6220,7 +6220,13 @@ def page_backtest():
                     try:
                         _ex = model.get_exchange_instance(model.TA_EXCHANGE)
                         if _ex:
-                            _btc_o = model.robust_fetch_ohlcv(_ex, "BTC/USDT", "1d", limit=len(_eq_signal) or 200)
+                            # P1-25 audit fix — was uncached on every Backtester
+                            # render. §12 5min cache via _sg_cached_ohlcv.
+                            _ex_id = getattr(_ex, "id", str(model.TA_EXCHANGE))
+                            _btc_o = _sg_cached_ohlcv(
+                                _ex_id, "BTC/USDT", "1d",
+                                limit=max(200, len(_eq_signal) or 0),
+                            )
                             if _btc_o:
                                 _btc_closes = [float(r[4]) for r in _btc_o if len(r) >= 5]
                                 if _btc_closes:
@@ -8313,7 +8319,9 @@ def page_arbitrage():
             with st.spinner("Fetching rates from 4 exchanges…", show_time=True):
                 fr_rows: list[dict] = []
                 for pair in fr_pairs_sel:
-                    multi = data_feeds.get_multi_exchange_funding_rates(pair)
+                    # P1-25 audit fix — was uncached; repeated "Load Rates"
+                    # clicks within a 10-min window now cost 0 round-trips.
+                    multi = _sg_cached_multi_exchange_funding(pair)
                     row: dict = {"Pair": pair}
                     for exch in ("okx", "binance", "bybit", "kucoin"):
                         rd   = multi.get(exch, {})
@@ -8870,7 +8878,10 @@ def page_signals():
     try:
         _ex = model.get_exchange_instance(model.TA_EXCHANGE)
         if _ex:
-            _ohlcv_d = model.robust_fetch_ohlcv(_ex, _pair, "1d", limit=400)
+            # P1-25 audit fix — was uncached OHLCV fetch on every Signals
+            # render. §12 says 5min cache for intraday OHLCV.
+            _ex_id = getattr(_ex, "id", str(model.TA_EXCHANGE))
+            _ohlcv_d = _sg_cached_ohlcv(_ex_id, _pair, "1d", limit=400)
             if _ohlcv_d:
                 _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
                 if _closes_d:

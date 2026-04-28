@@ -210,7 +210,13 @@ def _gate_human_override(context: dict, cfg: dict) -> Optional[str]:
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
+# P1 audit fix — HUMAN_OVERRIDE was last in the list. check_all() returns
+# at the FIRST tripped gate, so a manual halt could be masked by an
+# unrelated automated trip earlier in the sequence (e.g., a transient
+# variance spike preempts the operator's explicit STOP). Manual override
+# now runs FIRST so an operator-set halt always wins.
 GATES = [
+    ("HUMAN_OVERRIDE", _gate_human_override),
     ("DRAWDOWN",       _gate_drawdown),
     ("DAILY_LOSS",     _gate_daily_loss),
     ("LOSS_RATE",      _gate_loss_rate),
@@ -218,7 +224,6 @@ GATES = [
     ("HEARTBEAT",      _gate_heartbeat),
     ("API_HEALTH",     _gate_api_health),
     ("VARIANCE",       _gate_variance),
-    ("HUMAN_OVERRIDE", _gate_human_override),
 ]
 
 
