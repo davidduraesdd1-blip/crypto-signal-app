@@ -418,6 +418,8 @@ def hero_signal_card_html(
 
     # Regime line — callers pass a clean label (Bull/Bear/etc). Strip any
     # accidental "Regime" prefix so we never render "Regime: Regime Bull".
+    # P1 audit fix — regime_label can flow from API/DB output via the
+    # composite signal layer; escape before HTML interpolation.
     regime_html = ""
     if regime_label:
         _clean = str(regime_label).strip()
@@ -426,17 +428,24 @@ def hero_signal_card_html(
             if _low.startswith(_prefix):
                 _clean = _clean[len(_prefix):].strip()
                 break
-        conf_txt = f" · {int(regime_confidence)}% conf" if regime_confidence is not None else ""
+        # `regime_confidence` is numeric; only `_clean` needs escaping
+        try:
+            _conf_int = int(regime_confidence) if regime_confidence is not None else None
+        except (TypeError, ValueError):
+            _conf_int = None
+        conf_txt = f" · {_conf_int}% conf" if _conf_int is not None else ""
         regime_html = (
             f'<div class="ds-regime"><span class="dot"></span> '
-            f'Regime: {_clean}{conf_txt}</div>'
+            f'Regime: {_html.escape(_clean)}{conf_txt}</div>'
         )
 
     # Single-line to avoid Streamlit markdown's 4-space = code-block rule.
+    # P1 audit fix — escape `ticker` (caller-supplied symbol). Numeric strings
+    # (price_str / change_str) and class names are produced internally above.
     return (
         f'<div class="ds-card ds-signal-hero">'
         f'<div class="ds-signal-lhs">'
-        f'<div class="ds-signal-ticker">{ticker}</div>'
+        f'<div class="ds-signal-ticker">{_html.escape(str(ticker))}</div>'
         f'<div class="ds-signal-big">{price_str}</div>'
         f'<div class="ds-signal-change {change_cls}">{change_str}</div>'
         f'</div>'
