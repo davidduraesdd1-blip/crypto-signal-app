@@ -106,8 +106,10 @@ _CSS = """
     /* typography — fluid (clamp: min, preferred, max) */
     --font-ui:   'Inter', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-    --fs-xxs:    clamp(9px,  0.65vw, 10px);
-    --fs-xs:     clamp(11px, 0.75vw, 12px);
+    /* P1-32: --fs-xxs raised to 11px floor (was 9–10px) per CLAUDE.md §8 label floor.
+       Now identical to --fs-xs; legacy callers continue to work without change. */
+    --fs-xxs:    clamp(11px, 0.75vw, 13px);
+    --fs-xs:     clamp(11px, 0.75vw, 13px);
     --fs-sm:     clamp(12px, 0.85vw, 13px);
     --fs-base:   clamp(13px, 0.9vw,  14px);
     --fs-md:     clamp(14px, 1vw,    16px);
@@ -527,6 +529,20 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 /* Beginner mode body tag injected by inject_beginner_mode_js() */
 
 /* ═══════════════════════════════════════════════
+   GLOBAL 44px TAP TARGETS  (P1-33)
+   AUDIT (a) load-bearing: WCAG AA + CLAUDE.md §8 — 44×44 minimum tap target
+   on all interactive elements, every breakpoint (covers Surface, iPad in
+   landscape, and other desktop touch users). Scoped to section.main so the
+   compact 30px sidebar nav remains design-system-controlled.
+═══════════════════════════════════════════════ */
+section.main div[data-testid="stButton"] > button { min-height: 44px !important; }
+section.main [data-testid="stPopover"] button { min-height: 44px !important; }
+section.main [data-testid="stRadio"] label { min-height: 44px !important; }
+section.main [data-testid="stCheckbox"] label { min-height: 44px !important; }
+section.main [data-testid="stToggle"] label { min-height: 44px !important; }
+section.main [data-baseweb="select"] { min-height: 44px !important; }
+
+/* ═══════════════════════════════════════════════
    MOBILE — 768px breakpoint + 44px tap targets
    AUDIT (a) load-bearing: WCAG AA compliance per CLAUDE.md §8.
    Button rule already scoped to section.main so sidebar nav stays compact.
@@ -534,13 +550,10 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 @media (max-width: 768px) {
     .stApp { font-size: var(--fs-sm) !important; }
     .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
-    /* 44px minimum tap targets — scoped to main section so sidebar nav
-       can stay compact at the design-system 30px height. */
-    section.main div[data-testid="stButton"] > button { min-height: 44px !important; }
-    [data-testid="stRadio"] label { min-height: 44px !important; padding: 10px 0 !important; }
-    [data-testid="stCheckbox"] label { min-height: 44px !important; padding: 10px 0 !important; }
-    [data-testid="stToggle"] label { min-height: 44px !important; }
-    [data-baseweb="select"] { min-height: 44px !important; }
+    /* 44px minimum tap targets (mobile) — extra padding for radio/checkbox
+       to keep total touchable area generous at small screen sizes. */
+    [data-testid="stRadio"] label { padding: 10px 0 !important; }
+    [data-testid="stCheckbox"] label { padding: 10px 0 !important; }
     /* Stack columns */
     [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
     [data-testid="stColumn"] { min-width: 100% !important; }
@@ -1083,49 +1096,61 @@ def render_card(title: str = None, icon: str = None, accent: str = "#00d4aa",
 
 # ── Signal direction pill ──────────────────────────────────────────────────────
 
+# P1-31: shape encoding — color is paired with a directional shape token so
+# color-blind users get a redundant cue. ▲ for BUY-family, ▼ for SELL-family,
+# ■ for NEUTRAL. Mirrors signal_badge_html() pattern.
 _PILL_CFG = {
-    "STRONG BUY":  ("#00d4aa", "#0d0e14", "0 0 12px rgba(0,212,170,0.5)"),
-    "BUY":         ("#22c55e", "#0d0e14", "0 0 8px  rgba(0,192,118,0.35)"),
-    "STRONG SELL": ("#ef4444", "#fff",    "0 0 12px rgba(246,70,93,0.5)"),
-    "SELL":        ("#ef4444", "#fff",    "0 0 8px  rgba(192,57,43,0.35)"),
-    "NEUTRAL":     ("#1e293b", "#64748b", "none"),
+    "STRONG BUY":  ("▲", "#00d4aa", "#0d0e14", "0 0 12px rgba(0,212,170,0.5)"),
+    "BUY":         ("▲", "#22c55e", "#0d0e14", "0 0 8px  rgba(0,192,118,0.35)"),
+    "STRONG SELL": ("▼", "#ef4444", "#fff",    "0 0 12px rgba(246,70,93,0.5)"),
+    "SELL":        ("▼", "#ef4444", "#fff",    "0 0 8px  rgba(192,57,43,0.35)"),
+    "NEUTRAL":     ("■", "#1e293b", "#64748b", "none"),
 }
 
 def signal_pill(direction: str) -> str:
-    """Return an HTML colored pill badge for a signal direction."""
+    """Return an HTML colored pill badge for a signal direction.
+
+    P1-31: Shape encoding — every badge prepends a direction shape (▲/▼/■)
+    so color-blind users get a redundant cue beyond color alone.
+    """
+    # TODO P1-34: html.escape inputs — direction is user-derivable
     # UI-06: guard against None direction to prevent TypeError in `key in direction`
     direction = direction or ""
-    for key, (bg, fg, glow) in _PILL_CFG.items():
+    for key, (shape, bg, fg, glow) in _PILL_CFG.items():
         if key in direction:
             return (
                 f'<span style="background:{bg};color:{fg};'
                 f'padding:4px 13px;border-radius:999px;'
                 f'font-size:11px;font-weight:800;letter-spacing:0.5px;'
                 f'display:inline-block;box-shadow:{glow};'
-                f'text-transform:uppercase">{key}</span>'
+                f'text-transform:uppercase">{shape} {key}</span>'
             )
     return (
         f'<span style="background:#1e293b;color:#64748b;'
         f'padding:4px 13px;border-radius:999px;font-size:11px;'
-        f'font-weight:700;display:inline-block">{direction}</span>'
+        f'font-weight:700;display:inline-block">■ {direction}</span>'
     )
 
 
 # ── Confidence badge ───────────────────────────────────────────────────────────
 
 def conf_badge_html(conf: float) -> str:
-    """Return an HTML confidence percentage badge with color tier."""
+    """Return an HTML confidence percentage badge with color tier.
+
+    P1-31: Shape encoding — leading dot count (●●●/●●/●) gives a redundant
+    cue for high/mid/low confidence beyond color alone (color-blind safe).
+    """
     if conf >= 75:
-        color, bg = "#00d4aa", "rgba(0,212,170,0.1)"
+        color, bg, shape = "#00d4aa", "rgba(0,212,170,0.1)", "●●●"
     elif conf >= 60:
-        color, bg = "#f59e0b", "rgba(245,158,11,0.1)"
+        color, bg, shape = "#f59e0b", "rgba(245,158,11,0.1)", "●●"
     else:
-        color, bg = "#ef4444", "rgba(246,70,93,0.1)"
+        color, bg, shape = "#ef4444", "rgba(246,70,93,0.1)", "●"
     return (
         f'<span style="background:{bg};color:{color};'
         f'padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;'
         f'border:1px solid {color}38;display:inline-block;'
-        f'font-family:\'JetBrains Mono\',monospace">{conf:.0f}%</span>'
+        f'font-family:\'JetBrains Mono\',monospace">{shape} {conf:.0f}%</span>'
     )
 
 
@@ -1724,20 +1749,25 @@ def risk_level_badge_html(conf: float, pos_pct: float = None) -> str:
     """
     Return HTML for a color-coded risk level chip.
     Risk is LOW when confidence is high and position size is small.
+
+    P1-31: Shape encoding — leading dot count (●/●●/●●●) gives a redundant
+    cue for LOW / MODERATE / HIGHER risk so color-blind users get the
+    severity through shape, not color alone.
+    P1-32: font-size raised from 10px → var(--fs-xs) (11px floor).
     """
     # Determine risk: low conf or large position = higher risk
     size = pos_pct if pos_pct else 10.0
     if conf >= 70 and size <= 15:
-        label, bg, border, tc = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "#00d4aa"
+        label, bg, border, tc, shape = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "#00d4aa", "●"
     elif conf >= 55 and size <= 25:
-        label, bg, border, tc = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "#f59e0b"
+        label, bg, border, tc, shape = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "#f59e0b", "●●"
     else:
-        label, bg, border, tc = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "#ef4444"
+        label, bg, border, tc, shape = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "#ef4444", "●●●"
 
     return (
         f'<span style="display:inline-block;background:{bg};border:1px solid {border};'
-        f'color:{tc};border-radius:999px;padding:2px 10px;font-size:10px;'
-        f'font-weight:700;letter-spacing:0.5px">{label}</span>'
+        f'color:{tc};border-radius:999px;padding:2px 10px;font-size:var(--fs-xs);'
+        f'font-weight:700;letter-spacing:0.5px">{shape} {label}</span>'
     )
 
 
@@ -2106,15 +2136,18 @@ def signal_accuracy_badge_html(win_rate: float, sample_size: int,
 
     Returns HTML string.
     """
+    # P1-31: Shape encoding — leading star count gives a redundant cue
+    # for accuracy grade so color-blind users get severity through shape,
+    # not color alone (★★★ high / ★★ mod / ★ neutral / ☆ below-avg).
     pct = win_rate * 100
     if pct >= 70:
-        color, label = "#22c55e", "High Accuracy"
+        color, label, shape = "#22c55e", "High Accuracy", "★★★"
     elif pct >= 55:
-        color, label = "#f59e0b", "Moderate"
+        color, label, shape = "#f59e0b", "Moderate", "★★"
     elif pct >= 45:
-        color, label = "#94a3b8", "Neutral"
+        color, label, shape = "#94a3b8", "Neutral", "★"
     else:
-        color, label = "#ef4444", "Below Average"
+        color, label, shape = "#ef4444", "Below Average", "☆"
 
     suffix = f" {signal_type}" if signal_type else ""
     n_text = f"{sample_size} signals" if sample_size >= 10 else "New signal"
@@ -2124,7 +2157,7 @@ def signal_accuracy_badge_html(win_rate: float, sample_size: int,
         f'style="display:inline-flex;align-items:center;gap:5px;'
         f'background:rgba(15,23,42,0.8);border:1px solid {color}44;border-radius:20px;'
         f'padding:3px 9px;font-size:0.85rem;cursor:help;">'
-        f'<span style="color:{color};font-weight:700;">{pct:.0f}%</span>'
+        f'<span style="color:{color};font-weight:700;">{shape} {pct:.0f}%</span>'
         f'<span style="color:#94a3b8;">{label} · {n_text}</span>'
         f'</span>'
     )
@@ -2155,12 +2188,18 @@ def regime_banner_html(regime: str, hurst: float | None = None,
 
     hurst_html = ""
     if hurst is not None:
-        h_color = "#22c55e" if hurst > 0.55 else ("#ef4444" if hurst < 0.45 else "#f59e0b")
-        h_label = "Trending" if hurst > 0.55 else ("Mean-Reverting" if hurst < 0.45 else "Random Walk")
+        # P1-31: pair color with arrow shape — ↗ trending (green) / → random
+        # walk (amber) / ↙ mean-reverting (red). Color-blind safe.
+        if hurst > 0.55:
+            h_color, h_label, h_shape = "#22c55e", "Trending", "↗"
+        elif hurst < 0.45:
+            h_color, h_label, h_shape = "#ef4444", "Mean-Reverting", "↙"
+        else:
+            h_color, h_label, h_shape = "#f59e0b", "Random Walk", "→"
         hurst_html = (
             f'<span style="background:rgba(255,255,255,0.05);border-radius:8px;'
             f'padding:3px 8px;font-size:0.85rem;margin-left:10px;">'
-            f'Hurst: <span style="color:{h_color};font-weight:700;">{hurst:.2f}</span>'
+            f'Hurst: <span style="color:{h_color};font-weight:700;">{h_shape} {hurst:.2f}</span>'
             f' <span style="color:#64748b;">({h_label})</span></span>'
         )
 
