@@ -835,11 +835,20 @@ body.light-mode div[style*="border:1px solid rgba(255,255,255,0.0"] { border-col
 # Flipping st.session_state["sg_up_is_red"] flips every gain/loss color.
 
 def color_up() -> str:
-    """Return the hex color for positive/up moves per the user's regional preference."""
+    """Return the hex color for positive/up moves per the user's regional preference.
+
+    NOTE: Returns a hex string rather than a CSS var() because callers feed
+    the result into Plotly chart configs (where var(--success) doesn't resolve)
+    and into f-string concatenations producing alpha tricks like ``{color}33``.
+    Hex literals match design tokens: --success=#22c55e / --danger=#ef4444.
+    """
     return "#ef4444" if st.session_state.get("sg_up_is_red", False) else "#22c55e"
 
 def color_down() -> str:
-    """Return the hex color for negative/down moves per the user's regional preference."""
+    """Return the hex color for negative/down moves per the user's regional preference.
+
+    NOTE: see color_up() — hex string for Plotly + alpha-trick compatibility.
+    """
     return "#22c55e" if st.session_state.get("sg_up_is_red", False) else "#ef4444"
 
 def color_for_delta(delta, default: str = "#64748b") -> str:
@@ -927,20 +936,24 @@ def render_quick_access_row() -> None:
 
 def render_regional_color_toggle() -> None:
     """Side-by-side Western/Asian swatch picker for up/down color convention."""
+    # P1-30: hex → CSS-variable tokens. Active border uses --accent (signal
+    # green); +/- text uses --success / --danger; muted label uses
+    # --text-secondary; card surface uses --bg-1 directly so light/dark
+    # both flip cleanly.
     st.markdown(
-        "<div style='color:#94a3b8; font-size:0.88rem; margin-bottom:8px;'>"
+        "<div style='color:var(--text-secondary); font-size:0.88rem; margin-bottom:8px;'>"
         "Regional color convention for gains and losses.</div>",
         unsafe_allow_html=True,
     )
     _is_asian = st.session_state.get("sg_up_is_red", False)
     _c1, _c2, _c3 = st.columns([4, 1, 4])
     with _c1:
-        _active = "border:1px solid #00d4aa;" if not _is_asian else "border:1px solid rgba(148,163,184,0.15);"
+        _active = "border:1px solid var(--accent);" if not _is_asian else "border:1px solid var(--border);"
         st.markdown(
-            f"<div style='{_active} border-radius:10px; padding:14px; background:rgba(15,23,42,0.5);'>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#22c55e; font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#ef4444; font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
-            f"<div style='color:#94a3b8; font-size:0.8rem; margin-top:6px;'>Western (US, EU)</div>"
+            f"<div style='{_active} border-radius:10px; padding:14px; background:var(--bg-2);'>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--success); font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--danger); font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
+            f"<div style='color:var(--text-secondary); font-size:0.8rem; margin-top:6px;'>Western (US, EU)</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -955,12 +968,12 @@ def render_regional_color_toggle() -> None:
                 st.session_state["sg_up_is_red"] = False
                 st.rerun()
     with _c3:
-        _active = "border:1px solid #00d4aa;" if _is_asian else "border:1px solid rgba(148,163,184,0.15);"
+        _active = "border:1px solid var(--accent);" if _is_asian else "border:1px solid var(--border);"
         st.markdown(
-            f"<div style='{_active} border-radius:10px; padding:14px; background:rgba(15,23,42,0.5);'>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#ef4444; font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#22c55e; font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
-            f"<div style='color:#94a3b8; font-size:0.8rem; margin-top:6px;'>Asian (CN, JP, KR)</div>"
+            f"<div style='{_active} border-radius:10px; padding:14px; background:var(--bg-2);'>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--danger); font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--success); font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
+            f"<div style='color:var(--text-secondary); font-size:0.8rem; margin-top:6px;'>Asian (CN, JP, KR)</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -1099,12 +1112,16 @@ def render_card(title: str = None, icon: str = None, accent: str = "#00d4aa",
 # P1-31: shape encoding — color is paired with a directional shape token so
 # color-blind users get a redundant cue. ▲ for BUY-family, ▼ for SELL-family,
 # ■ for NEUTRAL. Mirrors signal_badge_html() pattern.
+# P1-30: hex → CSS-var tokens. STRONG BUY uses --accent (brand teal),
+# BUY uses --success, SELL/STRONG SELL uses --danger, NEUTRAL uses --bg-2/
+# --text-secondary. The glow rgba strings stay raw — they're computed off
+# the same color values and would be empty if vars resolved to themselves.
 _PILL_CFG = {
-    "STRONG BUY":  ("▲", "#00d4aa", "#0d0e14", "0 0 12px rgba(0,212,170,0.5)"),
-    "BUY":         ("▲", "#22c55e", "#0d0e14", "0 0 8px  rgba(0,192,118,0.35)"),
-    "STRONG SELL": ("▼", "#ef4444", "#fff",    "0 0 12px rgba(246,70,93,0.5)"),
-    "SELL":        ("▼", "#ef4444", "#fff",    "0 0 8px  rgba(192,57,43,0.35)"),
-    "NEUTRAL":     ("■", "#1e293b", "#64748b", "none"),
+    "STRONG BUY":  ("▲", "var(--accent)",  "var(--accent-ink)",      "0 0 12px rgba(0,212,170,0.5)"),
+    "BUY":         ("▲", "var(--success)", "var(--accent-ink)",      "0 0 8px  rgba(0,192,118,0.35)"),
+    "STRONG SELL": ("▼", "var(--danger)",  "#fff",                   "0 0 12px rgba(246,70,93,0.5)"),
+    "SELL":        ("▼", "var(--danger)",  "#fff",                   "0 0 8px  rgba(192,57,43,0.35)"),
+    "NEUTRAL":     ("■", "var(--bg-2)",    "var(--text-secondary)",  "none"),
 }
 
 def signal_pill(direction: str) -> str:
@@ -1126,7 +1143,7 @@ def signal_pill(direction: str) -> str:
                 f'text-transform:uppercase">{shape} {key}</span>'
             )
     return (
-        f'<span style="background:#1e293b;color:#64748b;'
+        f'<span style="background:var(--bg-2);color:var(--text-secondary);'
         f'padding:4px 13px;border-radius:999px;font-size:11px;'
         f'font-weight:700;display:inline-block">■ {direction}</span>'
     )
