@@ -3188,10 +3188,44 @@ def check_db_integrity() -> bool:
 
 
 # ──────────────────────────────────────────────
-# STARTUP — runs automatically on import
+# STARTUP — schema setup eager (cheap CREATE IF NOT EXISTS); CSV
+# migration is now LAZY (P1 audit fix). The audit flagged that on
+# Streamlit Cloud every worker thread re-ran the full migration
+# scan on import, blowing the §12 60s cold-start budget. The schema
+# step is fast and harmless to repeat, so it stays at import. The
+# CSV migration scan (which can read multi-MB legacy files and runs
+# Pandas parse loops) is now gated behind ensure_csv_migrated() so
+# only the worker that actually needs DB-backed history pays the
+# cost — and only once per process. Other workers (e.g., the
+# WebSocket feed thread) skip it entirely.
 # ──────────────────────────────────────────────
-init_db()
-migrate_csv_to_db()
+
+init_db()  # cheap; safe to repeat per worker
+
+_MIGRATION_LOCK = threading.Lock()
+_MIGRATION_DONE = False
+
+
+def ensure_csv_migrated() -> None:
+    """Run the legacy-CSV→SQLite migration once per process. Lazy.
+
+    Callers that need DB-backed history (e.g., backtester, signal
+    history page) call this on first use. Cheap on subsequent calls
+    (a single boolean read).
+    """
+    global _MIGRATION_DONE
+    if _MIGRATION_DONE:
+        return
+    with _MIGRATION_LOCK:
+        if _MIGRATION_DONE:
+            return
+        try:
+            migrate_csv_to_db()
+        except Exception as e:
+            logging.error("[database] CSV migration failed: %s", e)
+        finally:
+            _MIGRATION_DONE = True
+
 
 # Run integrity check after init — log warning only, never crash
 if not check_db_integrity():
