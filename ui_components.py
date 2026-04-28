@@ -1678,15 +1678,15 @@ def fng_gauge_html(fng_value: int, fng_category: str) -> str:
 
     # Emoji that matches the mood
     if pct <= 20:
-        emoji, mood_color, advice = "😱", "#ef4444", "Markets are very fearful — historically a buying opportunity, but use caution."
+        emoji, mood_color, advice = "😱", "var(--danger)", "Markets are very fearful — historically a buying opportunity, but use caution."
     elif pct <= 40:
-        emoji, mood_color, advice = "😟", "#f59e0b", "Markets are fearful — some may see this as a buying opportunity."
+        emoji, mood_color, advice = "😟", "var(--warning)", "Markets are fearful — some may see this as a buying opportunity."
     elif pct <= 60:
-        emoji, mood_color, advice = "😐", "#64748b", "Markets are neutral — no strong emotion either way. Wait for a clearer signal."
+        emoji, mood_color, advice = "😐", "var(--text-secondary)", "Markets are neutral — no strong emotion either way. Wait for a clearer signal."
     elif pct <= 80:
-        emoji, mood_color, advice = "🤩", "#00d4aa", "Markets are greedy — prices may be elevated. Be careful chasing gains."
+        emoji, mood_color, advice = "🤩", "var(--accent)", "Markets are greedy — prices may be elevated. Be careful chasing gains."
     else:
-        emoji, mood_color, advice = "🤑", "#ef4444", "Extreme Greed — the market may be overheated. Historically a warning sign."
+        emoji, mood_color, advice = "🤑", "var(--danger)", "Extreme Greed — the market may be overheated. Historically a warning sign."
 
     # Track fill color gradient
     bar_gradient = f"linear-gradient(90deg, #ef4444 0%, #f59e0b 25%, #64748b 50%, #22c55e 75%, #00d4aa 100%)"
@@ -1737,15 +1737,15 @@ def signal_strength_stars(conf: float) -> str:
     filled = max(0, min(5, filled))
 
     if conf >= 75:
-        label, dot_color = "Very Strong", "#00d4aa"
+        label, dot_color = "Very Strong", "var(--accent)"
     elif conf >= 60:
-        label, dot_color = "Strong", "#22c55e"
+        label, dot_color = "Strong", "var(--success)"
     elif conf >= 45:
-        label, dot_color = "Moderate", "#f59e0b"
+        label, dot_color = "Moderate", "var(--warning)"
     elif conf >= 30:
-        label, dot_color = "Weak", "#ef4444"
+        label, dot_color = "Weak", "var(--danger)"
     else:
-        label, dot_color = "Very Weak", "#ef4444"
+        label, dot_color = "Very Weak", "var(--danger)"
 
     dots = ""
     for i in range(5):
@@ -2208,11 +2208,11 @@ def regime_banner_html(regime: str, hurst: float | None = None,
         # P1-31: pair color with arrow shape — ↗ trending (green) / → random
         # walk (amber) / ↙ mean-reverting (red). Color-blind safe.
         if hurst > 0.55:
-            h_color, h_label, h_shape = "#22c55e", "Trending", "↗"
+            h_color, h_label, h_shape = "var(--success)", "Trending", "↗"
         elif hurst < 0.45:
-            h_color, h_label, h_shape = "#ef4444", "Mean-Reverting", "↙"
+            h_color, h_label, h_shape = "var(--danger)", "Mean-Reverting", "↙"
         else:
-            h_color, h_label, h_shape = "#f59e0b", "Random Walk", "→"
+            h_color, h_label, h_shape = "var(--warning)", "Random Walk", "→"
         hurst_html = (
             f'<span style="background:rgba(255,255,255,0.05);border-radius:8px;'
             f'padding:3px 8px;font-size:0.85rem;margin-left:10px;">'
@@ -3038,7 +3038,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
         ws    = ws_prices.get(pair, {})
         price = ws.get("price") or r.get("price_usd")
         chg   = ws.get("change_24h_pct", 0) or 0
-        chg_c = "#00d4aa" if chg >= 0 else "#ef4444"
+        chg_c = "var(--accent)" if chg >= 0 else "var(--danger)"
         price_str = _fmt(price) if price else "—"
         chg_str = f'<span style="color:{chg_c};font-size:11px">{chg:+.2f}%</span>' if ws else ""
 
@@ -3434,7 +3434,7 @@ def render_micro_tutorial() -> None:
             st.rerun()
 
 
-def tt(term: str, definition: str, color: str = "#00d4aa") -> str:
+def tt(term: str, definition: str, color: str = "var(--accent)") -> str:
     """
     Item 10 — Inline glossary tooltip. Wraps a jargon term with a dashed
     underline and HTML title attribute (hover tooltip).
@@ -3457,15 +3457,15 @@ def freshness_dot_html(last_updated_ts: float | None, max_age_sec: int,
     """
     import time as _time
     if last_updated_ts is None:
-        color, tip = "#6b7280", f"{label}: unknown age"
+        color, tip = "var(--text-muted)", f"{label}: unknown age"
     else:
         age = _time.time() - last_updated_ts
         if age < max_age_sec:
-            color, tip = "#22c55e", f"{label}: {int(age//60)}m ago (fresh)"
+            color, tip = "var(--success)", f"{label}: {int(age//60)}m ago (fresh)"
         elif age < max_age_sec * 2:
-            color, tip = "#f59e0b", f"{label}: {int(age//60)}m ago (aging)"
+            color, tip = "var(--warning)", f"{label}: {int(age//60)}m ago (aging)"
         else:
-            color, tip = "#ef4444", f"{label}: {int(age//60)}m ago (stale)"
+            color, tip = "var(--danger)", f"{label}: {int(age//60)}m ago (stale)"
     return (
         f'<span title="{tip}" style="display:inline-block;width:8px;height:8px;'
         f'border-radius:50%;background:{color};margin-right:4px;'
@@ -3670,11 +3670,11 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
         _avg30 = _avg7
 
     def _fg_label(v: float) -> tuple[str, str]:
-        if v <= 25:  return "Extreme Fear",  "#ef4444"
-        if v <= 45:  return "Fear",           "#f59e0b"
-        if v <= 55:  return "Neutral",        "#64748b"
-        if v <= 75:  return "Greed",          "#f59e0b"
-        return "Extreme Greed", "#22c55e"
+        if v <= 25:  return "Extreme Fear",  "var(--danger)"
+        if v <= 45:  return "Fear",           "var(--warning)"
+        if v <= 55:  return "Neutral",        "var(--text-secondary)"
+        if v <= 75:  return "Greed",          "var(--warning)"
+        return "Extreme Greed", "var(--success)"
 
     _cl, _cc = _fg_label(_cur)
     _7l, _7c = _fg_label(_avg7)
@@ -3768,21 +3768,21 @@ def render_market_regime_banner(results: list, fng_value: int = 50,
     if _buy_pct >= 60 and fng_value >= 45:
         _regime   = "BULL MARKET"
         _icon     = "📈"
-        _color    = "#22c55e"
+        _color    = "var(--success)"
         _bg       = "rgba(34,197,94,0.08)"
         _border   = "rgba(34,197,94,0.3)"
         _desc     = f"{_buy_pct:.0f}% of signals bullish · F&G {fng_value} · {altcoin_season}"
     elif _sell_pct >= 60 or fng_value <= 25:
         _regime   = "BEAR MARKET"
         _icon     = "📉"
-        _color    = "#ef4444"
+        _color    = "var(--danger)"
         _bg       = "rgba(239,68,68,0.08)"
         _border   = "rgba(239,68,68,0.3)"
         _desc     = f"{_sell_pct:.0f}% of signals bearish · F&G {fng_value} · {macro_regime.replace('_',' ')}"
     else:
         _regime   = "SIDEWAYS / MIXED"
         _icon     = "➡️"
-        _color    = "#f59e0b"
+        _color    = "var(--warning)"
         _bg       = "rgba(245,158,11,0.08)"
         _border   = "rgba(245,158,11,0.3)"
         _desc     = f"{_buy_pct:.0f}% bullish · {_sell_pct:.0f}% bearish · F&G {fng_value}"
@@ -3804,7 +3804,7 @@ def render_market_regime_banner(results: list, fng_value: int = 50,
         f"<span style='font-size:18px;font-weight:800;color:{_color}'>{_icon} {_regime}</span>"
         f"{_macro_badge}"
         f"</div>"
-        f"<div style='color:#9ca3af;font-size:12px'>{_desc}</div>"
+        f"<div style='color:var(--text-secondary);font-size:12px'>{_desc}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -3876,15 +3876,15 @@ def render_ttm_squeeze_panel(sparkline_data: dict, results: list,
     _cols = _st.columns(min(len(squeeze_pairs), 4))
     for _ci, _sp in enumerate(squeeze_pairs[:8]):
         _col    = "#f59e0b" if _sp["state"] == "COMPRESSION" else "#ef4444"
-        _dir_cl = "#22c55e" if "BUY" in _sp["direction"] else "#ef4444" if "SELL" in _sp["direction"] else "#9ca3af"
+        _dir_cl = "var(--success)" if "BUY" in _sp["direction"] else "var(--danger)" if "SELL" in _sp["direction"] else "var(--text-secondary)"
         with _cols[_ci % 4]:
             _st.markdown(
                 f"<div style='background:rgba(0,0,0,0.25);border:1px solid {_col}44;"
                 f"border-top:2px solid {_col};border-radius:8px;padding:10px 12px;margin-bottom:8px'>"
-                f"<div style='font-size:12px;color:#9ca3af'>{_sp['pair'].replace('/USDT','')}</div>"
+                f"<div style='font-size:12px;color:var(--text-secondary)'>{_sp['pair'].replace('/USDT','')}</div>"
                 f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_sp['state']}</div>"
                 f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_sp['direction']}</div>"
-                f"<div style='font-size:var(--fs-xs);color:#475569;margin-top:2px'>"
+                f"<div style='font-size:var(--fs-xs);color:var(--text-muted);margin-top:2px'>"
                 f"BB width: {_sp['bb_width_pct']:.2f}% · Mom: {_sp['momentum']:+.1f}%</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -3959,7 +3959,7 @@ def render_hurst_exponent_panel(sparkline_data: dict, results: list,
         closes = sparkline_data.get(p, [])
         h      = _hurst(closes)
         _label = "TRENDING" if h > 0.6 else "RANDOM" if h > 0.4 else "MEAN-REVERTING"
-        _color = "#22c55e" if h > 0.6 else "#9ca3af" if h > 0.4 else "#f59e0b"
+        _color = "var(--success)" if h > 0.6 else "var(--text-secondary)" if h > 0.4 else "var(--warning)"
         _strat = "▲ Follow signals" if h > 0.6 else "■ Reduce position size" if h > 0.4 else "▼ Fade extremes"
         _hurst_rows.append({
             "Pair":    p.replace("/USDT", ""),
@@ -4019,7 +4019,7 @@ def render_rsi_macd_divergence_panel(results: list, user_level: str = "beginner"
 
     for _da in _div_alerts[:10]:
         _is_bull = _da["type"] == "BULLISH"
-        _col     = "#22c55e" if _is_bull else "#ef4444"
+        _col     = "var(--success)" if _is_bull else "var(--danger)"
         _icon    = "▲" if _is_bull else "▼"
         _st.markdown(
             f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_col};"
@@ -4027,8 +4027,8 @@ def render_rsi_macd_divergence_panel(results: list, user_level: str = "beginner"
             f"<b style='color:{_col}'>{_icon} {_da['type']} DIVERGENCE</b> · "
             f"<b>{_da['pair'].replace('/USDT','')}</b> · {_da['tf']} · "
             f"RSI: <b>{_da['rsi']}</b> · "
-            f"Model signal: <span style='color:#9ca3af'>{_da['direction']}</span><br>"
-            f"<span style='font-size:11px;color:#475569'>{_da['macd_div']}</span>"
+            f"Model signal: <span style='color:var(--text-secondary)'>{_da['direction']}</span><br>"
+            f"<span style='font-size:11px;color:var(--text-muted)'>{_da['macd_div']}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -4076,7 +4076,7 @@ def render_funding_rate_arb_panel(results: list, user_level: str = "beginner") -
 
         if abs(_fr_pct) >= 0.05:  # 0.05% threshold for notable funding
             _arb_type  = "LONGS PAY" if _fr_pct > 0 else "SHORTS PAY"
-            _arb_col   = "#f59e0b" if _fr_pct > 0 else "#22c55e"
+            _arb_col   = "var(--warning)" if _fr_pct > 0 else "var(--success)"
             _arb_action = ("Buy spot + Short perp to collect funding" if _fr_pct > 0.1
                            else "Short spot + Long perp to collect funding" if _fr_pct < -0.05
                            else "Watch — elevated but not extreme")
@@ -4097,14 +4097,14 @@ def render_funding_rate_arb_panel(results: list, user_level: str = "beginner") -
         return
 
     for _fa in _fr_alerts[:8]:
-        _badge_col = "#ef4444" if _fa["fr_pct"] > 0.15 else "#f59e0b" if _fa["fr_pct"] > 0.05 else "#22c55e"
+        _badge_col = "var(--danger)" if _fa["fr_pct"] > 0.15 else "var(--warning)" if _fa["fr_pct"] > 0.05 else "var(--success)"
         _st.markdown(
             f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_fa['arb_color']};"
             f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
             f"<b>{_fa['pair'].replace('/USDT','')}</b> · "
             f"<span style='color:{_badge_col}'><b>{_fa['fr_pct']:+.4f}%</b></span> · "
             f"<span style='color:{_fa['arb_color']}'>{_fa['arb_type']}</span><br>"
-            f"<span style='font-size:11px;color:#9ca3af'>"
+            f"<span style='font-size:11px;color:var(--text-secondary)'>"
             f"Arb: {_fa['arb_action']}</span>"
             f"</div>",
             unsafe_allow_html=True,
@@ -4394,13 +4394,13 @@ def render_threshold_alerts_panel(results: list, user_level: str = "beginner") -
 
     if _thr_alerts:
         for _ta in _thr_alerts[:10]:
-            _dir_col = "#22c55e" if "BUY" in _ta["dir"] else "#ef4444" if "SELL" in _ta["dir"] else "#9ca3af"
+            _dir_col = "var(--success)" if "BUY" in _ta["dir"] else "var(--danger)" if "SELL" in _ta["dir"] else "var(--text-secondary)"
             _st.markdown(
                 f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_dir_col};"
                 f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
                 f"<b style='color:{_dir_col}'>🔔 {_ta['pair'].replace('/USDT','')}</b> · "
-                f"<span style='color:#9ca3af'>{_ta['dir']} · {_ta['conf']:.0f}% confidence</span><br>"
-                f"<span style='font-size:11px;color:#64748b'>"
+                f"<span style='color:var(--text-secondary)'>{_ta['dir']} · {_ta['conf']:.0f}% confidence</span><br>"
+                f"<span style='font-size:11px;color:var(--text-secondary)'>"
                 f"{'  ·  '.join(_ta['fired'])}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
