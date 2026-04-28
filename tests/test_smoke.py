@@ -123,3 +123,77 @@ def test_pure_utility_module_imports(module_name: str) -> None:
     """
     mod = importlib.import_module(module_name)
     assert mod is not None
+
+
+# ── 4. cryptorank.io PRIMARY data feeds (P1 audit items 26 + 27) ─────────────
+# Per CLAUDE.md §10 — token unlocks PRIMARY = cryptorank.io, VC funding
+# PRIMARY = cryptorank.io. These tests verify the helpers don't crash and
+# return the documented "graceful failure" shapes when the API is unreachable
+# or returns 401/404 (the default state for the free tier without an API key).
+
+def test_cryptorank_token_unlocks_returns_none_or_dict_without_key(monkeypatch) -> None:
+    """fetch_cryptorank_token_unlocks must not crash without an API key.
+
+    Without CRYPTORANK_API_KEY the v1 endpoint returns 401, and the
+    helper must gracefully return None so the Tokenomist fallback path
+    in get_token_unlock_schedule can take over.
+    """
+    monkeypatch.delenv("CRYPTORANK_API_KEY", raising=False)
+    df = importlib.import_module("data_feeds")
+
+    # Mock _SESSION.get to return a 401 (no-key behavior of cryptorank).
+    class _R:
+        status_code = 401
+        text = '{"status":{"success":false,"code":401}}'
+        def json(self):
+            return {"status": {"success": False, "code": 401}}
+
+    monkeypatch.setattr(df._SESSION, "get", lambda *a, **k: _R())
+    out = df.fetch_cryptorank_token_unlocks("BTC", days_ahead=30)
+    assert out is None, "must return None on 401 so callers can fall back"
+
+
+def test_cryptorank_funding_rounds_returns_dict_or_none(monkeypatch) -> None:
+    """fetch_cryptorank_funding_rounds must return None or a well-formed dict.
+
+    On 404 (free tier) the helper transparently falls through to a
+    /v0/funds aggregate read; if that also fails it must return None.
+    """
+    monkeypatch.delenv("CRYPTORANK_API_KEY", raising=False)
+    df = importlib.import_module("data_feeds")
+
+    # Force every HTTP call to raise — proves the helper swallows errors.
+    def _boom(*a, **k):
+        raise RuntimeError("network unreachable in test")
+
+    monkeypatch.setattr(df._SESSION, "get", _boom)
+    out = df.fetch_cryptorank_funding_rounds(days=30)
+    assert out is None, "must return None when the network is unreachable"
+
+
+def test_fetch_vc_funding_signal_returns_neutral_payload(monkeypatch) -> None:
+    """fetch_vc_funding_signal must always return a payload (never None).
+
+    When the cryptorank endpoints are unreachable / rate-limited, the
+    helper must return a neutral score=0.0 payload so Layer 3 sentiment
+    consumers can use it without a None check.
+    """
+    monkeypatch.delenv("CRYPTORANK_API_KEY", raising=False)
+    df = importlib.import_module("data_feeds")
+
+    def _boom(*a, **k):
+        raise RuntimeError("network unreachable in test")
+
+    monkeypatch.setattr(df._SESSION, "get", _boom)
+
+    out = df.fetch_vc_funding_signal()
+    assert isinstance(out, dict), "VC funding signal must always be a dict"
+    # Required keys per the documented schema.
+    for k in ("score", "total_raised_usd", "round_count",
+              "ewma_baseline_usd", "source", "_ts"):
+        assert k in out, f"missing required key: {k}"
+    # Score must always be in [-1, +1] regardless of input.
+    assert -1.0 <= out["score"] <= 1.0
+    # On unreachable network the source must be "unavailable" and score 0.
+    assert out["source"] == "unavailable"
+    assert out["score"] == 0.0
