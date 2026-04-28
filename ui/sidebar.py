@@ -18,6 +18,7 @@ Every page should:
 """
 from __future__ import annotations
 
+import html as _html
 from typing import Iterable, Literal, Sequence
 
 try:
@@ -309,6 +310,10 @@ def page_header(
     if st is None:
         return
 
+    # P1 audit fix — escape every interpolated caller string. Defense
+    # in depth: even if today's callers only pass static literals, a
+    # later change that pipes API/DB-derived data through page_header
+    # must not become a stored-XSS surface.
     if data_sources:
         pills = []
         for label, status in data_sources:
@@ -317,17 +322,23 @@ def page_header(
                 cls += " warn"
             elif status == "down":
                 cls += " down"
-            pills.append(f'<span class="{cls}"><span class="tick"></span> {label} · {status}</span>')
+            pills.append(
+                f'<span class="{cls}"><span class="tick"></span> '
+                f'{_html.escape(str(label))} · {_html.escape(str(status))}</span>'
+            )
         pills_html = f'<div class="ds-row">{"".join(pills)}</div>'
     else:
         pills_html = ""
 
-    sub_html = f'<div class="ds-page-sub">{subtitle}</div>' if subtitle else ""
+    sub_html = (
+        f'<div class="ds-page-sub">{_html.escape(str(subtitle))}</div>'
+        if subtitle else ""
+    )
 
     st.markdown(
         f'<div class="ds-page-hd">'
         f'<div>'
-        f'<h1 class="ds-page-title">{title}</h1>'
+        f'<h1 class="ds-page-title">{_html.escape(str(title))}</h1>'
         f'{sub_html}'
         f'</div>'
         f'{pills_html}'
@@ -346,12 +357,13 @@ def macro_strip(items: Sequence[tuple[str, str, str]]) -> None:
     if st is None:
         return
 
+    # P1 audit fix — escape interpolated caller strings (defense in depth).
     cells = []
     for label, value, sub in items:
         cells.append(
-            f'<div><div class="lbl">{label}</div>'
-            f'<div class="val">{value}</div>'
-            f'<div class="sub">{sub}</div></div>'
+            f'<div><div class="lbl">{_html.escape(str(label))}</div>'
+            f'<div class="val">{_html.escape(str(value))}</div>'
+            f'<div class="sub">{_html.escape(str(sub))}</div></div>'
         )
     st.markdown(
         f'<div class="ds-card ds-strip">{"".join(cells)}</div>',
