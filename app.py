@@ -3394,8 +3394,20 @@ def page_dashboard():
         else:
             _cycle_row = ""
 
+        # P0 audit fix — Trade Action Card was using `f"…" if val else f"…"`
+        # ternaries spliced INSIDE a chain of implicit string concatenation.
+        # Python parses `A B C if cond else D E` as `(A B C) if cond else (D E)`,
+        # so when `entry`/`stop`/`tp1_act` were truthy the closing `</div>`
+        # following each cell was dropped, producing malformed HTML and breaking
+        # the 3-col grid layout. Build each cell's inner-value once, then drop
+        # it into a single uniform card template.
+        _entry_str = f"${entry:,.4f}" if entry else "—"
+        _stop_str  = f"${stop:,.4f}"  if stop  else "—"
+        _tp_str    = f"${_tp1_act:,.4f}" if _tp1_act else "—"
+        _grad_rgb = ('34,197,94' if _d_up
+                     else ('239,68,68' if _d_down else '245,158,11'))
         st.markdown(
-            f"<div style='background:linear-gradient(135deg,rgba({('34,197,94' if _d_up else ('239,68,68' if _d_down else '245,158,11'))},0.08) 0%,rgba(0,0,0,0.2) 100%);"
+            f"<div style='background:linear-gradient(135deg,rgba({_grad_rgb},0.08) 0%,rgba(0,0,0,0.2) 100%);"
             f"border:1px solid {_d_color}44;border-left:5px solid {_d_color};"
             f"border-radius:12px;padding:18px 22px;margin-bottom:16px'>"
             f"<div style='display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap'>"
@@ -3407,18 +3419,15 @@ def page_dashboard():
             f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>"
             f"<div style='background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px'>"
             f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Entry Zone</div>"
-            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>${entry:,.4f}</div>" if entry else
-            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>—</div>"
+            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>{_entry_str}</div>"
             f"</div>"
             f"<div style='background:rgba(239,68,68,0.06);border-radius:8px;padding:10px 14px'>"
             f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Stop Loss</div>"
-            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>${stop:,.4f}</div>" if stop else
-            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>—</div>"
+            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>{_stop_str}</div>"
             f"</div>"
             f"<div style='background:rgba(34,197,94,0.06);border-radius:8px;padding:10px 14px'>"
             f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Take Profit</div>"
-            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>${_tp1_act:,.4f}</div>" if _tp1_act else
-            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>—</div>"
+            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>{_tp_str}</div>"
             f"</div>"
             f"</div>"
             f"<div style='font-size:0.75rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px'>Timeframe Breakdown</div>"
@@ -6941,12 +6950,19 @@ def page_backtest():
 
                 # Auto-rerun every 5s when toggle is on
                 if _auto_pos:
+                    # P0 audit fix — was: time.sleep(0.1) + st.rerun() blocking
+                    # the worker thread on every tick. Under Streamlit Cloud
+                    # health-check timeouts this could compound into 503s.
+                    # The full @st.fragment(run_every=5) refactor (hoisting the
+                    # live-P&L block out of page_dashboard) is queued for a P2
+                    # follow-up; for now, drop the sleep — the rerun timestamp
+                    # gate above already throttles to ~5s cadence without
+                    # blocking the render thread.
                     import time as _time_pos
                     _pos_ts_key = "_pos_live_ts"
                     _now_pos    = _time_pos.time()
                     if _now_pos - st.session_state.setdefault(_pos_ts_key, _now_pos - 4.9) >= 5:  # APP-14: default near-now prevents immediate fire
                         st.session_state[_pos_ts_key] = _now_pos
-                        _time_pos.sleep(0.1)
                         st.rerun()
             else:
                 st.info("No open positions.")
@@ -9426,8 +9442,23 @@ def page_onchain():
     st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
 
     # Whale activity / large transfers (using existing whale_tracker if available)
+    # P0 audit fix — was calling _cached_whale_activity() with no arguments
+    # (signature requires pair: str, price: float) so On-chain page silently
+    # crashed into the outer try/except on every load and the entire whale
+    # section was dead. whale_tracker.get_whale_activity returns a dict; the
+    # legacy isinstance(list) check was always False even when the call shape
+    # was right. Pass a sane default pair + price=0.0 (the tracker handles
+    # both shapes), then accept either dict-with-events or bare-list returns.
     try:
-        _whale = _cached_whale_activity()
+        _whale_raw = _cached_whale_activity("BTC/USDT", 0.0)
+        _whale = []
+        if isinstance(_whale_raw, dict):
+            _whale = (_whale_raw.get("events")
+                      or _whale_raw.get("transfers")
+                      or _whale_raw.get("recent")
+                      or [])
+        elif isinstance(_whale_raw, list):
+            _whale = _whale_raw
         if _whale and isinstance(_whale, list) and len(_whale) > 0:
             st.markdown(
                 '<div class="ds-card">'
