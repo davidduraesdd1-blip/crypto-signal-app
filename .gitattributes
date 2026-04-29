@@ -1,0 +1,35 @@
+# Normalize all text files to LF in the repo. Working trees still get
+# native EOL on checkout per platform default, but the repo is canonical LF.
+# Master template §20 — Windows + OneDrive caveat: without this, autocrlf
+# produces 50k-line spurious diffs on every Windows clone.
+
+* text=auto eol=lf
+
+# Explicit binary types — never normalize, never diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.xlsx  binary
+*.xls   binary
+*.parquet binary
+*.sqlite binary
+*.db    binary
+*.pyc   binary
+
+# Lockfiles and scripts that must stay LF
+*.sh    text eol=lf
+*.py    text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
