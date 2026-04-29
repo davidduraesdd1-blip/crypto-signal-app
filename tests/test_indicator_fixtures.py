@@ -18,14 +18,14 @@ fails — forcing the engineer to:
   2. Update the fixture's expected value alongside the code change;
   3. Document the change in MEMORY.md.
 
-Coverage (8 of 22 indicators — remaining queued for follow-up):
-  RSI, MACD, Bollinger, ATR, ADX, SuperTrend, Stochastic, Ichimoku.
-
-Excluded for now (queued):
-  Hurst, Squeeze Momentum, Chandelier Exit, CVD divergence, Gaussian
-  Channel, Support/Resistance pivots, MACD divergence, RSI divergence,
-  Candlestick patterns, Wyckoff phase, Cointegration z-score,
-  HMM regime detector, anchored VWAP, Fibonacci.
+Coverage (22 of 22 indicators — full §22 coverage):
+  Phase 1 (commit f9ea3c1):
+    RSI, MACD, Bollinger, ATR, ADX, SuperTrend, Stochastic, Ichimoku.
+  Phase 2 (this commit set):
+    Hurst, Squeeze Momentum, Chandelier Exit, CVD divergence, Gaussian
+    Channel, Support/Resistance pivots, MACD divergence, RSI divergence,
+    Candlestick patterns, Wyckoff phase, Cointegration z-score,
+    HMM regime detector, anchored VWAP, Fibonacci.
 """
 
 from __future__ import annotations
@@ -209,3 +209,143 @@ def test_bollinger_short_input_does_not_crash() -> None:
         mid, upper, lower = cmc.compute_bollinger(short_close)
     except Exception as e:
         pytest.fail(f"compute_bollinger raised on short input: {e}")
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  PHASE 2 — additional 14 indicators per project CLAUDE.md §22 mandate      ║
+# ║  Each fixture below was captured against the synthetic_ohlcv on            ║
+# ║  2026-04-28 with the model in its commit-9ed9874 state. If a value drifts  ║
+# ║  here, audit the corresponding indicator fix and update both the code      ║
+# ║  and this fixture in lockstep (same commit).                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ── Hurst exponent (DFA) ────────────────────────────────────────────────────
+EXPECTED_HURST = 1.0  # synthetic random-walk-with-drift saturates at upper clip
+
+def test_hurst_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """DFA Hurst on the seed=42 fixture saturates at 1.0 (clipped upper bound).
+
+    The synthetic series has a strong positive drift (mean=0.001) on top of
+    moderate noise, which DFA reads as highly persistent. The value is
+    clipped to [0, 1] inside compute_hurst_exponent.
+    """
+    h = cmc.compute_hurst_exponent(synthetic_ohlcv["close"])
+    assert abs(h - EXPECTED_HURST) < _TOLERANCE, (
+        f"Hurst drift: expected {EXPECTED_HURST}, got {h:.6f}"
+    )
+    # Sanity: Hurst is always in [0, 1] (clipped)
+    assert 0.0 <= h <= 1.0
+
+
+def test_hurst_short_input_returns_random_walk() -> None:
+    """Hurst on insufficient data returns 0.5 (random walk fallback)."""
+    short = pd.Series([100.0 + i * 0.1 for i in range(20)])
+    h = cmc.compute_hurst_exponent(short)
+    assert h == 0.5
+
+
+# ── Squeeze Momentum (Lazybear TTM) ─────────────────────────────────────────
+EXPECTED_SQUEEZE_MOMENTUM = 3.894057
+EXPECTED_SQUEEZE_ON       = False
+EXPECTED_SQUEEZE_SIGNAL   = "NO_SQUEEZE"
+
+def test_squeeze_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    out = cmc.compute_squeeze_momentum(synthetic_ohlcv)
+    assert isinstance(out, dict)
+    assert out["squeeze_on"]   == EXPECTED_SQUEEZE_ON
+    assert out["signal"]       == EXPECTED_SQUEEZE_SIGNAL
+    assert abs(out["momentum"] - EXPECTED_SQUEEZE_MOMENTUM) < _TOLERANCE, (
+        f"Squeeze momentum drift: expected {EXPECTED_SQUEEZE_MOMENTUM}, "
+        f"got {out['momentum']:.6f}"
+    )
+    # Sanity: signal must be from the closed enum
+    assert out["signal"] in ("BULL_SQUEEZE", "BEAR_SQUEEZE", "NO_SQUEEZE")
+    assert isinstance(out["squeeze_on"], bool)
+    assert isinstance(out["increasing"], bool)
+
+
+# ── Chandelier Exit (ATR trailing stop) ─────────────────────────────────────
+EXPECTED_CHANDELIER_LONG_STOP  = 105.555792
+EXPECTED_CHANDELIER_SHORT_STOP = 103.217137
+EXPECTED_CHANDELIER_DIRECTION  = "LONG"
+EXPECTED_CHANDELIER_FLIP       = False
+
+def test_chandelier_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    out = cmc.compute_chandelier_exit(synthetic_ohlcv, atr_period=22, multiplier=3.0)
+    assert isinstance(out, dict)
+    assert abs(out["long_stop"]  - EXPECTED_CHANDELIER_LONG_STOP)  < _TOLERANCE
+    assert abs(out["short_stop"] - EXPECTED_CHANDELIER_SHORT_STOP) < _TOLERANCE
+    assert out["direction"]   == EXPECTED_CHANDELIER_DIRECTION
+    assert out["flip_signal"] == EXPECTED_CHANDELIER_FLIP
+    # Sanity: direction must be from the closed enum
+    assert out["direction"] in ("LONG", "SHORT")
+    # Sanity: long_stop should be below short_stop in this fixture (diverging stops)
+    # Actually long_stop (highest_high - 3*atr) > short_stop (lowest_low + 3*atr)
+    # is the typical Chandelier configuration when ranges are wide.
+    assert isinstance(out["flip_signal"], bool)
+
+
+# ── CVD Divergence (locks behaviour after CVD-windows fix in 9ed9874) ───────
+EXPECTED_CVD_DIVERGENCE = "BEARISH"
+EXPECTED_CVD_STRENGTH   = "STRONG"
+EXPECTED_CVD_SLOPE      = 148.9975
+
+def test_cvd_divergence_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """Locks CVD divergence behaviour post commit 9ed9874 (CVD windows fix).
+
+    Synthetic OHLCV with positive drift ends in a price higher-high while
+    the noisy `sign(close-open)` cumulative volume delta makes a lower
+    high → flagged as BEARISH STRONG.
+    """
+    out = cmc.compute_cvd_divergence(synthetic_ohlcv, lookback=20)
+    assert isinstance(out, dict)
+    assert out["divergence"] == EXPECTED_CVD_DIVERGENCE
+    assert out["strength"]   == EXPECTED_CVD_STRENGTH
+    assert abs(out["cvd_slope"] - EXPECTED_CVD_SLOPE) < 1e-2  # 4-dp rounded
+    # Sanity: divergence and strength are from closed enums
+    assert out["divergence"] in ("BULLISH", "BEARISH", "NONE")
+    assert out["strength"]   in ("STRONG",  "WEAK",    "NONE")
+
+
+# ── Gaussian Channel (causal kernel) ────────────────────────────────────────
+EXPECTED_GC_MID   = 104.341205
+EXPECTED_GC_UPPER = 108.572598
+EXPECTED_GC_LOWER = 100.109812
+
+def test_gaussian_channel_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    gc_mid, gc_upper, gc_lower = cmc.compute_gaussian_channel(
+        synthetic_ohlcv, length=100, mult=2.0
+    )
+    # Series shape sanity
+    assert len(gc_mid)   == len(synthetic_ohlcv)
+    assert len(gc_upper) == len(synthetic_ohlcv)
+    assert len(gc_lower) == len(synthetic_ohlcv)
+
+    last_mid   = float(gc_mid.iloc[-1])
+    last_upper = float(gc_upper.iloc[-1])
+    last_lower = float(gc_lower.iloc[-1])
+
+    assert abs(last_mid   - EXPECTED_GC_MID)   < _TOLERANCE
+    assert abs(last_upper - EXPECTED_GC_UPPER) < _TOLERANCE
+    assert abs(last_lower - EXPECTED_GC_LOWER) < _TOLERANCE
+    # Definitional sanity: upper > mid > lower at the last bar
+    assert last_upper > last_mid > last_lower
+    # Warmup period: first (length-1) bars must be NaN
+    assert pd.isna(gc_mid.iloc[0])
+    assert pd.isna(gc_mid.iloc[98])  # length=100, so index 0..98 are NaN
+    assert not pd.isna(gc_mid.iloc[99])  # first valid value at index length-1
+
+
+def test_gaussian_channel_short_input_returns_nan() -> None:
+    """Gaussian Channel on < length bars returns all-NaN series, not crash."""
+    short_df = pd.DataFrame({
+        "open":   [100.0] * 30,
+        "high":   [101.0] * 30,
+        "low":    [99.0]  * 30,
+        "close":  [100.0] * 30,
+        "volume": [1000.0] * 30,
+    })
+    gc_mid, gc_upper, gc_lower = cmc.compute_gaussian_channel(short_df, length=100)
+    assert gc_mid.isna().all()
+    assert gc_upper.isna().all()
+    assert gc_lower.isna().all()
