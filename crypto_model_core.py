@@ -2334,12 +2334,19 @@ def calculate_signal_confidence(df, tf, fng_value=50, fng_category="Neutral",
 
         regime_str = f"Regime: {regime} (ADX {round(adx, 1)}, H={hurst_val:.2f})"
 
-        # BUG-CMC01: pre-compute strategy_bias here so GC dampener (below) can reference it.
-        # Without this, the first use at the GC scoring block raises NameError — every signal
-        # calculation silently falls through to the except and returns zeros.
-        # Note: strategy_bias is also re-derived below in the regime_bonus block (line ~2480).
-        # Both are intentional: this one enables the GC dampener; the second one also computes
-        # regime_bonus from the same regime value. Values will always agree.
+        # BUG-CMC01: pre-compute strategy_bias here so GC dampener (below) can
+        # reference it. Without this, the first use at the GC scoring block
+        # raises NameError — every signal calculation silently falls through
+        # to the except and returns zeros.
+        #
+        # P3 audit note (2026-04-28): the regime_bonus block at ~2510 ALSO
+        # derives strategy_bias from `regime`. Both derivations use the
+        # SAME mapping (Trending→Trend-Follow, Ranging→Mean-Reversion,
+        # else→Balanced) so values will always agree. Audited and
+        # confirmed safe. A helper extraction was considered but the
+        # logic is dead-simple (3 branches) and the comment here is
+        # the intentional contract. If the mapping ever needs to change,
+        # update both sites in lock-step.
         if regime == "Trending":
             strategy_bias = "Trend-Follow"
         elif regime == "Ranging":

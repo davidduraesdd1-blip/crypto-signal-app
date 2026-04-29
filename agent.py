@@ -1332,3 +1332,33 @@ class AgentSupervisor:
 # ─────────────────────────────────────────────────────────────────────────────
 
 supervisor = AgentSupervisor()
+
+
+def ensure_supervisor_running() -> bool:
+    """Idempotently ensure the module-level supervisor is running.
+
+    Resolves the deferred P0-19 audit item — the supervisor instance
+    is created at import (above) so it's discoverable, but is NOT
+    auto-started, because importing `agent` from a test, CLI tool, or
+    headless evaluator should not spawn a real cycle thread. Callers
+    that DO want a live agent (Streamlit `app.py` startup; `scheduler.py`)
+    invoke this helper from their own startup path.
+
+    Idempotent: subsequent calls return True without restarting the
+    thread. Returns False on any exception so the caller can decide
+    whether to retry or surface a UI message — never raises.
+
+    Per CLAUDE.md §11: "All AI agents must be fully active and
+    operational at all times." The contract this helper provides:
+    after the first call from a long-lived process, the supervisor
+    runs until that process exits.
+    """
+    try:
+        if supervisor.is_running():
+            return True
+        supervisor.start()
+        # Brief readback so callers can log the new state.
+        return supervisor.is_running()
+    except Exception as _e:
+        logger.warning("[agent] ensure_supervisor_running failed: %s", _e)
+        return False

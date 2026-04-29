@@ -762,10 +762,15 @@ if not globals().get("_OHLCV_PREWARM_STARTED"):
     threading.Thread(target=_ohlcv_prewarm, daemon=True, name="ohlcv-prewarm").start()
 
 # Auto-start autonomous agent if enabled in config (idempotent)
+# P0-19 follow-up — route through agent.ensure_supervisor_running() instead
+# of supervisor.start() directly. The helper is exception-safe and returns
+# bool, so a transient init failure no longer takes down the whole app
+# startup path; we just log + carry on.
 if _agent is not None:
     _agent_cfg_boot = _cached_alerts_config()
     if _agent_cfg_boot.get("agent_enabled", False):
-        _agent.supervisor.start()
+        if not _agent.ensure_supervisor_running():
+            logger.warning("[App] agent.ensure_supervisor_running returned False at startup")
 
 # ──────────────────────────────────────────────
 # SIDEBAR NAVIGATION
