@@ -6,10 +6,10 @@
 <style>
 :root{--accent:#22d36f;--accent-soft:rgba(34,211,111,0.12);--accent-ink:#0a0a0f;--gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;--gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;--font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;--rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;--bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);--text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);--border:var(--gray-3);--border-strong:var(--gray-4);}
 html[data-theme="light"]{--bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;--text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;--border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);}
-*,*::before,*::after{box-sizing:border-box;}html,body{margin:0;padding:0;}
+*,*::before,*::after{box-sizing:border-box;min-width:0;}html,body{margin:0;padding:0;overflow-x:hidden;max-width:100vw;}
 body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}
 .mono,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
-.app{display:grid;grid-template-columns:var(--rail-w) 1fr;grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;}
+.app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;max-width:100vw;overflow-x:hidden;}
 .rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
 .brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;}
 .brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
@@ -23,7 +23,7 @@ body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui)
 .main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
 .page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:16px;}
 .page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
-.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;max-width:min(640px,100%);min-width:0;overflow-wrap:break-word;word-break:break-word;}
 .grid{display:grid;gap:var(--gap);}.grid.cols-4{grid-template-columns:repeat(4,1fr);}.grid.cols-3{grid-template-columns:repeat(3,1fr);}.grid.cols-2{grid-template-columns:1fr 1fr;}
 .card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
 html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
@@ -72,7 +72,7 @@ body.preview-mobile .grid.cols-4,body.preview-mobile .grid.cols-3,body.preview-m
 <div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
 <div class="nav-group">Markets</div><a class="nav-item">Home</a><a class="nav-item">Signals</a><a class="nav-item active">Regimes</a>
 <div class="nav-group">Research</div><a class="nav-item">Backtester</a><a class="nav-item">On-chain</a>
-<div class="nav-group">Account</div><a class="nav-item">Alerts</a><a class="nav-item">Settings</a>
+<div class="nav-group">Account</div><a class="nav-item">Alerts</a><a class="nav-item">AI Assistant</a><a class="nav-item">Settings</a>
 </aside>
 <header class="topbar">
 <div class="crumbs">Markets / <b>Regimes</b></div><div class="topbar-spacer"></div>
