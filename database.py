@@ -3101,9 +3101,21 @@ def export_feedback_checkpoint() -> bool:
             "open_pos_list":  open_positions,
         }
 
+        # P2 audit fix — was a non-atomic open(_CHECKPOINT_FILE, "w") write.
+        # If the process crashed mid-write the JSON file would be corrupt /
+        # truncated and the next startup couldn't restore the checkpoint.
+        # Atomic-rename pattern: write to a temp file in the same directory,
+        # then os.replace() onto the real path. os.replace is atomic on
+        # POSIX and Windows (Python's os.replace docs are explicit on this).
+        import tempfile as _tempfile
         os.makedirs(os.path.dirname(_CHECKPOINT_FILE), exist_ok=True)
-        with open(_CHECKPOINT_FILE, "w", encoding="utf-8") as _cf:
-            _json.dump(checkpoint, _cf, indent=2, default=str)
+        _ckpt_dir = os.path.dirname(os.path.abspath(_CHECKPOINT_FILE))
+        with _tempfile.NamedTemporaryFile(
+            "w", dir=_ckpt_dir, suffix=".tmp", delete=False, encoding="utf-8"
+        ) as _tmp:
+            _json.dump(checkpoint, _tmp, indent=2, default=str)
+            _tmp_path = _tmp.name
+        os.replace(_tmp_path, _CHECKPOINT_FILE)
 
         logger.info("[DB] Feedback checkpoint exported — %d resolved, %.1f%% win rate",
                     total_resolved, win_rate_overall or 0)

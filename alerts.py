@@ -12,15 +12,15 @@ import smtplib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
-# PERF: reuse TCP connections for any outbound HTTPS call (e.g. generic webhook).
-_SESSION = requests.Session()
-_SESSION.headers.update({"Accept-Encoding": "gzip, deflate", "Connection": "keep-alive"})
+# P2 audit fix — `import requests` + `_SESSION = requests.Session()` were
+# dead code. The email path uses smtplib directly; there is currently no
+# generic HTTPS webhook that calls _SESSION. If a future webhook lands
+# here, re-add the import + reuse the same TCP-keepalive headers.
 
 _ALERTS_CONFIG_FILE = "alerts_config.json"
 

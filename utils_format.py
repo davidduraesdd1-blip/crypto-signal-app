@@ -130,8 +130,9 @@ def format_basis_points(value, decimals: int = 0) -> str:
     Input may be in bps (e.g. 150 = 150bps) OR fraction (0.015 = 150bps).
 
     Examples:
-        format_basis_points(150)     → "150bp"
-        format_basis_points(0.015)   → "150bp"
+        format_basis_points(150)     → "150bps"
+        format_basis_points(0.015)   → "150bps"
+        format_basis_points(1)       → "1bp"  (singular for exactly ±1)
     """
     if _is_missing(value):
         return _EM_DASH
@@ -141,7 +142,10 @@ def format_basis_points(value, decimals: int = 0) -> str:
         return _EM_DASH
     if abs(v) <= 1.5:
         v = v * 10_000
-    return f"{v:.{decimals}f}bp"
+    # P2 audit fix — was always "bp" regardless of value. Convention is
+    # plural "bps" except for exactly ±1.
+    suffix = "bp" if abs(round(v, decimals)) == 1 else "bps"
+    return f"{v:.{decimals}f}{suffix}"
 
 
 def format_delta_color(value) -> str:
