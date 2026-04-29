@@ -390,6 +390,118 @@ def _cached_news_sentiment(pair: str) -> dict:
     return _news_mod.get_news_sentiment(pair)
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=12)
+def _sg_cached_composite_per_pair(pair: str) -> dict:
+    """Compute the 4-layer composite signal for a single pair on demand.
+
+    C3 follow-up (2026-04-29): the Signals → BTC detail composite-score
+    card and the Regimes / BTC detail layer breakdown both pulled
+    `layer_technical / layer_macro / layer_sentiment / layer_onchain`
+    from the latest scan_result. When no scan had run yet (cold cache,
+    fresh deploy), every layer was None and the composite_score_card
+    rendered four empty bars + score "—". This wrapper fills the gap
+    by composing the proven fetchers (proven by §22 fixtures + §4
+    regression baseline) and calling `composite_signal.compute_composite_
+    signal(...)` directly.
+
+    5-minute TTL matches the §12 composite-signal recompute cycle.
+
+    Returns:
+      The full compute_composite_signal output dict, or {} on failure
+      so the caller can graceful-fall to its existing "—" rendering.
+    """
+    try:
+        from composite_signal import compute_composite_signal as _cs
+    except Exception as _e:
+        logger.debug("[App] composite_signal import failed: %s", _e)
+        return {}
+
+    # Macro is global (DXY / VIX / yield spread / CPI) — same for every pair.
+    try:
+        _macro_enr = data_feeds.get_macro_enrichment() or {}
+    except Exception as _e:
+        logger.debug("[App] macro fetch for composite failed: %s", _e)
+        _macro_enr = {}
+    macro_data = {
+        "dxy":                 _macro_enr.get("dxy"),
+        "vix":                 _macro_enr.get("vix"),
+        "yield_spread_2y10y":  _macro_enr.get("yield_spread_pp"),
+        # cpi_yoy isn't in get_macro_enrichment — leave None so the
+        # composite layer renormalises over surviving sub-signals
+        # (P1 audit fix in compute_composite_signal handles this).
+        "cpi_yoy":             None,
+    }
+
+    # On-chain — per-pair via the proven (and now cache-warmed by C4) helper.
+    try:
+        onchain_data = data_feeds.get_onchain_metrics(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] onchain fetch for composite %s failed: %s", pair, _e)
+        onchain_data = {}
+
+    # Fear & Greed (24h cache).
+    try:
+        _fng = _sg_cached_fear_greed() or {}
+        fg_value = _fng.get("value")
+    except Exception:
+        fg_value = None
+
+    # Per-pair BTC funding rate (10min cache). For non-BTC pairs we still
+    # fetch the BTC funding because the sentiment layer treats it as a
+    # market-wide crowding signal, not a per-pair one.
+    try:
+        _fr = _sg_cached_funding_rate("BTC/USDT") or {}
+        btc_fund_pct = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+    except Exception:
+        btc_fund_pct = None
+
+    # TA — for BTC use the dedicated fetcher; for other pairs we just
+    # let it fall to {} so compute_composite_signal renormalises across
+    # the surviving 3 layers (Macro/Sentiment/On-chain). Per-pair TA
+    # would require a fresh OHLCV fetch + indicator computation; out of
+    # scope for this fallback (it's what the scanner does in batch).
+    ta_data: dict = {}
+    if pair.upper().startswith("BTC"):
+        try:
+            ta_data = data_feeds.fetch_btc_ta_signals() or {}
+        except Exception as _e:
+            logger.debug("[App] BTC TA fetch for composite failed: %s", _e)
+            ta_data = {}
+
+    try:
+        return _cs(
+            macro_data=macro_data,
+            onchain_data=onchain_data,
+            fg_value=fg_value,
+            put_call_ratio=None,
+            ta_data=ta_data,
+            fg_30d_avg=None,
+            btc_funding_rate_pct=btc_fund_pct,
+        ) or {}
+    except Exception as _e:
+        logger.debug("[App] compute_composite_signal for %s failed: %s", pair, _e)
+        return {}
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=24)
+def _cached_google_trends_score(keyword: str) -> dict:
+    """Streamlit-level cache for Google Trends — 24 hr TTL.
+
+    H4 fix (2026-04-28): the Sentiment indicator card on detail pages
+    showed "—" for Google Trends because the result it pulled from
+    `_result.get("google_trends_score")` was None whenever the page
+    loaded without a fresh scan in session_state. This wrapper lets
+    the card fall back to a direct (cached) trends fetch when no scan
+    result is available. pytrends is rate-limited and slow, so a 24h
+    TTL is plenty — sentiment doesn't move that fast.
+    """
+    try:
+        return data_feeds.fetch_google_trends_score(keyword) or {}
+    except Exception as _e:
+        logger.debug("[App] cached trends fetch %s failed: %s", keyword, _e)
+        return {}
+
+
 @st.cache_data(ttl=300, show_spinner=False, max_entries=24)
 def _cached_whale_activity(pair: str, price: float) -> dict:
     """Cache whale tracker HTTP calls — 5 min TTL."""
@@ -1009,7 +1121,8 @@ def _refresh_all_data() -> None:
             _cached_backtest_df, _cached_scan_results, _cached_execution_log_df,
             _cached_agent_log_df, _cached_api_health, _cached_arb_opportunities_df,
             _cached_resolved_feedback_df, _cached_alerts_config, _cached_news_sentiment,
-            _cached_whale_activity,
+            _cached_whale_activity, _cached_google_trends_score,
+            _sg_cached_composite_per_pair,
         ]:
             try:
                 _fn.clear()
@@ -5079,9 +5192,31 @@ def page_config():
                     logger.warning("[app] settings save error: %s", _e)
                     st.error("Settings could not be saved — check file permissions and try again.")
 
-        with st.expander("🔧 Advanced Settings (for experienced users)", expanded=False):
-            st.info("These are technical settings. Leave them as-is unless you know what you're doing.")
-        return  # beginners only see the 3-control view above
+        # C5 fix (2026-04-28): the previous shape rendered an empty
+        # "Advanced Settings" expander then `return`'d immediately, so
+        # beginner-tier users could NEVER reach the Trading / Signal &
+        # Risk / Alerts / Dev Tools / Execution tabs even though those
+        # tabs were fully wired below. The handoff doc described this
+        # as "Config Editor appears wiring-stripped" — the wiring was
+        # intact, but unreachable for the default user level. We now
+        # fall through to the full tab-stack below; the simplified 3-
+        # control view above stays as a quick-edit shortcut, and a
+        # clearly labelled section header introduces the deeper tabs
+        # so beginners aren't surprised by the additional surface.
+        st.markdown('<div style="height:18px;"></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="border-top:1px solid var(--border);padding-top:14px;'
+            'margin-top:6px;">'
+            '<div style="font-size:13px;color:var(--text-muted);'
+            'letter-spacing:0.04em;text-transform:uppercase;font-weight:600;'
+            'margin-bottom:4px;">More settings</div>'
+            '<div style="font-size:14px;color:var(--text-muted);">'
+            'Optional — leave these as defaults unless you want fine '
+            'control over pairs, signal weights, alert rules, dev tools, '
+            'or execution.</div></div>',
+            unsafe_allow_html=True,
+        )
+        # No early return — fall through to the full tab-stack below.
 
     overrides = {}
 
@@ -6154,14 +6289,33 @@ def page_backtest():
     except Exception as _e_ctrl:
         logger.debug("[Backtest] controls row failed: %s", _e_ctrl)
 
-    # The visual button in the controls row above is markup-only; the real
-    # click handler stays a Streamlit button rendered just below it so the
-    # backtest can actually be triggered.
+    # C2 fix (2026-04-28): the run trigger is a real Streamlit button.
+    # Earlier the controls row above also rendered an HTML `<button>`
+    # labelled "Re-run backtest →" inside an `st.markdown` block, which
+    # captured user clicks but couldn't trigger any Python handler — so
+    # users who clicked it saw nothing happen. The decorative button has
+    # been suppressed in `backtest_controls_row` (see show_decorative_
+    # button=False), and this Streamlit button now uses on_click= so the
+    # state write + thread spawn happen BEFORE the script re-renders
+    # (immediate "running" feedback on the very next paint).
+    def _on_run_backtest_click():
+        _start_backtest()
+        try:
+            st.toast("Backtest started — running in background", icon="⏱")
+        except Exception:
+            pass
+
     run_col, _ = st.columns([2, 6])
     with run_col:
         bt_disabled = st.session_state.get("backtest_running", False)
-        if st.button("▶ Run Backtest", key="bt_btn_run", disabled=bt_disabled, type="primary", width="stretch"):
-            _start_backtest()
+        st.button(
+            "▶ Run Backtest",
+            key="bt_btn_run",
+            disabled=bt_disabled,
+            type="primary",
+            width="stretch",
+            on_click=_on_run_backtest_click,
+        )
 
     # _backtest_progress is defined at module level (above page_backtest) — always called
     # here so its fragment key stays registered across rerenders (prevents $$ID KeyError).
@@ -8926,24 +9080,31 @@ def page_signals():
     _chg_1y = None
     _closes_90d = []
     try:
-        _ex = model.get_exchange_instance(model.TA_EXCHANGE)
-        if _ex:
-            # P1-25 audit fix — was uncached OHLCV fetch on every Signals
-            # render. §12 says 5min cache for intraday OHLCV.
-            _ex_id = getattr(_ex, "id", str(model.TA_EXCHANGE))
-            _ohlcv_d = _sg_cached_ohlcv(_ex_id, _pair, "1d", limit=400)
-            if _ohlcv_d:
-                _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
-                if _closes_d:
-                    if _price is None:
-                        _price = _closes_d[-1]
-                    if len(_closes_d) >= 30 and _closes_d[-30]:
-                        _chg_30d = (_closes_d[-1] - _closes_d[-30]) / _closes_d[-30] * 100.0
-                    if len(_closes_d) >= 365 and _closes_d[-365]:
-                        _chg_1y = (_closes_d[-1] - _closes_d[-365]) / _closes_d[-365] * 100.0
-                    elif len(_closes_d) >= 2:
-                        _chg_1y = (_closes_d[-1] - _closes_d[0]) / _closes_d[0] * 100.0
-                    _closes_90d = _closes_d[-90:]
+        # H3 fix (2026-04-28): the previous shape `if _ex: <fetch>` gated
+        # the entire OHLCV fetch on `model.get_exchange_instance(...)`
+        # returning a non-None object. When the primary TA exchange was
+        # unreachable (OKX rate-limit, datacenter-IP block, etc.), _ex
+        # was None and no fetch was attempted at all — the user saw
+        # "Price history unavailable" with no fallback. We now pass the
+        # configured exchange ID directly to `_sg_cached_ohlcv` (which
+        # wraps `model.robust_fetch_ohlcv` and handles the §10 fallback
+        # chain internally: OKX → Kraken → CoinGecko). The instance
+        # object is no longer required.
+        _ex_id = str(getattr(model.get_exchange_instance(model.TA_EXCHANGE), "id", "")
+                     or model.TA_EXCHANGE or "okx")
+        _ohlcv_d = _sg_cached_ohlcv(_ex_id, _pair, "1d", limit=400)
+        if _ohlcv_d:
+            _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
+            if _closes_d:
+                if _price is None:
+                    _price = _closes_d[-1]
+                if len(_closes_d) >= 30 and _closes_d[-30]:
+                    _chg_30d = (_closes_d[-1] - _closes_d[-30]) / _closes_d[-30] * 100.0
+                if len(_closes_d) >= 365 and _closes_d[-365]:
+                    _chg_1y = (_closes_d[-1] - _closes_d[-365]) / _closes_d[-365] * 100.0
+                elif len(_closes_d) >= 2:
+                    _chg_1y = (_closes_d[-1] - _closes_d[0]) / _closes_d[0] * 100.0
+                _closes_90d = _closes_d[-90:]
     except Exception as _e_ohlcv:
         logger.debug("[Signals] OHLCV fetch for %s failed: %s", _pair, _e_ohlcv)
 
@@ -9097,6 +9258,46 @@ def page_signals():
         _l_sent = _result.get("layer_sentiment") or _result.get("sentiment_score")
         _l_onch = _result.get("layer_onchain") or _result.get("onchain_score")
         _composite = _result.get("composite_score") or _conf
+
+        # C3 fallback (2026-04-29): when no scan result has populated
+        # the layer scores yet, compute them on demand via the cached
+        # per-pair composite helper. Without this, the four progress
+        # bars and the score in the composite_score_card all render
+        # empty on cold load — the bug the handoff doc described as
+        # "All 4 composite layers + technical indicators + on-chain
+        # values empty". The helper has a 5-min TTL so repeated detail-
+        # page renders don't re-run compute_composite_signal each time.
+        if (
+            _l_tech is None and _l_macro is None
+            and _l_sent is None and _l_onch is None
+        ):
+            try:
+                _cs_out = _sg_cached_composite_per_pair(_pair) or {}
+                _layers = (_cs_out or {}).get("layers") or {}
+                # compute_composite_signal returns layer scores in
+                # [-1.0, +1.0] (each "score" key inside the per-layer
+                # dict). The composite_score_card expects 0-100 scale,
+                # so we map: display = (score + 1.0) / 2.0 * 100.
+                def _to_card_scale(v):
+                    if v is None:
+                        return None
+                    try:
+                        return max(0.0, min(100.0, (float(v) + 1.0) * 50.0))
+                    except Exception:
+                        return None
+                _l_tech  = _to_card_scale((_layers.get("technical") or {}).get("score"))
+                _l_macro = _to_card_scale((_layers.get("macro")     or {}).get("score"))
+                _l_sent  = _to_card_scale((_layers.get("sentiment") or {}).get("score"))
+                _l_onch  = _to_card_scale((_layers.get("onchain")   or {}).get("score"))
+                # The card's `score` field is also 0-100; map the
+                # full composite score the same way.
+                if _composite is None:
+                    _comp_raw = _cs_out.get("score")
+                    if _comp_raw is not None:
+                        _composite = (float(_comp_raw) + 1.0) * 50.0
+            except Exception as _e_csf:
+                logger.debug("[Signals] C3 composite fallback failed: %s", _e_csf)
+
         try:
             _composite_f = float(_composite) if _composite is not None else None
         except Exception:
@@ -9168,6 +9369,23 @@ def page_signals():
             pass
         _trends = _result.get("google_trends_score") or _result.get("trends_score")
         _news = _result.get("news_sentiment_score") or _result.get("news_sent")
+        # H4 fix (2026-04-28): when the latest scan didn't populate
+        # sentiment scores (no scan run yet, or the field was dropped
+        # during the redesign port), fall back to the direct cached
+        # fetchers so the Sentiment card isn't all dashes on first load.
+        if _trends is None:
+            try:
+                _kw = (str(_coin or "bitcoin")).lower()
+                _gt = _cached_google_trends_score(_kw)
+                _trends = (_gt or {}).get("score")
+            except Exception as _e_gt:
+                logger.debug("[Signals] trends fallback failed: %s", _e_gt)
+        if _news is None:
+            try:
+                _ns = _cached_news_sentiment(_pair)
+                _news = (_ns or {}).get("score") or (_ns or {}).get("sentiment_score")
+            except Exception as _e_ns:
+                logger.debug("[Signals] news fallback failed: %s", _e_ns)
         _ds_ind_card(
             "Sentiment",
             [
@@ -9523,7 +9741,14 @@ def page_onchain():
         ],
     )
 
-    # Pull on-chain data per coin from the latest scan result (or DB fallback).
+    # Pull on-chain data per coin from the latest scan result (or DB fallback,
+    # or — C4 fix, 2026-04-28 — a direct on-chain fetch as last resort so the
+    # page is never empty when the user lands on it without having run a scan
+    # first). The redesigned indicator cards expect mvrv_z/sopr/
+    # exchange_reserve_delta_7d/active_addresses_24h, but data_feeds.
+    # get_onchain_metrics returns mvrv_z/sopr/net_flow/vol_mcap_ratio. We
+    # adapt the field names here so the cards populate correctly without
+    # touching the fetcher (proven healthy by §22 fixtures + §4 baseline).
     def _result_for(ticker: str) -> dict:
         for _r in (st.session_state.get("scan_results") or []):
             _p = str(_r.get("pair") or _r.get("symbol") or "").upper()
@@ -9538,6 +9763,32 @@ def page_onchain():
                     return _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
         except Exception as _e:
             logger.debug("[On-chain] DB lookup for %s failed: %s", ticker, _e)
+        # Direct on-chain fetch fallback — keeps the page from being
+        # data-less on first load. get_onchain_metrics is cached
+        # (_ONCHAIN_TTL in data_feeds), so repeated page renders won't
+        # hammer the upstream APIs.
+        try:
+            _pair = f"{ticker}/USDT"
+            _oc = data_feeds.get_onchain_metrics(_pair) or {}
+            if _oc:
+                # Field-name adapter — map fetcher output → card expectations.
+                return {
+                    "pair": _pair,
+                    "mvrv_z": _oc.get("mvrv_z"),
+                    "mvrv": _oc.get("mvrv_z"),  # legacy alias used by some cards
+                    "sopr": _oc.get("sopr"),
+                    # Approximate exchange_reserve_delta_7d from net_flow.
+                    # get_onchain_metrics returns net_flow as a ±400-scaled
+                    # proxy; we surface it directly. The card displays
+                    # outflow/inflow tone correctly off the sign alone.
+                    "exchange_reserve_delta_7d": _oc.get("net_flow"),
+                    # Active addresses isn't in the free Binance ticker —
+                    # leave None so the card renders the "—" graceful empty.
+                    "active_addresses_24h": None,
+                    "_source": _oc.get("source", "fallback"),
+                }
+        except Exception as _e_oc:
+            logger.debug("[On-chain] direct fetch for %s failed: %s", ticker, _e_oc)
         return {}
 
     def _v(x, fmt="{:.2f}"):

@@ -29,6 +29,38 @@ except ImportError:  # pragma: no cover — module is streamlit-specific
 from .design_system import ACCENTS, family_of
 
 
+# ── Single source of truth for user level ─────────────────────────────
+# C1 fix (2026-04-28): every page must read the level via this helper so
+# the Beginner/Intermediate/Advanced toggle is observed consistently.
+# Reads st.session_state["user_level"] each call — never cache the result
+# at module top, or the toggle will appear inert until the next full reload.
+
+_VALID_LEVELS = ("beginner", "intermediate", "advanced")
+_DEFAULT_LEVEL = "beginner"
+
+
+def current_user_level() -> str:
+    """Return the active user level from session state.
+
+    Always returns one of `_VALID_LEVELS`; falls back to "beginner" if
+    state is missing or corrupted. Use this at the start of every page
+    section instead of reading session_state directly so the toggle's
+    effect is visible app-wide on the very next render.
+    """
+    if st is None:
+        return _DEFAULT_LEVEL
+    val = st.session_state.get("user_level", _DEFAULT_LEVEL)
+    if val not in _VALID_LEVELS:
+        return _DEFAULT_LEVEL
+    return val
+
+
+def level_label(level: str | None = None) -> str:
+    """Capitalised label for display, e.g. "Beginner"."""
+    lv = (level or current_user_level()).lower()
+    return lv.capitalize() if lv in _VALID_LEVELS else "Beginner"
+
+
 # ── Navigation model ──────────────────────────────────────────────────
 
 NavItem = tuple[str, str, str]  # (key, label, icon)
@@ -143,8 +175,21 @@ def render_sidebar(
     if "nav_key" not in st.session_state:
         st.session_state["nav_key"] = active
 
-    # Render each group header + items. Use st.button for nav items so
-    # Streamlit reruns on click; visual look comes from overrides.py.
+    # Render each group header + items.
+    #
+    # H5 fix (2026-04-28): nav buttons use the `on_click=` callback
+    # pattern instead of `if st.sidebar.button(...): write_state();
+    # st.rerun()`. With the inline pattern, the marker `<div>` rendered
+    # *above* the button captured `is_active` from the OLD session_state
+    # (because the click handler runs only AFTER the markdown emits),
+    # so the highlight only appeared on the second render. Callbacks
+    # run *before* the script body re-runs, so by the time the marker
+    # emits, `nav_key` is already updated and the active class is
+    # correct on the very first click.
+    def _select_nav(key: str) -> None:
+        st.session_state["nav_key"] = key
+        st.session_state["_nav_target"] = PAGE_KEY_TO_APP.get(key, "Dashboard")
+
     for group, items in DEFAULT_NAV.items():
         st.sidebar.markdown(
             f'<div class="ds-nav-group">{group}</div>',
@@ -165,15 +210,14 @@ def render_sidebar(
                 f'</div>',
                 unsafe_allow_html=True,
             )
-            if st.sidebar.button(
+            st.sidebar.button(
                 lbl,
                 key=f"ds_nav_{k}",
                 use_container_width=True,
                 type=("primary" if is_active else "secondary"),
-            ):
-                st.session_state["nav_key"] = k
-                st.session_state["_nav_target"] = PAGE_KEY_TO_APP.get(k, "Dashboard")
-                st.rerun()
+                on_click=_select_nav,
+                args=(k,),
+            )
 
     return st.session_state.get("nav_key", active)
 
@@ -244,31 +288,78 @@ def render_top_bar(
             unsafe_allow_html=True,
         )
 
+    # H1+H2 fix (2026-04-28): topbar buttons now use on_click=callback so
+    # the click frame paints with the new state immediately (no more
+    # "type=secondary then primary" two-render lag on level pills).
+    # Refresh additionally fires st.toast + records a wall-clock
+    # timestamp so users see immediate "refreshed Xs ago" feedback.
+    def _select_level(level: str) -> None:
+        st.session_state["user_level"] = level
+
+    def _on_topbar_refresh() -> None:
+        if callable(on_refresh):
+            try:
+                on_refresh()
+            except Exception:  # pragma: no cover — defensive only
+                pass
+        # Wall-clock timestamp for the "refreshed Xs ago" caption.
+        import time as _time
+        st.session_state["_topbar_last_refresh_at"] = _time.time()
+        try:
+            st.toast("Data refreshed", icon="✓")
+        except Exception:
+            pass
+
+    def _on_topbar_theme() -> None:
+        if callable(on_theme):
+            try:
+                on_theme()
+            except Exception:  # pragma: no cover
+                pass
+
     if show_level:
         lvls = [("beginner", "Beginner"), ("intermediate", "Intermediate"), ("advanced", "Advanced")]
         for idx, (k, lbl) in enumerate(lvls, start=1):
             with cols[idx]:
-                if st.button(
+                st.button(
                     lbl,
                     key=f"ds_topbar_lvl_{k}",
                     use_container_width=True,
                     type=("primary" if user_level == k else "secondary"),
                     help=f"Switch to {lbl} view",
-                ):
-                    st.session_state["user_level"] = k
-                    st.rerun()
+                    on_click=_select_level,
+                    args=(k,),
+                )
 
     if show_refresh:
         with cols[4]:
             if on_refresh is not None:
-                if st.button(
+                st.button(
                     "↻ Refresh",
                     key="ds_topbar_refresh",
                     use_container_width=True,
                     help="Clear all caches and reload data from all sources",
-                ):
-                    on_refresh()
-                    st.rerun()
+                    on_click=_on_topbar_refresh,
+                )
+                # Persistent caption directly under the button so users
+                # have a passive indicator of recent refresh activity even
+                # after the toast fades.
+                _last = st.session_state.get("_topbar_last_refresh_at")
+                if _last:
+                    import time as _time
+                    _delta = max(0.0, _time.time() - float(_last))
+                    if _delta < 60:
+                        _ago = f"✓ refreshed {int(_delta)}s ago"
+                    elif _delta < 3600:
+                        _ago = f"✓ refreshed {int(_delta // 60)}m ago"
+                    else:
+                        _ago = f"✓ refreshed {int(_delta // 3600)}h ago"
+                    st.markdown(
+                        f'<div style="font-size:10px;color:var(--text-muted);'
+                        f'text-align:center;margin-top:2px;letter-spacing:0.02em;">'
+                        f'{_html.escape(_ago)}</div>',
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.markdown(
                     '<div class="ds-chip-btn" style="text-align:center;opacity:0.5;">↻ Refresh</div>',
@@ -278,14 +369,13 @@ def render_top_bar(
     if show_theme:
         with cols[5]:
             if on_theme is not None:
-                if st.button(
+                st.button(
                     "☾ Theme",
                     key="ds_topbar_theme",
                     use_container_width=True,
                     help="Toggle light / dark mode",
-                ):
-                    on_theme()
-                    st.rerun()
+                    on_click=_on_topbar_theme,
+                )
             else:
                 st.markdown(
                     '<div class="ds-chip-btn" style="text-align:center;opacity:0.5;">☾ Theme</div>',
@@ -300,12 +390,17 @@ def page_header(
     subtitle: str = "",
     *,
     data_sources: Iterable[tuple[str, str]] | None = None,
+    show_level: bool = True,
 ) -> None:
     """
     Render the page-hd block seen on every mockup: title + subtitle on the
     left, data-source pills on the right.
 
     data_sources: iterable of (label, status). status ∈ {live, cached, down}.
+    show_level: when True (default), prepends a "View: <Level>" pill to the
+        right-hand pill row so the topbar Beginner/Intermediate/Advanced
+        toggle has a guaranteed visible effect on every page (C1 fix,
+        2026-04-28).
     """
     if st is None:
         return
@@ -314,8 +409,28 @@ def page_header(
     # in depth: even if today's callers only pass static literals, a
     # later change that pipes API/DB-derived data through page_header
     # must not become a stored-XSS surface.
+    pills: list[str] = []
+
+    if show_level:
+        lv = current_user_level()
+        # Tone the pill differently per level so the change is visually
+        # obvious even with the title/subtitle unchanged.
+        lv_cls = {
+            "beginner":     "ds-pill",
+            "intermediate": "ds-pill warn",
+            "advanced":     "ds-pill",
+        }.get(lv, "ds-pill")
+        # Use a distinctive style attribute on the advanced pill to make
+        # the three levels visually distinct without relying on color alone.
+        lv_lbl = level_label(lv)
+        pills.append(
+            f'<span class="{lv_cls}" data-level="{lv}" '
+            f'title="Active view level — set via the topbar toggle">'
+            f'<span class="tick"></span> View · {_html.escape(lv_lbl)}'
+            f'</span>'
+        )
+
     if data_sources:
-        pills = []
         for label, status in data_sources:
             cls = "ds-pill"
             if status == "cached":
@@ -326,9 +441,8 @@ def page_header(
                 f'<span class="{cls}"><span class="tick"></span> '
                 f'{_html.escape(str(label))} · {_html.escape(str(status))}</span>'
             )
-        pills_html = f'<div class="ds-row">{"".join(pills)}</div>'
-    else:
-        pills_html = ""
+
+    pills_html = f'<div class="ds-row">{"".join(pills)}</div>' if pills else ""
 
     sub_html = (
         f'<div class="ds-page-sub">{_html.escape(str(subtitle))}</div>'
@@ -895,21 +1009,35 @@ def backtest_controls_row(
     items: Sequence[tuple[str, str]],
     *,
     run_button_label: str = "Re-run backtest →",
+    show_decorative_button: bool = False,
 ) -> str:
     """Return HTML for the inline controls row (Universe, Period, Initial, etc.).
 
-    Each item: (label, value). Visual only — pair with a real st.button if
-    the run trigger needs a click handler.
+    Each item: (label, value). The decorative `<button>` previously
+    embedded in this markup was causing C2 — users clicked it and nothing
+    happened, because HTML `<button>` elements inside `st.markdown` cannot
+    trigger Streamlit callbacks. The real run trigger is a separate
+    `st.button(...)` rendered just below the controls row in app.py.
+
+    `show_decorative_button` defaults to False as of the C2 fix
+    (2026-04-28) so the misleading non-functional button is hidden by
+    default. Callers that still want the visual placeholder can opt in
+    explicitly. `run_button_label` is kept for back-compat with any
+    callers that haven't migrated yet.
     """
     cells = "".join(
         f'<div class="ds-bt-ctrl"><span class="lbl">{lbl}</span>'
         f'<span class="v">{val}</span></div>'
         for lbl, val in items
     )
+    btn_markup = (
+        f'<button class="ds-bt-runbtn" disabled aria-disabled="true" '
+        f'title="The run trigger is the prominent button below — '
+        f'this is a visual marker only.">{_html.escape(run_button_label)}</button>'
+        if show_decorative_button else ""
+    )
     return (
-        f'<div class="ds-bt-controls">{cells}'
-        f'<button class="ds-bt-runbtn">{run_button_label}</button>'
-        f'</div>'
+        f'<div class="ds-bt-controls">{cells}{btn_markup}</div>'
     )
 
 

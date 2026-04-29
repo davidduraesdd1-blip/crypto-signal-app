@@ -7,6 +7,8 @@ Modules:
 """
 from .design_system import inject_theme, tokens, ACCENTS, kpi_tile, signal_badge, data_source_badge
 from .sidebar import (
+    current_user_level,
+    level_label,
     render_sidebar,
     render_top_bar,
     page_header,
@@ -45,6 +47,8 @@ __all__ = [
     "kpi_tile",
     "signal_badge",
     "data_source_badge",
+    "current_user_level",
+    "level_label",
     "render_sidebar",
     "render_top_bar",
     "page_header",
