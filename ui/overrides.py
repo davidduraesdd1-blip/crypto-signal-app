@@ -24,12 +24,18 @@ def inject_streamlit_overrides() -> None:
       max-width: none;
     }
 
-    /* Sidebar canvas */
+    /* Sidebar canvas — C1-fix (2026-04-29): explicit `width` in addition
+       to min/max so Streamlit's outer wrapper can't impose its own
+       default width (~336px). Without `width:`, the min-width rule
+       lets the sidebar grow back when Streamlit's flex container
+       computes its preferred size. */
     [data-testid="stSidebar"] {
       background: var(--bg-1) !important;
       border-right: 1px solid var(--border) !important;
+      width: var(--rail-w) !important;
       min-width: var(--rail-w) !important;
-      max-width: calc(var(--rail-w) + 24px) !important;
+      max-width: var(--rail-w) !important;
+      flex: 0 0 var(--rail-w) !important;
     }
     [data-testid="stSidebar"] > div:first-child {
       padding: 16px 12px !important;
@@ -135,16 +141,19 @@ def inject_streamlit_overrides() -> None:
     }
 
     /* Section headers — visually distinct from the nav items below them.
-       Uppercase, bolder, slightly larger text-secondary color, with a thin
-       divider above each section so the boundary is unambiguous. */
+       C1-fix (2026-04-29): bumped to 12px / 0.12em / text-primary per
+       full-mockup-match spec — was 11.5px / 0.14em / text-secondary
+       which read as nearly-invisible. The .ds-nav-group rule (line 57)
+       was edited in C1 but is dead code; the live class is this one
+       (.ds-nav-group-header) used by app.py's _DS_NAV renderer. */
     .ds-nav-group-header {
-      font-size: 11.5px !important;
+      font-size: 12px !important;
       font-weight: 700 !important;
-      color: var(--text-secondary) !important;
+      color: var(--text-primary) !important;
       margin: 10px 0 2px 0 !important;
       padding: 6px 10px 4px 10px !important;
       text-transform: uppercase !important;
-      letter-spacing: 0.14em !important;
+      letter-spacing: 0.12em !important;
       border-top: 1px solid var(--border) !important;
     }
     /* No top border on the very first section header — it sits right

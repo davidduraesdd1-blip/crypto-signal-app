@@ -1163,10 +1163,13 @@ _DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("onchain",    "On-chain",   "On-chain"),
     ]),
     ("Account", [
-        ("alerts",   "Alerts",     "Config Editor"),
-        ("settings", "Settings",   "Config Editor"),
-        ("agent",    "AI Agent",   "Agent"),
-        ("opps",     "Arbitrage",  "Arbitrage"),
+        ("alerts",   "Alerts",       "Config Editor"),
+        # C1-fix (2026-04-29): "AI Agent" → "AI Assistant" per spec; promoted
+        # above Settings so it sits between Alerts and Settings (was previously
+        # buried under Settings in the old order). Arbitrage stays last.
+        ("agent",    "AI Assistant", "Agent"),
+        ("settings", "Settings",     "Config Editor"),
+        ("opps",     "Arbitrage",    "Arbitrage"),
     ]),
 ]
 _ds_nav_current = _DS_NAV
