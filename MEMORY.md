@@ -4,6 +4,47 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-04-28 (later) — Post-merge follow-ups landed on main
+
+Sprint follow-ups committed directly to main: 4 commits, 18 new tests.
+
+| # | Commit | Items |
+|---|---|---|
+| 1 | 770d13f | `agent.ensure_supervisor_running()` helper (closes deferred P0-19) + strategy_bias P3 doc |
+| 2 | 5a5565a | Wire `fetch_vc_funding_signal()` (P1-26/27) into Layer 3 + Dune scaffold (P1-28) into Layer 4 |
+| 3 | 4ba4c0a | composite_signal regression baseline + 5-scenario lock-in (§4 mandate) |
+| 4 | f9ea3c1 | §22 fixtures for 8 core indicators (RSI/MACD/BB/ATR/ADX/SuperTrend/Stochastic/Ichimoku) |
+
+**Test status:** pytest **63/63 pass in 5.80s** (was 45 at merge time;
++5 composite regression + 1 baseline-presence + 12 indicator fixtures).
+
+**§4 mandate satisfied:** `docs/signal-regression/2026-04-28-baseline.json`
+locks 5 hand-picked composite-signal scenarios (all-none, bull, bear,
+mid-cycle, VIX-panic). Future change to composite_signal output fails
+the regression test until the engineer regenerates the baseline
+deliberately.
+
+**§22 mandate progress:** 8 of 22 indicators have known-correct fixtures.
+Remaining 14 (Hurst, Squeeze Momentum, Chandelier, CVD divergence,
+Gaussian Channel, S/R pivots, MACD/RSI divergence, candlestick patterns,
+Wyckoff phase, cointegration, HMM regime, anchored VWAP, Fibonacci)
+queued for follow-up — same fixture pattern, ~1-2 tests each.
+
+**Sub-weight rebalances** in composite_signal layers:
+- Sentiment: F&G 0.45→0.40, put/call 0.30→0.25, +VC funding 0.10
+- On-chain: MVRV-Z 0.35→0.30, Hash 0.25→0.22, SOPR 0.20→0.18, +Dune 0.10
+Both sums still 1.00. Baseline regenerated against new weights.
+
+**Remaining follow-ups (none merge-blocking):**
+- Live 20-point browser walkthrough on the deploy (needs operator on
+  the live site)
+- §22 fixture backfill for the 14 remaining indicators
+- MEDIUM/LOW backlog (~290 items in baseline audit) — multi-session
+- UI surfacing of cryptorank token-unlock data
+- Live runtime verification of agents / rate-limits / Web3
+
+---
+
 ## 2026-04-28 — Redesign-2026-05 + audit baseline merged to main (PR #11)
 
 **Merge commit:** `929a40f` — "Merge pull request #11 from

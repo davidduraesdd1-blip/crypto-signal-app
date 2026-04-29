@@ -63,28 +63,44 @@ Full sprint outcome documented in:
 
 ### Soon (next sprint)
 
-- [ ] Wire `fetch_vc_funding_signal()` (cryptorank, P1-26/27) into
-  `composite_signal.py` Layer 3 sentiment.
-- [ ] Wire `fetch_dune_query_result(...)` (P1-28) into Layer 4
-  on-chain when concrete query IDs are chosen for BTC + ETH.
+- [x] Wire `fetch_vc_funding_signal()` (cryptorank, P1-26/27) into
+  `composite_signal.py` Layer 3 sentiment. → commit 5a5565a
+- [x] Wire `fetch_dune_query_result(...)` (P1-28) scaffold into
+  Layer 4 on-chain. Caller passes `dune_score` once concrete query
+  IDs for BTC + ETH are chosen. → commit 5a5565a
 - [ ] Surface cryptorank token-unlock data in the UI.
-- [ ] Replace deferred P0-19 with explicit
-  `ensure_supervisor_running()` helper called from app.py + scheduler.py.
+- [x] Replace deferred P0-19 with explicit
+  `ensure_supervisor_running()` helper called from app.py.
+  scheduler.py doesn't currently use the supervisor; if it adds one,
+  use the same helper. → commit 770d13f
 - [ ] Run the full 20-point manual browser checklist against
   https://cryptosignal-ddb1.streamlit.app/ once the redesign deploys.
+  (NEEDS OPERATOR — Claude can't manually click through the live site.)
 
 ### Standing items (per CLAUDE.md mandates)
 
-- [ ] Backfill known-correct fixtures for the 22 indicators in
-  `crypto_model_core.py` (§22 mandate).
-- [ ] Save backtest regression baseline for
+- [~] Backfill known-correct fixtures for the 22 indicators in
+  `crypto_model_core.py` (§22 mandate). → 8 of 22 done in commit
+  f9ea3c1 (RSI/MACD/BB/ATR/ADX/SuperTrend/Stochastic/Ichimoku).
+  Remaining 14: Hurst, Squeeze Momentum, Chandelier Exit, CVD
+  divergence, Gaussian Channel, S/R pivots, MACD divergence,
+  RSI divergence, candlestick patterns, Wyckoff phase,
+  cointegration z-score, HMM regime, anchored VWAP, Fibonacci.
+- [x] Save backtest regression baseline for
   `composite_signal.compute_composite_signal` to
-  `docs/signal-regression/` (§4 mandate). Required before the next
-  change to that module.
-- [ ] Light-mode contrast lift on `_PILL_CFG["NEUTRAL"]`
-  (3.2:1 → ≥4.5:1 WCAG AA).
-- [ ] Cleanup pass: P0-4 strategy_bias duplicate derivation
-  in `crypto_model_core.py` (P3 — non-bug, just code-smell).
+  `docs/signal-regression/` (§4 mandate). → commit 4ba4c0a
+- [x] Light-mode contrast lift on `_PILL_CFG["NEUTRAL"]`
+  — already resolved by the design-token migration
+  (`var(--text-secondary)` on `var(--bg-2)` = 4.67:1 ✓ AA).
+- [x] Cleanup pass: P0-4 strategy_bias duplicate derivation
+  in `crypto_model_core.py` (P3) — documented contract in commit
+  770d13f instead of refactor; values can never disagree.
+
+### MEDIUM / LOW backlog from baseline audit
+
+~180 MEDIUM and ~110 LOW findings cataloged in
+`docs/audits/2026-04-28-redesign-baseline.md` §2. None merge-blocking;
+work through opportunistically when touching nearby code.
 
 ---
 
