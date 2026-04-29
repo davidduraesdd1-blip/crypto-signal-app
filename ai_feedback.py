@@ -28,6 +28,25 @@ _MIN_CALIBRATION_SAMPLES = 8
 
 # Kelly Criterion limits
 _MAX_KELLY_FRACTION = 0.25   # cap Kelly at 25% of portfolio per trade
+
+# P2 audit fix — grade boundaries extracted from inline magic numbers
+# in compute_accuracy. Public + ordered (best to worst) so tests + docs
+# can reference the same source of truth.
+GRADE_BOUNDARIES: list[tuple[float, str]] = [
+    (75.0, "A"),
+    (62.0, "B"),
+    (50.0, "C"),
+    (38.0, "D"),
+    # everything below 38.0 → F
+]
+
+
+def _grade_from_accuracy(accuracy_pct: float) -> str:
+    """Map a 0-100 accuracy percentage to an A-F grade per GRADE_BOUNDARIES."""
+    for floor, letter in GRADE_BOUNDARIES:
+        if accuracy_pct >= floor:
+            return letter
+    return "F"
 _MIN_KELLY_WIN_RATE = 0.40   # need ≥40% win rate to take any position
 
 
@@ -132,17 +151,10 @@ def compute_accuracy(pair: str = None, window_days: int = None) -> dict:
         if weighted_pnls else 0.0
     )
 
-    # Grade based on accuracy (directional signal correctness)
-    if accuracy_pct >= 75:
-        grade = "A"
-    elif accuracy_pct >= 62:
-        grade = "B"
-    elif accuracy_pct >= 50:
-        grade = "C"
-    elif accuracy_pct >= 38:
-        grade = "D"
-    else:
-        grade = "F"
+    # P2 audit fix — grade boundaries were inline magic numbers; extracted
+    # to a module-level constant so they're editable in ONE place and
+    # show up in the public surface for tests / docs.
+    grade = _grade_from_accuracy(accuracy_pct)
 
     # Health score: 50% accuracy weighting, 30% avg PnL, 20% grade consistency
     # consistency_score: A=100, B=80, C=60, D=40, F=20

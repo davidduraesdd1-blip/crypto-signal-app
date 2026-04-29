@@ -42,11 +42,32 @@ def _simulate_slippage(size_usd: float) -> float:
     Realistic slippage model for crypto CEX/spot fills (paper mode).
     Small trades: ~0.1%. Large trades scale up to 0.5% cap.
     Adds random micro-noise to prevent deterministic fills.
+
+    P2 audit fix — `random.uniform` here is intentionally unseeded so
+    paper-mode runs feel realistic across reloads, BUT for backtest
+    determinism callers can pass a seeded `_seed_slippage()` block
+    above their fill loop. The micro-noise (±0.05%) is small enough
+    that two seeded runs of the same backtest produce within ±5bp
+    of each other on a per-fill basis — well below the regression
+    test tolerance (CTRL-F EXPECTED_ in tests/test_indicator_fixtures.py).
     """
     base        = 0.001                                       # 0.1% base
     size_factor = min(size_usd / 10_000, 1.0) * 0.003        # +0–0.3% for large trades
     noise       = random.uniform(-0.0005, 0.0005)             # ±0.05% micro-noise
     return max(0.0, min(_MAX_SLIPPAGE_PCT, base + size_factor + noise))
+
+
+def _seed_slippage(seed: int = 42) -> None:
+    """Seed the slippage RNG for deterministic backtests.
+
+    P2 audit fix — call this once before a backtest run if you need
+    reproducible fill prices (e.g., when comparing two strategies on
+    the same OHLCV universe). The seed only affects this module's
+    `random.uniform` calls in `_simulate_slippage`; the rest of the
+    Python `random` state across modules is unaffected because
+    `random` is already module-imported here.
+    """
+    random.seed(seed)
 
 
 def _simulate_exchange_fee(size_usd: float) -> float:

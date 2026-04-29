@@ -39,7 +39,13 @@ _CACHE_TTL = 3600  # 1 hour
 # when the cap is reached so hot coins stay in memory.
 _model_store: dict = {}   # {(pair, tf): fitted_model}, insertion-ordered Python 3.7+
 _model_lock = threading.Lock()
-_MODEL_STORE_MAX_ENTRIES = 20   # ~40-200MB ceiling for model store
+# P2 audit fix — was 20 entries; with 37 pairs × 4 timeframes = 148
+# possible (pair, tf) keys, the cap caused FIFO thrashing (50% eviction
+# every full scan) and forced repeated retraining of warm models.
+# Raised to 160 so a full scan stays in memory. Memory ceiling stays
+# bounded: each fitted GBM is ~1-3 MB → ~160-480 MB upper bound, well
+# under the 1GB Streamlit Community Cloud limit.
+_MODEL_STORE_MAX_ENTRIES = 160
 
 # PERF-19: disk persistence via joblib — survives Streamlit hot-reloads
 _MODEL_DISK_TTL = 3600   # 1 hour — don't load a pkl file older than this
