@@ -963,21 +963,35 @@ def backtest_controls_row(
     items: Sequence[tuple[str, str]],
     *,
     run_button_label: str = "Re-run backtest →",
+    show_decorative_button: bool = False,
 ) -> str:
     """Return HTML for the inline controls row (Universe, Period, Initial, etc.).
 
-    Each item: (label, value). Visual only — pair with a real st.button if
-    the run trigger needs a click handler.
+    Each item: (label, value). The decorative `<button>` previously
+    embedded in this markup was causing C2 — users clicked it and nothing
+    happened, because HTML `<button>` elements inside `st.markdown` cannot
+    trigger Streamlit callbacks. The real run trigger is a separate
+    `st.button(...)` rendered just below the controls row in app.py.
+
+    `show_decorative_button` defaults to False as of the C2 fix
+    (2026-04-28) so the misleading non-functional button is hidden by
+    default. Callers that still want the visual placeholder can opt in
+    explicitly. `run_button_label` is kept for back-compat with any
+    callers that haven't migrated yet.
     """
     cells = "".join(
         f'<div class="ds-bt-ctrl"><span class="lbl">{lbl}</span>'
         f'<span class="v">{val}</span></div>'
         for lbl, val in items
     )
+    btn_markup = (
+        f'<button class="ds-bt-runbtn" disabled aria-disabled="true" '
+        f'title="The run trigger is the prominent button below — '
+        f'this is a visual marker only.">{_html.escape(run_button_label)}</button>'
+        if show_decorative_button else ""
+    )
     return (
-        f'<div class="ds-bt-controls">{cells}'
-        f'<button class="ds-bt-runbtn">{run_button_label}</button>'
-        f'</div>'
+        f'<div class="ds-bt-controls">{cells}{btn_markup}</div>'
     )
 
 

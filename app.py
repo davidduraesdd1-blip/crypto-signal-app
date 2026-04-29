@@ -6173,14 +6173,33 @@ def page_backtest():
     except Exception as _e_ctrl:
         logger.debug("[Backtest] controls row failed: %s", _e_ctrl)
 
-    # The visual button in the controls row above is markup-only; the real
-    # click handler stays a Streamlit button rendered just below it so the
-    # backtest can actually be triggered.
+    # C2 fix (2026-04-28): the run trigger is a real Streamlit button.
+    # Earlier the controls row above also rendered an HTML `<button>`
+    # labelled "Re-run backtest →" inside an `st.markdown` block, which
+    # captured user clicks but couldn't trigger any Python handler — so
+    # users who clicked it saw nothing happen. The decorative button has
+    # been suppressed in `backtest_controls_row` (see show_decorative_
+    # button=False), and this Streamlit button now uses on_click= so the
+    # state write + thread spawn happen BEFORE the script re-renders
+    # (immediate "running" feedback on the very next paint).
+    def _on_run_backtest_click():
+        _start_backtest()
+        try:
+            st.toast("Backtest started — running in background", icon="⏱")
+        except Exception:
+            pass
+
     run_col, _ = st.columns([2, 6])
     with run_col:
         bt_disabled = st.session_state.get("backtest_running", False)
-        if st.button("▶ Run Backtest", key="bt_btn_run", disabled=bt_disabled, type="primary", width="stretch"):
-            _start_backtest()
+        st.button(
+            "▶ Run Backtest",
+            key="bt_btn_run",
+            disabled=bt_disabled,
+            type="primary",
+            width="stretch",
+            on_click=_on_run_backtest_click,
+        )
 
     # _backtest_progress is defined at module level (above page_backtest) — always called
     # here so its fragment key stays registered across rerenders (prevents $$ID KeyError).
