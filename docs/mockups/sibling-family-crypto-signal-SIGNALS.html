@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Crypto Signal · Signals Detail</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --accent: #22d36f;
+  --accent-soft: rgba(34, 211, 111, 0.12);
+  --accent-ink: #0a0a0f;
+  --gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;
+  --gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--gray-9:#f8f8fc;
+  --success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;
+  --font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;
+  --rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;
+  --bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);
+  --text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);
+  --border:var(--gray-3);--border-strong:var(--gray-4);
+}
+html[data-theme="light"] {
+  --bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;
+  --text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;
+  --border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);
+}
+*,*::before,*::after{box-sizing:border-box;} html,body{margin:0;padding:0;overflow-x:hidden;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+.mono,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+.app{display:grid;grid-template-columns:var(--rail-w) 1fr;grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;}
+.rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;letter-spacing:-0.01em;}
+.brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
+.nav-group{margin:18px 0 6px;padding:0 10px;color:var(--text-primary);font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-secondary);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none;transition:background 120ms,color 120ms;}
+.nav-item:hover{background:var(--bg-2);color:var(--text-primary);}
+.nav-item.active{background:var(--accent-soft);color:var(--text-primary);}
+.topbar{grid-area:topbar;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;padding:0 24px;position:sticky;top:0;z-index:10;}
+.crumbs{color:var(--text-muted);font-size:13px;} .crumbs b{color:var(--text-primary);font-weight:500;}
+.topbar-spacer{flex:1;}
+.level-group,.theme-btn,.refresh-btn{display:inline-flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text-secondary);cursor:pointer;font-family:var(--font-ui);}
+.level-group{padding:2px;gap:0;}
+.level-group button{all:unset;cursor:pointer;padding:4px 10px;border-radius:6px;font-size:12.5px;color:var(--text-muted);font-weight:500;}
+.level-group button.on{background:var(--accent-soft);color:var(--text-primary);}
+.main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
+.page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;gap:20px;flex-wrap:wrap;}
+.page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;}
+.coin-pick{display:inline-flex;gap:6px;background:var(--bg-1);border:1px solid var(--border);border-radius:10px;padding:4px;align-items:center;}
+.coin-pick button{all:unset;cursor:pointer;padding:6px 14px;border-radius:6px;font-size:13px;color:var(--text-muted);font-weight:600;font-family:var(--font-mono);}
+.coin-pick button.on{background:var(--accent-soft);color:var(--text-primary);}
+.coin-pick button.more{font-family:var(--font-ui);font-size:12.5px;color:var(--text-secondary);border:1px solid var(--border);padding:5px 10px;}
+.coin-pick button.more:hover{color:var(--text-primary);border-color:var(--border-strong);background:var(--bg-2);}
+.coin-pick .pick-sep{width:1px;height:18px;background:var(--border);margin:0 4px;}
+.grid{display:grid;gap:var(--gap);}
+.grid.cols-3{grid-template-columns:repeat(3,1fr);} .grid.cols-4{grid-template-columns:repeat(4,1fr);} .grid.cols-2{grid-template-columns:1.2fr 1fr;}
+.card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
+html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
+.card-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;}
+.card-title{font-size:12px;color:var(--text-muted);font-weight:500;letter-spacing:0.04em;text-transform:uppercase;}
+.hero{display:flex;align-items:center;justify-content:space-between;padding:24px;margin-bottom:20px;}
+.hero .ticker{color:var(--text-secondary);font-weight:500;font-size:14px;}
+.hero .price{font-size:52px;font-weight:600;font-family:var(--font-mono);letter-spacing:-0.02em;line-height:1;margin-top:6px;}
+.hero .chg{font-family:var(--font-mono);font-size:14px;margin-top:6px;}
+.hero .chg.up{color:var(--success);} .hero .chg.down{color:var(--danger);}
+.signal-badge{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:999px;font-weight:600;font-size:15px;letter-spacing:0.05em;}
+.signal-badge.buy{background:color-mix(in srgb,var(--success) 16%,transparent);color:var(--success);}
+.signal-badge.hold{background:color-mix(in srgb,var(--warning) 16%,transparent);color:var(--warning);}
+.signal-badge.sell{background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger);}
+.regime{font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-top:10px;}
+.regime .d{width:6px;height:6px;border-radius:50%;background:var(--accent);}
+.layer{display:flex;flex-direction:column;gap:8px;}
+.layer-hd{display:flex;justify-content:space-between;align-items:baseline;}
+.layer-name{font-size:13px;font-weight:500;}
+.layer-val{font-family:var(--font-mono);font-size:16px;font-weight:600;}
+.bar{height:6px;background:var(--bg-2);border-radius:3px;overflow:hidden;}
+.bar-fill{height:100%;background:var(--accent);border-radius:3px;}
+.bar-fill.mid{background:var(--warning);} .bar-fill.low{background:var(--danger);}
+.ind-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+.ind{padding:12px;background:var(--bg-2);border-radius:8px;}
+.ind-lbl{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;}
+.ind-val{font-family:var(--font-mono);font-size:16px;font-weight:600;margin-top:4px;}
+.ind-sub{font-size:11.5px;color:var(--text-muted);margin-top:2px;font-family:var(--font-mono);}
+.chart{height:200px;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 10%,transparent),transparent);border-radius:8px;position:relative;overflow:hidden;}
+.chart svg{width:100%;height:100%;}
+.hist{display:flex;flex-direction:column;}
+.hist-row{display:grid;grid-template-columns:110px 70px 1fr 90px;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border);font-size:12.5px;align-items:center;}
+.hist-row:last-child{border-bottom:none;}
+.hist-row .t{font-family:var(--font-mono);color:var(--text-muted);}
+.hist-row .s{font-weight:600;}
+.hist-row .s.buy{color:var(--success);} .hist-row .s.sell{color:var(--danger);} .hist-row .s.hold{color:var(--warning);}
+.hist-row .note{color:var(--text-secondary);}
+.hist-row .ret{font-family:var(--font-mono);text-align:right;}
+.hist-row .ret.up{color:var(--success);} .hist-row .ret.down{color:var(--danger);}
+.ds-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.ds{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 8px;border-radius:999px;background:var(--bg-2);color:var(--text-secondary);border:1px solid var(--border);}
+.ds .tick{width:6px;height:6px;border-radius:50%;background:var(--success);}
+.ds.warn .tick{background:var(--warning);}
+@media (max-width:1024px){.grid.cols-4{grid-template-columns:repeat(2,1fr);} .grid.cols-2{grid-template-columns:1fr;} .grid.cols-3{grid-template-columns:repeat(2,1fr);} .ind-grid{grid-template-columns:repeat(2,1fr);}}
+@media (max-width:768px){.app{grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";} .rail{position:fixed;bottom:0;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;} .brand,.nav-group{display:none;} .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;} .main{padding:16px 16px 80px;overflow-x:hidden;max-width:100%;min-width:0;box-sizing:border-box;} .hero .price{font-size:34px;} .hero{flex-direction:column;align-items:flex-start;gap:14px;padding:20px;} .ind-grid{grid-template-columns:minmax(0,1fr);} .level-group{display:none;} .coin-pick{flex-wrap:wrap;} .refresh-btn,.theme-btn{padding:6px 8px;font-size:12px;} .card{max-width:100%;min-width:0;overflow:hidden;box-sizing:border-box;} .grid{max-width:100%;} .grid>*{min-width:0;max-width:100%;} .page-hd,.page-hd .sub,.ds-row,.ds{max-width:100%;} .ds-row{flex-wrap:wrap;} .ind{min-width:0;overflow:hidden;} .ind-val,.ind-sub,.ind-lbl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} .layer{min-width:0;} .layer-name,.layer-val{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.dev-bar{position:fixed;bottom:16px;right:16px;z-index:1000;background:var(--bg-1);border:1px solid var(--border-strong);border-radius:10px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:12px;}
+.dev-bar button{all:unset;cursor:pointer;padding:6px 10px;border-radius:6px;color:var(--text-secondary);}
+.dev-bar button:hover{background:var(--bg-2);color:var(--text-primary);} .dev-bar button.on{background:var(--accent-soft);color:var(--text-primary);}
+.dev-bar .sep{width:1px;background:var(--border);margin:4px 0;}
+body.preview-mobile .app{max-width:390px;margin:0 auto;border:1px solid var(--border-strong);border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-height:844px;height:auto;grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+body.preview-mobile .rail{position:relative;bottom:auto;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+body.preview-mobile .brand,body.preview-mobile .nav-group{display:none;} body.preview-mobile .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+body.preview-mobile .grid.cols-4,body.preview-mobile .grid.cols-3,body.preview-mobile .grid.cols-2{grid-template-columns:1fr;} body.preview-mobile .ind-grid{grid-template-columns:1fr;}
+body.preview-mobile .main{padding:16px 16px 80px;} body.preview-mobile .hero .price{font-size:34px;} body.preview-mobile .hero{flex-direction:column;align-items:flex-start;gap:14px;padding:20px;} body.preview-mobile .coin-pick{flex-wrap:wrap;} body.preview-mobile .level-group{display:none;} body.preview-mobile .refresh-btn,body.preview-mobile .theme-btn{padding:6px 8px;font-size:12px;}
+/* Multi-timeframe strip — selection drives every data section below */
+.tf-strip{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;}
+.tf-cell{padding:12px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;text-align:center;cursor:pointer;transition:all 120ms;display:flex;flex-direction:column;gap:4px;align-items:center;}
+.tf-cell:hover{background:var(--bg-3);border-color:var(--border-strong);}
+.tf-cell.active{outline:1px solid var(--accent);outline-offset:-1px;background:var(--accent-soft);}
+.tf-cell .tf-lbl{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--text-secondary);}
+.tf-cell .tf-sig{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:600;letter-spacing:0.05em;}
+.tf-cell .tf-sig.buy{color:var(--success);} .tf-cell .tf-sig.hold{color:var(--warning);} .tf-cell .tf-sig.sell{color:var(--danger);}
+.tf-cell .tf-score{font-family:var(--font-mono);font-size:13.5px;font-weight:600;color:var(--text-primary);}
+@media (max-width:1024px){.tf-strip{grid-template-columns:repeat(4,1fr);}}
+@media (max-width:768px){.tf-strip{grid-template-columns:repeat(4,1fr);gap:6px;} .tf-cell{padding:8px 4px;} .tf-cell .tf-lbl{font-size:12px;} .tf-cell .tf-sig{font-size:10px;} .tf-cell .tf-score{font-size:12.5px;}}
+body.preview-mobile .tf-strip{grid-template-columns:repeat(4,1fr);gap:6px;} body.preview-mobile .tf-cell{padding:8px 4px;} body.preview-mobile .tf-cell .tf-lbl{font-size:12px;} body.preview-mobile .tf-cell .tf-sig{font-size:10px;} body.preview-mobile .tf-cell .tf-score{font-size:12.5px;}
+</style>
+</head>
+<body data-theme="dark">
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
+    <div class="nav-group">Markets</div>
+    <a class="nav-item">Home</a>
+    <a class="nav-item active">Signals</a>
+    <a class="nav-item">Regimes</a>
+    <div class="nav-group">Research</div>
+    <a class="nav-item">Backtester</a>
+    <a class="nav-item">On-chain</a>
+    <div class="nav-group">Account</div>
+    <a class="nav-item">Alerts</a>
+    <a class="nav-item">Settings</a>
+  </aside>
+  <header class="topbar">
+    <div class="crumbs">Markets / <b>Signals</b></div>
+    <div class="topbar-spacer"></div>
+    <div class="level-group"><button>Beginner</button><button class="on">Intermediate</button><button>Advanced</button></div>
+    <button class="refresh-btn">↻ Refresh</button>
+    <button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+  </header>
+  <main class="main">
+    <div class="page-hd">
+      <div>
+        <h1>Signal detail</h1>
+        <div class="sub">Layer-by-layer composite signal breakdown for a single coin.</div>
+      </div>
+      <div class="coin-pick" title="5 quick-select pairs · More opens dropdown for all 33"><button class="on">BTC</button><button>ETH</button><button>XRP</button><button>SOL</button><button>AVAX</button><span class="pick-sep"></span><button class="more">More ▾ <span style="opacity:0.6;font-size:11px;margin-left:2px;">+28</span></button></div>
+    </div>
+
+    <div class="card hero">
+      <div>
+        <div class="ticker">BTC / USD · Bitcoin</div>
+        <div class="price">104,280</div>
+        <div class="chg up">+ 2.14% · 24h &nbsp;·&nbsp; + 18.4% · 30d &nbsp;·&nbsp; + 134.8% · 1Y</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <span class="signal-badge buy">▲ Buy · strong · 1d</span>
+        <div class="regime"><span class="d"></span> Regime: bull · 82% conf · stable 14d</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-hd">
+        <div class="card-title">Multi-timeframe signals · BTC</div>
+        <div style="color:var(--text-muted);font-size:12px;">click a timeframe to drill in · selection drives every data section below</div>
+      </div>
+      <div class="tf-strip">
+        <div class="tf-cell"><div class="tf-lbl">1m</div><div class="tf-sig hold">■ HOLD</div><div class="tf-score">52</div></div>
+        <div class="tf-cell"><div class="tf-lbl">5m</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">64</div></div>
+        <div class="tf-cell"><div class="tf-lbl">15m</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">70</div></div>
+        <div class="tf-cell"><div class="tf-lbl">30m</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">73</div></div>
+        <div class="tf-cell"><div class="tf-lbl">1h</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">76</div></div>
+        <div class="tf-cell"><div class="tf-lbl">4h</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">80</div></div>
+        <div class="tf-cell active"><div class="tf-lbl">1d</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">78</div></div>
+        <div class="tf-cell"><div class="tf-lbl">1w</div><div class="tf-sig buy">▲ BUY</div><div class="tf-score">84</div></div>
+      </div>
+    </div>
+
+    <div class="grid cols-2" style="margin-bottom:20px;">
+      <div class="card">
+        <div class="card-hd"><div class="card-title">Price · last 90d</div><div style="color:var(--text-muted);font-size:12px;">yfinance · live</div></div>
+        <div class="chart">
+          <svg viewBox="0 0 600 200" preserveAspectRatio="none">
+            <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#22d36f" stop-opacity="0.5"/><stop offset="100%" stop-color="#22d36f" stop-opacity="0"/></linearGradient></defs>
+            <polyline fill="url(#g1)" stroke="none" points="0,160 30,150 60,158 90,140 120,145 150,120 180,110 210,90 240,95 270,78 300,72 330,65 360,82 390,70 420,58 450,45 480,52 510,40 540,30 570,28 600,20 600,200 0,200"/>
+            <polyline fill="none" stroke="#22d36f" stroke-width="2" points="0,160 30,150 60,158 90,140 120,145 150,120 180,110 210,90 240,95 270,78 300,72 330,65 360,82 390,70 420,58 450,45 480,52 510,40 540,30 570,28 600,20"/>
+          </svg>
+        </div>
+        <div class="ind-grid" style="margin-top:16px;">
+          <div class="ind"><div class="ind-lbl">Vol (24h)</div><div class="ind-val">$48.2B</div><div class="ind-sub">+18% vs 30d avg</div></div>
+          <div class="ind"><div class="ind-lbl">ATR (14d)</div><div class="ind-val">$2,840</div><div class="ind-sub">2.7% of price</div></div>
+          <div class="ind"><div class="ind-lbl">Beta vs S&amp;P</div><div class="ind-val">1.72</div><div class="ind-sub">90d rolling</div></div>
+          <div class="ind"><div class="ind-lbl">Funding (8h)</div><div class="ind-val">+0.012%</div><div class="ind-sub">neutral-bull</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><div class="card-title">Composite score · 0–100</div><div style="color:var(--accent);font-family:var(--font-mono);font-weight:600;">78.4</div></div>
+        <div style="display:flex;flex-direction:column;gap:14px;margin-top:8px;">
+          <div class="layer"><div class="layer-hd"><div class="layer-name">Layer 1 · Technical</div><div class="layer-val">82</div></div><div class="bar"><div class="bar-fill" style="width:82%;"></div></div></div>
+          <div class="layer"><div class="layer-hd"><div class="layer-name">Layer 2 · Macro</div><div class="layer-val">74</div></div><div class="bar"><div class="bar-fill" style="width:74%;"></div></div></div>
+          <div class="layer"><div class="layer-hd"><div class="layer-name">Layer 3 · Sentiment</div><div class="layer-val">71</div></div><div class="bar"><div class="bar-fill mid" style="width:71%;"></div></div></div>
+          <div class="layer"><div class="layer-hd"><div class="layer-name">Layer 4 · On-chain</div><div class="layer-val">86</div></div><div class="bar"><div class="bar-fill" style="width:86%;"></div></div></div>
+        </div>
+        <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
+          Composite = weighted avg per regime-adjusted weights. Current regime weights: tech 0.30, macro 0.15, sentiment 0.20, on-chain 0.35.
+        </div>
+      </div>
+    </div>
+
+    <div class="grid cols-3" style="margin-bottom:20px;">
+      <div class="card">
+        <div class="card-hd"><div class="card-title">Technical indicators</div></div>
+        <div class="ind-grid" style="grid-template-columns:1fr 1fr;">
+          <div class="ind"><div class="ind-lbl">RSI (14)</div><div class="ind-val" style="color:var(--warning);">73.2</div><div class="ind-sub">overbought</div></div>
+          <div class="ind"><div class="ind-lbl">MACD hist</div><div class="ind-val" style="color:var(--success);">+412</div><div class="ind-sub">bullish cross</div></div>
+          <div class="ind"><div class="ind-lbl">Supertrend</div><div class="ind-val" style="color:var(--success);">Buy</div><div class="ind-sub">since Apr 12</div></div>
+          <div class="ind"><div class="ind-lbl">ADX (14)</div><div class="ind-val">32.4</div><div class="ind-sub">strong trend</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">On-chain</div></div>
+        <div class="ind-grid" style="grid-template-columns:1fr 1fr;">
+          <div class="ind"><div class="ind-lbl">MVRV-Z</div><div class="ind-val">2.84</div><div class="ind-sub">mid-cycle</div></div>
+          <div class="ind"><div class="ind-lbl">SOPR</div><div class="ind-val">1.024</div><div class="ind-sub">profit taking</div></div>
+          <div class="ind"><div class="ind-lbl">Exch. reserve</div><div class="ind-val" style="color:var(--success);">−12k</div><div class="ind-sub">outflow 7d</div></div>
+          <div class="ind"><div class="ind-lbl">Active addr.</div><div class="ind-val">1.14M</div><div class="ind-sub">+8% vs 30d</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">Sentiment</div></div>
+        <div class="ind-grid" style="grid-template-columns:1fr 1fr;">
+          <div class="ind"><div class="ind-lbl">Fear&amp;Greed</div><div class="ind-val" style="color:var(--warning);">72</div><div class="ind-sub">greed</div></div>
+          <div class="ind"><div class="ind-lbl">Funding</div><div class="ind-val">+0.012%</div><div class="ind-sub">neutral-bull</div></div>
+          <div class="ind"><div class="ind-lbl">Google trends</div><div class="ind-val">58</div><div class="ind-sub">rising · 30d</div></div>
+          <div class="ind"><div class="ind-lbl">News sent.</div><div class="ind-val" style="color:var(--success);">+0.42</div><div class="ind-sub">positive</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><div class="card-title">Recent signal history · BTC</div><div style="color:var(--text-muted);font-size:12px;">last 8 state transitions</div></div>
+      <div class="hist">
+        <div class="hist-row"><span class="t">Apr 12 08:20</span><span class="s buy">▲ BUY</span><span class="note">Composite crossed above 70; regime shifted bull → accumulation</span><span class="ret up">+ 18.4%</span></div>
+        <div class="hist-row"><span class="t">Mar 28 14:10</span><span class="s hold">■ HOLD</span><span class="note">Consolidation; ADX &lt; 20</span><span class="ret up">+ 2.1%</span></div>
+        <div class="hist-row"><span class="t">Mar 14 09:00</span><span class="s buy">▲ BUY</span><span class="note">On-chain score 86, MVRV-Z rising</span><span class="ret up">+ 12.6%</span></div>
+        <div class="hist-row"><span class="t">Feb 28 19:45</span><span class="s sell">▼ SELL</span><span class="note">Overbought + funding spike; regime risk-off</span><span class="ret down">− 6.2%</span></div>
+        <div class="hist-row"><span class="t">Feb 14 11:30</span><span class="s buy">▲ BUY</span><span class="note">Multi-timeframe alignment confirmed</span><span class="ret up">+ 9.8%</span></div>
+        <div class="hist-row"><span class="t">Jan 28 03:20</span><span class="s hold">■ HOLD</span><span class="note">Transition regime, awaiting confirmation</span><span class="ret up">+ 1.2%</span></div>
+      </div>
+    </div>
+  </main>
+</div>
+<div class="dev-bar">
+  <button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button>
+  <button id="btn-light" onclick="setTheme('light')">Light</button>
+  <div class="sep"></div>
+  <button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button>
+  <button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button>
+</div>
+<script>
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.getElementById('btn-dark').classList.toggle('on',t==='dark');document.getElementById('btn-light').classList.toggle('on',t==='light');}
+function toggleTheme(){setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function setViewport(v){document.body.classList.toggle('preview-mobile',v==='mobile');document.getElementById('btn-desktop').classList.toggle('on',v==='desktop');document.getElementById('btn-mobile').classList.toggle('on',v==='mobile');}
+</script>
+</body></html>
