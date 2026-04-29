@@ -323,6 +323,20 @@ def inject_streamlit_overrides() -> None:
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    /* H1 fix (2026-04-28): Streamlit wraps button labels in inner <p> /
+       <div data-testid="stMarkdownContainer"> elements that re-introduce
+       white-space: pre-wrap. The button-level nowrap above isn't enough
+       on viewports between 769-1200px where the column width is narrow
+       enough to force a wrap inside the inner element. Push nowrap +
+       overflow:ellipsis down to every descendant so the label stays on
+       one line and truncates cleanly when there isn't room. */
+    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+      [data-testid="stButton"] > button > * {
+      white-space: nowrap !important;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
     /* Tighten the vertical block element wrapping each button so the row
        feels like a topbar, not a stack of inputs. */
     [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) [data-testid="stButton"] {
@@ -712,6 +726,28 @@ def inject_streamlit_overrides() -> None:
       .ds-hero-grid { grid-template-columns: 1fr; }
       .ds-grid.ds-cols-4 { grid-template-columns: repeat(2, 1fr); }
       .ds-grid.ds-cols-3 { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    /* H1 fix (2026-04-28): intermediate viewport (769-1200px) — column
+       widths in the topbar grid get tight enough that "Intermediate" /
+       "↻ Refresh" labels wrap inside their pills. Drop the font-size +
+       horizontal padding before the wrap can happen so all five pills
+       stay on one line. The full-width breakpoint at <=768px hides
+       level pills entirely (see mobile section below). */
+    @media (max-width: 1200px) {
+      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+        [data-testid="stButton"] > button {
+        font-size: 11.5px;
+        padding: 3px 6px;
+        letter-spacing: 0;
+      }
+    }
+    @media (max-width: 1024px) {
+      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+        [data-testid="stButton"] > button {
+        font-size: 11px;
+        padding: 3px 4px;
+      }
     }
 
     /* Mobile */

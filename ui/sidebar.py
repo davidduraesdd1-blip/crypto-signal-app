@@ -288,31 +288,78 @@ def render_top_bar(
             unsafe_allow_html=True,
         )
 
+    # H1+H2 fix (2026-04-28): topbar buttons now use on_click=callback so
+    # the click frame paints with the new state immediately (no more
+    # "type=secondary then primary" two-render lag on level pills).
+    # Refresh additionally fires st.toast + records a wall-clock
+    # timestamp so users see immediate "refreshed Xs ago" feedback.
+    def _select_level(level: str) -> None:
+        st.session_state["user_level"] = level
+
+    def _on_topbar_refresh() -> None:
+        if callable(on_refresh):
+            try:
+                on_refresh()
+            except Exception:  # pragma: no cover — defensive only
+                pass
+        # Wall-clock timestamp for the "refreshed Xs ago" caption.
+        import time as _time
+        st.session_state["_topbar_last_refresh_at"] = _time.time()
+        try:
+            st.toast("Data refreshed", icon="✓")
+        except Exception:
+            pass
+
+    def _on_topbar_theme() -> None:
+        if callable(on_theme):
+            try:
+                on_theme()
+            except Exception:  # pragma: no cover
+                pass
+
     if show_level:
         lvls = [("beginner", "Beginner"), ("intermediate", "Intermediate"), ("advanced", "Advanced")]
         for idx, (k, lbl) in enumerate(lvls, start=1):
             with cols[idx]:
-                if st.button(
+                st.button(
                     lbl,
                     key=f"ds_topbar_lvl_{k}",
                     use_container_width=True,
                     type=("primary" if user_level == k else "secondary"),
                     help=f"Switch to {lbl} view",
-                ):
-                    st.session_state["user_level"] = k
-                    st.rerun()
+                    on_click=_select_level,
+                    args=(k,),
+                )
 
     if show_refresh:
         with cols[4]:
             if on_refresh is not None:
-                if st.button(
+                st.button(
                     "↻ Refresh",
                     key="ds_topbar_refresh",
                     use_container_width=True,
                     help="Clear all caches and reload data from all sources",
-                ):
-                    on_refresh()
-                    st.rerun()
+                    on_click=_on_topbar_refresh,
+                )
+                # Persistent caption directly under the button so users
+                # have a passive indicator of recent refresh activity even
+                # after the toast fades.
+                _last = st.session_state.get("_topbar_last_refresh_at")
+                if _last:
+                    import time as _time
+                    _delta = max(0.0, _time.time() - float(_last))
+                    if _delta < 60:
+                        _ago = f"✓ refreshed {int(_delta)}s ago"
+                    elif _delta < 3600:
+                        _ago = f"✓ refreshed {int(_delta // 60)}m ago"
+                    else:
+                        _ago = f"✓ refreshed {int(_delta // 3600)}h ago"
+                    st.markdown(
+                        f'<div style="font-size:10px;color:var(--text-muted);'
+                        f'text-align:center;margin-top:2px;letter-spacing:0.02em;">'
+                        f'{_html.escape(_ago)}</div>',
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.markdown(
                     '<div class="ds-chip-btn" style="text-align:center;opacity:0.5;">↻ Refresh</div>',
@@ -322,14 +369,13 @@ def render_top_bar(
     if show_theme:
         with cols[5]:
             if on_theme is not None:
-                if st.button(
+                st.button(
                     "☾ Theme",
                     key="ds_topbar_theme",
                     use_container_width=True,
                     help="Toggle light / dark mode",
-                ):
-                    on_theme()
-                    st.rerun()
+                    on_click=_on_topbar_theme,
+                )
             else:
                 st.markdown(
                     '<div class="ds-chip-btn" style="text-align:center;opacity:0.5;">☾ Theme</div>',
