@@ -29,6 +29,38 @@ except ImportError:  # pragma: no cover — module is streamlit-specific
 from .design_system import ACCENTS, family_of
 
 
+# ── Single source of truth for user level ─────────────────────────────
+# C1 fix (2026-04-28): every page must read the level via this helper so
+# the Beginner/Intermediate/Advanced toggle is observed consistently.
+# Reads st.session_state["user_level"] each call — never cache the result
+# at module top, or the toggle will appear inert until the next full reload.
+
+_VALID_LEVELS = ("beginner", "intermediate", "advanced")
+_DEFAULT_LEVEL = "beginner"
+
+
+def current_user_level() -> str:
+    """Return the active user level from session state.
+
+    Always returns one of `_VALID_LEVELS`; falls back to "beginner" if
+    state is missing or corrupted. Use this at the start of every page
+    section instead of reading session_state directly so the toggle's
+    effect is visible app-wide on the very next render.
+    """
+    if st is None:
+        return _DEFAULT_LEVEL
+    val = st.session_state.get("user_level", _DEFAULT_LEVEL)
+    if val not in _VALID_LEVELS:
+        return _DEFAULT_LEVEL
+    return val
+
+
+def level_label(level: str | None = None) -> str:
+    """Capitalised label for display, e.g. "Beginner"."""
+    lv = (level or current_user_level()).lower()
+    return lv.capitalize() if lv in _VALID_LEVELS else "Beginner"
+
+
 # ── Navigation model ──────────────────────────────────────────────────
 
 NavItem = tuple[str, str, str]  # (key, label, icon)
@@ -300,12 +332,17 @@ def page_header(
     subtitle: str = "",
     *,
     data_sources: Iterable[tuple[str, str]] | None = None,
+    show_level: bool = True,
 ) -> None:
     """
     Render the page-hd block seen on every mockup: title + subtitle on the
     left, data-source pills on the right.
 
     data_sources: iterable of (label, status). status ∈ {live, cached, down}.
+    show_level: when True (default), prepends a "View: <Level>" pill to the
+        right-hand pill row so the topbar Beginner/Intermediate/Advanced
+        toggle has a guaranteed visible effect on every page (C1 fix,
+        2026-04-28).
     """
     if st is None:
         return
@@ -314,8 +351,28 @@ def page_header(
     # in depth: even if today's callers only pass static literals, a
     # later change that pipes API/DB-derived data through page_header
     # must not become a stored-XSS surface.
+    pills: list[str] = []
+
+    if show_level:
+        lv = current_user_level()
+        # Tone the pill differently per level so the change is visually
+        # obvious even with the title/subtitle unchanged.
+        lv_cls = {
+            "beginner":     "ds-pill",
+            "intermediate": "ds-pill warn",
+            "advanced":     "ds-pill",
+        }.get(lv, "ds-pill")
+        # Use a distinctive style attribute on the advanced pill to make
+        # the three levels visually distinct without relying on color alone.
+        lv_lbl = level_label(lv)
+        pills.append(
+            f'<span class="{lv_cls}" data-level="{lv}" '
+            f'title="Active view level — set via the topbar toggle">'
+            f'<span class="tick"></span> View · {_html.escape(lv_lbl)}'
+            f'</span>'
+        )
+
     if data_sources:
-        pills = []
         for label, status in data_sources:
             cls = "ds-pill"
             if status == "cached":
@@ -326,9 +383,8 @@ def page_header(
                 f'<span class="{cls}"><span class="tick"></span> '
                 f'{_html.escape(str(label))} · {_html.escape(str(status))}</span>'
             )
-        pills_html = f'<div class="ds-row">{"".join(pills)}</div>'
-    else:
-        pills_html = ""
+
+    pills_html = f'<div class="ds-row">{"".join(pills)}</div>' if pills else ""
 
     sub_html = (
         f'<div class="ds-page-sub">{_html.escape(str(subtitle))}</div>'
