@@ -22,18 +22,23 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
       # P1 audit fix — was `|| true`; HIGH/CRITICAL CVEs now gate merges.
+      # NOTE: pip-audit's flag is `--format` (or `-f`), NOT
+      # `--output-format`. Earlier revisions of this file used the
+      # wrong flag name; pip-audit then parsed the format value
+      # ("columns") as a positional project_path, which conflicts
+      # with -r/--requirement and crashed before any scan ran. Fixed.
       - name: Run pip-audit
         run: |
           pip-audit -r requirements.txt \
             --ignore-vuln PYSEC-2022-42974 \
-            --output-format columns \
+            --format columns \
             --progress-spinner off
       # Artifact upload runs even on failure so the report is always
       # available for triage. The `|| true` here is intentional: the
       # report write must not gate the workflow.
       - name: Upload audit report
         if: always()
-        run: pip-audit -r requirements.txt --output-format json > pip-audit-report.json 2>/dev/null || true
+        run: pip-audit -r requirements.txt --format json > pip-audit-report.json 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
