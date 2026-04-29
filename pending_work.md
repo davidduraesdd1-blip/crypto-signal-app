@@ -79,13 +79,15 @@ Full sprint outcome documented in:
 
 ### Standing items (per CLAUDE.md mandates)
 
-- [~] Backfill known-correct fixtures for the 22 indicators in
-  `crypto_model_core.py` (§22 mandate). → 8 of 22 done in commit
-  f9ea3c1 (RSI/MACD/BB/ATR/ADX/SuperTrend/Stochastic/Ichimoku).
-  Remaining 14: Hurst, Squeeze Momentum, Chandelier Exit, CVD
-  divergence, Gaussian Channel, S/R pivots, MACD divergence,
-  RSI divergence, candlestick patterns, Wyckoff phase,
-  cointegration z-score, HMM regime, anchored VWAP, Fibonacci.
+- [x] Backfill known-correct fixtures for the 22 indicators in
+  `crypto_model_core.py` (§22 mandate). **COMPLETE** (22/22):
+  - Phase 1 (commit f9ea3c1): RSI, MACD, Bollinger, ATR, ADX,
+    SuperTrend, Stochastic, Ichimoku
+  - Phase 2 (commits ad880f9 + cb79904 + f12fc3a): Hurst, Squeeze
+    Momentum, Chandelier Exit, CVD divergence, Gaussian Channel,
+    S/R pivots, MACD divergence, RSI divergence, candlestick patterns,
+    Wyckoff phase, HMM regime, cointegration z-score, anchored VWAP,
+    Fibonacci.
 - [x] Save backtest regression baseline for
   `composite_signal.compute_composite_signal` to
   `docs/signal-regression/` (§4 mandate). → commit 4ba4c0a
