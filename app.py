@@ -4258,7 +4258,12 @@ def page_dashboard():
         st.markdown("---")
         _ui.risk_disclaimer_banner()
         if not _exec_status.get("ccxt_available", False):
-            st.caption("ccxt not installed — run: pip install ccxt")
+            # P2 audit fix — was leaking a developer instruction
+            # ("run: pip install ccxt") to end users. Replaced with a
+            # plain-English status note per CLAUDE.md §8 error-message
+            # rules (no Python tracebacks / no dev commands shown to
+            # end users).
+            st.caption("Live trading is unavailable in this environment.")
         else:
             _mode_label = "🔴 LIVE" if _exec_cfg.get("live_trading", False) else "📄 Paper"
             _cur_price  = (_ws.get_price(pair) or {}).get("price") or price
@@ -5388,8 +5393,13 @@ def page_config():
                     with st.spinner("Running Bayesian weight recalibration...", show_time=True):
                         _new_bw = _db.bayesian_recalibrate_weights(prior_strength=10.0)
                         st.session_state["bayesian_new_weights"] = _new_bw
-                        st.success(f"Weights recalibrated. Reload app to apply.")
+                        # P2 audit fix — was telling users to manually
+                        # reload the app. st.rerun() applies the new
+                        # weights immediately without breaking session
+                        # state (it's a soft re-execute, not a full reload).
+                        st.success("Weights recalibrated — applying now…")
                         _bay_detail = _db.get_bayesian_weights_detail()
+                        st.rerun()
             with _bay_c2:
                 _cur_bw = st.session_state.get("bayesian_new_weights", {})
                 if not _bay_detail and not _cur_bw:
@@ -8183,7 +8193,11 @@ def page_arbitrage():
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Pairs Scanned",    len(spot))
-        m2.metric("Opportunities",    len(opp_rows), delta=f"+{len(opp_rows)}" if opp_rows else None)
+        # P2 audit fix — was `delta=f"+{len(opp_rows)}"` which is just
+        # the count of itself; rendered a green up-arrow that didn't
+        # convey any information. Removed the delta (single-value
+        # metric is cleaner).
+        m2.metric("Opportunities",    len(opp_rows))
         m3.metric("Marginal",         len(mar_rows))
         m4.metric("No Arb",           len(no_rows))
 
