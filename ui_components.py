@@ -910,7 +910,12 @@ def render_quick_access_row() -> None:
             _recent = _sg_recent_alerts()
             if _recent:
                 for _a in _recent:
-                    st.markdown(f"• {_a.get('timestamp','—')[:16]} — {_a.get('message','—')[:60]}")
+                    # P1-34/P1-35: alert message is from JSONL — could contain
+                    # markdown control chars or HTML. Use st.text to render
+                    # untrusted content as plain text (no HTML / markdown parse).
+                    _ts  = str(_a.get("timestamp", "—"))[:16]
+                    _msg = str(_a.get("message",   "—"))[:60]
+                    st.text(f"• {_ts} — {_msg}")
             else:
                 st.caption("No alerts yet — configure in Settings.")
     with _scans:
@@ -3891,13 +3896,18 @@ def render_ttm_squeeze_panel(sparkline_data: dict, results: list,
     for _ci, _sp in enumerate(squeeze_pairs[:8]):
         _col    = "#f59e0b" if _sp["state"] == "COMPRESSION" else "#ef4444"
         _dir_cl = "var(--success)" if "BUY" in _sp["direction"] else "var(--danger)" if "SELL" in _sp["direction"] else "var(--text-secondary)"
+        # P1-34/P1-35: pair/state/direction trace back to scan results
+        # (exchange-supplied symbols + model output strings) — escape before HTML.
+        _pair_safe  = _esc(str(_sp["pair"]).replace("/USDT", ""))
+        _state_safe = _esc(str(_sp["state"]))
+        _dir_safe   = _esc(str(_sp["direction"]))
         with _cols[_ci % 4]:
             _st.markdown(
                 f"<div style='background:rgba(0,0,0,0.25);border:1px solid {_col}44;"
                 f"border-top:2px solid {_col};border-radius:8px;padding:10px 12px;margin-bottom:8px'>"
-                f"<div style='font-size:12px;color:var(--text-secondary)'>{_sp['pair'].replace('/USDT','')}</div>"
-                f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_sp['state']}</div>"
-                f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_sp['direction']}</div>"
+                f"<div style='font-size:12px;color:var(--text-secondary)'>{_pair_safe}</div>"
+                f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_state_safe}</div>"
+                f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_dir_safe}</div>"
                 f"<div style='font-size:var(--fs-xs);color:var(--text-muted);margin-top:2px'>"
                 f"BB width: {_sp['bb_width_pct']:.2f}% · Mom: {_sp['momentum']:+.1f}%</div>"
                 f"</div>",
@@ -4035,14 +4045,22 @@ def render_rsi_macd_divergence_panel(results: list, user_level: str = "beginner"
         _is_bull = _da["type"] == "BULLISH"
         _col     = "var(--success)" if _is_bull else "var(--danger)"
         _icon    = "▲" if _is_bull else "▼"
+        # P1-34/P1-35: escape model-output strings (timeframes dict values
+        # may contain free-form text from data feed adapters).
+        _type_safe = _esc(str(_da["type"]))
+        _pair_safe = _esc(str(_da["pair"]).replace("/USDT", ""))
+        _tf_safe   = _esc(str(_da["tf"]))
+        _rsi_safe  = _esc(str(_da["rsi"]))
+        _dir_safe  = _esc(str(_da["direction"]))
+        _div_safe  = _esc(str(_da["macd_div"]))
         _st.markdown(
             f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_col};"
             f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
-            f"<b style='color:{_col}'>{_icon} {_da['type']} DIVERGENCE</b> · "
-            f"<b>{_da['pair'].replace('/USDT','')}</b> · {_da['tf']} · "
-            f"RSI: <b>{_da['rsi']}</b> · "
-            f"Model signal: <span style='color:var(--text-secondary)'>{_da['direction']}</span><br>"
-            f"<span style='font-size:11px;color:var(--text-muted)'>{_da['macd_div']}</span>"
+            f"<b style='color:{_col}'>{_icon} {_type_safe} DIVERGENCE</b> · "
+            f"<b>{_pair_safe}</b> · {_tf_safe} · "
+            f"RSI: <b>{_rsi_safe}</b> · "
+            f"Model signal: <span style='color:var(--text-secondary)'>{_dir_safe}</span><br>"
+            f"<span style='font-size:11px;color:var(--text-muted)'>{_div_safe}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -4112,14 +4130,19 @@ def render_funding_rate_arb_panel(results: list, user_level: str = "beginner") -
 
     for _fa in _fr_alerts[:8]:
         _badge_col = "var(--danger)" if _fa["fr_pct"] > 0.15 else "var(--warning)" if _fa["fr_pct"] > 0.05 else "var(--success)"
+        # P1-34/P1-35: escape pair, arb_type, arb_action (fr_raw not rendered
+        # here, but we escape anyway since exchange feeds can include junk).
+        _pair_safe   = _esc(str(_fa["pair"]).replace("/USDT", ""))
+        _atype_safe  = _esc(str(_fa["arb_type"]))
+        _action_safe = _esc(str(_fa["arb_action"]))
         _st.markdown(
             f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_fa['arb_color']};"
             f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
-            f"<b>{_fa['pair'].replace('/USDT','')}</b> · "
+            f"<b>{_pair_safe}</b> · "
             f"<span style='color:{_badge_col}'><b>{_fa['fr_pct']:+.4f}%</b></span> · "
-            f"<span style='color:{_fa['arb_color']}'>{_fa['arb_type']}</span><br>"
+            f"<span style='color:{_fa['arb_color']}'>{_atype_safe}</span><br>"
             f"<span style='font-size:11px;color:var(--text-secondary)'>"
-            f"Arb: {_fa['arb_action']}</span>"
+            f"Arb: {_action_safe}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -4409,13 +4432,19 @@ def render_threshold_alerts_panel(results: list, user_level: str = "beginner") -
     if _thr_alerts:
         for _ta in _thr_alerts[:10]:
             _dir_col = "var(--success)" if "BUY" in _ta["dir"] else "var(--danger)" if "SELL" in _ta["dir"] else "var(--text-secondary)"
+            # P1-34/P1-35: escape pair, dir, and joined fired-rule strings
+            # (fired list contains numeric values + threshold names — safe by
+            # construction internally, but escape defensively).
+            _pair_safe  = _esc(str(_ta["pair"]).replace("/USDT", ""))
+            _dir_safe   = _esc(str(_ta["dir"]))
+            _fired_safe = _esc("  ·  ".join(str(x) for x in _ta["fired"]))
             _st.markdown(
                 f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_dir_col};"
                 f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
-                f"<b style='color:{_dir_col}'>🔔 {_ta['pair'].replace('/USDT','')}</b> · "
-                f"<span style='color:var(--text-secondary)'>{_ta['dir']} · {_ta['conf']:.0f}% confidence</span><br>"
+                f"<b style='color:{_dir_col}'>🔔 {_pair_safe}</b> · "
+                f"<span style='color:var(--text-secondary)'>{_dir_safe} · {_ta['conf']:.0f}% confidence</span><br>"
                 f"<span style='font-size:11px;color:var(--text-secondary)'>"
-                f"{'  ·  '.join(_ta['fired'])}</span>"
+                f"{_fired_safe}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )

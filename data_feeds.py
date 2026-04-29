@@ -309,6 +309,10 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "fred.stlouisfed.org",                      # FRED CSV macro data
     # CLAUDE.md §10 — cryptorank.io PRIMARY for token unlocks + VC fundraising
     "api.cryptorank.io",                        # Cryptorank token unlocks + VC funds
+    # CLAUDE.md §10 (P1 audit item 28) — Dune Analytics SECONDARY for on-chain
+    # BTC/ETH metrics (Glassnode primary). Free tier exists but most queries
+    # require an API key — helper returns None gracefully when missing.
+    "api.dune.com",                             # Dune Analytics query results
 })
 
 
@@ -2761,6 +2765,168 @@ def fetch_vc_funding_signal() -> dict:
         "source": source,
         "_ts": now,
     }
+
+
+# ──────────────────────────────────────────────
+# DUNE ANALYTICS — SECONDARY on-chain BTC/ETH metrics (P1 audit item 28)
+# Per CLAUDE.md §10:
+#   • On-chain BTC/ETH PRIMARY = Glassnode (free tier, rate-limited)
+#   • On-chain BTC/ETH SECONDARY = Dune Analytics free queries (this block)
+# Most Dune queries require an API key (free tier provides one). Without a
+# key the helper gracefully returns None so the caller can stay on its
+# primary or move to the tertiary native-RPC fallback.
+# Cache TTL aligned with §12 on-chain refresh window (1h).
+# ──────────────────────────────────────────────
+
+_DUNE_BASE = "https://api.dune.com"
+_DUNE_RESULTS_TTL = 3600              # 1h — §12 on-chain refresh
+_DUNE_RESULTS_CACHE: dict = {}
+_DUNE_RESULTS_LOCK = threading.Lock()
+
+
+def fetch_dune_query_result(query_id: int) -> dict | None:
+    """Fetch the latest result row for a published Dune Analytics query.
+
+    SECONDARY on-chain data source per CLAUDE.md §10. Free tier requires
+    a personal API key (set DUNE_API_KEY) for most queries. Without a key
+    this helper returns ``None`` gracefully so callers fall back to
+    Glassnode primary or to the tertiary native-RPC reads.
+
+    Args:
+        query_id: Numeric ID of the published Dune query (from the query URL,
+            e.g. https://dune.com/queries/12345 → query_id=12345).
+
+    Returns:
+        Schema:
+            {
+              "query_id": int,
+              "row": dict,                # latest result row (first in result set)
+              "rows": list[dict],         # full result set (capped to 50 rows)
+              "row_count": int,
+              "executed_at": str | None,  # ISO8601 timestamp from Dune metadata
+              "source": "dune",
+              "_ts": float (unix epoch),
+            }
+
+        ``None`` on:
+          - missing/empty query_id
+          - missing DUNE_API_KEY (most queries 401 without it)
+          - 401 / 403 / 404 / 429 / 5xx from Dune
+          - network / parse error
+          - empty result set
+    """
+    try:
+        qid = int(query_id)
+    except (TypeError, ValueError):
+        return None
+    if qid <= 0:
+        return None
+
+    cache_key = f"qid:{qid}"
+    now = time.time()
+    with _DUNE_RESULTS_LOCK:
+        cached = _DUNE_RESULTS_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _DUNE_RESULTS_TTL:
+            return cached
+
+    api_key = _get_runtime_key("dune_key", "")
+    if not api_key:
+        # Free-tier Dune requires a key for query result reads. Log at debug
+        # level only — this is the expected default state for users without
+        # a Dune account.
+        logging.debug("dune: no API key configured (DUNE_API_KEY) — skipping qid=%s", qid)
+        return None
+
+    url = f"{_DUNE_BASE}/api/v1/query/{qid}/results"
+    if not _ssrf_check(url):
+        return None
+
+    headers = {"X-Dune-API-Key": api_key, "Accept": "application/json"}
+
+    try:
+        resp = _SESSION.get(url, headers=headers, timeout=10)
+    except Exception as e:
+        logging.debug("dune query result fetch failed for qid=%s: %s", qid, e)
+        return None
+
+    if resp.status_code in (401, 403, 404, 429):
+        logging.debug("dune unavailable (%s) for qid=%s", resp.status_code, qid)
+        return None
+    if resp.status_code != 200:
+        return None
+
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return None
+
+    # Dune's response shape: {"execution_id": ..., "state": ..., "result":
+    # {"rows": [...], "metadata": {...}}, "execution_ended_at": "..."}
+    if not isinstance(payload, dict):
+        return None
+
+    result_block = payload.get("result")
+    if not isinstance(result_block, dict):
+        return None
+
+    raw_rows = result_block.get("rows")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return None
+
+    rows: list[dict] = [r for r in raw_rows[:50] if isinstance(r, dict)]
+    if not rows:
+        return None
+
+    executed_at = (
+        payload.get("execution_ended_at")
+        or payload.get("submitted_at")
+        or None
+    )
+
+    result = {
+        "query_id": qid,
+        "row": rows[0],
+        "rows": rows,
+        "row_count": len(rows),
+        "executed_at": str(executed_at) if executed_at else None,
+        "source": "dune",
+        "_ts": now,
+    }
+    with _DUNE_RESULTS_LOCK:
+        _DUNE_RESULTS_CACHE[cache_key] = result
+    return result
+
+
+# ── Google Trends — pytrends wrapper (P1-29) ────────────────────────────
+# CLAUDE.md §10 lists pytrends as the PRIMARY Google Trends sentiment
+# source. The actual fetcher lives in `cycle_indicators.fetch_google_trends_signal`
+# (built earlier as part of the cycle-indicator stack). This thin
+# wrapper makes the signal discoverable from data_feeds.py and matches
+# the architectural location §10 calls out, without duplicating the
+# pytrends import / TTL plumbing. Returns the same dict shape as the
+# upstream helper (or None if pytrends is rate-limited / missing).
+
+def fetch_google_trends_score(keyword: str = "bitcoin",
+                              timeframe: str = "now 7-d") -> "dict | None":
+    """Layer 3 sentiment — Google Trends spike via pytrends.
+
+    Delegates to `cycle_indicators.fetch_google_trends_signal()` which
+    already implements the proper pytrends call with 24h TTL + graceful
+    fallback. Wrapper kept here so callers grepping data_feeds.py for
+    the §10 source list find it. The `timeframe` arg is ignored by the
+    upstream helper but accepted for API compatibility with future
+    multi-window extensions.
+    """
+    try:
+        from cycle_indicators import fetch_google_trends_signal as _fts
+    except ImportError:
+        return None
+    try:
+        return _fts(keyword)
+    except Exception as _e:
+        logging.debug("[Trends] fetch_google_trends_score failed for %s: %s",
+                      keyword, _e)
+        return None
 
 
 # ──────────────────────────────────────────────
@@ -7560,6 +7726,9 @@ def _get_runtime_key(key_name: str, default: str = "") -> str:
         # token unlocks (replaces Tokenomist as primary) and VC fundraising
         # (Layer 3 sentiment input).
         "cryptorank_key":    "CRYPTORANK_API_KEY",
+        # CLAUDE.md §10 (P1 audit item 28) — Dune Analytics SECONDARY for
+        # on-chain BTC/ETH metrics (most queries require a key on free tier).
+        "dune_key":          "DUNE_API_KEY",
     }
     try:
         import streamlit as st
