@@ -1,6 +1,11 @@
 """
-pdf_export.py — PDF report generation for Crypto Signal Model v5.9.13
+pdf_export.py — PDF report generation for the Crypto Signal Model.
 Uses reportlab to build scan and backtest PDF reports.
+
+P2 audit fix — version string was hardcoded "v5.9.13" in 4 places
+(module docstring + 3 PDF headers/footers), drifting silently every
+release. Now imported from `crypto_model_core.VERSION` once at
+module-load and substituted into the PDF templates.
 """
 
 import io
@@ -8,6 +13,12 @@ import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth for the version string in PDF headers / footers.
+try:
+    from crypto_model_core import VERSION as _MODEL_VERSION
+except Exception:
+    _MODEL_VERSION = "v5.9.13"  # last-known-good fallback
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -114,7 +125,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
 
     # ── Title ──
     ts = scan_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    story.append(Paragraph("Crypto Signal Model v5.9.13 — Scan Report", styles["title"]))
+    story.append(Paragraph(f"Crypto Signal Model {_MODEL_VERSION} — Scan Report", styles["title"]))
     story.append(Paragraph(f"Generated: {ts}  |  Pairs scanned: {len(results)}", styles["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=10))
 
@@ -212,7 +223,7 @@ def generate_scan_pdf(results: list, scan_timestamp: str = None) -> bytes:
     story.append(HRFlowable(width="100%", thickness=0.5, color=GREY))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
-        "Crypto Signal Model v5.9.13 — For informational purposes only. Not financial advice.",
+        f"Crypto Signal Model {_MODEL_VERSION} — For informational purposes only. Not financial advice.",
         styles["footer"]
     ))
 
@@ -236,7 +247,7 @@ def generate_backtest_pdf(metrics: dict, trades_df, scan_timestamp: str = None) 
     story = []
 
     ts = scan_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    story.append(Paragraph("Crypto Signal Model v5.9.13 — Backtest Report", styles["title"]))
+    story.append(Paragraph(f"Crypto Signal Model {_MODEL_VERSION} — Backtest Report", styles["title"]))
     story.append(Paragraph(f"Generated: {ts}", styles["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=10))
 
@@ -327,7 +338,7 @@ def generate_backtest_pdf(metrics: dict, trades_df, scan_timestamp: str = None) 
     story.append(HRFlowable(width="100%", thickness=0.5, color=GREY))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
-        "Crypto Signal Model v5.9.13 — For informational purposes only. Not financial advice.",
+        f"Crypto Signal Model {_MODEL_VERSION} — For informational purposes only. Not financial advice.",
         styles["footer"]
     ))
 

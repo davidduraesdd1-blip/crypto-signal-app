@@ -195,10 +195,22 @@ def glossary_popover(user_level: str = "beginner") -> None:
     """Render a sidebar 'Crypto Glossary' popover button with 30 terms.
 
     Explanation depth scales with user_level.
+
+    P2 audit fix — st.popover is Streamlit ≥1.31 only. On older versions
+    (or any environment that strips the attribute), fall back to a plain
+    expander so the glossary still renders rather than crashing the
+    sidebar.
     """
     label_depth = {"beginner": "Plain English", "intermediate": "Key Metrics", "advanced": "Technical Detail"}
     depth_name = label_depth.get(user_level, "Plain English")
-    with st.popover(f"📖 Glossary — 30 terms ({depth_name})"):
+    label = f"📖 Glossary — 30 terms ({depth_name})"
+
+    if hasattr(st, "popover"):
+        _container_cm = st.popover(label)
+    else:
+        _container_cm = st.expander(label, expanded=False)
+
+    with _container_cm:
         st.markdown("### Crypto & DeFi Glossary")
         st.caption(f"Showing explanations at **{user_level}** level. Change your level in the sidebar to see deeper explanations.")
         for term, depths in GLOSSARY.items():
