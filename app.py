@@ -390,6 +390,25 @@ def _cached_news_sentiment(pair: str) -> dict:
     return _news_mod.get_news_sentiment(pair)
 
 
+@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=24)
+def _cached_google_trends_score(keyword: str) -> dict:
+    """Streamlit-level cache for Google Trends — 24 hr TTL.
+
+    H4 fix (2026-04-28): the Sentiment indicator card on detail pages
+    showed "—" for Google Trends because the result it pulled from
+    `_result.get("google_trends_score")` was None whenever the page
+    loaded without a fresh scan in session_state. This wrapper lets
+    the card fall back to a direct (cached) trends fetch when no scan
+    result is available. pytrends is rate-limited and slow, so a 24h
+    TTL is plenty — sentiment doesn't move that fast.
+    """
+    try:
+        return data_feeds.fetch_google_trends_score(keyword) or {}
+    except Exception as _e:
+        logger.debug("[App] cached trends fetch %s failed: %s", keyword, _e)
+        return {}
+
+
 @st.cache_data(ttl=300, show_spinner=False, max_entries=24)
 def _cached_whale_activity(pair: str, price: float) -> dict:
     """Cache whale tracker HTTP calls — 5 min TTL."""
@@ -1009,7 +1028,7 @@ def _refresh_all_data() -> None:
             _cached_backtest_df, _cached_scan_results, _cached_execution_log_df,
             _cached_agent_log_df, _cached_api_health, _cached_arb_opportunities_df,
             _cached_resolved_feedback_df, _cached_alerts_config, _cached_news_sentiment,
-            _cached_whale_activity,
+            _cached_whale_activity, _cached_google_trends_score,
         ]:
             try:
                 _fn.clear()
@@ -8926,24 +8945,31 @@ def page_signals():
     _chg_1y = None
     _closes_90d = []
     try:
-        _ex = model.get_exchange_instance(model.TA_EXCHANGE)
-        if _ex:
-            # P1-25 audit fix — was uncached OHLCV fetch on every Signals
-            # render. §12 says 5min cache for intraday OHLCV.
-            _ex_id = getattr(_ex, "id", str(model.TA_EXCHANGE))
-            _ohlcv_d = _sg_cached_ohlcv(_ex_id, _pair, "1d", limit=400)
-            if _ohlcv_d:
-                _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
-                if _closes_d:
-                    if _price is None:
-                        _price = _closes_d[-1]
-                    if len(_closes_d) >= 30 and _closes_d[-30]:
-                        _chg_30d = (_closes_d[-1] - _closes_d[-30]) / _closes_d[-30] * 100.0
-                    if len(_closes_d) >= 365 and _closes_d[-365]:
-                        _chg_1y = (_closes_d[-1] - _closes_d[-365]) / _closes_d[-365] * 100.0
-                    elif len(_closes_d) >= 2:
-                        _chg_1y = (_closes_d[-1] - _closes_d[0]) / _closes_d[0] * 100.0
-                    _closes_90d = _closes_d[-90:]
+        # H3 fix (2026-04-28): the previous shape `if _ex: <fetch>` gated
+        # the entire OHLCV fetch on `model.get_exchange_instance(...)`
+        # returning a non-None object. When the primary TA exchange was
+        # unreachable (OKX rate-limit, datacenter-IP block, etc.), _ex
+        # was None and no fetch was attempted at all — the user saw
+        # "Price history unavailable" with no fallback. We now pass the
+        # configured exchange ID directly to `_sg_cached_ohlcv` (which
+        # wraps `model.robust_fetch_ohlcv` and handles the §10 fallback
+        # chain internally: OKX → Kraken → CoinGecko). The instance
+        # object is no longer required.
+        _ex_id = str(getattr(model.get_exchange_instance(model.TA_EXCHANGE), "id", "")
+                     or model.TA_EXCHANGE or "okx")
+        _ohlcv_d = _sg_cached_ohlcv(_ex_id, _pair, "1d", limit=400)
+        if _ohlcv_d:
+            _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
+            if _closes_d:
+                if _price is None:
+                    _price = _closes_d[-1]
+                if len(_closes_d) >= 30 and _closes_d[-30]:
+                    _chg_30d = (_closes_d[-1] - _closes_d[-30]) / _closes_d[-30] * 100.0
+                if len(_closes_d) >= 365 and _closes_d[-365]:
+                    _chg_1y = (_closes_d[-1] - _closes_d[-365]) / _closes_d[-365] * 100.0
+                elif len(_closes_d) >= 2:
+                    _chg_1y = (_closes_d[-1] - _closes_d[0]) / _closes_d[0] * 100.0
+                _closes_90d = _closes_d[-90:]
     except Exception as _e_ohlcv:
         logger.debug("[Signals] OHLCV fetch for %s failed: %s", _pair, _e_ohlcv)
 
@@ -9168,6 +9194,23 @@ def page_signals():
             pass
         _trends = _result.get("google_trends_score") or _result.get("trends_score")
         _news = _result.get("news_sentiment_score") or _result.get("news_sent")
+        # H4 fix (2026-04-28): when the latest scan didn't populate
+        # sentiment scores (no scan run yet, or the field was dropped
+        # during the redesign port), fall back to the direct cached
+        # fetchers so the Sentiment card isn't all dashes on first load.
+        if _trends is None:
+            try:
+                _kw = (str(_coin or "bitcoin")).lower()
+                _gt = _cached_google_trends_score(_kw)
+                _trends = (_gt or {}).get("score")
+            except Exception as _e_gt:
+                logger.debug("[Signals] trends fallback failed: %s", _e_gt)
+        if _news is None:
+            try:
+                _ns = _cached_news_sentiment(_pair)
+                _news = (_ns or {}).get("score") or (_ns or {}).get("sentiment_score")
+            except Exception as _e_ns:
+                logger.debug("[Signals] news fallback failed: %s", _e_ns)
         _ds_ind_card(
             "Sentiment",
             [
@@ -9523,7 +9566,14 @@ def page_onchain():
         ],
     )
 
-    # Pull on-chain data per coin from the latest scan result (or DB fallback).
+    # Pull on-chain data per coin from the latest scan result (or DB fallback,
+    # or — C4 fix, 2026-04-28 — a direct on-chain fetch as last resort so the
+    # page is never empty when the user lands on it without having run a scan
+    # first). The redesigned indicator cards expect mvrv_z/sopr/
+    # exchange_reserve_delta_7d/active_addresses_24h, but data_feeds.
+    # get_onchain_metrics returns mvrv_z/sopr/net_flow/vol_mcap_ratio. We
+    # adapt the field names here so the cards populate correctly without
+    # touching the fetcher (proven healthy by §22 fixtures + §4 baseline).
     def _result_for(ticker: str) -> dict:
         for _r in (st.session_state.get("scan_results") or []):
             _p = str(_r.get("pair") or _r.get("symbol") or "").upper()
@@ -9538,6 +9588,32 @@ def page_onchain():
                     return _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
         except Exception as _e:
             logger.debug("[On-chain] DB lookup for %s failed: %s", ticker, _e)
+        # Direct on-chain fetch fallback — keeps the page from being
+        # data-less on first load. get_onchain_metrics is cached
+        # (_ONCHAIN_TTL in data_feeds), so repeated page renders won't
+        # hammer the upstream APIs.
+        try:
+            _pair = f"{ticker}/USDT"
+            _oc = data_feeds.get_onchain_metrics(_pair) or {}
+            if _oc:
+                # Field-name adapter — map fetcher output → card expectations.
+                return {
+                    "pair": _pair,
+                    "mvrv_z": _oc.get("mvrv_z"),
+                    "mvrv": _oc.get("mvrv_z"),  # legacy alias used by some cards
+                    "sopr": _oc.get("sopr"),
+                    # Approximate exchange_reserve_delta_7d from net_flow.
+                    # get_onchain_metrics returns net_flow as a ±400-scaled
+                    # proxy; we surface it directly. The card displays
+                    # outflow/inflow tone correctly off the sign alone.
+                    "exchange_reserve_delta_7d": _oc.get("net_flow"),
+                    # Active addresses isn't in the free Binance ticker —
+                    # leave None so the card renders the "—" graceful empty.
+                    "active_addresses_24h": None,
+                    "_source": _oc.get("source", "fallback"),
+                }
+        except Exception as _e_oc:
+            logger.debug("[On-chain] direct fetch for %s failed: %s", ticker, _e_oc)
         return {}
 
     def _v(x, fmt="{:.2f}"):
