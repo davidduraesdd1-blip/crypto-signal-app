@@ -175,8 +175,21 @@ def render_sidebar(
     if "nav_key" not in st.session_state:
         st.session_state["nav_key"] = active
 
-    # Render each group header + items. Use st.button for nav items so
-    # Streamlit reruns on click; visual look comes from overrides.py.
+    # Render each group header + items.
+    #
+    # H5 fix (2026-04-28): nav buttons use the `on_click=` callback
+    # pattern instead of `if st.sidebar.button(...): write_state();
+    # st.rerun()`. With the inline pattern, the marker `<div>` rendered
+    # *above* the button captured `is_active` from the OLD session_state
+    # (because the click handler runs only AFTER the markdown emits),
+    # so the highlight only appeared on the second render. Callbacks
+    # run *before* the script body re-runs, so by the time the marker
+    # emits, `nav_key` is already updated and the active class is
+    # correct on the very first click.
+    def _select_nav(key: str) -> None:
+        st.session_state["nav_key"] = key
+        st.session_state["_nav_target"] = PAGE_KEY_TO_APP.get(key, "Dashboard")
+
     for group, items in DEFAULT_NAV.items():
         st.sidebar.markdown(
             f'<div class="ds-nav-group">{group}</div>',
@@ -197,15 +210,14 @@ def render_sidebar(
                 f'</div>',
                 unsafe_allow_html=True,
             )
-            if st.sidebar.button(
+            st.sidebar.button(
                 lbl,
                 key=f"ds_nav_{k}",
                 use_container_width=True,
                 type=("primary" if is_active else "secondary"),
-            ):
-                st.session_state["nav_key"] = k
-                st.session_state["_nav_target"] = PAGE_KEY_TO_APP.get(k, "Dashboard")
-                st.rerun()
+                on_click=_select_nav,
+                args=(k,),
+            )
 
     return st.session_state.get("nav_key", active)
 
