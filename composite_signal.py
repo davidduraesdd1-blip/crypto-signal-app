@@ -584,10 +584,12 @@ def score_sentiment_layer(
     fg_30d_avg: float | None = None,
     vix: float | None = None,
     btc_funding_rate_pct: float | None = None,
+    vc_funding_score: float | None = None,
 ) -> dict[str, Any]:
     """
     Compute Layer 2 sentiment score.
-    Sub-weights: F&G level=0.45, F&G trend=0.10, put/call=0.30, funding rate=0.15.
+    Sub-weights: F&G level=0.40, F&G trend=0.10, put/call=0.25, funding rate=0.15,
+                 VC fundraising=0.10. (Total = 1.00.)
     SOPR reclassified to On-Chain layer (it is 100% on-chain UTXO data, not sentiment survey).
 
     C1 — VIX≥40 gate on put/call (SuperGrok only):
@@ -601,20 +603,32 @@ def score_sentiment_layer(
     Issue #6 — BTC perpetual funding rate added as 4th sentiment dimension.
     Positive funding = overlong crowding (bearish). Negative = short squeeze risk (bullish).
     Research: Cong et al. (2021); Deribit perpetual data 2019-2024.
+
+    P1-26/27 (2026-04-28) — VC fundraising score added as 5th sentiment
+    dimension. Cryptorank fundraising data over a 30d window mapped to a
+    [-1, +1] score by `data_feeds.fetch_vc_funding_signal()`. Sustained
+    elevated VC capital deployment historically precedes 6-12 month
+    momentum legs (Crunchbase / Pitchbook 2017-2023). Light weight (0.10)
+    matches the lower signal-to-noise of fundraising data vs price-derived
+    sentiment.
     """
     s_fg  = _score_fear_greed(fg_value)
     s_fgt = _score_fg_trend(fg_value, fg_30d_avg)
     s_pc  = _score_put_call(put_call_ratio)
     s_fr  = _score_funding_rate(btc_funding_rate_pct)   # Issue #6
+    s_vc  = vc_funding_score if vc_funding_score is None else _clamp(float(vc_funding_score))
 
     # C1 gate: panic VIX → neutralise put/call (mechanical hedging, not signal)
     vix_panic = vix is not None and vix >= 40
     if vix_panic:
         s_pc = 0.0
 
-    # Rebalanced to accommodate funding rate (total = 1.00)
-    _SUB_W = {"fg": 0.45, "fgt": 0.10, "pc": 0.30, "fr": 0.15}
-    _pairs  = [("fg", s_fg), ("fgt", s_fgt), ("pc", s_pc), ("fr", s_fr)]
+    # Rebalanced to accommodate VC funding (total = 1.00).
+    # F&G dropped 0.45→0.40, put/call 0.30→0.25 to make room for VC=0.10
+    # without shrinking the funding-rate weight (which is already a
+    # high-signal short-window dimension).
+    _SUB_W = {"fg": 0.40, "fgt": 0.10, "pc": 0.25, "fr": 0.15, "vc": 0.10}
+    _pairs  = [("fg", s_fg), ("fgt", s_fgt), ("pc", s_pc), ("fr", s_fr), ("vc", s_vc)]
     avail   = [(k, v) for k, v in _pairs if v is not None]
     if not avail:
         raw = 0.0
@@ -630,10 +644,11 @@ def score_sentiment_layer(
         "weight":     _W_SENTIMENT,
         "weighted":   round(layer * _W_SENTIMENT, 4),
         "components": {
-            "fear_greed":     {"value": fg_value,             "score": round(s_fg,  3) if s_fg  is not None else None, "sub_weight": 0.45},
+            "fear_greed":     {"value": fg_value,             "score": round(s_fg,  3) if s_fg  is not None else None, "sub_weight": 0.40},
             "fg_trend_30d":   {"value": fg_30d_avg,           "score": round(s_fgt, 3) if s_fgt is not None else None, "sub_weight": 0.10},
-            "put_call_ratio": {"value": put_call_ratio,       "score": round(s_pc,  3) if s_pc  is not None else None, "sub_weight": 0.30, "vix_gated": vix_panic},
+            "put_call_ratio": {"value": put_call_ratio,       "score": round(s_pc,  3) if s_pc  is not None else None, "sub_weight": 0.25, "vix_gated": vix_panic},
             "funding_rate":   {"value": btc_funding_rate_pct, "score": round(s_fr,  3) if s_fr  is not None else None, "sub_weight": 0.15},
+            "vc_funding":     {"value": vc_funding_score,     "score": round(s_vc,  3) if s_vc  is not None else None, "sub_weight": 0.10},
         },
     }
 
@@ -775,14 +790,23 @@ def score_onchain_layer(
     btc_price: float | None = None,
     realized_price: float | None = None,
     nvt: float | None = None,
+    dune_score: float | None = None,
 ) -> dict[str, Any]:
     """
     Compute Layer 3 on-chain score.
-    MVRV Z 0.35, Hash Ribbons 0.25, SOPR 0.20, Puell 0.08, Realized Price 0.07, NVT 0.05.
+    MVRV Z 0.30, Hash Ribbons 0.22, SOPR 0.18, Puell 0.08, Realized Price 0.07,
+    NVT 0.05, Dune custom 0.10. (Total = 1.00.)
     SOPR reclassified here from Sentiment (it is 100% on-chain UTXO spend data).
     A4: Realized Price added as on-chain support/resistance signal.
     A1: NVT Signal added (Willy Woo 2017; Kalichkin 2018).
     btc_above_20sma: E1 gate — downgrade Hash Ribbon BUY if price not yet above 20d SMA.
+
+    P1-28 (2026-04-28) — `dune_score` is a [-1, +1] aggregator output from
+    one or more Dune Analytics community queries (e.g., active addresses
+    delta, exchange reserve change, large-holder accumulation). Caller is
+    responsible for picking concrete query IDs and mapping their numeric
+    output into the score range. Returns None if no query is configured;
+    layer renormalises over the surviving sub-signals automatically.
     """
     s_mvrv  = _score_mvrv_z(mvrv_z)
     s_hash  = _score_hash_ribbon(hash_ribbon_signal, btc_above_20sma)
@@ -790,10 +814,16 @@ def score_onchain_layer(
     s_sopr  = _score_sopr(sopr)
     s_rp    = _score_realized_price(btc_price, realized_price)
     s_nvt   = _score_nvt(nvt)
+    s_dune  = _clamp(float(dune_score)) if dune_score is not None else None
 
-    _SUB_W  = {"mvrv": 0.35, "hash": 0.25, "sopr": 0.20, "puell": 0.08, "rp": 0.07, "nvt": 0.05}
-    _pairs  = [("mvrv", s_mvrv), ("hash", s_hash), ("sopr", s_sopr), ("puell", s_puell),
-               ("rp", s_rp), ("nvt", s_nvt)]
+    # P1-28: rebalanced sub-weights to accommodate Dune slot. MVRV-Z dropped
+    # 0.35→0.30, Hash 0.25→0.22, SOPR 0.20→0.18 — the high-signal three are
+    # all trimmed slightly. Puell/RP/NVT (already light) unchanged.
+    _SUB_W  = {"mvrv": 0.30, "hash": 0.22, "sopr": 0.18, "puell": 0.08,
+               "rp": 0.07, "nvt": 0.05, "dune": 0.10}
+    _pairs  = [("mvrv", s_mvrv), ("hash", s_hash), ("sopr", s_sopr),
+               ("puell", s_puell), ("rp", s_rp), ("nvt", s_nvt),
+               ("dune", s_dune)]
     _wsum   = sum(_SUB_W[k] for k, v in _pairs if v is not None)
     raw     = (
         sum((v or 0.0) * _SUB_W[k] for k, v in _pairs if v is not None) / _wsum
@@ -807,12 +837,13 @@ def score_onchain_layer(
         "weight":     _W_ONCHAIN,
         "weighted":   round(layer * _W_ONCHAIN, 4),
         "components": {
-            "mvrv_z":          {"value": mvrv_z,             "score": round(s_mvrv,  3) if s_mvrv  is not None else None, "sub_weight": 0.35},
-            "hash_ribbon":     {"value": hash_ribbon_signal, "score": round(s_hash,  3) if s_hash  is not None else None, "sub_weight": 0.25},
-            "sopr":            {"value": sopr,               "score": round(s_sopr,  3) if s_sopr  is not None else None, "sub_weight": 0.20},
+            "mvrv_z":          {"value": mvrv_z,             "score": round(s_mvrv,  3) if s_mvrv  is not None else None, "sub_weight": 0.30},
+            "hash_ribbon":     {"value": hash_ribbon_signal, "score": round(s_hash,  3) if s_hash  is not None else None, "sub_weight": 0.22},
+            "sopr":            {"value": sopr,               "score": round(s_sopr,  3) if s_sopr  is not None else None, "sub_weight": 0.18},
             "puell_multiple":  {"value": puell_multiple,     "score": round(s_puell, 3) if s_puell is not None else None, "sub_weight": 0.08},
             "realized_price":  {"value": realized_price,     "score": round(s_rp,    3) if s_rp    is not None else None, "sub_weight": 0.07, "btc_price": btc_price},
             "nvt_signal":      {"value": nvt,                "score": round(s_nvt,   3) if s_nvt   is not None else None, "sub_weight": 0.05},
+            "dune_custom":     {"value": dune_score,         "score": round(s_dune,  3) if s_dune  is not None else None, "sub_weight": 0.10},
         },
     }
 
@@ -914,9 +945,24 @@ def compute_composite_signal(
 
     try:
         vix_val = macro_data.get("vix") if macro_data else None
+        # P1-26/27 wiring — pull VC fundraising signal from data_feeds and
+        # pass into sentiment layer. Lazy import + try/except so a missing
+        # data_feeds, missing cryptorank key, or rate-limit just yields
+        # vc_funding_score=None and the layer renormalises over the
+        # remaining 4 sub-signals (sub_weight redistribution lives inside
+        # score_sentiment_layer's `total_w` rebalance).
+        vc_score = None
+        try:
+            from data_feeds import fetch_vc_funding_signal as _vc_fn
+            vc_payload = _vc_fn()
+            if isinstance(vc_payload, dict):
+                vc_score = vc_payload.get("score")
+        except Exception as _vc_e:
+            logger.debug("[CompositeSignal] VC funding fetch failed: %s", _vc_e)
         sentiment_layer = score_sentiment_layer(
             fg_value, put_call_ratio, fg_30d_avg,
             vix=vix_val, btc_funding_rate_pct=btc_funding_rate_pct,
+            vc_funding_score=vc_score,
         )
     except Exception as e:
         logger.warning("[CompositeSignal] sentiment layer failed: %s", e)
