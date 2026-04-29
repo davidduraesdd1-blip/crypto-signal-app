@@ -307,6 +307,12 @@ _ALLOWED_HOSTS: frozenset = frozenset({
     "community-api.coinmetrics.io",             # CoinMetrics on-chain metrics
     # FRED (St. Louis Fed) macro data — CSV download endpoint
     "fred.stlouisfed.org",                      # FRED CSV macro data
+    # CLAUDE.md §10 — cryptorank.io PRIMARY for token unlocks + VC fundraising
+    "api.cryptorank.io",                        # Cryptorank token unlocks + VC funds
+    # CLAUDE.md §10 (P1 audit item 28) — Dune Analytics SECONDARY for on-chain
+    # BTC/ETH metrics (Glassnode primary). Free tier exists but most queries
+    # require an API key — helper returns None gracefully when missing.
+    "api.dune.com",                             # Dune Analytics query results
 })
 
 
@@ -497,7 +503,10 @@ def get_funding_rate(pair: str) -> dict:
 # ──────────────────────────────────────────────
 
 _ONCHAIN_CACHE: dict = {}
-_ONCHAIN_TTL = 300  # 5-minute cache
+# P1 audit fix — was 300s (5min); CLAUDE.md §12 mandates 1h cache for
+# on-chain. Glassnode/CoinMetrics community endpoints update much
+# slower than 5min and the old TTL was burning rate-limit headroom.
+_ONCHAIN_TTL = 3600  # 1-hour cache (per CLAUDE.md §12)
 
 _COIN_MAP = {
     # Core
@@ -1397,19 +1406,15 @@ def _fetch_okx_fr(pair: str, now: float) -> dict:
 
 
 def _fetch_binance_fr(pair: str, now: float) -> dict:
-    """Fetch funding rate via Bybit v5 (no US geo-block — replaces fapi.binance.com)."""
-    try:
-        symbol = _binance_symbol(pair)
-        resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
-        if resp.status_code == 200:
-            items = resp.json().get("result", {}).get("list", [])
-            if items:
-                parsed = _parse_bybit_item(items[0], now)
-                if parsed:
-                    return parsed
-    except Exception as _e:
-        logging.debug("_fetch_binance_fr (bybit) %s: %s", pair, _e)
-    return _empty_result("Bybit N/A", now)
+    """Fetch funding rate via Bybit v5 (no US geo-block — replaces fapi.binance.com).
+
+    NOTE: Despite the legacy `_fetch_binance_fr` name (kept for back-compat
+    with existing callers in `get_multi_exchange_funding_rates`), this
+    function actually queries Bybit. The original Binance Futures path
+    was retired due to US datacenter-IP geo-blocks. The newer
+    `_fetch_binance_us_fr` below is the legitimate Binance.US path.
+    """
+    return _fetch_bybit_fr(pair, now)  # P1 audit fix — single source of truth
 
 
 def _fetch_bybit_fr(pair: str, now: float) -> dict:
@@ -2227,9 +2232,15 @@ def get_defillama_tvl(pair: str) -> dict:
 
 def get_token_unlock_schedule(pair: str) -> dict:
     """
-    Check for upcoming token unlock events via Tokenomist.ai free API.
+    Check for upcoming token unlock events.
+
+    Per CLAUDE.md §10:
+      • PRIMARY: cryptorank.io /v1/currencies/unlock-events (via
+        ``fetch_cryptorank_token_unlocks``)
+      • SECONDARY: Tokenomist.ai (this function — used when cryptorank
+        returns None due to missing key, rate limit, or unsupported symbol).
+
     Unlocks > 1% of supply within 7 days = bearish supply pressure.
-    No API key required for basic lookups.
 
     Schema: {'signal': str, 'next_unlock_days': int|None, 'unlock_pct_supply': float|None,
              'source': str, 'error': str|None}
@@ -2250,6 +2261,56 @@ def get_token_unlock_schedule(pair: str) -> dict:
         if cached and (now - cached.get("_ts", 0)) < _UNLOCK_TTL:
             return cached
 
+    # ── PRIMARY: cryptorank.io ────────────────────────────────────────────
+    # Pair format is "BASE/QUOTE" — extract the base symbol for cryptorank.
+    base_sym = pair.split("/", 1)[0] if "/" in pair else pair
+    cr_payload = fetch_cryptorank_token_unlocks(symbol=base_sym, days_ahead=14)
+    if cr_payload and cr_payload.get("events"):
+        events = cr_payload["events"]
+        first = events[0]
+        try:
+            from datetime import datetime as _dt
+            ev_ts = _dt.fromisoformat(
+                str(first.get("date", "")).replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            ev_ts = now + 9999999
+        days_away = max(0, int((ev_ts - now) / 86400))
+        pct_supply = float(first.get("amount_pct_circ", 0.0))
+        if days_away <= 3 and pct_supply >= 1.0:
+            signal = "UNLOCK_IMMINENT"
+        elif days_away <= 7:
+            signal = "UNLOCK_SOON"
+        else:
+            signal = "NO_UNLOCK"
+        result = {
+            "signal": signal,
+            "next_unlock_days": days_away,
+            "unlock_pct_supply": round(pct_supply, 2),
+            "source": "cryptorank",
+            "error": None,
+            "_ts": now,
+        }
+        with _UNLOCK_CACHE_LOCK:
+            _UNLOCK_CACHE[pair] = result
+        return result
+    # If cryptorank returned a payload with empty events, that is an
+    # authoritative "no upcoming unlock in window" answer — short-circuit
+    # rather than re-asking Tokenomist for the same info.
+    if cr_payload is not None:
+        result = {
+            "signal": "NO_UNLOCK",
+            "next_unlock_days": None,
+            "unlock_pct_supply": None,
+            "source": "cryptorank",
+            "error": None,
+            "_ts": now,
+        }
+        with _UNLOCK_CACHE_LOCK:
+            _UNLOCK_CACHE[pair] = result
+        return result
+
+    # ── SECONDARY: Tokenomist.ai (fallback) ──────────────────────────────
     # Map to Tokenomist project slugs (best-effort)
     _SLUG_MAP = {
         'ETH/USDT': 'ethereum', 'SOL/USDT': 'solana', 'XRP/USDT': 'ripple',
@@ -2316,6 +2377,556 @@ def get_token_unlock_schedule(pair: str) -> dict:
         with _UNLOCK_CACHE_LOCK:
             _UNLOCK_CACHE[pair] = result
         return result
+
+
+# ──────────────────────────────────────────────
+# CRYPTORANK.IO — TOKEN UNLOCKS + VC FUNDRAISING (PRIMARY)
+# Per CLAUDE.md §10:
+#   • Token unlocks PRIMARY = cryptorank.io (replaces Tokenomist as primary;
+#     Tokenomist becomes secondary fallback in get_token_unlock_schedule wiring).
+#   • Fundraising / VC sentiment PRIMARY = cryptorank.io /funds and
+#     /funding-rounds endpoints.
+# Key handling: free tier exists but most v1 endpoints require an api_key query
+# parameter. Without a key, requests return 401 — we gracefully return None so
+# the caller can fall back to the secondary source.
+# Cache TTLs aligned with §12 RWA-style refresh windows because unlock /
+# fundraising data are slow-moving forward calendars (no need to refetch
+# more than once per few hours).
+# ──────────────────────────────────────────────
+
+_CRYPTORANK_BASE = "https://api.cryptorank.io"
+_CRYPTORANK_UNLOCKS_TTL  = 8 * 3600   # 8 h — §12 RWA window for unlock calendar
+_CRYPTORANK_FUNDING_TTL  = 4 * 3600   # 4 h — VC fundraising re-checks
+_CRYPTORANK_UNLOCKS_CACHE: dict = {}
+_CRYPTORANK_UNLOCKS_LOCK  = threading.Lock()
+_CRYPTORANK_FUNDING_CACHE: dict = {}
+_CRYPTORANK_FUNDING_LOCK  = threading.Lock()
+
+
+def fetch_cryptorank_token_unlocks(symbol: str = "BTC", days_ahead: int = 30) -> dict | None:
+    """Fetch upcoming token unlock events for a symbol from cryptorank.io.
+
+    PRIMARY data source for token unlocks per CLAUDE.md §10.
+    Returns ``None`` on any failure (missing key, 401/429/5xx, network error,
+    parse error) so callers can fall back to ``get_token_unlock_schedule``
+    (Tokenomist secondary).
+
+    Schema:
+        {
+          "events": [
+              {"symbol": str, "date": str (ISO8601),
+               "amount_usd": float, "amount_pct_circ": float,
+               "type": str},
+              ...
+          ],
+          "source": "cryptorank",
+          "next_unlock_usd": float,   # USD value of the next event
+          "_ts": float (unix epoch),
+        }
+    """
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return None
+
+    cache_key = f"{sym}:{days_ahead}"
+    now = time.time()
+    with _CRYPTORANK_UNLOCKS_LOCK:
+        cached = _CRYPTORANK_UNLOCKS_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _CRYPTORANK_UNLOCKS_TTL:
+            return cached
+
+    api_key = _get_runtime_key("cryptorank_key", "")
+    url = f"{_CRYPTORANK_BASE}/v1/currencies/unlock-events"
+    if not _ssrf_check(url):
+        return None
+
+    params: dict = {"symbol": sym, "limit": 50}
+    if api_key:
+        params["api_key"] = api_key
+
+    try:
+        resp = _SESSION.get(url, params=params, timeout=10)
+    except Exception as e:
+        logging.debug("cryptorank unlocks fetch failed for %s: %s", sym, e)
+        return None
+
+    # Free tier rate-limited / unauthenticated → graceful None (fallback).
+    if resp.status_code in (401, 403, 429):
+        logging.debug("cryptorank unlocks unavailable (%s) for %s", resp.status_code, sym)
+        return None
+    if resp.status_code != 200:
+        return None
+
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return None
+
+    raw_events = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(raw_events, list):
+        return None
+
+    cutoff_ts = now + days_ahead * 86400
+    events: list[dict] = []
+    for ev in raw_events:
+        if not isinstance(ev, dict):
+            continue
+        # Cryptorank fields vary by plan tier — be defensive on key names.
+        date_str = ev.get("date") or ev.get("eventDate") or ev.get("time") or ""
+        try:
+            from datetime import datetime as _dt
+            ev_dt = _dt.fromisoformat(str(date_str).replace("Z", "+00:00"))
+            ev_ts = ev_dt.timestamp()
+        except Exception:
+            continue
+        if ev_ts < now or ev_ts > cutoff_ts:
+            continue
+        amt_usd = float(ev.get("amountUSD") or ev.get("amount_usd") or 0.0)
+        amt_pct = float(ev.get("percentOfCirculatingSupply")
+                        or ev.get("amount_pct_circ") or 0.0)
+        events.append({
+            "symbol": str(ev.get("symbol") or sym).upper(),
+            "date": str(date_str),
+            "amount_usd": amt_usd,
+            "amount_pct_circ": amt_pct,
+            "type": str(ev.get("type") or ev.get("unlockType") or "vesting"),
+        })
+
+    events.sort(key=lambda e: e.get("date") or "")
+    next_unlock_usd = float(events[0]["amount_usd"]) if events else 0.0
+
+    result = {
+        "events": events,
+        "source": "cryptorank",
+        "next_unlock_usd": next_unlock_usd,
+        "_ts": now,
+    }
+    with _CRYPTORANK_UNLOCKS_LOCK:
+        _CRYPTORANK_UNLOCKS_CACHE[cache_key] = result
+    return result
+
+
+def fetch_cryptorank_funding_rounds(days: int = 30) -> dict | None:
+    """Fetch recent VC funding rounds from cryptorank.io.
+
+    PRIMARY data source for crypto VC fundraising data per CLAUDE.md §10.
+    Returns ``None`` on any failure so callers can fall back to
+    CryptoFundraising / DropsTab.
+
+    Schema:
+        {
+          "rounds": [
+              {"project": str, "date": str (ISO8601),
+               "amount_usd": float, "round": str,
+               "investors": [str, ...]},
+              ...
+          ],
+          "total_raised_usd": float,
+          "source": "cryptorank",
+          "_ts": float,
+        }
+    """
+    cache_key = f"days:{days}"
+    now = time.time()
+    with _CRYPTORANK_FUNDING_LOCK:
+        cached = _CRYPTORANK_FUNDING_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _CRYPTORANK_FUNDING_TTL:
+            return cached
+
+    api_key = _get_runtime_key("cryptorank_key", "")
+    url = f"{_CRYPTORANK_BASE}/v1/funding-rounds"
+    if not _ssrf_check(url):
+        return None
+
+    params: dict = {"limit": 100}
+    if api_key:
+        params["api_key"] = api_key
+
+    try:
+        resp = _SESSION.get(url, params=params, timeout=10)
+    except Exception as e:
+        logging.debug("cryptorank funding-rounds fetch failed: %s", e)
+        return None
+
+    # Endpoint may not be on free tier. The publicly-reachable /v0/funds
+    # endpoint exposes aggregated fund totals without a key — fall through
+    # to that as a secondary read inside this same primary call so that
+    # ``fetch_vc_funding_signal`` can still produce a value when the
+    # paid endpoint is gated.
+    if resp.status_code in (401, 403, 404, 429):
+        logging.debug(
+            "cryptorank /v1/funding-rounds unavailable (%s) — trying /v0/funds aggregate",
+            resp.status_code,
+        )
+        return _cryptorank_funds_aggregate_fallback(now=now, cache_key=cache_key)
+    if resp.status_code != 200:
+        return None
+
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return None
+
+    raw_rounds = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(raw_rounds, list):
+        return None
+
+    cutoff_ts = now - days * 86400
+    rounds: list[dict] = []
+    for rd in raw_rounds:
+        if not isinstance(rd, dict):
+            continue
+        date_str = rd.get("date") or rd.get("announcedDate") or ""
+        try:
+            from datetime import datetime as _dt
+            rd_ts = _dt.fromisoformat(str(date_str).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if rd_ts < cutoff_ts:
+            continue
+        investors_raw = rd.get("investors") or rd.get("funds") or []
+        investors: list[str] = []
+        if isinstance(investors_raw, list):
+            for inv in investors_raw:
+                if isinstance(inv, dict):
+                    name = inv.get("name") or inv.get("slug")
+                    if name:
+                        investors.append(str(name))
+                elif isinstance(inv, str):
+                    investors.append(inv)
+        rounds.append({
+            "project": str(rd.get("project") or rd.get("currency") or rd.get("name") or ""),
+            "date": str(date_str),
+            "amount_usd": float(rd.get("amountUSD") or rd.get("amount_usd") or 0.0),
+            "round": str(rd.get("round") or rd.get("type") or ""),
+            "investors": investors,
+        })
+
+    total = sum(r.get("amount_usd", 0.0) for r in rounds)
+    result = {
+        "rounds": rounds,
+        "total_raised_usd": float(total),
+        "source": "cryptorank",
+        "_ts": now,
+    }
+    with _CRYPTORANK_FUNDING_LOCK:
+        _CRYPTORANK_FUNDING_CACHE[cache_key] = result
+    return result
+
+
+def _cryptorank_funds_aggregate_fallback(*, now: float, cache_key: str) -> dict | None:
+    """Best-effort secondary read using the cryptorank /v0/funds free endpoint.
+
+    /v0/funds does not give per-round timestamps, only aggregate totals per
+    fund (totalInvestments, leadInvestments). Used to keep the VC sentiment
+    pipeline alive when the paid /v1/funding-rounds endpoint is gated.
+    Returns None on failure.
+    """
+    url = f"{_CRYPTORANK_BASE}/v0/funds"
+    if not _ssrf_check(url):
+        return None
+    try:
+        resp = _SESSION.get(url, params={"limit": 50}, timeout=10)
+    except Exception as e:
+        logging.debug("cryptorank /v0/funds fallback failed: %s", e)
+        return None
+
+    if resp.status_code in (401, 403, 429):
+        return None
+    if resp.status_code != 200:
+        return None
+
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return None
+
+    funds = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(funds, list):
+        return None
+
+    # Use total-investment counts as a coarse proxy for activity.
+    rounds: list[dict] = []
+    total_investments = 0
+    for f in funds:
+        if not isinstance(f, dict):
+            continue
+        try:
+            ti = int(f.get("totalInvestments") or 0)
+        except Exception:
+            ti = 0
+        total_investments += ti
+        rounds.append({
+            "project": str(f.get("name") or ""),
+            "date": "",  # /v0/funds has no per-round date
+            "amount_usd": 0.0,
+            "round": "fund-aggregate",
+            "investors": [str(f.get("name") or "")],
+        })
+
+    result = {
+        "rounds": rounds,
+        # No USD totals on /v0/funds — surface the count so the caller can
+        # still take a sentiment reading.
+        "total_raised_usd": 0.0,
+        "total_investments": total_investments,
+        "source": "cryptorank-funds-aggregate",
+        "_ts": now,
+    }
+    with _CRYPTORANK_FUNDING_LOCK:
+        _CRYPTORANK_FUNDING_CACHE[cache_key] = result
+    return result
+
+
+# Long-term EWMA baseline of recent-30d VC funding totals — used to map an
+# absolute USD figure into a [-1, +1] sentiment score. Persists in-process
+# across calls; if the process restarts we re-warm from the first sample.
+_VC_FUNDING_BASELINE: dict = {"ewma_usd": 0.0, "n": 0}
+_VC_FUNDING_LOCK = threading.Lock()
+
+
+def fetch_vc_funding_signal() -> dict:
+    """Aggregate 30-day cryptorank VC fundraising activity into a sentiment score.
+
+    Layer 3 (sentiment) input per CLAUDE.md §9. Maps the trailing-30-day
+    total raise vs. its EWMA baseline into a clipped [-1, +1] score.
+
+    Returns:
+        {
+          "score": float in [-1, +1],
+          "total_raised_usd": float,
+          "round_count": int,
+          "ewma_baseline_usd": float,
+          "source": str,
+          "_ts": float,
+        }
+
+    A neutral payload (``score=0.0``) is returned when no data is available,
+    so this helper is always safe to call as a Layer 3 sentiment input
+    without ``None`` checks downstream.
+    """
+    now = time.time()
+    payload = fetch_cryptorank_funding_rounds(days=30)
+    neutral = {
+        "score": 0.0,
+        "total_raised_usd": 0.0,
+        "round_count": 0,
+        "ewma_baseline_usd": 0.0,
+        "source": "unavailable",
+        "_ts": now,
+    }
+    if not payload:
+        return neutral
+
+    total = float(payload.get("total_raised_usd") or 0.0)
+    rounds = payload.get("rounds") or []
+    n_rounds = len(rounds) if isinstance(rounds, list) else 0
+    source = str(payload.get("source") or "cryptorank")
+
+    # If we hit the /v0/funds aggregate fallback (no per-round USD figures),
+    # use the count of investments as the activity proxy instead of USD.
+    if source == "cryptorank-funds-aggregate":
+        ti = float(payload.get("total_investments") or 0)
+        # Coarse normalization — 5,000 cumulative investments = neutral baseline.
+        # Clip into [-1, +1].
+        score = max(-1.0, min(1.0, (ti - 5000.0) / 5000.0))
+        return {
+            "score": float(score),
+            "total_raised_usd": 0.0,
+            "round_count": int(ti),
+            "ewma_baseline_usd": 5000.0,
+            "source": source,
+            "_ts": now,
+        }
+
+    # Update EWMA baseline (alpha=0.1 ≈ 10-period smoothing).
+    with _VC_FUNDING_LOCK:
+        n = _VC_FUNDING_BASELINE["n"]
+        prev = _VC_FUNDING_BASELINE["ewma_usd"]
+        if n == 0:
+            ewma = total if total > 0 else 0.0
+        else:
+            ewma = 0.9 * prev + 0.1 * total
+        _VC_FUNDING_BASELINE["ewma_usd"] = ewma
+        _VC_FUNDING_BASELINE["n"] = n + 1
+
+    # Score = (current - baseline) / baseline, clipped to [-1, +1].
+    if ewma > 0:
+        ratio = (total - ewma) / ewma
+        score = max(-1.0, min(1.0, ratio))
+    else:
+        score = 0.0
+
+    return {
+        "score": float(score),
+        "total_raised_usd": float(total),
+        "round_count": int(n_rounds),
+        "ewma_baseline_usd": float(ewma),
+        "source": source,
+        "_ts": now,
+    }
+
+
+# ──────────────────────────────────────────────
+# DUNE ANALYTICS — SECONDARY on-chain BTC/ETH metrics (P1 audit item 28)
+# Per CLAUDE.md §10:
+#   • On-chain BTC/ETH PRIMARY = Glassnode (free tier, rate-limited)
+#   • On-chain BTC/ETH SECONDARY = Dune Analytics free queries (this block)
+# Most Dune queries require an API key (free tier provides one). Without a
+# key the helper gracefully returns None so the caller can stay on its
+# primary or move to the tertiary native-RPC fallback.
+# Cache TTL aligned with §12 on-chain refresh window (1h).
+# ──────────────────────────────────────────────
+
+_DUNE_BASE = "https://api.dune.com"
+_DUNE_RESULTS_TTL = 3600              # 1h — §12 on-chain refresh
+_DUNE_RESULTS_CACHE: dict = {}
+_DUNE_RESULTS_LOCK = threading.Lock()
+
+
+def fetch_dune_query_result(query_id: int) -> dict | None:
+    """Fetch the latest result row for a published Dune Analytics query.
+
+    SECONDARY on-chain data source per CLAUDE.md §10. Free tier requires
+    a personal API key (set DUNE_API_KEY) for most queries. Without a key
+    this helper returns ``None`` gracefully so callers fall back to
+    Glassnode primary or to the tertiary native-RPC reads.
+
+    Args:
+        query_id: Numeric ID of the published Dune query (from the query URL,
+            e.g. https://dune.com/queries/12345 → query_id=12345).
+
+    Returns:
+        Schema:
+            {
+              "query_id": int,
+              "row": dict,                # latest result row (first in result set)
+              "rows": list[dict],         # full result set (capped to 50 rows)
+              "row_count": int,
+              "executed_at": str | None,  # ISO8601 timestamp from Dune metadata
+              "source": "dune",
+              "_ts": float (unix epoch),
+            }
+
+        ``None`` on:
+          - missing/empty query_id
+          - missing DUNE_API_KEY (most queries 401 without it)
+          - 401 / 403 / 404 / 429 / 5xx from Dune
+          - network / parse error
+          - empty result set
+    """
+    try:
+        qid = int(query_id)
+    except (TypeError, ValueError):
+        return None
+    if qid <= 0:
+        return None
+
+    cache_key = f"qid:{qid}"
+    now = time.time()
+    with _DUNE_RESULTS_LOCK:
+        cached = _DUNE_RESULTS_CACHE.get(cache_key)
+        if cached and (now - cached.get("_ts", 0)) < _DUNE_RESULTS_TTL:
+            return cached
+
+    api_key = _get_runtime_key("dune_key", "")
+    if not api_key:
+        # Free-tier Dune requires a key for query result reads. Log at debug
+        # level only — this is the expected default state for users without
+        # a Dune account.
+        logging.debug("dune: no API key configured (DUNE_API_KEY) — skipping qid=%s", qid)
+        return None
+
+    url = f"{_DUNE_BASE}/api/v1/query/{qid}/results"
+    if not _ssrf_check(url):
+        return None
+
+    headers = {"X-Dune-API-Key": api_key, "Accept": "application/json"}
+
+    try:
+        resp = _SESSION.get(url, headers=headers, timeout=10)
+    except Exception as e:
+        logging.debug("dune query result fetch failed for qid=%s: %s", qid, e)
+        return None
+
+    if resp.status_code in (401, 403, 404, 429):
+        logging.debug("dune unavailable (%s) for qid=%s", resp.status_code, qid)
+        return None
+    if resp.status_code != 200:
+        return None
+
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return None
+
+    # Dune's response shape: {"execution_id": ..., "state": ..., "result":
+    # {"rows": [...], "metadata": {...}}, "execution_ended_at": "..."}
+    if not isinstance(payload, dict):
+        return None
+
+    result_block = payload.get("result")
+    if not isinstance(result_block, dict):
+        return None
+
+    raw_rows = result_block.get("rows")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return None
+
+    rows: list[dict] = [r for r in raw_rows[:50] if isinstance(r, dict)]
+    if not rows:
+        return None
+
+    executed_at = (
+        payload.get("execution_ended_at")
+        or payload.get("submitted_at")
+        or None
+    )
+
+    result = {
+        "query_id": qid,
+        "row": rows[0],
+        "rows": rows,
+        "row_count": len(rows),
+        "executed_at": str(executed_at) if executed_at else None,
+        "source": "dune",
+        "_ts": now,
+    }
+    with _DUNE_RESULTS_LOCK:
+        _DUNE_RESULTS_CACHE[cache_key] = result
+    return result
+
+
+# ── Google Trends — pytrends wrapper (P1-29) ────────────────────────────
+# CLAUDE.md §10 lists pytrends as the PRIMARY Google Trends sentiment
+# source. The actual fetcher lives in `cycle_indicators.fetch_google_trends_signal`
+# (built earlier as part of the cycle-indicator stack). This thin
+# wrapper makes the signal discoverable from data_feeds.py and matches
+# the architectural location §10 calls out, without duplicating the
+# pytrends import / TTL plumbing. Returns the same dict shape as the
+# upstream helper (or None if pytrends is rate-limited / missing).
+
+def fetch_google_trends_score(keyword: str = "bitcoin",
+                              timeframe: str = "now 7-d") -> "dict | None":
+    """Layer 3 sentiment — Google Trends spike via pytrends.
+
+    Delegates to `cycle_indicators.fetch_google_trends_signal()` which
+    already implements the proper pytrends call with 24h TTL + graceful
+    fallback. Wrapper kept here so callers grepping data_feeds.py for
+    the §10 source list find it. The `timeframe` arg is ignored by the
+    upstream helper but accepted for API compatibility with future
+    multi-window extensions.
+    """
+    try:
+        from cycle_indicators import fetch_google_trends_signal as _fts
+    except ImportError:
+        return None
+    try:
+        return _fts(keyword)
+    except Exception as _e:
+        logging.debug("[Trends] fetch_google_trends_score failed for %s: %s",
+                      keyword, _e)
+        return None
 
 
 # ──────────────────────────────────────────────
@@ -2826,7 +3437,10 @@ def fetch_cvd_divergence(symbol: str = "BTC") -> dict:
 
 _FNG_CACHE: dict = {}
 _FNG_LOCK  = threading.Lock()
-_FNG_TTL   = 900   # 15-minute cache (index only updates daily but we cache shorter so first load is fast)
+# P1 audit fix — was 900s (15min); CLAUDE.md §12 mandates 24h F&G
+# cache. The alternative.me index only updates once daily so any
+# sub-day TTL was wasted bandwidth and rate-limit headroom.
+_FNG_TTL   = 86_400  # 24-hour cache (per CLAUDE.md §12)
 
 _FNG_NEUTRAL = {
     "value": 50,
@@ -3204,7 +3818,8 @@ _NEWS_CACHE_TTL    = 900  # 15-minute cache
 
 _FNG2_CACHE: dict = {"value": None, "label": None, "_ts": 0.0}
 _FNG2_LOCK = threading.Lock()
-_FNG2_TTL  = 3600  # 1-hour cache (index updates daily — no need to hammer)
+# P1 audit fix — was 3600s (1h); CLAUDE.md §12 mandates 24h F&G cache.
+_FNG2_TTL  = 86_400  # 24-hour cache (per CLAUDE.md §12)
 
 
 def get_fear_greed() -> dict:
@@ -3889,7 +4504,10 @@ _FRED_MACRO_FALLBACKS_SG = {
 _MACRO_CACHE_SG: dict = {}
 _MACRO_CACHE_LOCK_SG = threading.Lock()
 _MACRO_INFLIGHT: dict = {}   # key → threading.Event sentinel (TOCTOU guard)
-_MACRO_TTL = 3600  # 1 hour
+# P1 audit fix — was 3600s (1h); CLAUDE.md §12 mandates 2h macro cache.
+# FRED/yfinance macro series rarely change intraday (DXY/VIX excepted,
+# which have shorter dedicated caches elsewhere).
+_MACRO_TTL = 7_200  # 2-hour cache (per CLAUDE.md §12)
 
 
 def get_cache_age_seconds(key: str) -> float | None:
@@ -7089,10 +7707,28 @@ def _get_runtime_key(key_name: str, default: str = "") -> str:
     so that keys set at deploy time are used automatically without manual paste.
     """
     import os as _os
+    # P1 audit fix — was 3-key map; per-session UI-paste flow silently
+    # bypassed for every other paid API. Expanded to cover the full
+    # set of API keys referenced elsewhere in this file so the Settings
+    # page paste-in workflow works uniformly.
     _ENV_MAP = {
-        "coingecko_key":  "SUPERGROK_COINGECKO_API_KEY",
-        "lunarcrush_key": "LUNARCRUSH_API_KEY",
-        "tiingo_key":     "SUPERGROK_TIINGO_API_KEY",
+        "coingecko_key":     "SUPERGROK_COINGECKO_API_KEY",
+        "lunarcrush_key":    "LUNARCRUSH_API_KEY",
+        "tiingo_key":        "SUPERGROK_TIINGO_API_KEY",
+        "coinmarketcap_key": "COINMARKETCAP_API_KEY",
+        "glassnode_key":     "GLASSNODE_API_KEY",
+        "cryptoquant_key":   "CRYPTOQUANT_API_KEY",
+        "coinglass_key":     "COINGLASS_API_KEY",
+        "coinalyze_key":     "SUPERGROK_COINALYZE_API_KEY",
+        "tokenomist_key":    "TOKENOMIST_API_KEY",
+        "etherscan_key":     "ETHERSCAN_API_KEY",
+        # CLAUDE.md §10 (P1 audit items 26 + 27) — cryptorank.io PRIMARY for
+        # token unlocks (replaces Tokenomist as primary) and VC fundraising
+        # (Layer 3 sentiment input).
+        "cryptorank_key":    "CRYPTORANK_API_KEY",
+        # CLAUDE.md §10 (P1 audit item 28) — Dune Analytics SECONDARY for
+        # on-chain BTC/ETH metrics (most queries require a key on free tier).
+        "dune_key":          "DUNE_API_KEY",
     }
     try:
         import streamlit as st
@@ -7266,15 +7902,24 @@ def fetch_wallet_holdings(address: str) -> dict:
     except ImportError:
         _eth_key = ""
 
-    _eth_url = (
-        f"https://api.etherscan.io/v2/api"
-        f"?chainid=1&module=account&action=tokenlist"
-        f"&address={address}&apikey={_eth_key}"
-    )
+    # P0 audit fix — was building URL with apikey={_eth_key} interpolated into
+    # the path. _SESSION's retry logic (status_forcelist=[429, 500, 502, 503,
+    # 504], total=3) would emit the literal URL into debug/proxy logs on every
+    # retry, leaking the API key. Move key to params= so requests builds the
+    # query string and any logging adapter that scrubs `headers` / `params`
+    # also scrubs the key.
+    _eth_url = "https://api.etherscan.io/v2/api"
+    _eth_params = {
+        "chainid": "1",
+        "module":  "account",
+        "action":  "tokenlist",
+        "address": address,
+        "apikey":  _eth_key,
+    }
     # Etherscan is a known-safe domain — add inline guard
     if "api.etherscan.io" in _eth_url:
         try:
-            resp = _SESSION.get(_eth_url, timeout=10)
+            resp = _SESSION.get(_eth_url, params=_eth_params, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 tokens = []

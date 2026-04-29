@@ -1772,12 +1772,18 @@ def get_signal_win_rate(pair: str = None, direction: str = None,
     """
     conn = _get_conn()
     try:
+        # P1 audit fix — was f-string interpolating int(days) into the
+        # WHERE clause. The int() cast made it injection-safe in
+        # practice, but it deviated from the project's own SEC-CRITICAL-01
+        # standard (parameterised via `?` placeholders). Use a `?`
+        # placeholder + cast at parameter time so future maintainers
+        # can't accidentally append a raw caller-supplied filter.
         conditions = [
             "resolved_at IS NOT NULL",
             "was_correct IS NOT NULL",
-            f"timestamp > datetime('now', '-{int(days)} days')",
+            "timestamp > datetime('now', ?)",
         ]
-        params: list = []
+        params: list = [f"-{int(days)} days"]
 
         if pair:
             conditions.append("pair = ?")
@@ -1792,7 +1798,7 @@ def get_signal_win_rate(pair: str = None, direction: str = None,
         df = pd.read_sql_query(
             f"SELECT was_correct FROM feedback_log WHERE {where}",
             conn,
-            params=params if params else None,
+            params=params,
         )
     except Exception as exc:
         logger.warning("get_signal_win_rate failed: %s", exc)
@@ -1819,8 +1825,12 @@ def get_top_signals_by_accuracy(n: int = 5, days: int = 60) -> list[dict]:
     """
     conn = _get_conn()
     try:
+        # P1 audit fix — was f-string interpolating int(days) and int(n).
+        # Same SEC-CRITICAL-01 deviation as get_signal_win_rate above;
+        # `?` placeholders fixes both the standard-compliance issue and
+        # makes the query plan cacheable by SQLite.
         df = pd.read_sql_query(
-            f"""
+            """
             SELECT pair,
                    direction,
                    COUNT(*) as total,
@@ -1828,13 +1838,14 @@ def get_top_signals_by_accuracy(n: int = 5, days: int = 60) -> list[dict]:
             FROM feedback_log
             WHERE resolved_at IS NOT NULL
               AND was_correct IS NOT NULL
-              AND timestamp > datetime('now', '-{int(days)} days')
+              AND timestamp > datetime('now', ?)
             GROUP BY pair, direction
             HAVING total >= 10
             ORDER BY (wins * 1.0 / total) DESC
-            LIMIT {int(n)}
+            LIMIT ?
             """,
             conn,
+            params=[f"-{int(days)} days", int(n)],
         )
     except Exception:
         return []
@@ -3188,10 +3199,44 @@ def check_db_integrity() -> bool:
 
 
 # ──────────────────────────────────────────────
-# STARTUP — runs automatically on import
+# STARTUP — schema setup eager (cheap CREATE IF NOT EXISTS); CSV
+# migration is now LAZY (P1 audit fix). The audit flagged that on
+# Streamlit Cloud every worker thread re-ran the full migration
+# scan on import, blowing the §12 60s cold-start budget. The schema
+# step is fast and harmless to repeat, so it stays at import. The
+# CSV migration scan (which can read multi-MB legacy files and runs
+# Pandas parse loops) is now gated behind ensure_csv_migrated() so
+# only the worker that actually needs DB-backed history pays the
+# cost — and only once per process. Other workers (e.g., the
+# WebSocket feed thread) skip it entirely.
 # ──────────────────────────────────────────────
-init_db()
-migrate_csv_to_db()
+
+init_db()  # cheap; safe to repeat per worker
+
+_MIGRATION_LOCK = threading.Lock()
+_MIGRATION_DONE = False
+
+
+def ensure_csv_migrated() -> None:
+    """Run the legacy-CSV→SQLite migration once per process. Lazy.
+
+    Callers that need DB-backed history (e.g., backtester, signal
+    history page) call this on first use. Cheap on subsequent calls
+    (a single boolean read).
+    """
+    global _MIGRATION_DONE
+    if _MIGRATION_DONE:
+        return
+    with _MIGRATION_LOCK:
+        if _MIGRATION_DONE:
+            return
+        try:
+            migrate_csv_to_db()
+        except Exception as e:
+            logging.error("[database] CSV migration failed: %s", e)
+        finally:
+            _MIGRATION_DONE = True
+
 
 # Run integrity check after init — log warning only, never crash
 if not check_db_integrity():

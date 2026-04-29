@@ -1051,7 +1051,31 @@ def _build_graph():
         from langgraph.checkpoint.sqlite import SqliteSaver
         # AG-13: use absolute path so checkpoints survive cwd changes (e.g. Streamlit)
         _ckpt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_checkpoints.db")
-        _checkpointer = SqliteSaver.from_conn_string(_ckpt_path)
+        # P0 audit fix — was: SqliteSaver.from_conn_string(path), used outside
+        # its `with` block. In LangGraph 0.2+ from_conn_string returns a
+        # context manager whose underlying sqlite3 connection lifecycle is
+        # tied to the CM. Using its return value bare meant Python could
+        # tear down the connection at any time, silently breaking checkpoint
+        # persistence after the first GC. Two-step recovery:
+        #   (a) build the sqlite3 connection ourselves so its lifetime is
+        #       tied to the process, not a CM that nobody is holding,
+        #   (b) hand it to SqliteSaver(conn) which is the documented direct-
+        #       constructor entry-point in 0.2+.
+        # If the direct constructor isn't available on the installed
+        # LangGraph version, fall back to manually entering the context
+        # manager and stashing it on the module so its __exit__ is never
+        # called (acceptable for a process-long-lived agent).
+        import sqlite3 as _sqlite3
+        try:
+            _ckpt_conn = _sqlite3.connect(_ckpt_path, check_same_thread=False)
+            _checkpointer = SqliteSaver(_ckpt_conn)  # type: ignore[call-arg]
+        except TypeError:
+            # Older LangGraph: only `from_conn_string` is exposed. Hold the
+            # context manager open for the lifetime of the module so the
+            # connection survives.
+            _ckpt_cm = SqliteSaver.from_conn_string(_ckpt_path)
+            _checkpointer = _ckpt_cm.__enter__()
+            globals()["_SQLITE_SAVER_CM"] = _ckpt_cm  # keep reference so GC doesn't tear it down
         logger.info("[agent] LangGraph SQLite checkpointer attached at %s", _ckpt_path)
     except Exception as _cp_err:
         logger.debug("[agent] Checkpointer unavailable (non-critical): %s", _cp_err)

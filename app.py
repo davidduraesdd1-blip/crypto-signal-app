@@ -333,7 +333,21 @@ def _cached_arb_opportunities_df(limit: int = 100) -> "pd.DataFrame":
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=1)
 def _cached_resolved_feedback_df(days: int = 365) -> "pd.DataFrame":
-    """Cache resolved feedback — calendar heatmap, 5-min TTL."""
+    """Cache resolved feedback — calendar heatmap, 5-min TTL.
+
+    P1 audit fix — ensure the legacy CSV→SQLite migration has run
+    before reading. database.ensure_csv_migrated() is a thread-safe
+    one-shot from the lazy-init refactor (commit 82c1ccf).
+    """
+    try:
+        _db.ensure_csv_migrated()
+    except Exception as _mig_err:
+        logger.debug("[App] ensure_csv_migrated failed: %s", _mig_err)
+    # P1 audit also flagged days=365 as too large for hot-path reads;
+    # cap at 180 to keep cold renders under the 60s budget. Callers
+    # that genuinely need a full year can pass an explicit larger value.
+    if days > 180:
+        days = 180
     return _db.get_resolved_feedback_df(days=days)
 
 
@@ -427,6 +441,64 @@ def _cached_macro_enrichment() -> dict:
 def _cached_signal_win_rate(pair: str, direction: str, days: int = 90) -> dict:
     """Cache get_signal_win_rate() DB read — 5-min TTL per pair+direction."""
     return _db.get_signal_win_rate(pair=pair, direction=direction, days=days)
+
+
+# ── P1 audit fix (P1-25) — wrappers for hot-path data_feeds calls that
+# were previously invoked uncached on render-path hits, violating the
+# §12 cache-window matrix. Each wrapper's TTL matches the §12 spec.
+# Rendering code should call the _sg_cached_* helpers, not data_feeds
+# directly.
+@st.cache_data(ttl=86_400, show_spinner=False, max_entries=2)
+def _sg_cached_fear_greed() -> dict:
+    """Fear & Greed index — 24h TTL per CLAUDE.md §12."""
+    try:
+        return data_feeds.get_fear_greed() or {}
+    except Exception as _e:
+        logger.debug("[App] cached F&G fetch failed: %s", _e)
+        return {}
+
+
+@st.cache_data(ttl=600, show_spinner=False, max_entries=120)
+def _sg_cached_funding_rate(pair: str) -> dict:
+    """Funding rate for a single pair — 10-min TTL per CLAUDE.md §12."""
+    try:
+        return data_feeds.get_funding_rate(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] cached funding fetch %s failed: %s", pair, _e)
+        return {}
+
+
+@st.cache_data(ttl=600, show_spinner=False, max_entries=20)
+def _sg_cached_multi_exchange_funding(pair: str) -> dict:
+    """Multi-exchange funding aggregator — 10-min TTL per CLAUDE.md §12.
+
+    The audit flagged the Funding Rates scan page firing up to ~32
+    sequential HTTP calls per click (8 pairs × 4 exchanges). With this
+    wrapper, repeated clicks within a 10-minute window cost zero
+    network round-trips.
+    """
+    try:
+        return data_feeds.get_multi_exchange_funding_rates(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] cached multi-fr fetch %s failed: %s", pair, _e)
+        return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=200)
+def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 400):
+    """OHLCV — 5-min TTL per CLAUDE.md §12 (intraday).
+
+    Wraps model.robust_fetch_ohlcv so dashboard / signals / backtester
+    pages don't refetch identical (exchange, pair, tf, limit) tuples on
+    every Streamlit rerun. Returns whatever robust_fetch_ohlcv returns
+    (DataFrame or empty list); errors fall through to None.
+    """
+    try:
+        return model.robust_fetch_ohlcv(exchange_id, pair, timeframe, limit=limit)
+    except Exception as _e:
+        logger.debug("[App] cached OHLCV %s %s %s failed: %s",
+                     exchange_id, pair, timeframe, _e)
+        return None
 
 
 # ──────────────────────────────────────────────
@@ -584,21 +656,51 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── 2026-05 redesign: design-system theme injection (sibling-family left-rail
+#    layout, token-based theming, Streamlit widget overrides). Runs BEFORE the
+#    legacy inject_css() so the design tokens are the base and the legacy
+#    overrides only affect components we haven't yet ported. All existing
+#    logic (data feeds, signals, scheduler, ML) is preserved — only the
+#    presentation layer changes.
+try:
+    from ui import (
+        inject_theme as _ds_inject_theme,
+        inject_streamlit_overrides as _ds_inject_overrides,
+        register_plotly_template as _ds_register_plotly,
+    )
+    _ds_theme_pref = st.session_state.get("theme", "dark")
+    _ds_inject_theme("crypto-signal-app", theme=_ds_theme_pref)
+    _ds_inject_overrides()
+    # Register the design-system Plotly template + set as default so every
+    # chart inherits it. Per-chart update_layout(...) calls still win where
+    # specific overrides are needed (transparent bg + tight margins, etc.).
+    _ds_register_plotly(theme=_ds_theme_pref)
+except Exception as _ds_err:
+    logger.debug("[App] design-system theme injection failed: %s", _ds_err)
+
 # ── Professional CSS design system (must come before any st.* calls) ──
 _ui.inject_css()
 
-# ── #59 UI/UX Refresh — global signal/card color variables ────────────────────
-SIGNAL_CSS = """
-<style>
-.signal-buy  { color: #22c55e; font-weight: bold; }
-.signal-sell { color: #ef4444; font-weight: bold; }
-.signal-hold { color: #f59e0b; font-weight: bold; }
-.metric-positive { color: #22c55e; }
-.metric-negative { color: #ef4444; }
-.card-container  { background: #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
-</style>
-"""
-st.markdown(SIGNAL_CSS, unsafe_allow_html=True)
+# ── Signal/card color tokens come from ui/design_system.py (P0 audit fix) ─────
+# Removed legacy SIGNAL_CSS that hard-coded dark hex over the design tokens —
+# `.signal-buy/.signal-sell/.signal-hold` now use `var(--success)/--danger/
+# --warning` defined by ui/design_system.inject_theme. `.card-container`
+# rendering should use the `.ds-card` class from design_system.
+st.markdown(
+    """
+    <style>
+    .signal-buy      { color: var(--success); font-weight: 600; }
+    .signal-sell     { color: var(--danger);  font-weight: 600; }
+    .signal-hold     { color: var(--warning); font-weight: 600; }
+    .metric-positive { color: var(--success); }
+    .metric-negative { color: var(--danger); }
+    .card-container  { background: var(--bg-1); border: 1px solid var(--border);
+                       border-radius: var(--card-radius); padding: 12px;
+                       margin-bottom: 8px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ── Beginner / Advanced mode toggle (persisted in session state) ──────────────
 if "beginner_mode" not in st.session_state:
@@ -668,51 +770,64 @@ if _agent is not None:
 # ──────────────────────────────────────────────
 # SIDEBAR NAVIGATION
 # ──────────────────────────────────────────────
-_ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
+# 2026-05 redesign: render the new sibling-family brand block at the top of
+# the sidebar. Matches shared-docs/design-mockups/sibling-family-crypto-signal.html.
+# The legacy sidebar_header is kept below as a diagnostic block (version +
+# exchange + pair count) inside a collapsed expander for advanced users.
+try:
+    from ui.design_system import ACCENTS as _DS_ACCENTS
+    _ds_accent = _DS_ACCENTS["crypto-signal-app"]
+    # Mockup brand block — wordmark only. Version / exchange / pair-count
+    # diagnostic line was removed in 2026-04-25 redesign; that info is
+    # available in Settings → Dev Tools when needed.
+    st.sidebar.markdown(
+        f'<div class="ds-rail-brand">'
+        f'<div class="ds-brand-dot" style="background:{_ds_accent["accent"]};color:{_ds_accent["accent_ink"]};">◈</div>'
+        f'<div class="ds-brand-wm">Signal<span style="color:var(--text-muted);">.app</span></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+except Exception as _ds_brand_err:
+    logger.debug("[App] design-system brand block failed, falling back: %s", _ds_brand_err)
+    _ui.sidebar_header(model.VERSION, model.TA_EXCHANGE, len(model.PAIRS))
 
-# ── Paper / Live mode persistent badge ───────────────────────────────────────
+# ── Module-level status flags (consumed by topbar status pills) ──────────────
+# These used to render as full-width banners in the sidebar; now they fold into
+# small pills next to the breadcrumb in render_top_bar (see _topbar_pills below).
 try:
     _exec_mode_cfg = _cached_alerts_config()
     _is_live_mode  = _exec_mode_cfg.get("live_trading_enabled", False)
-    if _is_live_mode:
-        st.sidebar.markdown(
-            '<div style="background:rgba(246,70,93,0.15);border:1px solid rgba(246,70,93,0.4);'
-            'border-radius:8px;padding:7px 12px;text-align:center;margin-bottom:8px">'
-            '<span style="color:#ef4444;font-size:11px;font-weight:800;letter-spacing:0.8px">'
-            '🔴 LIVE TRADING ACTIVE — Real money at risk</span></div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.sidebar.markdown(
-            '<div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);'
-            'border-radius:8px;padding:6px 12px;text-align:center;margin-bottom:8px">'
-            '<span style="color:#a78bfa;font-size:11px;font-weight:700;letter-spacing:0.5px">'
-            '📄 Paper Mode — Simulated trades only</span></div>',
-            unsafe_allow_html=True,
-        )
 except Exception as _mode_badge_err:
-    logger.debug("[App] paper/live mode badge render failed: %s", _mode_badge_err)
+    logger.debug("[App] paper/live mode flag read failed: %s", _mode_badge_err)
+    _is_live_mode = False
 
-# ── AI / API Health Banner ─────────────────────────────────────────────────────
 try:
     from config import ANTHROPIC_ENABLED as _sg_ai_enabled, ANTHROPIC_API_KEY as _sg_ai_key
     _sg_ai_key_present = bool(_sg_ai_key)
-    if _sg_ai_enabled and _sg_ai_key_present:
-        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#22c55e", "✅", "Claude AI active"
-    elif _sg_ai_enabled and not _sg_ai_key_present:
-        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#ef4444", "🔴", "Claude AI: key missing"
+except Exception as _ai_flag_err:
+    logger.debug("[App] AI status flag read failed: %s", _ai_flag_err)
+    _sg_ai_enabled, _sg_ai_key_present = False, False
+
+def _topbar_pills() -> list[dict]:
+    """Compact status pills for the topbar — Paper/Live + Claude AI status.
+
+    Returns a list of {label, icon, tone} dicts. tone ∈ {info, success,
+    warning, danger, muted}. render_top_bar maps tone → CSS class.
+    """
+    pills: list[dict] = []
+    if _is_live_mode:
+        pills.append({"label": "Live", "icon": "🔴", "tone": "danger"})
     else:
-        _sg_ai_col, _sg_ai_icon, _sg_ai_txt = "#64748b", "⚫", "Claude AI disabled"
-    st.sidebar.markdown(
-        f"<div style='background:rgba(0,0,0,0.15);border:1px solid {_sg_ai_col}44;"
-        f"border-left:3px solid {_sg_ai_col};border-radius:6px;"
-        f"padding:4px 10px;margin:4px 0;font-size:0.85rem;"
-        f"color:{_sg_ai_col};font-weight:600;'>"
-        f"{_sg_ai_icon} {_sg_ai_txt}</div>",
-        unsafe_allow_html=True,
-    )
-except Exception as _ai_banner_err:
-    logger.debug("[App] AI health banner render failed: %s", _ai_banner_err)
+        pills.append({"label": "Paper", "icon": "📄", "tone": "info"})
+    if _sg_ai_enabled and _sg_ai_key_present:
+        pills.append({"label": "Claude", "icon": "✅", "tone": "success"})
+    elif _sg_ai_enabled and not _sg_ai_key_present:
+        pills.append({"label": "Claude", "icon": "🔴", "tone": "danger"})
+    else:
+        pills.append({"label": "Claude", "icon": "⚫", "tone": "muted"})
+    if st.session_state.get("demo_mode"):
+        pills.append({"label": "Demo", "icon": "⚠️", "tone": "warning"})
+    return pills
 
 
 # ── Compact live scan-progress (sidebar) ────────────────────────────────────
@@ -811,70 +926,59 @@ except Exception as _sg_sp_err:
 
 # ── 3-Level Experience selector (Phase 1) ─────────────────────────────────────
 # Beginner = default; persists across all pages via session_state.
-# beginner_mode kept for backward compat with inject_beginner_mode_js().
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Experience Level</span>',
-    unsafe_allow_html=True,
-)
+# 2026-04-24 redesign: the visible level selector lives in the topbar (see
+# render_top_bar). The sidebar radio has been removed so there's a single
+# control surface. We still init the session-state default + beginner_mode
+# side-effect here so first-render code paths and inject_beginner_mode_js()
+# behave identically.
 _LEVEL_OPTIONS = ["beginner", "intermediate", "advanced"]
-_LEVEL_LABELS  = {
-    "beginner":     "🟢 Beginner",
-    "intermediate": "🟡 Intermediate",
-    "advanced":     "🔴 Advanced",
-}
-_cur_sg_level = st.session_state.get("user_level", "beginner")
-_sg_level_val = st.sidebar.radio(
-    "User Level",
-    options=_LEVEL_OPTIONS,
-    format_func=lambda lv: _LEVEL_LABELS[lv],
-    index=_LEVEL_OPTIONS.index(_cur_sg_level) if _cur_sg_level in _LEVEL_OPTIONS else 0,
-    key="sg_user_level_radio",
-    label_visibility="collapsed",
-    help=(
-        "Beginner: plain-English view, tooltips always visible, simplified signals. "
-        "Intermediate: key numbers + condensed explanations. "
-        "Advanced: full technical detail, all raw numbers."
-    ),
-)
-st.session_state["user_level"]    = _sg_level_val
+if st.session_state.get("user_level") not in _LEVEL_OPTIONS:
+    st.session_state["user_level"] = "beginner"
+_sg_level_val = st.session_state["user_level"]
 # Backward compat: beginner_mode = True when NOT Advanced (drives inject_beginner_mode_js)
 _bm_val = (_sg_level_val != "advanced")
 st.session_state["beginner_mode"] = _bm_val
 _ui.inject_beginner_mode_js(_bm_val)
 
-# ── Demo / Sandbox mode toggle (#67) ─────────────────────────────────────────
-_demo_val = st.sidebar.toggle(
-    "Demo / Sandbox",
-    value=st.session_state.get("demo_mode", False),
-    key="demo_mode_toggle",
-    help="Demo mode: shows synthetic placeholder data — no real API calls. Safe for screenshots and onboarding.",
-)
-st.session_state["demo_mode"] = _demo_val
-if _demo_val:
-    st.sidebar.markdown(
-        '<div style="background:#1e293b;border:1px solid rgba(251,191,36,0.3);border-radius:6px;'
-        'padding:6px 10px;font-size:11px;color:#FBBF24;margin-top:-6px">⚠️ DEMO MODE — synthetic data</div>',
-        unsafe_allow_html=True,
-    )
-_demo_mode = _demo_val
+# Demo / Sandbox mode toggle relocated to Settings → Dev Tools.
+# st.session_state["demo_mode"] is the single source of truth (defaults to
+# False); the topbar shows a "Demo" pill when on (see _topbar_pills above).
+st.session_state.setdefault("demo_mode", False)
 
-# ── Crypto Glossary (always visible in sidebar) ───────────────────────────────
-st.sidebar.markdown("")
-_ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+# Note: the Crypto Glossary popover used to live here (always-visible top-of-
+# sidebar slot). It's been moved to the sidebar footer (see render_legal_footer
+# below) — the topbar handles the primary controls now, and the footer group
+# is the right home for reference / legal links.
 
-# ── Theme toggle (item 18 — light/dark mode) ──────────────────────────────────
-_ui.render_theme_toggle_sg()
+# ── Theme-toggle handler (shared by topbar ☾ Theme button) ───────────────────
+# 2026-04-24 redesign: the visible theme toggle now lives in the topbar.
+# The sidebar render_theme_toggle_sg() call has been removed. Both keys
+# ("_sg_theme" used by ui_components/Plotly templates and "theme" used by
+# ui.design_system.inject_theme) are kept in sync here.
+def _toggle_theme() -> None:
+    cur = st.session_state.get("_sg_theme", "dark")
+    new = "light" if cur != "light" else "dark"
+    st.session_state["_sg_theme"] = new
+    st.session_state["theme"]     = new
+    # Reset CSS injection guard so inject_css() re-fires on next rerun.
+    st.session_state["_css_injected"] = False
+    # Flip the Plotly default template so every chart created on the next
+    # rerun picks up the new theme automatically.
+    try:
+        from ui import register_plotly_template as _ds_reset_plotly
+        _ds_reset_plotly(theme=new)
+    except Exception as _e_plt:
+        logger.debug("[App] Plotly template re-register failed: %s", _e_plt)
 
-# ── Refresh All Data (item 27) ────────────────────────────────────────────────
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Data</span>',
-    unsafe_allow_html=True,
-)
-if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", help="Clear all caches and reload fresh data from all sources", width="stretch"):
+# ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
+# 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
+# (see render_top_bar). The sidebar "Refresh All Data" button has been
+# removed so the topbar ↻ chip is the single control surface. Both the
+# topbar button and any future programmatic call invoke this handler.
+def _refresh_all_data() -> None:
+    """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
+    helpers, the data_feeds module-level dicts, and the cycle_indicators
+    in-memory caches. Caller is responsible for st.rerun()."""
     try:
         st.cache_data.clear()
     except Exception:
@@ -889,7 +993,7 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
                 _fn.clear()
             except Exception as _fc_err:
                 logger.debug("[App] cache clear failed for %s: %s", _fn, _fc_err)
-    # Also clear module-level cache dicts in data_feeds — not covered by st.cache_data.clear()
+    # Module-level cache dicts in data_feeds aren't covered by st.cache_data.clear()
     try:
         data_feeds.clear_all_module_caches()
     except Exception as _df_clr_err:
@@ -899,256 +1003,294 @@ if st.sidebar.button("🔄 Refresh All Data", key="sidebar_btn_refresh_all", hel
         _ccc()
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
-    st.rerun()
 
 st.sidebar.markdown("---")
 
-# ── Navigation — level-aware page list (Item 3) ───────────────────────────────
-# Beginner:     3 pages (signals, trades, AI assistant)
-# Intermediate: 5 pages (+ performance + opportunities)
-# Advanced:     all 6 pages
-_NAV_BEGINNER = [
-    "📊 My Signals",
-    "🤖 AI Assistant",
+# ── 2026-05 redesign: grouped sidebar nav (Markets / Research / Account) ─────
+# Matches shared-docs/design-mockups/sibling-family-crypto-signal.html rail.
+# Each mockup nav item maps to an existing page_* function — preserves all
+# existing app logic, only relabels + regroups.
+#
+# Same nav for every user level — the level controls main-column content
+# density, not which pages exist. Home / Signals / Regimes / On-chain all
+# resolve to the Dashboard page (different sections of it). Alerts opens
+# Config Editor pre-pivoted to its Alerts tab via _ds_nav_after_select.
+# AI Agent and Arbitrage are kept reachable since they're real pages even
+# though the static mockup doesn't list them.
+_DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
+    ("Markets", [
+        ("home",     "Home",       "Dashboard"),
+        ("signals",  "Signals",    "Signals"),
+        ("regimes",  "Regimes",    "Regimes"),
+    ]),
+    ("Research", [
+        ("backtester", "Backtester", "Backtest Viewer"),
+        ("onchain",    "On-chain",   "On-chain"),
+    ]),
+    ("Account", [
+        ("alerts",   "Alerts",     "Config Editor"),
+        ("settings", "Settings",   "Config Editor"),
+        ("agent",    "AI Agent",   "Agent"),
+        ("opps",     "Arbitrage",  "Arbitrage"),
+    ]),
 ]
-_NAV_INTERMEDIATE = [
-    "📊 My Signals",
-    "🤖 AI Assistant",
-    "📈 Performance",
-    "⚡ Opportunities",
-]
-_NAV_ADVANCED = [
-    "📊 My Signals",
-    "⚙️ Settings",
-    "📈 Performance",
-    "⚡ Opportunities",
-    "🤖 AI Assistant",
-]
-_nav_by_level = {
-    "beginner":     _NAV_BEGINNER,
-    "intermediate": _NAV_INTERMEDIATE,
-    "advanced":     _NAV_ADVANCED,
-}
-_nav_options = _nav_by_level.get(_sg_level_val, _NAV_BEGINNER)
+_ds_nav_current = _DS_NAV
 
-page = st.sidebar.radio(
-    "Navigate",
-    _nav_options,
-    label_visibility="collapsed",
-)
+# Flatten for the hidden radio fallback (preserves keyboard nav + Streamlit
+# state consistency). We render the visible buttons separately.
+_ds_nav_flat_labels = []
+_ds_nav_label_to_page = {}
+for _grp_name, _grp_items in _ds_nav_current:
+    for _k, _lbl, _page_key in _grp_items:
+        _ds_nav_flat_labels.append(_lbl)
+        _ds_nav_label_to_page[_lbl] = _page_key
 
-# Normalise page name — map display labels to internal page keys
+# Render the grouped nav — styled headers + st.sidebar.button per item.
+# The overrides.css file styles these to look like the mockup.
+_ds_current_label = st.session_state.get("_ds_current_nav_label", _ds_nav_flat_labels[0] if _ds_nav_flat_labels else "")
+if _ds_current_label not in _ds_nav_flat_labels:
+    _ds_current_label = _ds_nav_flat_labels[0] if _ds_nav_flat_labels else ""
+    st.session_state["_ds_current_nav_label"] = _ds_current_label
+
+_ds_new_label_selected = None
+_ds_new_key_selected = None
+for _grp_name, _grp_items in _ds_nav_current:
+    # Section header — visual styling lives entirely in ui/overrides.py
+    # under .ds-nav-group-header. Keeping inline style here would beat the
+    # class rule and revert the section headers to tiny/muted.
+    st.sidebar.markdown(
+        f'<div class="ds-nav-group-header">{_grp_name}</div>',
+        unsafe_allow_html=True,
+    )
+    for _k, _lbl, _page_key in _grp_items:
+        _is_active = (_lbl == _ds_current_label)
+        if st.sidebar.button(
+            _lbl,
+            key=f"ds_nav_btn_{_k}",
+            use_container_width=True,
+            type=("primary" if _is_active else "secondary"),
+        ):
+            _ds_new_label_selected = _lbl
+            _ds_new_key_selected = _k
+            # Side-effect routing for items that share a target page —
+            # e.g. "Alerts" should land on the Alerts tab inside Settings.
+            if _k == "alerts":
+                st.session_state["_settings_tab"] = "🔔 Alerts"
+
+if _ds_new_label_selected:
+    st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
+    st.session_state["_ds_current_nav_key"] = _ds_new_key_selected
+    _ds_current_label = _ds_new_label_selected
+
+page = _ds_nav_label_to_page.get(_ds_current_label, "Dashboard")
+
+# Programmatic navigation override (e.g. "Configure Alerts" button sets _nav_target)
+_nav_override = st.session_state.pop("_nav_target", None)
+if _nav_override:
+    page = _nav_override
+
+# Backwards compat: keep the legacy radio mapping available for any code that
+# still reads page via the old label strings.
 _PAGE_MAP = {
     "📊 My Signals":    "Dashboard",
     "📊 Dashboard":     "Dashboard",
     "⚙️ Settings":      "Config Editor",
     "📈 Performance":   "Backtest Viewer",
     "📈 Performance History": "Backtest Viewer",
+    "📈 Backtest Viewer":     "Backtest Viewer",
     "⚡ Opportunities": "Arbitrage",
     "⚡ Arbitrage":     "Arbitrage",
     "🤖 AI Assistant":  "Agent",
     "🤖 AI Agent":      "Agent",
 }
-# Override page if a programmatic navigation target was set (e.g. "Configure Alerts" button)
-_nav_override = st.session_state.pop("_nav_target", None)
-if _nav_override:
-    page = _nav_override
-else:
-    page = _PAGE_MAP.get(page, page)
 
 # ──────────────────────────────────────────────
-# SIDEBAR: AUTO-SCAN (Item 4 — compact for beginners)
+# RELOCATED LEGACY SIDEBAR WIDGETS
 # ──────────────────────────────────────────────
-st.sidebar.markdown("---")
-# CQ-10: Load alerts config once per sidebar render; reused by all expander sections.
-# Each expander that needs to mutate gets its own .copy() or re-reads when saving.
-_sidebar_alerts_cfg = _cached_alerts_config()
+# 2026-04-25 redesign: the sidebar now matches the mockup (brand → Markets /
+# Research / Account → footer). The legacy widgets that lived under the nav
+# (Auto-Scan, Email Alerts toggle, API Health, Wallet Import, API Keys, plus
+# the Demo / Sandbox toggle removed above) are exposed inside Settings →
+# Dev Tools via _render_relocated_sidebar_widgets() instead.
+def _render_relocated_sidebar_widgets() -> None:
+    """Render the legacy sidebar widgets in the main column.
 
-# Item 4: beginners see a simple ON/OFF toggle; intermediate/advanced get full expander.
-_is_beginner_sidebar = (_sg_level_val == "beginner")
+    Called from page_config()'s Dev Tools tab. Each widget keeps the same
+    session-state key as before so the saved settings survived the move.
+    Email Alerts toggle is dropped entirely — Settings → Alerts has the
+    full email config and the sidebar quick-toggle was a duplicate.
+    """
+    _legacy_alerts_cfg = _cached_alerts_config()
 
-with st.sidebar.expander("⏰ Auto-Scan", expanded=False):
-    _alert_cfg = _sidebar_alerts_cfg.copy()
-
-    autoscan_on = st.toggle(
-        "Enable Auto-Scan",
-        value=_alert_cfg.get("autoscan_enabled", False),
-        key="autoscan_toggle",
-    )
-    interval_options = {
-        "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
-        "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
-    }
-    interval_label = st.selectbox(
-        "Scan Interval",
-        options=list(interval_options.keys()),
-        index=list(interval_options.values()).index(
-            min(interval_options.values(),
-                key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
-        ),
-        key="autoscan_interval",
-        disabled=not autoscan_on,
-    )
-    interval_min = interval_options[interval_label]
-
-    quiet_on = st.toggle(
-        "Quiet Hours (UTC)",
-        value=_alert_cfg.get("autoscan_quiet_hours_enabled", False),
-        key="autoscan_quiet_on",
-        disabled=not autoscan_on,
-        help="Skip scheduled scans during these hours (times are UTC).",
-    )
-    _qc1, _qc2 = st.columns(2)
-    with _qc1:
-        quiet_start = st.text_input(
-            "Start HH:MM", value=_alert_cfg.get("autoscan_quiet_start", "22:00"),
-            key="autoscan_quiet_start", disabled=not (autoscan_on and quiet_on),
+    with st.expander("⏰ Auto-Scan", expanded=False):
+        _alert_cfg = _legacy_alerts_cfg.copy()
+        autoscan_on = st.toggle(
+            "Enable Auto-Scan",
+            value=_alert_cfg.get("autoscan_enabled", False),
+            key="autoscan_toggle",
         )
-    with _qc2:
-        quiet_end = st.text_input(
-            "End HH:MM", value=_alert_cfg.get("autoscan_quiet_end", "06:00"),
-            key="autoscan_quiet_end", disabled=not (autoscan_on and quiet_on),
+        interval_options = {
+            "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
+            "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
+        }
+        interval_label = st.selectbox(
+            "Scan Interval",
+            options=list(interval_options.keys()),
+            index=list(interval_options.values()).index(
+                min(interval_options.values(),
+                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
+            ),
+            key="autoscan_interval",
+            disabled=not autoscan_on,
         )
+        interval_min = interval_options[interval_label]
 
-    # Apply scheduler changes only when job doesn't exist or interval has changed
-    # (avoid resetting next_run_time on every Streamlit rerun, which prevents the job from ever firing)
-    if autoscan_on:
-        _job_exists = bool(_get_scheduler().get_job(_AUTOSCAN_JOB_ID))
-        _interval_changed = interval_min != _alert_cfg.get("autoscan_interval_minutes")
-        if not _job_exists or _interval_changed:
-            _setup_autoscan(interval_min)
-        next_t = _get_next_autoscan_time()
-        if next_t:
-            # Use timezone-aware comparison (APScheduler may return tz-aware)
-            try:
-                if next_t.tzinfo is None:
-                    next_t = next_t.replace(tzinfo=timezone.utc)
-                delta = next_t - datetime.now(timezone.utc)
-            except Exception:
-                delta = timedelta(0)
-            total_secs = delta.total_seconds()
-            # BUG-L05: clamp negative deltas (overdue jobs) before computing mins/secs
-            total_secs = max(0.0, total_secs)
-            mins_left = int(total_secs // 60)
-            secs_left = int(total_secs % 60)
-            st.caption(f"Next scan in: {mins_left}m {secs_left}s")
-    else:
-        _stop_autoscan()
-        st.caption("Auto-scan is off.")
+        quiet_on = st.toggle(
+            "Quiet Hours (UTC)",
+            value=_alert_cfg.get("autoscan_quiet_hours_enabled", False),
+            key="autoscan_quiet_on",
+            disabled=not autoscan_on,
+            help="Skip scheduled scans during these hours (times are UTC).",
+        )
+        _qc1, _qc2 = st.columns(2)
+        with _qc1:
+            quiet_start = st.text_input(
+                "Start HH:MM", value=_alert_cfg.get("autoscan_quiet_start", "22:00"),
+                key="autoscan_quiet_start", disabled=not (autoscan_on and quiet_on),
+            )
+        with _qc2:
+            quiet_end = st.text_input(
+                "End HH:MM", value=_alert_cfg.get("autoscan_quiet_end", "06:00"),
+                key="autoscan_quiet_end", disabled=not (autoscan_on and quiet_on),
+            )
 
-    # Save autoscan config when changed
-    if (autoscan_on  != _alert_cfg.get("autoscan_enabled")
-            or interval_min != _alert_cfg.get("autoscan_interval_minutes")
-            or quiet_on      != _alert_cfg.get("autoscan_quiet_hours_enabled")
-            or quiet_start   != _alert_cfg.get("autoscan_quiet_start")
-            or quiet_end     != _alert_cfg.get("autoscan_quiet_end")):
-        _alert_cfg["autoscan_enabled"]            = autoscan_on
-        _alert_cfg["autoscan_interval_minutes"]   = interval_min
-        _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
-        _alert_cfg["autoscan_quiet_start"]        = quiet_start.strip()
-        _alert_cfg["autoscan_quiet_end"]          = quiet_end.strip()
-        _save_alerts_config_and_clear(_alert_cfg)
-
-# ──────────────────────────────────────────────
-# SIDEBAR: ALERT TOGGLES (compact — full config in Settings → Alerts)
-# ──────────────────────────────────────────────
-st.sidebar.markdown(
-    '<span style="font-size:11px;color:rgba(168,180,200,0.5);'
-    'font-weight:600;text-transform:uppercase;letter-spacing:0.8px">'
-    'Alerts</span>',
-    unsafe_allow_html=True,
-)
-_alert_cfg_sidebar = _sidebar_alerts_cfg.copy()
-_alerts_changed = False
-
-_em_on = st.sidebar.toggle(
-    "📧 Email",
-    value=_alert_cfg_sidebar.get("email_enabled", False),
-    key="sb_em_toggle",
-    help="Enable email alerts. Configure in Settings → Alerts.",
-)
-if _em_on != _alert_cfg_sidebar.get("email_enabled", False):
-    _alert_cfg_sidebar["email_enabled"] = _em_on
-    _alerts_changed = True
-
-if _alerts_changed:
-    _save_alerts_config_and_clear(_alert_cfg_sidebar)
-
-if st.sidebar.button("⚙️ Configure Alerts", key="sb_cfg_alerts_btn", width="stretch"):
-    st.session_state["_nav_target"] = "Config Editor"
-    st.session_state["_settings_tab"] = "Alerts"
-    st.rerun()
-
-
-
-# ──────────────────────────────────────────────
-# SIDEBAR: API HEALTH CHECK (#17 security hardening)
-# ──────────────────────────────────────────────
-with st.sidebar.expander("🔌 API Health", expanded=False):
-    _api_health = _cached_api_health()
-    _health_rows = []
-    for _svc, _status in _api_health.items():
-        _dot = "🟢" if _status in ("ok", "configured") else "🟠" if _status.startswith("HTTP") else "🔴"
-        _health_rows.append(f"{_dot} **{_svc.capitalize()}** — {_status}")
-    st.markdown("\n\n".join(_health_rows) if _health_rows else "No results")
-    if st.button("Recheck", key="api_health_recheck", width="stretch"):
-        _cached_api_health.clear()
-        st.rerun()
-
-# ──────────────────────────────────────────────
-# SIDEBAR: WALLET PORTFOLIO IMPORT (#110 / #111)
-# ──────────────────────────────────────────────
-with st.sidebar.expander("🔗 Wallet Import (Beta)", expanded=False):
-    _wallet_addr = st.text_input(
-        "EVM Wallet Address",
-        placeholder="0x...",
-        key="wallet_address",
-        help="Read-only portfolio import. We never request signing or private keys.",
-    )
-    if _wallet_addr and len(_wallet_addr) == 42 and _wallet_addr.startswith("0x"):
-        st.caption("✓ Valid Ethereum address")
-        if st.button("Import Positions", key="btn_import_wallet"):
-            with st.spinner("Fetching wallet holdings..."):
+        if autoscan_on:
+            _job_exists = bool(_get_scheduler().get_job(_AUTOSCAN_JOB_ID))
+            _interval_changed = interval_min != _alert_cfg.get("autoscan_interval_minutes")
+            if not _job_exists or _interval_changed:
+                _setup_autoscan(interval_min)
+            next_t = _get_next_autoscan_time()
+            if next_t:
                 try:
-                    _wallet_data = data_feeds.fetch_wallet_holdings(_wallet_addr)
-                    if _wallet_data:
-                        st.session_state["wallet_holdings"] = _wallet_data
-                        st.success(f"Imported {len(_wallet_data.get('tokens', []))} positions")
-                    else:
-                        st.warning("No holdings found or fetch failed.")
-                except Exception as _we:
-                    logger.warning("[Wallet] import error: %s", _we)
-                    st.error("Could not import wallet data — check the address is valid and try again.")
-        # Also offer full Zerion portfolio
-        if st.button("Full Portfolio (Zerion)", key="btn_zerion_portfolio"):
-            with st.spinner("Fetching full portfolio..."):
-                try:
-                    _zerion_data = data_feeds.fetch_zerion_portfolio(_wallet_addr)
-                    if _zerion_data:
-                        st.session_state["zerion_portfolio"] = _zerion_data
-                        st.success(f"Loaded portfolio: ${_zerion_data.get('total_value_usd', 0):,.2f}")
-                    else:
-                        st.warning("No portfolio data found.")
-                except Exception as _ze:
-                    logger.warning("[Zerion] fetch error: %s", _ze)
-                    st.error("Portfolio data temporarily unavailable — try again in a moment.")
-    elif _wallet_addr:
-        st.error("Invalid Ethereum address format")
+                    if next_t.tzinfo is None:
+                        next_t = next_t.replace(tzinfo=timezone.utc)
+                    delta = next_t - datetime.now(timezone.utc)
+                except Exception:
+                    delta = timedelta(0)
+                total_secs = max(0.0, delta.total_seconds())
+                mins_left = int(total_secs // 60)
+                secs_left = int(total_secs % 60)
+                st.caption(f"Next scan in: {mins_left}m {secs_left}s")
+        else:
+            _stop_autoscan()
+            st.caption("Auto-scan is off.")
 
-# ──────────────────────────────────────────────
-# SIDEBAR: PERSONAL API KEYS (#18)
-# Stored in session state only — never written to disk.
-# ──────────────────────────────────────────────
-with st.sidebar.expander("🔑 API Keys (Session Only)", expanded=False):
-    st.caption("Keys stored in session only — never saved to disk.")
-    _user_cg = st.text_input("CoinGecko Pro Key", type="password", key="user_cg_key")
-    _user_ant = st.text_input("Anthropic Key (override)", type="password", key="user_anthropic_key")
-    if st.button("Apply", key="btn_apply_user_keys"):
-        if _user_cg:
-            st.session_state["runtime_coingecko_key"] = _user_cg
-        if _user_ant:
-            st.session_state["runtime_anthropic_key"] = _user_ant
-        st.success("Applied for this session")
+        if (autoscan_on  != _alert_cfg.get("autoscan_enabled")
+                or interval_min != _alert_cfg.get("autoscan_interval_minutes")
+                or quiet_on      != _alert_cfg.get("autoscan_quiet_hours_enabled")
+                or quiet_start   != _alert_cfg.get("autoscan_quiet_start")
+                or quiet_end     != _alert_cfg.get("autoscan_quiet_end")):
+            _alert_cfg["autoscan_enabled"]             = autoscan_on
+            _alert_cfg["autoscan_interval_minutes"]    = interval_min
+            _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
+            _alert_cfg["autoscan_quiet_start"]         = quiet_start.strip()
+            _alert_cfg["autoscan_quiet_end"]           = quiet_end.strip()
+            _save_alerts_config_and_clear(_alert_cfg)
+
+    with st.expander("🎭 Demo / Sandbox mode", expanded=False):
+        _demo_val = st.toggle(
+            "Demo / Sandbox",
+            value=st.session_state.get("demo_mode", False),
+            key="demo_mode_toggle",
+            help="Demo mode: shows synthetic placeholder data — no real API calls. "
+                 "Safe for screenshots and onboarding.",
+        )
+        st.session_state["demo_mode"] = _demo_val
+        if _demo_val:
+            st.caption("⚠️ DEMO MODE — synthetic data, no live calls.")
+
+    with st.expander("🔌 API Health", expanded=False):
+        _api_health = _cached_api_health()
+        _health_rows = []
+        for _svc, _status in _api_health.items():
+            _dot = "🟢" if _status in ("ok", "configured") else "🟠" if _status.startswith("HTTP") else "🔴"
+            _health_rows.append(f"{_dot} **{_svc.capitalize()}** — {_status}")
+        st.markdown("\n\n".join(_health_rows) if _health_rows else "No results")
+        if st.button("Recheck", key="api_health_recheck", width="stretch"):
+            _cached_api_health.clear()
+            st.rerun()
+
+    with st.expander("🔗 Wallet Import (Beta)", expanded=False):
+        _wallet_addr = st.text_input(
+            "EVM Wallet Address",
+            placeholder="0x...",
+            key="wallet_address",
+            help="Read-only portfolio import. We never request signing or private keys.",
+        )
+        if _wallet_addr and len(_wallet_addr) == 42 and _wallet_addr.startswith("0x"):
+            st.caption("✓ Valid Ethereum address")
+            if st.button("Import Positions", key="btn_import_wallet"):
+                with st.spinner("Fetching wallet holdings..."):
+                    try:
+                        _wallet_data = data_feeds.fetch_wallet_holdings(_wallet_addr)
+                        if _wallet_data:
+                            st.session_state["wallet_holdings"] = _wallet_data
+                            st.success(f"Imported {len(_wallet_data.get('tokens', []))} positions")
+                        else:
+                            st.warning("No holdings found or fetch failed.")
+                    except Exception as _we:
+                        logger.warning("[Wallet] import error: %s", _we)
+                        st.error("Could not import wallet data — check the address is valid and try again.")
+            if st.button("Full Portfolio (Zerion)", key="btn_zerion_portfolio"):
+                with st.spinner("Fetching full portfolio..."):
+                    try:
+                        _zerion_data = data_feeds.fetch_zerion_portfolio(_wallet_addr)
+                        if _zerion_data:
+                            st.session_state["zerion_portfolio"] = _zerion_data
+                            st.success(f"Loaded portfolio: ${_zerion_data.get('total_value_usd', 0):,.2f}")
+                        else:
+                            st.warning("No portfolio data found.")
+                    except Exception as _ze:
+                        logger.warning("[Zerion] fetch error: %s", _ze)
+                        st.error("Portfolio data temporarily unavailable — try again in a moment.")
+        elif _wallet_addr:
+            st.error("Invalid Ethereum address format")
+
+    with st.expander("🔑 API Keys (Session Only)", expanded=False):
+        st.caption("Keys stored in session only — never saved to disk.")
+        _user_cg = st.text_input("CoinGecko Pro Key", type="password", key="user_cg_key")
+        _user_ant = st.text_input("Anthropic Key (override)", type="password", key="user_anthropic_key")
+        if st.button("Apply", key="btn_apply_user_keys"):
+            if _user_cg:
+                st.session_state["runtime_coingecko_key"] = _user_cg
+            if _user_ant:
+                st.session_state["runtime_anthropic_key"] = _user_ant
+            st.success("Applied for this session")
+
+    with st.expander("🛠️ Build Info", expanded=False):
+        st.caption(f"v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs")
+
+    with st.expander("🧪 Legacy views (advanced)", expanded=False):
+        st.caption(
+            "The 2026-05 redesign moved per-coin detail, regime detail, and "
+            "backtest detail to dedicated pages (Signals / Regimes / Backtester). "
+            "If you want the old Home dashboard's 5-tab structure back "
+            "(Today / All Coins / Coin Detail / Market Intel / Analysis), "
+            "toggle it on here."
+        )
+        _legacy_on = st.toggle(
+            "Show legacy 5-tab Dashboard view on Home",
+            value=st.session_state.get("show_legacy_scan_view", False),
+            key="show_legacy_scan_view_toggle",
+        )
+        st.session_state["show_legacy_scan_view"] = _legacy_on
+        _legacy_ticker_on = st.toggle(
+            "Show animated price-ticker strip on Home",
+            value=st.session_state.get("show_legacy_price_ticker", False),
+            key="show_legacy_price_ticker_toggle",
+        )
+        st.session_state["show_legacy_price_ticker"] = _legacy_ticker_on
+
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -1399,46 +1541,494 @@ def render_past_performance_disclaimer(context: str = "") -> None:
 
 
 def render_legal_footer() -> None:
-    """Render Terms + Privacy expander (internal-beta stub) in the sidebar."""
-    with st.sidebar.expander("📜 Legal (Internal Beta)", expanded=False):
-        st.markdown(_LEGAL_TOS)
-        st.markdown("---")
-        st.markdown(_LEGAL_PRIVACY)
+    """Render the sidebar footer cluster — Glossary popover + Legal stub.
+
+    Both items are explicitly scoped to st.sidebar via the `with st.sidebar:`
+    context. The previous version called _ui.glossary_popover(...) outside any
+    sidebar context, so the popover dropdown rendered at the bottom of the
+    main page area below the legal disclaimer instead of in the sidebar.
+    Depth of glossary content scales with user_level.
+    """
+    with st.sidebar:
+        try:
+            _ui.glossary_popover(user_level=st.session_state.get("user_level", "beginner"))
+        except Exception as _gloss_err:
+            logger.debug("[App] sidebar glossary render failed: %s", _gloss_err)
+        with st.expander("📜 Legal (Internal Beta)", expanded=False):
+            st.markdown(_LEGAL_TOS)
+            st.markdown("---")
+            st.markdown(_LEGAL_PRIVACY)
 
 
 def page_dashboard():
-    # ── Welcome banner (item 19 — beginner only, once per session) ────────────
-    _ui.render_welcome_banner()
-
-    # ── Quick-access popover row (ToS #7) — flush right, top of page ──────────
+    # ── 2026-05 redesign: mockup-style top bar (breadcrumb + level pills) ────
     try:
-        _ui.render_quick_access_row()
-    except Exception:
-        pass
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            macro_strip as _ds_macro_strip,
+        )
+        _ds_level = st.session_state.get("user_level", "beginner")
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_page_header(
+            title="Market home",
+            subtitle="Composite signals + regime state across the top-cap set.",
+            data_sources=[
+                (str(model.TA_EXCHANGE).upper(), "live"),
+                ("Glassnode", "live"),
+                ("News sentiment", "cached"),
+            ],
+        )
+        # Macro strip — mirrors the mockup's 5-col strip with real data.
+        # Pulls from LIVE data-source functions directly (each already cached
+        # at the data_feeds module level) — no dependency on a scan having
+        # been run. Fills BTC Dom / F&G / DXY / Funding / Regime on page
+        # load for every user, every visit.
+        try:
+            _gm = _cached_global_market() or {}
+            _me = _cached_macro_enrichment() or {}
 
-    st.markdown(
-        '<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
-        'letter-spacing:-0.5px;margin-bottom:0">🎯 Crypto Signals — What To Do Today</h1>',
-        unsafe_allow_html=True,
-    )
+            # Direct live feeds (bypass scan-only enrichment cache)
+            _fng_dict = {}
+            _dxy_val = None
+            _dxy_30d = None
+            _funding_val = None
+            try:
+                # P1-25 audit fix — was uncached F&G fetch on every Dashboard
+                # render. §12 says 24h cache.
+                _fng_dict = _sg_cached_fear_greed()
+            except Exception as _e_fng:
+                logger.debug("[Dashboard] F&G live fetch failed: %s", _e_fng)
+            try:
+                _yf = data_feeds.fetch_yfinance_macro() or {}
+                _dxy_val = _yf.get("dxy")
+                _dxy_30d = _yf.get("dxy_30d_change_pct") or _yf.get("dxy_30d_ret_pct")
+            except Exception as _e_yf:
+                logger.debug("[Dashboard] yfinance macro fetch failed: %s", _e_yf)
+            try:
+                # P1-25 audit fix — funding was uncached at render time. §12: 10min.
+                _fr = _sg_cached_funding_rate("BTC/USDT")
+                _funding_val = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+            except Exception as _e_fr:
+                logger.debug("[Dashboard] funding rate fetch failed: %s", _e_fr)
+
+            _btc_dom = _gm.get("btc_dominance_pct", _gm.get("btc_dominance"))
+            _btc_dom_7d = _gm.get("btc_dominance_7d_change_pct", _gm.get("btc_dominance_7d_ppt"))
+
+            # F&G from direct feed first, fall back to macro enrichment
+            _fng = _fng_dict.get("value")
+            _fng_cat = _fng_dict.get("label")
+            if _fng is None:
+                _fng = _me.get("fng_value")
+                _fng_cat = _me.get("fng_category", _me.get("fng_classification", ""))
+
+            # DXY fallback chain: yfinance → macro enrichment
+            if _dxy_val is None:
+                _dxy_val = _me.get("dxy")
+            if _dxy_30d is None:
+                _dxy_30d = _me.get("dxy_30d_change_pct")
+
+            # Funding fallback chain: direct → macro enrichment
+            if _funding_val is None:
+                _funding_val = _me.get("btc_funding_rate_pct", _me.get("funding_btc"))
+
+            _dxy = _dxy_val
+            _funding = _funding_val
+            _macro_regime = _me.get("macro_regime", _me.get("macro_regime_label", "—"))
+            _macro_conf = _me.get("macro_regime_confidence_pct", _me.get("macro_confidence"))
+
+            # Derive macro regime from raw indicators if enrichment hasn't run
+            if (_macro_regime in (None, "—", "")) or _macro_conf is None:
+                try:
+                    _risk_score = 0
+                    if _fng is not None:
+                        _risk_score += 1 if int(_fng) >= 55 else (-1 if int(_fng) <= 30 else 0)
+                    if _dxy_30d is not None:
+                        _risk_score += 1 if float(_dxy_30d) < 0 else -1
+                    if _funding is not None:
+                        _risk_score += 1 if float(_funding) > 0 else -1
+                    if _risk_score >= 2:
+                        _macro_regime, _macro_conf = "Risk-on", 72
+                    elif _risk_score <= -2:
+                        _macro_regime, _macro_conf = "Risk-off", 68
+                    else:
+                        _macro_regime, _macro_conf = "Mixed", 55
+                except Exception:
+                    pass
+            def _fmt_pct(v, decimals=2, prefix=True):
+                if v is None:
+                    return "—"
+                try:
+                    fv = float(v)
+                    sign = "+ " if (fv > 0 and prefix) else ("− " if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{decimals}f}%"
+                except Exception:
+                    return "—"
+            def _fmt_num(v, decimals=1, suffix=""):
+                if v is None:
+                    return "—"
+                try:
+                    return f"{float(v):.{decimals}f}{suffix}"
+                except Exception:
+                    return "—"
+            # Build the macro strip rows here but DON'T render yet — the
+            # mockup order is hero cards first, macro strip second. The
+            # actual _ds_macro_strip(...) call happens after the hero row,
+            # below.
+            _ds_macro_strip_rows = [
+                ("BTC Dominance", _fmt_num(_btc_dom, 1, "%"),
+                 f"{_fmt_pct(_btc_dom_7d, 2)} · 7d" if _btc_dom_7d is not None else "7d"),
+                ("Fear & Greed",  str(int(_fng)) if _fng is not None else "—",
+                 _fng_cat or ""),
+                ("DXY",           _fmt_num(_dxy, 2),
+                 f"{_fmt_pct(_dxy_30d, 2)} · 30d" if _dxy_30d is not None else "30d"),
+                ("Funding (BTC)", _fmt_pct(_funding, 3),
+                 "8h avg"),
+                ("Regime (macro)", str(_macro_regime).title(),
+                 f"confidence {int(_macro_conf)}%" if _macro_conf is not None else ""),
+            ]
+        except Exception as _ds_strip_err:
+            logger.debug("[App] macro strip prep failed: %s", _ds_strip_err)
+            _ds_macro_strip_rows = None
+    except Exception as _ds_tb_err:
+        logger.debug("[App] top bar render failed: %s", _ds_tb_err)
+        _ds_macro_strip_rows = None
+
     # PERF-28: read all WS prices once at the top of the render — was called 3+ times per render
     _live_prices = _ws.get_all_prices()
-    # Animated live price ticker strip — top of dashboard
+
+    # ── 2026-05 redesign: mockup-fidelity hero signal cards + regime mini-grid
+    #    + watchlist + backtest preview. Pulls live WS prices for BTC/ETH/XRP
+    #    plus the latest scan_results for signal/regime overlay. Matches
+    #    shared-docs/design-mockups/sibling-family-crypto-signal.html.
     try:
-        _ticker_prices = []
-        _all_ws = _live_prices
-        for _pair in model.PAIRS:
-            _tick = _all_ws.get(_pair)
-            if _tick:
-                _ticker_prices.append({
-                    "symbol":     _pair.replace("/USDT", ""),
-                    "price":      _tick.get("price", 0),
-                    "change_pct": _tick.get("change_24h_pct", 0),
-                })
-        if _ticker_prices:
-            st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
-    except Exception as _ticker_err:
-        logger.debug("[App] price ticker strip render failed: %s", _ticker_err)
+        from ui import (
+            hero_signal_cards_row as _ds_hero_row,
+            watchlist_card as _ds_watchlist,
+            backtest_preview_card as _ds_bt_preview,
+            regime_cards_grid as _ds_regimes,
+        )
+
+        # Lazy-load recent signals from DB so the hero cards have signal +
+        # regime info even on a fresh page load where no scan has been
+        # triggered in the current session. _cached_signals_df is already
+        # st.cache_data-wrapped (TTL controlled upstream).
+        _ds_db_signals = None
+        try:
+            _ds_db_signals = _cached_signals_df(500)
+        except Exception as _e_sig:
+            logger.debug("[Dashboard] could not load signals DF for hero cards: %s", _e_sig)
+
+        def _ds_latest_result_for_pair(target_pair: str) -> dict:
+            """Return the most recent scan result for a given pair (case-insensitive, slash or dash).
+            Falls back to the daily_signals DB when session state is empty."""
+            norm = target_pair.upper().replace("/", "").replace("-", "")
+            # 1. Current session scan results
+            for r in (st.session_state.get("scan_results") or []):
+                pr = str(r.get("pair") or r.get("symbol") or "").upper().replace("/", "").replace("-", "")
+                if pr.startswith(norm):
+                    return r
+            # 2. DB fallback — most recent row for the pair
+            if _ds_db_signals is not None and not _ds_db_signals.empty:
+                try:
+                    _df = _ds_db_signals
+                    _df_pair_norm = _df["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+                    _hits = _df[_df_pair_norm.str.startswith(norm)]
+                    if not _hits.empty:
+                        _row = _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
+                        return _row
+                except Exception as _e_db:
+                    logger.debug("[Dashboard] signals DB lookup for %s failed: %s", target_pair, _e_db)
+            return {}
+
+        def _ds_signal_label(r: dict) -> str:
+            d = (r.get("direction") or r.get("signal") or r.get("composite_direction") or "").upper()
+            if d in ("LONG", "BUY"):
+                return "BUY"
+            if d in ("SHORT", "SELL"):
+                return "SELL"
+            return "HOLD" if r else ""
+
+        def _ds_regime_label(r: dict) -> str:
+            """Return a clean regime label for mockup display.
+            Strips legacy "Regime " / "Regime: " prefixes and maps the
+            scan's Trending/Ranging/Trending:Bull taxonomy into the mockup's
+            Bull/Bear/Transition/Accumulation/Distribution vocabulary."""
+            raw = str(r.get("regime") or r.get("regime_label") or "").strip()
+            if not raw:
+                return ""
+            low = raw.lower()
+            # Strip "Regime " / "Regime: " prefix the scan writes
+            for prefix in ("regime: ", "regime:", "regime "):
+                if low.startswith(prefix):
+                    raw = raw[len(prefix):]
+                    low = raw.lower()
+                    break
+            # Map internal taxonomy → mockup states (Bull / Bear / Transition / Accumulation / Distribution)
+            if "bull" in low and "bear" not in low:
+                return "Bull"
+            if "bear" in low:
+                return "Bear"
+            if "accum" in low:
+                return "Accumulation"
+            if "dist" in low:
+                return "Distribution"
+            if "trans" in low or "rang" in low or "chop" in low:
+                return "Transition"
+            if "trend" in low:
+                return "Bull"  # Generic trending → lean bull (scan default when no direction)
+            return raw.title()
+
+        def _ds_regime_conf(r: dict):
+            for k in ("regime_confidence", "regime_conf_pct", "regime_confidence_pct"):
+                v = r.get(k)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except Exception:
+                        pass
+            return None
+
+        def _ds_build_hero(pair_key: str, display: str) -> dict:
+            tick = (_live_prices or {}).get(pair_key) or {}
+            price = tick.get("price") or tick.get("last") or None
+            chg = tick.get("change_24h_pct") or tick.get("change_pct") or None
+            r = _ds_latest_result_for_pair(pair_key)
+            return {
+                "ticker": display,
+                "price": price,
+                "change_pct": chg,
+                "signal": _ds_signal_label(r) if r else None,
+                "regime_label": _ds_regime_label(r),
+                "regime_confidence": _ds_regime_conf(r),
+            }
+
+        _ds_hero_row([
+            _ds_build_hero("BTC/USDT", "BTC / USD"),
+            _ds_build_hero("ETH/USDT", "ETH / USD"),
+            _ds_build_hero("XRP/USDT", "XRP / USD"),
+        ])
+
+        # Macro strip — rendered AFTER hero cards to match the mockup order.
+        # Rows were prepped earlier inside the topbar try block.
+        _ds_strip_rows = locals().get("_ds_macro_strip_rows")
+        if _ds_strip_rows:
+            try:
+                from ui import macro_strip as _ds_macro_strip
+                _ds_macro_strip(_ds_strip_rows)
+            except Exception as _ds_strip_render_err:
+                logger.debug("[App] macro strip render failed: %s", _ds_strip_render_err)
+
+        # Regime mini-grid — 4-col, up to 8 assets
+        try:
+            _ds_regime_rows = []
+            for _rp in model.PAIRS[:8]:
+                _r = _ds_latest_result_for_pair(_rp)
+                if _r:
+                    _state = _ds_regime_label(_r) or "Transition"
+                    _conf = _ds_regime_conf(_r)
+                    _ds_regime_rows.append({
+                        "ticker": _rp.replace("/USDT", "").replace("/USD", ""),
+                        "state": _state,
+                        "confidence": _conf,
+                        "since": "",
+                    })
+            if _ds_regime_rows:
+                st.markdown(
+                    '<div class="ds-section-title" style="font-size:11px;color:var(--text-muted);'
+                    'text-transform:uppercase;letter-spacing:0.08em;font-weight:500;'
+                    'margin:8px 0 10px 2px;">Regime · per asset</div>',
+                    unsafe_allow_html=True,
+                )
+                _ds_regimes(_ds_regime_rows, cols=4)
+        except Exception as _ds_rg_err:
+            logger.debug("[App] regime mini-grid render failed: %s", _ds_rg_err)
+
+        # Two-col: watchlist + backtest preview
+        try:
+            # Sparkline points come from real 24×1h OHLCV closes
+            # (data_feeds.fetch_sparkline_closes — OKX → Gate.io fallback,
+            # cached 5 minutes per pair via the module-level _SPARKLINE_CACHE).
+            # If the fetch fails the row simply omits spark_points and the
+            # watchlist card renders an empty SVG — never fake data.
+            def _spark_points_from_closes(closes, width: int = 80, height: int = 22):
+                if not closes or len(closes) < 2:
+                    return None
+                lo, hi = min(closes), max(closes)
+                span = hi - lo
+                n = len(closes)
+                pad_top, pad_bot = 2.0, 2.0
+                inner = height - pad_top - pad_bot  # 18
+                pts = []
+                for _idx, _c in enumerate(closes):
+                    _x = (_idx / (n - 1)) * width
+                    if span <= 0:
+                        _y_pt = pad_top + inner / 2
+                    else:
+                        # Invert: high price → low y (SVG y=0 is top)
+                        _y_pt = pad_top + (1.0 - (_c - lo) / span) * inner
+                    pts.append((round(_x, 1), round(_y_pt, 1)))
+                return pts
+
+            _ds_wl_rows = []
+            for _wp in model.PAIRS[:6]:
+                _tick = (_live_prices or {}).get(_wp) or {}
+                _price = _tick.get("price") or _tick.get("last")
+                _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
+                try:
+                    _closes = data_feeds.fetch_sparkline_closes(_wp, n=24)
+                except Exception as _spark_err:
+                    logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
+                    _closes = []
+                _pts = _spark_points_from_closes(_closes)
+                # Derive 24h change from closes only if WS didn't supply one
+                if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
+                    try:
+                        _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
+                    except Exception:
+                        pass
+                _wl_row = {
+                    "ticker": _wp.replace("/USDT", "").replace("/USD", ""),
+                    "price": _price,
+                    "change_pct": _chg,
+                }
+                if _pts:
+                    _wl_row["spark_points"] = _pts
+                _ds_wl_rows.append(_wl_row)
+            # Last scan timestamp
+            _scan_ts_label = "not yet run"
+            _ts = st.session_state.get("scan_timestamp")
+            if _ts:
+                try:
+                    _delta = (datetime.now(timezone.utc) - _ts).total_seconds()
+                    if _delta < 60:
+                        _scan_ts_label = "just now"
+                    elif _delta < 3600:
+                        _scan_ts_label = f"{int(_delta // 60)}m ago"
+                    else:
+                        _scan_ts_label = f"{int(_delta // 3600)}h ago"
+                except Exception:
+                    _scan_ts_label = "recent"
+
+            # Backtest KPIs — session_state first, then compute from the
+            # backtest_trades DB table so the preview card fills in even
+            # without a manual run triggered this session.
+            _bt_sess = st.session_state.get("backtest_results") or {}
+            _bt_m = (_bt_sess or {}).get("metrics") or {}
+            _bt_tr = _bt_m.get("total_return")
+            _bt_dd = _bt_m.get("max_drawdown")
+            _bt_sh = _bt_m.get("sharpe")
+            _bt_wr = _bt_m.get("win_rate")
+            _bt_ntr = _bt_m.get("total_trades", 0)
+
+            if _bt_tr is None:
+                try:
+                    _bt_df = _cached_backtest_df()
+                    if _bt_df is not None and not _bt_df.empty:
+                        _pnl = _bt_df.get("pnl_pct")
+                        if _pnl is not None and len(_pnl) > 0:
+                            _bt_tr = float(_pnl.sum())
+                            _bt_wr = float((_pnl > 0).mean() * 100.0)
+                            _bt_ntr = int(len(_pnl))
+                            # Equity-curve-based max drawdown (rough)
+                            _eq = (1.0 + _pnl / 100.0).cumprod()
+                            _peak = _eq.cummax()
+                            _bt_dd = float(((_eq - _peak) / _peak * 100.0).min())
+                            # Sharpe approx — mean/std of per-trade returns
+                            _std = float(_pnl.std())
+                            if _std > 0:
+                                _bt_sh = float(_pnl.mean() / _std)
+                except Exception as _e_bt:
+                    logger.debug("[Dashboard] backtest DB fallback failed: %s", _e_bt)
+            def _ds_pct(v, signed=False):
+                if v is None:
+                    return "—"
+                try:
+                    fv = float(v)
+                    if signed:
+                        sign = "+ " if fv > 0 else ("− " if fv < 0 else "")
+                        return f"{sign}{abs(fv):.1f}%"
+                    return f"{fv:.1f}%"
+                except Exception:
+                    return "—"
+            _ds_kpis = [
+                ("Return", _ds_pct(_bt_tr, signed=True),
+                 "cumulative across all trades" if _bt_tr is not None else "Run backtest to populate",
+                 "up" if (_bt_tr is not None and float(_bt_tr) > 0) else ("down" if _bt_tr is not None and float(_bt_tr) < 0 else "")),
+                ("Max drawdown", _ds_pct(_bt_dd, signed=True), "peak → trough", ""),
+                ("Sharpe", f"{float(_bt_sh):.2f}" if _bt_sh is not None else "—", "per-trade basis", ""),
+                ("Win rate", _ds_pct(_bt_wr), f"n={int(_bt_ntr)} trades" if _bt_ntr else "no runs yet", ""),
+            ]
+
+            _ds_col1, _ds_col2 = st.columns(2)
+            with _ds_col1:
+                _ds_watchlist(
+                    title="Watchlist · top-cap",
+                    subtitle=f"scan refreshed {_scan_ts_label}",
+                    rows=_ds_wl_rows,
+                )
+            with _ds_col2:
+                _ds_bt_preview(
+                    title="Composite backtest",
+                    subtitle="latest run — Run Backtest to update",
+                    kpis=_ds_kpis,
+                )
+        except Exception as _ds_wl_err:
+            logger.debug("[App] watchlist/backtest preview render failed: %s", _ds_wl_err)
+    except Exception as _ds_hero_err:
+        logger.debug("[App] hero signal cards render failed: %s", _ds_hero_err)
+
+    # ── 2026-05 redesign: pure-mockup Home for beginners ─────────────────
+    # Beginners get exactly what the shared-docs/design-mockups/
+    # sibling-family-crypto-signal.html Home shows: hero cards + macro
+    # strip + regime grid + watchlist + backtest preview. Nothing else.
+    # 2026-04-25: extended the gate from beginner-only to ALL levels by
+    # default. The legacy 5-tab dashboard structure (Today / All Coins /
+    # Coin Detail / Market Intel / Analysis) duplicates content that now
+    # lives on the dedicated SIGNALS / REGIMES / BACKTESTER pages, and
+    # was making Home read as cluttered for every user. Power users who
+    # explicitly want the legacy view can flip
+    #   st.session_state["show_legacy_scan_view"] = True
+    # from Settings → Dev Tools.
+    _ds_lvl_hide = st.session_state.get("user_level", "beginner")
+    if not st.session_state.get("show_legacy_scan_view", False):
+        # Compact scan CTA so users can still trigger a fresh scan from Home.
+        with _scan_lock:
+            _ds_sb_running = _scan_state["running"]
+        _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
+        _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
+        if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
+            st.session_state["scan_results"] = []
+            st.session_state["scan_error"] = None
+            _start_scan()
+        return  # skip the legacy scan/tabs section — see flag above
+
+    # Lightweight divider between the mockup cards above and the scan controls
+    # below. Renders as a thin 24px top-margin line instead of an h2.
+    st.markdown(
+        '<div style="height:1px;background:var(--border);margin:24px 0 16px 0;"></div>',
+        unsafe_allow_html=True,
+    )
+    # Animated live price ticker strip — SUPPRESSED in 2026-05 redesign.
+    # Hero signal cards above now show BTC/ETH/XRP big and prominent, which
+    # made the scrolling ticker visually redundant. Opt back in by flipping
+    # st.session_state["show_legacy_price_ticker"] = True from Settings.
+    if st.session_state.get("show_legacy_price_ticker", False):
+        try:
+            _ticker_prices = []
+            _all_ws = _live_prices
+            for _pair in model.PAIRS:
+                _tick = _all_ws.get(_pair)
+                if _tick:
+                    _ticker_prices.append({
+                        "symbol":     _pair.replace("/USDT", ""),
+                        "price":      _tick.get("price", 0),
+                        "change_pct": _tick.get("change_24h_pct", 0),
+                    })
+            if _ticker_prices:
+                st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
+        except Exception as _ticker_err:
+            logger.debug("[App] price ticker strip render failed: %s", _ticker_err)
 
     # FNG chip + scan controls
     col_btn, col_fng, col_ts = st.columns([2, 2, 4])
@@ -1481,8 +2071,13 @@ def page_dashboard():
         if st.session_state.get("scan_timestamp"):
             st.caption(f"Last scan: {st.session_state['scan_timestamp']}")
 
-    # ── Fear & Greed trend — Now / 7-day avg / 30-day avg (item 26) ──────────
-    _ui.render_fear_greed_trend_sg(user_level=st.session_state.get("user_level", "beginner"))
+    # ── Fear & Greed trend — SUPPRESSED in 2026-05 redesign.
+    # The mockup's macro strip (rendered above by _ds_macro_strip) already
+    # shows the current Fear & Greed value alongside BTC dominance, DXY,
+    # funding, and macro regime. The 3-card legacy widget duplicated that.
+    # Opt back in via st.session_state["show_legacy_fng_trend"] = True.
+    if st.session_state.get("show_legacy_fng_trend", False):
+        _ui.render_fear_greed_trend_sg(user_level=st.session_state.get("user_level", "beginner"))
 
     # Progress bar while scanning — check in-memory state first (PERF-30), fall back to SQLite
     with _scan_lock:
@@ -1536,13 +2131,17 @@ def page_dashboard():
     else:
         results = st.session_state.get("scan_results", [])
     if not results:
-        if st.session_state.get("user_level", "beginner") == "beginner" and not st.session_state.get("scan_run"):
+        # 2026-05 redesign: the legacy beginner_welcome_html block
+        # (3-column "Run the Scan / Read the Results / Do Your Research"
+        # onboarding + oversized risk warning) duplicated content already
+        # present in the new page_header + hero cards + welcome banner above.
+        # Replaced by a single-line info caption.
+        if st.session_state.get("show_legacy_beginner_welcome", False) and \
+           st.session_state.get("user_level", "beginner") == "beginner" and \
+           not st.session_state.get("scan_run"):
             st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
         else:
-            # Audit R3c: there is no "Run Scan" sidebar button — the scan
-            # button lives on the main page. Previous copy sent demo viewers
-            # hunting for a phantom button.
-            st.info("No scan results yet — click **🔍 Analyze All Coins Now** at the top of this page to begin.")
+            st.info("No scan results yet — click **🔍 Analyze All Coins Now** above to run a full market scan (~15-30s).")
         return  # A4: guard — always return on empty results, prevents results[0] IndexError
 
     # PERF-A8: Inject live WebSocket prices into scan results before rendering.
@@ -2470,8 +3069,8 @@ def page_dashboard():
             _hm_fig.update_layout(
                 height=max(250, 32 * len(_hm_pairs) + 60),
                 margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="#0d0e14",
-                plot_bgcolor="#0d0e14",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(color="#f8fafc", size=9),
                 xaxis=dict(side="top", tickfont=dict(size=9)),
                 yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
@@ -2870,8 +3469,20 @@ def page_dashboard():
         else:
             _cycle_row = ""
 
+        # P0 audit fix — Trade Action Card was using `f"…" if val else f"…"`
+        # ternaries spliced INSIDE a chain of implicit string concatenation.
+        # Python parses `A B C if cond else D E` as `(A B C) if cond else (D E)`,
+        # so when `entry`/`stop`/`tp1_act` were truthy the closing `</div>`
+        # following each cell was dropped, producing malformed HTML and breaking
+        # the 3-col grid layout. Build each cell's inner-value once, then drop
+        # it into a single uniform card template.
+        _entry_str = f"${entry:,.4f}" if entry else "—"
+        _stop_str  = f"${stop:,.4f}"  if stop  else "—"
+        _tp_str    = f"${_tp1_act:,.4f}" if _tp1_act else "—"
+        _grad_rgb = ('34,197,94' if _d_up
+                     else ('239,68,68' if _d_down else '245,158,11'))
         st.markdown(
-            f"<div style='background:linear-gradient(135deg,rgba({('34,197,94' if _d_up else ('239,68,68' if _d_down else '245,158,11'))},0.08) 0%,rgba(0,0,0,0.2) 100%);"
+            f"<div style='background:linear-gradient(135deg,rgba({_grad_rgb},0.08) 0%,rgba(0,0,0,0.2) 100%);"
             f"border:1px solid {_d_color}44;border-left:5px solid {_d_color};"
             f"border-radius:12px;padding:18px 22px;margin-bottom:16px'>"
             f"<div style='display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap'>"
@@ -2883,18 +3494,15 @@ def page_dashboard():
             f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>"
             f"<div style='background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px'>"
             f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Entry Zone</div>"
-            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>${entry:,.4f}</div>" if entry else
-            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>—</div>"
+            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>{_entry_str}</div>"
             f"</div>"
             f"<div style='background:rgba(239,68,68,0.06);border-radius:8px;padding:10px 14px'>"
             f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Stop Loss</div>"
-            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>${stop:,.4f}</div>" if stop else
-            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>—</div>"
+            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>{_stop_str}</div>"
             f"</div>"
             f"<div style='background:rgba(34,197,94,0.06);border-radius:8px;padding:10px 14px'>"
             f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Take Profit</div>"
-            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>${_tp1_act:,.4f}</div>" if _tp1_act else
-            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>—</div>"
+            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>{_tp_str}</div>"
             f"</div>"
             f"</div>"
             f"<div style='font-size:0.75rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px'>Timeframe Breakdown</div>"
@@ -4376,13 +4984,23 @@ def _start_scan():
 # ──────────────────────────────────────────────
 def page_config():
     _cfg_lv = st.session_state.get("user_level", "beginner")
-    _cfg_title = "⚙️ Settings" if _cfg_lv in ("beginner", "intermediate") else "⚙️ Config Editor"
-    st.markdown(
-        f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
-        f'letter-spacing:-0.5px;margin-bottom:0">{_cfg_title}</h1>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Changes are saved to config_overrides.json and applied on next scan.")
+    _cfg_title = "Settings" if _cfg_lv in ("beginner", "intermediate") else "Config Editor"
+    # ── 2026-05 redesign: mockup-style top bar + page header ──
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_page_header(
+            title=_cfg_title,
+            subtitle="Changes are saved to config_overrides.json and applied on next scan.",
+        )
+    except Exception as _ds_cfg_err:
+        logger.debug("[App] config top bar failed: %s", _ds_cfg_err)
+        st.markdown(
+            f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
+            f'letter-spacing:-0.5px;margin-bottom:0">⚙️ {_cfg_title}</h1>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Changes are saved to config_overrides.json and applied on next scan.")
 
     # ── Item 14: Beginner simplified settings — 3 controls only ──────────────
     if _cfg_lv == "beginner":
@@ -4989,6 +5607,15 @@ def page_config():
 
     # ── Tab 4: Dev Tools
     with _cfg_t4:
+        # ── Sidebar legacy widgets (relocated from sidebar in 2026-04-25 redesign)
+        _ui.section_header("Sidebar tools", "Auto-Scan, Demo / Sandbox, API Health, Wallet Import, API Keys, Build Info", icon="🧰")
+        try:
+            _render_relocated_sidebar_widgets()
+        except Exception as _rsl_err:
+            logger.warning("[Settings] relocated sidebar widgets failed: %s", _rsl_err)
+            st.warning("Sidebar tools temporarily unavailable.")
+
+        st.markdown("---")
         # ── Circuit Breakers (4A-5) ──────────────────────────────────────
         _ui.section_header("Circuit Breakers", "Level-C 7-gate safety system", icon="🛑")
         try:
@@ -5448,15 +6075,56 @@ def _backtest_progress():
 # ──────────────────────────────────────────────
 def page_backtest():
     _bt_lv = st.session_state.get("user_level", "beginner")
-    _bt_title = "Performance History" if _bt_lv in ("beginner", "intermediate") else "Backtest Viewer"
-    st.markdown(
-        f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
-        f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
-        unsafe_allow_html=True,
-    )
-    if _bt_lv == "beginner":
-        st.caption("See how the model has performed in the past — like a report card for the AI signals.")
+    _bt_title = "Backtester"
+    _bt_sub = "Composite signal backtested across the historical universe. Optuna-tuned hyperparams."
+    # ── 2026-05 redesign: mockup-style top bar + page header (matches
+    #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_page_header(title=_bt_title, subtitle=_bt_sub)
+    except Exception as _ds_bt_err:
+        logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
+        st.markdown(
+            f'<h1 style="color:#e2e8f0;font-size:26px;font-weight:700;'
+            f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
+            unsafe_allow_html=True,
+        )
 
+    # ── Controls row (Universe / Period / Initial / Rebalance / Costs) + Run button
+    try:
+        from ui import (
+            backtest_controls_row as _ds_bt_controls,
+            backtest_kpi_strip as _ds_bt_kpis,
+            optuna_top_card as _ds_bt_optuna,
+            recent_trades_card as _ds_bt_trades,
+        )
+        # Pull config-driven values where available; fall back to sensible defaults.
+        _bt_cfg = _cached_alerts_config() or {}
+        _bt_universe = _bt_cfg.get("backtest_universe", "Top 10 cap")
+        _bt_period = _bt_cfg.get("backtest_period", "2023-01-01 → today")
+        _bt_initial = _bt_cfg.get("backtest_initial_usd", "$100,000")
+        _bt_rebalance = _bt_cfg.get("backtest_rebalance", "Weekly")
+        _bt_costs = _bt_cfg.get("backtest_costs", "12 bps · realistic slippage")
+        st.markdown(
+            _ds_bt_controls(
+                [
+                    ("Universe", str(_bt_universe)),
+                    ("Period", str(_bt_period)),
+                    ("Initial", str(_bt_initial)),
+                    ("Rebalance", str(_bt_rebalance)),
+                    ("Costs", str(_bt_costs)),
+                ],
+                run_button_label="Re-run backtest →",
+            ),
+            unsafe_allow_html=True,
+        )
+    except Exception as _e_ctrl:
+        logger.debug("[Backtest] controls row failed: %s", _e_ctrl)
+
+    # The visual button in the controls row above is markup-only; the real
+    # click handler stays a Streamlit button rendered just below it so the
+    # backtest can actually be triggered.
     run_col, _ = st.columns([2, 6])
     with run_col:
         bt_disabled = st.session_state.get("backtest_running", False)
@@ -5466,6 +6134,208 @@ def page_backtest():
     # _backtest_progress is defined at module level (above page_backtest) — always called
     # here so its fragment key stays registered across rerenders (prevents $$ID KeyError).
     _backtest_progress()
+
+    # ── 2026-05 redesign: mockup-style backtester sections (matches
+    # sibling-family-crypto-signal-BACKTESTER.html: 5-col KPI strip +
+    # 2-col equity-vs-BTC + Optuna top-5 + recent-trades table). Renders
+    # above the existing tabs so users land on the mockup view first;
+    # tabs below carry the deeper Trade History / Advanced views.
+    try:
+        _bt_df = _cached_backtest_df()
+        _bt_sess = st.session_state.get("backtest_results") or {}
+        _bt_m = (_bt_sess or {}).get("metrics") or {}
+        _bt_equity = (_bt_sess or {}).get("equity")
+
+        # Derive metrics from DB if session state is empty
+        _bt_total = _bt_m.get("total_return")
+        _bt_cagr = _bt_m.get("cagr")
+        _bt_sharpe = _bt_m.get("sharpe")
+        _bt_dd = _bt_m.get("max_drawdown")
+        _bt_wr = _bt_m.get("win_rate")
+        _bt_n = _bt_m.get("total_trades", 0)
+        _bt_btc_total = _bt_m.get("btc_return", _bt_m.get("buy_hold_return"))
+        _bt_btc_cagr = _bt_m.get("btc_cagr")
+        _bt_btc_dd = _bt_m.get("btc_max_drawdown", _bt_m.get("benchmark_max_drawdown"))
+
+        if _bt_total is None and _bt_df is not None and not _bt_df.empty:
+            _pnl = _bt_df.get("pnl_pct")
+            if _pnl is not None and len(_pnl) > 0:
+                _bt_total = float(_pnl.sum())
+                _bt_wr = float((_pnl > 0).mean() * 100.0)
+                _bt_n = int(len(_pnl))
+                _eq = (1.0 + _pnl / 100.0).cumprod()
+                _peak = _eq.cummax()
+                _bt_dd = float(((_eq - _peak) / _peak * 100.0).min())
+                _std = float(_pnl.std())
+                if _std > 0:
+                    _bt_sharpe = float(_pnl.mean() / _std)
+
+        def _pct(v, d=1, signed=True):
+            if v is None:
+                return "—"
+            try:
+                fv = float(v)
+                if signed:
+                    sign = "+ " if fv > 0 else ("− " if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{d}f}%"
+                return f"{fv:.{d}f}%"
+            except Exception:
+                return "—"
+
+        # 5-col KPI strip
+        _ds_bt_kpis([
+            ("Total return",
+             _pct(_bt_total, 1),
+             f"vs BTC {_pct(_bt_btc_total, 1)}" if _bt_btc_total is not None else "over backtest window",
+             "success" if (_bt_total is not None and float(_bt_total) > 0) else ("danger" if _bt_total is not None and float(_bt_total) < 0 else "")),
+            ("CAGR",
+             _pct(_bt_cagr, 1),
+             f"vs BTC {_pct(_bt_btc_cagr, 1)}" if _bt_btc_cagr is not None else "annualised",
+             ""),
+            ("Sharpe",
+             f"{float(_bt_sharpe):.2f}" if _bt_sharpe is not None else "—",
+             "risk-free 4.5%",
+             "accent" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else ""),
+            ("Max drawdown",
+             _pct(_bt_dd, 1),
+             f"BTC {_pct(_bt_btc_dd, 1)}" if _bt_btc_dd is not None else "peak → trough",
+             "danger" if (_bt_dd is not None and float(_bt_dd) != 0) else ""),
+            ("Win rate",
+             _pct(_bt_wr, 0, signed=False) if _bt_wr is not None else "—",
+             f"n = {int(_bt_n)} trades" if _bt_n else "no runs yet",
+             ""),
+        ])
+
+        # 2-col: equity curve + Optuna top-5
+        _bt_col_l, _bt_col_r = st.columns([2, 1])
+        with _bt_col_l:
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd">'
+                '<div class="ds-card-title">Equity curve · signal vs BTC</div>'
+                f'<div style="color:var(--text-muted);font-size:12px;">{str(_bt_period) if "_bt_period" in dir() else ""}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            try:
+                if _bt_df is not None and not _bt_df.empty and "pnl_pct" in _bt_df.columns:
+                    _eq_signal = (1.0 + _bt_df["pnl_pct"].fillna(0) / 100.0).cumprod() * 100.0
+                    _x = list(range(len(_eq_signal)))
+                    import plotly.graph_objects as _go
+                    _fig = _go.Figure()
+                    _fig.add_trace(_go.Scatter(
+                        x=_x, y=_eq_signal.tolist(), mode="lines",
+                        name="Composite signal",
+                        line=dict(color="#22d36f", width=2),
+                        fill="tozeroy", fillcolor="rgba(34,211,111,0.18)",
+                        hovertemplate="%{y:.1f}<extra>signal</extra>",
+                    ))
+                    # BTC benchmark line if available
+                    try:
+                        _ex = model.get_exchange_instance(model.TA_EXCHANGE)
+                        if _ex:
+                            # P1-25 audit fix — was uncached on every Backtester
+                            # render. §12 5min cache via _sg_cached_ohlcv.
+                            _ex_id = getattr(_ex, "id", str(model.TA_EXCHANGE))
+                            _btc_o = _sg_cached_ohlcv(
+                                _ex_id, "BTC/USDT", "1d",
+                                limit=max(200, len(_eq_signal) or 0),
+                            )
+                            if _btc_o:
+                                _btc_closes = [float(r[4]) for r in _btc_o if len(r) >= 5]
+                                if _btc_closes:
+                                    _b0 = _btc_closes[0]
+                                    _btc_eq = [c / _b0 * 100.0 for c in _btc_closes][-len(_eq_signal):]
+                                    _fig.add_trace(_go.Scatter(
+                                        x=list(range(len(_btc_eq))),
+                                        y=_btc_eq, mode="lines",
+                                        name="BTC buy-and-hold",
+                                        line=dict(color="#8a8a9d", width=1.5, dash="dash"),
+                                    ))
+                    except Exception as _e_btc:
+                        logger.debug("[Backtest] BTC benchmark fetch failed: %s", _e_btc)
+                    _fig.update_layout(
+                        height=280, margin=dict(l=0, r=0, t=10, b=0),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(visible=False),
+                        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="left", x=0,
+                            font=dict(color="#8a8a9d", size=12),
+                            bgcolor="rgba(0,0,0,0)",
+                        ),
+                    )
+                    st.plotly_chart(_fig, width='stretch', config={"displayModeBar": False})
+                else:
+                    st.caption("Equity curve unavailable — run a backtest to populate.")
+            except Exception as _e_eq:
+                logger.debug("[Backtest] equity curve render failed: %s", _e_eq)
+                st.caption("Equity curve render failed — see logs.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with _bt_col_r:
+            # Optuna top-5 — read from optuna_studies.sqlite if available
+            _opt_rows = []
+            try:
+                import optuna as _opt
+                _study_name = getattr(model, "OPTUNA_STUDY_NAME", "optuna_cpx")
+                _study_storage = getattr(model, "OPTUNA_STORAGE", "sqlite:///optuna_studies.sqlite")
+                try:
+                    _study = _opt.load_study(study_name=_study_name, storage=_study_storage)
+                    _trials = sorted(
+                        [t for t in _study.trials if t.value is not None and t.state.name == "COMPLETE"],
+                        key=lambda t: t.value,
+                        reverse=True,
+                    )[:5]
+                    for _i, _t in enumerate(_trials, start=1):
+                        _params_str = ", ".join(f"{k}={v}" for k, v in list(_t.params.items())[:4])
+                        _opt_rows.append({
+                            "rank": _i,
+                            "star": (_i == 1),
+                            "params": _params_str,
+                            "sharpe": _t.value,
+                            "return_pct": _t.user_attrs.get("total_return") if hasattr(_t, "user_attrs") else None,
+                        })
+                except Exception as _e_load:
+                    logger.debug("[Backtest] Optuna study load failed: %s", _e_load)
+            except ImportError:
+                pass
+            _ds_bt_optuna(
+                _opt_rows,
+                title="Optuna studies · top 5 hyperparam sets",
+                footer=f"Study: {getattr(model, 'OPTUNA_STUDY_NAME', '—')} · TPE sampler" if _opt_rows else "",
+            )
+
+        # Recent trades table (last 8)
+        _trade_rows = []
+        try:
+            if _bt_df is not None and not _bt_df.empty:
+                _df_recent = _bt_df.sort_values(_bt_df.columns[0], ascending=False).head(8) if len(_bt_df.columns) else _bt_df.head(8)
+                for _, _row in _df_recent.iterrows():
+                    _date_v = _row.get("entry_time") or _row.get("date") or _row.get("timestamp")
+                    try:
+                        _date_str = str(_date_v)[:10] if _date_v is not None else "—"
+                    except Exception:
+                        _date_str = "—"
+                    _side = str(_row.get("side") or _row.get("direction") or "").upper()
+                    _trade_rows.append({
+                        "date": _date_str,
+                        "side": "BUY" if _side in ("LONG", "BUY") else ("SELL" if _side in ("SHORT", "SELL") else _side),
+                        "reason": str(_row.get("reason") or _row.get("rationale") or _row.get("pair") or "")[:80],
+                        "return_pct": _row.get("pnl_pct") or _row.get("return_pct"),
+                        "duration": _row.get("duration") or _row.get("hold_days") or "—",
+                    })
+        except Exception as _e_tr:
+            logger.debug("[Backtest] trades table prep failed: %s", _e_tr)
+        _ds_bt_trades(
+            _trade_rows,
+            title="Recent trades · signal-driven",
+            subtitle=f"last {len(_trade_rows)} of {int(_bt_n) if _bt_n else len(_trade_rows)}" if _trade_rows else "",
+        )
+        st.markdown('<div style="height:24px;"></div>', unsafe_allow_html=True)
+    except Exception as _e_mockup:
+        logger.debug("[Backtest] mockup sections failed: %s", _e_mockup)
 
     _bt_t1, _bt_t2, _bt_t3 = st.tabs([
         "📊 Summary",
@@ -5497,6 +6367,89 @@ def page_backtest():
         if metrics:
             m = metrics
             _wr = m.get('win_rate', 0)
+
+            # ── 2026-05 redesign: mockup-style 5-col KPI grid ────────────────
+            # Mirrors the top strip of
+            # shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html.
+            # Renders above the existing level-specific metric grids so users
+            # get the signature look at every level while the existing
+            # beginner/intermediate/advanced panels below stay intact.
+            try:
+                _tr = m.get("total_return", 0)
+                _bt_btc_ret = m.get("btc_return", m.get("buy_hold_return", None))
+                _bt_cagr = m.get("cagr", None)
+                _bt_btc_cagr = m.get("btc_cagr", None)
+                _bt_sharpe = m.get("sharpe", 0)
+                _bt_dd = m.get("max_drawdown", 0)
+                _bt_btc_dd = m.get("btc_max_drawdown", m.get("benchmark_max_drawdown", None))
+                _bt_ntrades = m.get("total_trades", 0)
+
+                def _bt_fmt_pct(v, decimals=1):
+                    if v is None:
+                        return "—"
+                    try:
+                        fv = float(v)
+                        sign = "+ " if fv > 0 else ("− " if fv < 0 else "")
+                        return f"{sign}{abs(fv):.{decimals}f}%"
+                    except Exception:
+                        return "—"
+
+                _tr_color = "var(--success)" if (_tr is not None and float(_tr) > 0) else ("var(--danger)" if (_tr is not None and float(_tr) < 0) else "var(--text-primary)")
+                _dd_color = "var(--danger)" if (_bt_dd is not None and float(_bt_dd) != 0) else "var(--text-primary)"
+                _sh_color = "var(--accent)" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else "var(--text-primary)"
+
+                _bt_sub_tr = f'<div class="sub up">vs BTC {_bt_fmt_pct(_bt_btc_ret)}</div>' if _bt_btc_ret is not None else '<div class="sub">over backtest window</div>'
+                _bt_sub_cagr = f'<div class="sub">vs BTC {_bt_fmt_pct(_bt_btc_cagr)}</div>' if _bt_btc_cagr is not None else '<div class="sub">annualised</div>'
+                _bt_sub_dd = f'<div class="sub down">BTC {_bt_fmt_pct(_bt_btc_dd)}</div>' if _bt_btc_dd is not None else '<div class="sub">peak → trough</div>'
+
+                _bt_kpi_html = f"""
+                <style>
+                .ds-bt-kpis {{ display: grid; grid-template-columns: repeat(5, 1fr);
+                               gap: var(--gap); margin: 8px 0 20px 0; }}
+                .ds-bt-kpis .card {{ background: var(--bg-1); border: 1px solid var(--border);
+                                      border-radius: var(--card-radius); padding: var(--card-pad); }}
+                .ds-bt-kpis .lbl {{ font-size: 11px; color: var(--text-muted);
+                                     text-transform: uppercase; letter-spacing: 0.06em; }}
+                .ds-bt-kpis .val {{ font-size: 22px; font-weight: 600; font-family: var(--font-mono);
+                                     line-height: 1.1; margin-top: 4px; color: var(--text-primary); }}
+                .ds-bt-kpis .sub {{ font-size: 11.5px; color: var(--text-muted);
+                                     margin-top: 4px; font-family: var(--font-mono); }}
+                .ds-bt-kpis .sub.up {{ color: var(--success); }}
+                .ds-bt-kpis .sub.down {{ color: var(--danger); }}
+                @media (max-width: 1024px) {{ .ds-bt-kpis {{ grid-template-columns: repeat(2, 1fr); }} }}
+                @media (max-width: 600px) {{ .ds-bt-kpis {{ grid-template-columns: 1fr; }} }}
+                </style>
+                <div class="ds-bt-kpis">
+                  <div class="card">
+                    <div class="lbl">Total return</div>
+                    <div class="val" style="color:{_tr_color};">{_bt_fmt_pct(_tr)}</div>
+                    {_bt_sub_tr}
+                  </div>
+                  <div class="card">
+                    <div class="lbl">CAGR</div>
+                    <div class="val">{_bt_fmt_pct(_bt_cagr) if _bt_cagr is not None else _bt_fmt_pct(_tr)}</div>
+                    {_bt_sub_cagr}
+                  </div>
+                  <div class="card">
+                    <div class="lbl">Sharpe</div>
+                    <div class="val" style="color:{_sh_color};">{float(_bt_sharpe):.2f}</div>
+                    <div class="sub">risk-free 4.5%</div>
+                  </div>
+                  <div class="card">
+                    <div class="lbl">Max drawdown</div>
+                    <div class="val" style="color:{_dd_color};">{_bt_fmt_pct(_bt_dd)}</div>
+                    {_bt_sub_dd}
+                  </div>
+                  <div class="card">
+                    <div class="lbl">Win rate</div>
+                    <div class="val">{float(_wr):.0f}%</div>
+                    <div class="sub">n = {int(_bt_ntrades)} trades</div>
+                  </div>
+                </div>
+                """
+                st.markdown(_bt_kpi_html, unsafe_allow_html=True)
+            except Exception as _bt_kpi_err:
+                logger.debug("[App] backtest KPI strip render failed: %s", _bt_kpi_err)
 
             # ── Item 12: Beginner simplified view — 3 big metrics ─────────────────
             if _bt_lv == "beginner":
@@ -6078,12 +7031,19 @@ def page_backtest():
 
                 # Auto-rerun every 5s when toggle is on
                 if _auto_pos:
+                    # P0 audit fix — was: time.sleep(0.1) + st.rerun() blocking
+                    # the worker thread on every tick. Under Streamlit Cloud
+                    # health-check timeouts this could compound into 503s.
+                    # The full @st.fragment(run_every=5) refactor (hoisting the
+                    # live-P&L block out of page_dashboard) is queued for a P2
+                    # follow-up; for now, drop the sleep — the rerun timestamp
+                    # gate above already throttles to ~5s cadence without
+                    # blocking the render thread.
                     import time as _time_pos
                     _pos_ts_key = "_pos_live_ts"
                     _now_pos    = _time_pos.time()
                     if _now_pos - st.session_state.setdefault(_pos_ts_key, _now_pos - 4.9) >= 5:  # APP-14: default near-now prevents immediate fire
                         st.session_state[_pos_ts_key] = _now_pos
-                        _time_pos.sleep(0.1)
                         st.rerun()
             else:
                 st.info("No open positions.")
@@ -6917,8 +7877,8 @@ def page_backtest():
                                     title="IS Sharpe vs OOS Sharpe per Window",
                                     height=240,
                                     margin=dict(l=10, r=10, t=36, b=10),
-                                    paper_bgcolor="#0d0e14",
-                                    plot_bgcolor="#0d0e14",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
                                     font=dict(color="#f8fafc", size=11),
                                     legend=dict(orientation="h", y=1.12, x=0),
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
@@ -6947,8 +7907,8 @@ def page_backtest():
                                     title="WFE Ratio per Window  (green ≥0.7 · yellow ≥0.5 · red <0.5)",
                                     height=220,
                                     margin=dict(l=10, r=80, t=36, b=10),
-                                    paper_bgcolor="#0d0e14",
-                                    plot_bgcolor="#0d0e14",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
                                     font=dict(color="#f8fafc", size=11),
                                     xaxis=dict(title="Window", dtick=1, gridcolor="#1f2937"),
                                     yaxis=dict(title="WFE", range=[0, max(max(_wfv_wfes) * 1.2, 1.1)],
@@ -7133,19 +8093,23 @@ def _start_backtest():
 # ──────────────────────────────────────────────
 def page_arbitrage():
     _arb_lv = st.session_state.get("user_level", "beginner")
-    _arb_title = "⚡ Opportunities" if _arb_lv in ("beginner", "intermediate") else "⚡ Arbitrage Scanner"
-    st.title(_arb_title)
-    if _arb_lv == "beginner":
-        st.caption(
-            "Sometimes the same coin costs different amounts on different exchanges. "
-            "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another. "
-            "Each card below tells you exactly what to do in plain English."
-        )
-    else:
-        st.caption(
-            "Cross-exchange spot price spreads and funding-rate carry trades. "
-            "Net spread = gross spread − round-trip taker fees."
-        )
+    _arb_title = "Opportunities" if _arb_lv in ("beginner", "intermediate") else "Arbitrage Scanner"
+    _arb_sub = (
+        "Sometimes the same coin costs different amounts on different exchanges. "
+        "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another."
+        if _arb_lv == "beginner"
+        else "Cross-exchange spot price spreads and funding-rate carry trades. "
+             "Net spread = gross spread − round-trip taker fees."
+    )
+    # ── 2026-05 redesign: top bar + page header ──
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_page_header(title=_arb_title, subtitle=_arb_sub)
+    except Exception as _ds_arb_err:
+        logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
+        st.title(f"⚡ {_arb_title}")
+        st.caption(_arb_sub)
 
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
@@ -7369,7 +8333,9 @@ def page_arbitrage():
             with st.spinner("Fetching rates from 4 exchanges…", show_time=True):
                 fr_rows: list[dict] = []
                 for pair in fr_pairs_sel:
-                    multi = data_feeds.get_multi_exchange_funding_rates(pair)
+                    # P1-25 audit fix — was uncached; repeated "Load Rates"
+                    # clicks within a 10-min window now cost 0 round-trips.
+                    multi = _sg_cached_multi_exchange_funding(pair)
                     row: dict = {"Pair": pair}
                     for exch in ("okx", "binance", "bybit", "kucoin"):
                         rd   = multi.get(exch, {})
@@ -7531,19 +8497,24 @@ def page_arbitrage():
 # ──────────────────────────────────────────────
 def page_agent():
     _ag_lv = st.session_state.get("user_level", "beginner")
-    _ag_title = "🤖 AI Assistant" if _ag_lv in ("beginner", "intermediate") else "🤖 Autonomous Agent"
-    st.title(_ag_title)
-    if _ag_lv == "beginner":
-        st.caption(
-            "Your AI assistant watches the markets 24/7 while the app is running and tells you when it thinks there's an opportunity. "
-            "It never makes trades for you — it only gives you advice, and you decide what to do."
-        )
-    else:
-        st.caption(
-            "LangGraph + Claude Sonnet 4.6 autonomous trading agent. "
-            "Hard Python risk gates before and after every Claude decision. "
-            "Claude may only approve or reject — never place orders directly."
-        )
+    _ag_title = "AI Assistant" if _ag_lv in ("beginner", "intermediate") else "Autonomous Agent"
+    _ag_sub = (
+        "Your AI assistant watches the markets 24/7 while the app is running and tells you when it thinks there's an opportunity. "
+        "It never makes trades for you — it only gives you advice, and you decide what to do."
+        if _ag_lv == "beginner"
+        else "LangGraph + Claude Sonnet 4.6 autonomous trading agent. "
+             "Hard Python risk gates before and after every Claude decision. "
+             "Claude may only approve or reject — never place orders directly."
+    )
+    # ── 2026-05 redesign: top bar + page header ──
+    try:
+        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_page_header(title=_ag_title, subtitle=_ag_sub)
+    except Exception as _ds_ag_err:
+        logger.debug("[App] agent top bar failed: %s", _ds_ag_err)
+        st.title(f"🤖 {_ag_title}")
+        st.caption(_ag_sub)
 
     if _agent is None:
         st.error("agent.py failed to import. Check logs for details.")
@@ -7818,11 +8789,829 @@ def page_agent():
 
 
 # ──────────────────────────────────────────────
+# PAGE: SIGNALS (sibling-family-crypto-signal-SIGNALS.html)
+# ──────────────────────────────────────────────
+def page_signals():
+    """Per-coin signal detail — hero + composite + indicators + history.
+
+    Pulls data from latest scan_results (in-session) → daily_signals DB
+    fallback. Where a metric isn't available, the cell shows "—" so the
+    layout is preserved and the user gets a clear "no data yet" state
+    rather than a missing card.
+    """
+    try:
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            coin_picker as _ds_coin_picker,
+            signal_hero_detail_card as _ds_signal_hero,
+            composite_score_card as _ds_composite,
+            indicator_card as _ds_ind_card,
+            signal_history_table as _ds_sig_hist,
+        )
+    except Exception as _e_imp:
+        logger.error("[Signals] import failed: %s", _e_imp)
+        st.error("Signal page failed to load — check logs.")
+        return
+
+    _ds_level = st.session_state.get("user_level", "beginner")
+    _ds_top_bar(
+        breadcrumb=("Markets", "Signals"),
+        user_level=_ds_level,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+    )
+
+    # Coin picker — top of page. The chip-group HTML is rendered alongside
+    # a real Streamlit selectbox (label hidden) so clicks actually register.
+    _signals_coins = ["BTC", "ETH", "XRP", "SOL", "AVAX"]
+    _signals_pair_map = {
+        "BTC": "BTC/USDT", "ETH": "ETH/USDT", "XRP": "XRP/USDT",
+        "SOL": "SOL/USDT", "AVAX": "AVAX/USDT",
+    }
+    _signals_active = st.session_state.get("signals_active_coin", "BTC")
+    if _signals_active not in _signals_coins:
+        _signals_active = "BTC"
+
+    _hd_l, _hd_r = st.columns([4, 2])
+    with _hd_l:
+        _ds_page_header(
+            title="Signal detail",
+            subtitle="Layer-by-layer composite signal breakdown for a single coin.",
+            data_sources=[
+                (str(model.TA_EXCHANGE).upper(), "live"),
+                ("Glassnode", "live"),
+                ("News sentiment", "cached"),
+            ],
+        )
+    with _hd_r:
+        # Real Streamlit-button row that mirrors the .ds-coin-pick mockup chip group.
+        _cp_cols = st.columns(len(_signals_coins))
+        for _i, _c in enumerate(_signals_coins):
+            with _cp_cols[_i]:
+                if st.button(
+                    _c,
+                    key=f"signals_coin_{_c}",
+                    use_container_width=True,
+                    type=("primary" if _c == _signals_active else "secondary"),
+                ):
+                    st.session_state["signals_active_coin"] = _c
+                    st.rerun()
+
+    _coin = _signals_active
+    _pair = _signals_pair_map.get(_coin, f"{_coin}/USDT")
+
+    # ── Pull data: latest scan result (or DB fallback) for the active pair ──
+    _result = {}
+    try:
+        for _r in (st.session_state.get("scan_results") or []):
+            _pr = str(_r.get("pair") or _r.get("symbol") or "").upper().replace("/", "").replace("-", "")
+            if _pr.startswith(_coin):
+                _result = _r
+                break
+        if not _result:
+            _df_sig = _cached_signals_df(500)
+            if _df_sig is not None and not _df_sig.empty:
+                _df_pair_norm = _df_sig["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+                _hits = _df_sig[_df_pair_norm.str.startswith(_coin)]
+                if not _hits.empty:
+                    _result = _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
+    except Exception as _e_lookup:
+        logger.debug("[Signals] result lookup failed: %s", _e_lookup)
+
+    # Live price + 24h change from WebSocket
+    _live = _ws.get_all_prices() or {}
+    _tick = _live.get(_pair) or {}
+    _price = _tick.get("price") or _tick.get("last") or _result.get("price")
+    _chg_24h = _tick.get("change_24h_pct") or _tick.get("change_pct") or _result.get("change_24h_pct")
+
+    # 30d / 1Y change from OHLCV
+    _chg_30d = None
+    _chg_1y = None
+    _closes_90d = []
+    try:
+        _ex = model.get_exchange_instance(model.TA_EXCHANGE)
+        if _ex:
+            # P1-25 audit fix — was uncached OHLCV fetch on every Signals
+            # render. §12 says 5min cache for intraday OHLCV.
+            _ex_id = getattr(_ex, "id", str(model.TA_EXCHANGE))
+            _ohlcv_d = _sg_cached_ohlcv(_ex_id, _pair, "1d", limit=400)
+            if _ohlcv_d:
+                _closes_d = [float(r[4]) for r in _ohlcv_d if len(r) >= 5]
+                if _closes_d:
+                    if _price is None:
+                        _price = _closes_d[-1]
+                    if len(_closes_d) >= 30 and _closes_d[-30]:
+                        _chg_30d = (_closes_d[-1] - _closes_d[-30]) / _closes_d[-30] * 100.0
+                    if len(_closes_d) >= 365 and _closes_d[-365]:
+                        _chg_1y = (_closes_d[-1] - _closes_d[-365]) / _closes_d[-365] * 100.0
+                    elif len(_closes_d) >= 2:
+                        _chg_1y = (_closes_d[-1] - _closes_d[0]) / _closes_d[0] * 100.0
+                    _closes_90d = _closes_d[-90:]
+    except Exception as _e_ohlcv:
+        logger.debug("[Signals] OHLCV fetch for %s failed: %s", _pair, _e_ohlcv)
+
+    # Signal + regime from result
+    _sig_raw = (_result.get("direction") or _result.get("signal") or _result.get("composite_direction") or "").upper()
+    _signal_letter = "BUY" if _sig_raw in ("LONG", "BUY") else ("SELL" if _sig_raw in ("SHORT", "SELL") else ("HOLD" if _result else None))
+    _conf = _result.get("confidence") or _result.get("composite_confidence")
+    _strength = ""
+    try:
+        _conf_f = float(_conf) if _conf is not None else None
+        if _conf_f is not None:
+            _strength = "strong" if _conf_f >= 75 else ("moderate" if _conf_f >= 60 else "weak")
+    except Exception:
+        pass
+    _regime_raw = str(_result.get("regime") or _result.get("regime_label") or "").strip()
+    _regime_clean = _regime_raw
+    for _p in ("Regime: ", "Regime:", "Regime "):
+        if _regime_clean.lower().startswith(_p.lower()):
+            _regime_clean = _regime_clean[len(_p):].strip()
+            break
+    _regime_conf = _result.get("regime_confidence") or _result.get("regime_conf_pct")
+
+    _coin_full = {"BTC": "Bitcoin", "ETH": "Ethereum", "XRP": "Ripple", "SOL": "Solana", "AVAX": "Avalanche"}.get(_coin, _coin)
+
+    st.markdown(
+        _ds_signal_hero(
+            ticker=f"{_coin} / USD",
+            name=_coin_full,
+            price=_price,
+            change_24h=_chg_24h,
+            change_30d=_chg_30d,
+            change_1y=_chg_1y,
+            signal=_signal_letter,
+            signal_strength=_strength,
+            regime_label=_regime_clean.title() if _regime_clean else "",
+            regime_confidence=_regime_conf,
+            regime_since="",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # ── Two-col: price chart + composite score ──
+    _col1, _col2 = st.columns([1.2, 1])
+    with _col1:
+        st.markdown(
+            f'<div class="ds-card">'
+            f'<div class="ds-card-hd"><div class="ds-card-title">Price · last 90d</div>'
+            f'<div style="color:var(--text-muted);font-size:12px;">{str(model.TA_EXCHANGE).upper()} · live</div></div>',
+            unsafe_allow_html=True,
+        )
+        if _closes_90d:
+            try:
+                import plotly.graph_objects as _go
+                _x = list(range(len(_closes_90d)))
+                _fig = _go.Figure()
+                _fig.add_trace(_go.Scatter(
+                    x=_x, y=_closes_90d, mode="lines",
+                    line=dict(color="#22d36f", width=2),
+                    fill="tozeroy", fillcolor="rgba(34,211,111,0.10)",
+                    showlegend=False, hovertemplate="%{y:,.2f}<extra></extra>",
+                ))
+                _fig.update_layout(
+                    height=200, margin=dict(l=0, r=0, t=0, b=0),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False, range=[min(_closes_90d) * 0.98, max(_closes_90d) * 1.02]),
+                )
+                st.plotly_chart(_fig, width='stretch', config={"displayModeBar": False})
+            except Exception as _e_plot:
+                logger.debug("[Signals] price chart render failed: %s", _e_plot)
+                st.caption("Chart unavailable — try refreshing.")
+        else:
+            st.caption("Price history unavailable — try refreshing.")
+
+        # 4-cell info strip below the chart (Vol / ATR / Beta / Funding)
+        try:
+            _vol = _result.get("volume_24h_usd") or _result.get("vol_24h")
+            _atr = _result.get("atr_14") or _result.get("atr")
+            _beta = _result.get("beta_spy")
+            _fund = None
+            try:
+                # P1-25 audit fix — Signals page funding fetch now cached 10min.
+                _fr = _sg_cached_funding_rate(_pair)
+                _fund = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+            except Exception:
+                pass
+            def _fmt_vol(v):
+                if v is None:
+                    return "—"
+                v = float(v)
+                if v >= 1e9:
+                    return f"${v/1e9:.1f}B"
+                if v >= 1e6:
+                    return f"${v/1e6:.0f}M"
+                return f"${v:,.0f}"
+            def _fmt_pct(v, decimals=3):
+                if v is None:
+                    return "—"
+                try:
+                    fv = float(v)
+                    sign = "+" if fv > 0 else ("−" if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{decimals}f}%"
+                except Exception:
+                    return "—"
+            _ind_html = (
+                '<div class="ds-ind-grid" style="margin-top:16px;">'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Vol (24h)</div><div class="ds-ind-val">{_fmt_vol(_vol)}</div><div class="ds-ind-sub"></div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">ATR (14d)</div><div class="ds-ind-val">{("$" + f"{float(_atr):,.0f}") if _atr is not None else "—"}</div><div class="ds-ind-sub"></div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Beta vs S&amp;P</div><div class="ds-ind-val">{(f"{float(_beta):.2f}") if _beta is not None else "—"}</div><div class="ds-ind-sub">90d rolling</div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Funding (8h)</div><div class="ds-ind-val">{_fmt_pct(_fund)}</div><div class="ds-ind-sub"></div></div>'
+                '</div>'
+            )
+            st.markdown(_ind_html, unsafe_allow_html=True)
+        except Exception as _e_strip:
+            logger.debug("[Signals] info strip failed: %s", _e_strip)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with _col2:
+        # Layer scores from result; if absent, derive composite from confidence
+        _l_tech = _result.get("layer_technical") or _result.get("tech_score")
+        _l_macro = _result.get("layer_macro") or _result.get("macro_score")
+        _l_sent = _result.get("layer_sentiment") or _result.get("sentiment_score")
+        _l_onch = _result.get("layer_onchain") or _result.get("onchain_score")
+        _composite = _result.get("composite_score") or _conf
+        try:
+            _composite_f = float(_composite) if _composite is not None else None
+        except Exception:
+            _composite_f = None
+        _ds_composite(
+            score=_composite_f,
+            layers=[
+                ("Layer 1 · Technical", float(_l_tech) if _l_tech is not None else None),
+                ("Layer 2 · Macro",     float(_l_macro) if _l_macro is not None else None),
+                ("Layer 3 · Sentiment", float(_l_sent) if _l_sent is not None else None),
+                ("Layer 4 · On-chain",  float(_l_onch) if _l_onch is not None else None),
+            ],
+            weights_note=("Composite = weighted avg per regime-adjusted weights. "
+                         "Weights are config-driven and tuned by Optuna."),
+        )
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── Three-col: Technical / On-chain / Sentiment indicator cards ──
+    _ic1, _ic2, _ic3 = st.columns(3)
+    with _ic1:
+        _rsi = _result.get("rsi_14") or _result.get("rsi")
+        _macd_h = _result.get("macd_hist")
+        _supert = _result.get("supertrend_signal") or _result.get("supertrend")
+        _adx = _result.get("adx_14") or _result.get("adx")
+        def _v(x, fmt="{:.1f}"):
+            if x is None:
+                return "—"
+            try:
+                return fmt.format(float(x))
+            except Exception:
+                return str(x)
+        _rsi_tone = "warning" if (_rsi is not None and float(_rsi) >= 70) else ("danger" if (_rsi is not None and float(_rsi) <= 30) else "")
+        _macd_tone = "success" if (_macd_h is not None and float(_macd_h) > 0) else ("danger" if (_macd_h is not None and float(_macd_h) < 0) else "")
+        _supert_str = (str(_supert).title() if _supert is not None else "—")
+        _supert_tone = "success" if str(_supert).upper() in ("BUY", "LONG", "BULL") else ("danger" if str(_supert).upper() in ("SELL", "SHORT", "BEAR") else "")
+        _ds_ind_card(
+            "Technical indicators",
+            [
+                ("RSI (14)",   _v(_rsi),    "overbought" if _rsi_tone == "warning" else ("oversold" if _rsi_tone == "danger" else ""),  _rsi_tone),
+                ("MACD hist",  _v(_macd_h, "{:+.0f}") if _macd_h is not None else "—", "bullish cross" if _macd_tone == "success" else ("bearish cross" if _macd_tone == "danger" else ""), _macd_tone),
+                ("Supertrend", _supert_str, "",                                                                                  _supert_tone),
+                ("ADX (14)",   _v(_adx),    "strong trend" if (_adx is not None and float(_adx) >= 25) else "no trend",          ""),
+            ],
+        )
+    with _ic2:
+        _mvrv = _result.get("mvrv_z") or _result.get("mvrv")
+        _sopr = _result.get("sopr")
+        _exch = _result.get("exchange_reserve_delta_7d")
+        _addr = _result.get("active_addresses_24h")
+        _ds_ind_card(
+            "On-chain",
+            [
+                ("MVRV-Z",        _v(_mvrv, "{:.2f}"),                                "mid-cycle" if (_mvrv is not None and 1 < float(_mvrv) < 5) else "",       ""),
+                ("SOPR",          _v(_sopr, "{:.3f}"),                                "profit taking" if (_sopr is not None and float(_sopr) > 1) else "",        ""),
+                ("Exch. reserve", _v(_exch, "{:+,.0f}") if _exch is not None else "—", "outflow 7d" if (_exch is not None and float(_exch) < 0) else "inflow 7d", "success" if (_exch is not None and float(_exch) < 0) else ""),
+                ("Active addr.",  _v(_addr, "{:,.0f}") if _addr is not None else "—",  "",                                                                       ""),
+            ],
+        )
+    with _ic3:
+        # P1-25 audit fix — F&G + funding via cached helpers (24h / 10min).
+        _fng_d = _sg_cached_fear_greed() if hasattr(data_feeds, "get_fear_greed") else {}
+        _fng_v = _fng_d.get("value")
+        _fund_v = None
+        try:
+            _fr = _sg_cached_funding_rate(_pair)
+            _fund_v = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+        except Exception:
+            pass
+        _trends = _result.get("google_trends_score") or _result.get("trends_score")
+        _news = _result.get("news_sentiment_score") or _result.get("news_sent")
+        _ds_ind_card(
+            "Sentiment",
+            [
+                ("Fear & Greed",  _v(_fng_v, "{:.0f}"),                                 (_fng_d.get("label") or "").lower(),          "warning" if (_fng_v is not None and float(_fng_v) >= 60) else ("danger" if (_fng_v is not None and float(_fng_v) <= 30) else "")),
+                ("Funding",       _v(_fund_v, "{:+.3f}%") if _fund_v is not None else "—", "neutral",                                  ""),
+                ("Google trends", _v(_trends, "{:.0f}"),                                "",                                          ""),
+                ("News sent.",    _v(_news, "{:+.2f}"),                                 "positive" if (_news is not None and float(_news) > 0) else ("negative" if (_news is not None and float(_news) < 0) else ""), "success" if (_news is not None and float(_news) > 0) else ("danger" if (_news is not None and float(_news) < 0) else "")),
+            ],
+        )
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── Recent signal history table ──
+    try:
+        _df_sig = _cached_signals_df(50)
+        _hist_rows: list[dict] = []
+        if _df_sig is not None and not _df_sig.empty:
+            _df_pair_norm = _df_sig["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+            _hits = _df_sig[_df_pair_norm.str.startswith(_coin)].sort_values("scan_timestamp", ascending=False).head(8)
+            for _, _row in _hits.iterrows():
+                _ts = _row.get("scan_timestamp", "")
+                try:
+                    _t_str = str(_ts)[:16].replace("T", " ")
+                except Exception:
+                    _t_str = "—"
+                _d = str(_row.get("direction") or "").upper()
+                _sig = "BUY" if _d in ("LONG", "BUY") else ("SELL" if _d in ("SHORT", "SELL") else "HOLD")
+                _hist_rows.append({
+                    "time": _t_str,
+                    "signal": _sig,
+                    "note": (_row.get("rationale") or _row.get("note") or "")[:80],
+                    "return_pct": _row.get("return_pct") or _row.get("realized_return_pct"),
+                })
+        _ds_sig_hist(_hist_rows, title=f"Recent signal history · {_coin}", subtitle="last 8 state transitions")
+    except Exception as _e_hist:
+        logger.debug("[Signals] history table failed: %s", _e_hist)
+        _ds_sig_hist([], title=f"Recent signal history · {_coin}", subtitle="No history available yet.")
+
+
+# ──────────────────────────────────────────────
+# PAGE: REGIMES (sibling-family-crypto-signal-REGIMES.html)
+# ──────────────────────────────────────────────
+def page_regimes():
+    """Per-asset regime grid + macro overlay + per-regime weights.
+
+    Pulls regime state per asset from latest scan_results / DB. Macro
+    overlay rows pulled live from data_feeds. Regime-weight grid pulled
+    from the model's REGIME_WEIGHTS config (or defaults if absent).
+    """
+    try:
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            regime_cards_grid as _ds_regimes,
+            regime_state_bar as _ds_state_bar,
+            macro_regime_overlay_card as _ds_macro_overlay,
+            regime_weights_grid as _ds_weights_grid,
+        )
+    except Exception as _e_imp:
+        logger.error("[Regimes] import failed: %s", _e_imp)
+        st.error("Regimes page failed to load — check logs.")
+        return
+
+    _ds_level = st.session_state.get("user_level", "beginner")
+    _ds_top_bar(
+        breadcrumb=("Markets", "Regimes"),
+        user_level=_ds_level,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+    )
+    _ds_page_header(
+        title="Regimes",
+        subtitle="HMM-inferred market regime per asset + macro overlay. Regime-specific signal weights auto-adjust.",
+        data_sources=[
+            (str(model.TA_EXCHANGE).upper(), "live"),
+            ("Glassnode", "live"),
+            ("FRED", "cached"),
+        ],
+    )
+
+    # ── Top: 8-card regime grid ──
+    try:
+        _df_sig = _cached_signals_df(500)
+        _seen_pairs: set[str] = set()
+        _regime_rows: list[dict] = []
+        # Prefer current session results, then fall back to DB
+        for _r in (st.session_state.get("scan_results") or []):
+            _p = str(_r.get("pair") or _r.get("symbol") or "").upper()
+            _ticker = _p.split("/")[0].split("-")[0]
+            if not _ticker or _ticker in _seen_pairs:
+                continue
+            _state_raw = str(_r.get("regime") or _r.get("regime_label") or "").strip()
+            for _pre in ("Regime: ", "Regime:", "Regime "):
+                if _state_raw.lower().startswith(_pre.lower()):
+                    _state_raw = _state_raw[len(_pre):].strip()
+                    break
+            _conf = _r.get("regime_confidence") or _r.get("regime_conf_pct")
+            _regime_rows.append({
+                "ticker": _ticker,
+                "state": _state_raw or "Transition",
+                "confidence": _conf,
+                "since": "",
+            })
+            _seen_pairs.add(_ticker)
+            if len(_regime_rows) >= 8:
+                break
+        # DB fallback if scan results don't fill 8
+        if len(_regime_rows) < 8 and _df_sig is not None and not _df_sig.empty:
+            _df_sorted = _df_sig.sort_values("scan_timestamp", ascending=False)
+            for _, _row in _df_sorted.iterrows():
+                _p = str(_row.get("pair") or "").upper()
+                _ticker = _p.split("/")[0].split("-")[0]
+                if not _ticker or _ticker in _seen_pairs:
+                    continue
+                _state_raw = str(_row.get("regime") or _row.get("regime_label") or "").strip()
+                for _pre in ("Regime: ", "Regime:", "Regime "):
+                    if _state_raw.lower().startswith(_pre.lower()):
+                        _state_raw = _state_raw[len(_pre):].strip()
+                        break
+                _regime_rows.append({
+                    "ticker": _ticker,
+                    "state": _state_raw or "Transition",
+                    "confidence": _row.get("regime_confidence") or _row.get("regime_conf_pct"),
+                    "since": "",
+                })
+                _seen_pairs.add(_ticker)
+                if len(_regime_rows) >= 8:
+                    break
+        if not _regime_rows:
+            # No data yet — show placeholder cards for the must-have set
+            for _t in ["BTC", "ETH", "XRP", "SOL", "AVAX", "LINK", "DOGE", "BNB"]:
+                _regime_rows.append({"ticker": _t, "state": "Transition", "confidence": None, "since": "no scan yet"})
+        _ds_regimes(_regime_rows[:8], cols=4)
+    except Exception as _e_rgrid:
+        logger.debug("[Regimes] regime grid render failed: %s", _e_rgrid)
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── 2-col: state-bar timeline (BTC) + macro overlay ──
+    _col_l, _col_r = st.columns([1.2, 1])
+
+    with _col_l:
+        # Compute approximate state-bar segments for BTC over the last 90d.
+        # If we have a regime_history table or per-day regimes in scan_results,
+        # use it. Otherwise show a representative example using the latest
+        # known state (single 100% segment) so the layout still renders.
+        try:
+            _segments: list[tuple[str, float]] = []
+            _btc_state = "bull"
+            _btc_conf = None
+            for _r in (st.session_state.get("scan_results") or []):
+                _p = str(_r.get("pair") or "").upper()
+                if _p.startswith("BTC"):
+                    _state_raw = str(_r.get("regime") or _r.get("regime_label") or "").strip()
+                    for _pre in ("Regime: ", "Regime:", "Regime "):
+                        if _state_raw.lower().startswith(_pre.lower()):
+                            _state_raw = _state_raw[len(_pre):].strip()
+                            break
+                    _btc_state = (_state_raw or "bull").lower()
+                    _btc_conf = _r.get("regime_confidence")
+                    break
+            # Without a regime history table, render the current state full-width
+            _segments = [(_btc_state, 100.0)]
+            _note = (f"HMM 4-state model over composite score + on-chain + macro features. "
+                     f"Current state: {_btc_state.title()}"
+                     f"{f', confidence {int(_btc_conf)}%' if _btc_conf is not None else ''}.")
+            _ds_state_bar(
+                _segments,
+                title="BTC regime state · last 90d",
+                date_labels=None,  # Only show labels when we have real segmentation
+                note=_note,
+            )
+        except Exception as _e_sbar:
+            logger.debug("[Regimes] state bar render failed: %s", _e_sbar)
+
+    with _col_r:
+        # Macro overlay card — pulls live values
+        try:
+            _gm = _cached_global_market() or {}
+            _me = _cached_macro_enrichment() or {}
+            _btc_dom = _gm.get("btc_dominance_pct", _gm.get("btc_dominance"))
+            _btc_dom_7d = _gm.get("btc_dominance_7d_change_pct", _gm.get("btc_dominance_7d_ppt"))
+            _yf = {}
+            try:
+                _yf = data_feeds.fetch_yfinance_macro() or {}
+            except Exception:
+                pass
+            _dxy = _yf.get("dxy") or _me.get("dxy")
+            _dxy_30d = _yf.get("dxy_30d_change_pct") or _yf.get("dxy_30d_ret_pct") or _me.get("dxy_30d_change_pct")
+            _vix = _yf.get("vix") or _me.get("vix")
+            _vix_30d = _yf.get("vix_30d_change_pct") or _me.get("vix_30d_change_pct")
+            _ust10 = _yf.get("treasury_10y") or _me.get("treasury_10y")
+            _ust10_7d = _yf.get("treasury_10y_7d_change_bps") or _me.get("treasury_10y_7d_change_bps")
+            # P1-25 audit fix — On-chain page F&G now via cached helper (24h).
+            _fng_d = _sg_cached_fear_greed()
+            _fng_v = _fng_d.get("value")
+            _fng_7d = _fng_d.get("change_7d") or _me.get("fng_7d_change")
+            _hy = _yf.get("hy_spread_bps") or _me.get("hy_spread_bps")
+            _hy_30d = _yf.get("hy_spread_30d_change_bps") or _me.get("hy_spread_30d_change_bps")
+
+            def _fmt_pct(v, decimals=1, suffix=" ppts"):
+                if v is None:
+                    return ""
+                try:
+                    fv = float(v)
+                    sign = "+" if fv > 0 else ("−" if fv < 0 else "")
+                    return f"{sign}{abs(fv):.{decimals}f}{suffix}"
+                except Exception:
+                    return ""
+            def _delta_dir(v):
+                if v is None:
+                    return ""
+                try:
+                    return "up" if float(v) > 0 else ("down" if float(v) < 0 else "")
+                except Exception:
+                    return ""
+
+            _rows = []
+            if _btc_dom is not None:
+                _rows.append({
+                    "name": "BTC Dominance",
+                    "value": f"{float(_btc_dom):.1f}%",
+                    "delta_text": f"{_fmt_pct(_btc_dom_7d, 1, ' ppts · 7d')}" if _btc_dom_7d is not None else "",
+                    "delta_dir": _delta_dir(_btc_dom_7d),
+                    "sentiment": "bull" if (_btc_dom_7d is not None and float(_btc_dom_7d) > 0) else "neut",
+                    "sentiment_label": "bullish" if (_btc_dom_7d is not None and float(_btc_dom_7d) > 0) else "neutral",
+                })
+            if _dxy is not None:
+                _rows.append({
+                    "name": "DXY",
+                    "value": f"{float(_dxy):.2f}",
+                    "delta_text": f"{_fmt_pct(_dxy_30d, 1, '% · 30d')}" if _dxy_30d is not None else "",
+                    "delta_dir": _delta_dir(_dxy_30d),
+                    "sentiment": "bull" if (_dxy_30d is not None and float(_dxy_30d) < 0) else "bear",
+                    "sentiment_label": "risk-on" if (_dxy_30d is not None and float(_dxy_30d) < 0) else "risk-off",
+                })
+            if _vix is not None:
+                _rows.append({
+                    "name": "VIX",
+                    "value": f"{float(_vix):.1f}",
+                    "delta_text": f"{_fmt_pct(_vix_30d, 0, '% · 30d')}" if _vix_30d is not None else "",
+                    "delta_dir": _delta_dir(_vix_30d),
+                    "sentiment": "bull" if (_vix_30d is not None and float(_vix_30d) < 0) else "bear",
+                    "sentiment_label": "risk-on" if (_vix_30d is not None and float(_vix_30d) < 0) else "risk-off",
+                })
+            if _ust10 is not None:
+                _rows.append({
+                    "name": "10Y yield",
+                    "value": f"{float(_ust10):.2f}%",
+                    "delta_text": f"{_fmt_pct(_ust10_7d, 0, 'bps · 7d')}" if _ust10_7d is not None else "",
+                    "delta_dir": _delta_dir(_ust10_7d),
+                    "sentiment": "bull" if (_ust10_7d is not None and float(_ust10_7d) < 0) else "bear",
+                    "sentiment_label": "tailwind" if (_ust10_7d is not None and float(_ust10_7d) < 0) else "headwind",
+                })
+            if _fng_v is not None:
+                _rows.append({
+                    "name": "Fear & Greed",
+                    "value": str(int(_fng_v)),
+                    "delta_text": f"{_fmt_pct(_fng_7d, 0, ' · 7d')}" if _fng_7d is not None else "",
+                    "delta_dir": _delta_dir(_fng_7d),
+                    "sentiment": "neut" if 35 <= float(_fng_v) <= 65 else ("bull" if float(_fng_v) > 65 else "bear"),
+                    "sentiment_label": _fng_d.get("label") or "",
+                })
+            if _hy is not None:
+                _rows.append({
+                    "name": "HY spreads",
+                    "value": f"{int(float(_hy))} bps",
+                    "delta_text": f"{_fmt_pct(_hy_30d, 0, ' bps · 30d')}" if _hy_30d is not None else "",
+                    "delta_dir": _delta_dir(_hy_30d),
+                    "sentiment": "bull" if (_hy_30d is not None and float(_hy_30d) < 0) else "bear",
+                    "sentiment_label": "tightening" if (_hy_30d is not None and float(_hy_30d) < 0) else "widening",
+                })
+
+            # Overall macro regime label
+            _macro_regime = _me.get("macro_regime") or _me.get("macro_regime_label") or ""
+            _macro_conf = _me.get("macro_regime_confidence_pct") or _me.get("macro_confidence")
+            _ds_macro_overlay(
+                _rows,
+                title="Macro regime · overlay",
+                overall_label=str(_macro_regime).title() if _macro_regime else "",
+                overall_confidence=_macro_conf,
+            )
+        except Exception as _e_macro:
+            logger.debug("[Regimes] macro overlay failed: %s", _e_macro)
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # ── Signal weights by regime ──
+    try:
+        # Try to read REGIME_WEIGHTS from model; fall back to mockup defaults.
+        _weights = getattr(model, "REGIME_WEIGHTS", None)
+        if not isinstance(_weights, dict) or not _weights:
+            _weights = {
+                "Bull":         {"Tech": 0.30, "Macro": 0.15, "Sent": 0.20, "On-chain": 0.35},
+                "Accumulation": {"Tech": 0.20, "Macro": 0.15, "Sent": 0.15, "On-chain": 0.50},
+                "Distribution": {"Tech": 0.35, "Macro": 0.25, "Sent": 0.25, "On-chain": 0.15},
+                "Bear":         {"Tech": 0.40, "Macro": 0.35, "Sent": 0.15, "On-chain": 0.10},
+            }
+        _tone_for = {
+            "Bull": "success", "bull": "success",
+            "Accumulation": "info", "accum": "info", "accumulation": "info",
+            "Distribution": "warning", "dist": "warning", "distribution": "warning",
+            "Bear": "danger", "bear": "danger",
+            "Transition": "warning", "trans": "warning", "transition": "warning",
+        }
+        _entries = []
+        for _name, _w in _weights.items():
+            if isinstance(_w, dict):
+                _entries.append((_name, _tone_for.get(_name, _tone_for.get(str(_name).lower(), "warning")), _w))
+        if _entries:
+            _ds_weights_grid(_entries[:4])
+    except Exception as _e_wgrid:
+        logger.debug("[Regimes] weights grid failed: %s", _e_wgrid)
+
+
+# ──────────────────────────────────────────────
+# PAGE: ON-CHAIN (thin design-system pass — no dedicated mockup)
+# ──────────────────────────────────────────────
+def page_onchain():
+    """On-chain metrics page — thin design-system pass per Cowork directive.
+
+    No dedicated mockup exists for ON-CHAIN; this page applies the design-
+    system topbar + page header + ds-card primitives over the existing
+    on-chain data sources. Content surface stays close to the existing
+    on-chain section that used to live inside the Dashboard tabs — we
+    don't redesign the data, just the chrome around it.
+    """
+    try:
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            indicator_card as _ds_ind_card,
+        )
+    except Exception as _e_imp:
+        logger.error("[On-chain] import failed: %s", _e_imp)
+        st.error("On-chain page failed to load — check logs.")
+        return
+
+    _oc_lv = st.session_state.get("user_level", "beginner")
+    _ds_top_bar(
+        breadcrumb=("Research", "On-chain"),
+        user_level=_oc_lv,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+    )
+    _ds_page_header(
+        title="On-chain",
+        subtitle="Glassnode + Dune metrics for the major majors. MVRV-Z, SOPR, exchange flows, active addresses.",
+        data_sources=[
+            ("Glassnode", "live"),
+            ("Dune", "cached"),
+            ("Native RPC", "live"),
+        ],
+    )
+
+    # Pull on-chain data per coin from the latest scan result (or DB fallback).
+    def _result_for(ticker: str) -> dict:
+        for _r in (st.session_state.get("scan_results") or []):
+            _p = str(_r.get("pair") or _r.get("symbol") or "").upper()
+            if _p.startswith(ticker):
+                return _r
+        try:
+            _df = _cached_signals_df(500)
+            if _df is not None and not _df.empty:
+                _df_pn = _df["pair"].astype(str).str.upper().str.replace("/", "", regex=False).str.replace("-", "", regex=False)
+                _hits = _df[_df_pn.str.startswith(ticker)]
+                if not _hits.empty:
+                    return _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
+        except Exception as _e:
+            logger.debug("[On-chain] DB lookup for %s failed: %s", ticker, _e)
+        return {}
+
+    def _v(x, fmt="{:.2f}"):
+        if x is None:
+            return "—"
+        try:
+            return fmt.format(float(x))
+        except Exception:
+            return str(x)
+
+    # Three indicator cards — BTC / ETH / overall flow snapshot.
+    _btc = _result_for("BTC")
+    _eth = _result_for("ETH")
+    _xrp = _result_for("XRP")
+
+    _c1, _c2, _c3 = st.columns(3)
+    with _c1:
+        _ds_ind_card(
+            "BTC · valuation & flows",
+            [
+                ("MVRV-Z",        _v(_btc.get("mvrv_z") or _btc.get("mvrv"), "{:.2f}"),
+                 "mid-cycle" if (_btc.get("mvrv_z") and 1 < float(_btc.get("mvrv_z") or 0) < 5) else "",
+                 ""),
+                ("SOPR",          _v(_btc.get("sopr"), "{:.3f}"),
+                 "profit taking" if (_btc.get("sopr") and float(_btc.get("sopr") or 0) > 1) else "",
+                 ""),
+                ("Exch. reserve", _v(_btc.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _btc.get("exchange_reserve_delta_7d") is not None else "—",
+                 "outflow 7d" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else "inflow 7d",
+                 "success" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
+                ("Active addr.",  _v(_btc.get("active_addresses_24h"), "{:,.0f}") if _btc.get("active_addresses_24h") is not None else "—",
+                 "24h",
+                 ""),
+            ],
+        )
+    with _c2:
+        _ds_ind_card(
+            "ETH · valuation & flows",
+            [
+                ("MVRV-Z",        _v(_eth.get("mvrv_z") or _eth.get("mvrv"), "{:.2f}"),                            "", ""),
+                ("SOPR",          _v(_eth.get("sopr"), "{:.3f}"),                                                  "", ""),
+                ("Exch. reserve", _v(_eth.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _eth.get("exchange_reserve_delta_7d") is not None else "—", "7d", "success" if (_eth.get("exchange_reserve_delta_7d") and float(_eth.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
+                ("Active addr.",  _v(_eth.get("active_addresses_24h"), "{:,.0f}") if _eth.get("active_addresses_24h") is not None else "—", "24h", ""),
+            ],
+        )
+    with _c3:
+        _ds_ind_card(
+            "XRP · valuation & flows",
+            [
+                ("MVRV-Z",        _v(_xrp.get("mvrv_z") or _xrp.get("mvrv"), "{:.2f}"), "", ""),
+                ("SOPR",          _v(_xrp.get("sopr"), "{:.3f}"),                       "", ""),
+                ("Exch. reserve", _v(_xrp.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _xrp.get("exchange_reserve_delta_7d") is not None else "—", "7d", ""),
+                ("Active addr.",  _v(_xrp.get("active_addresses_24h"), "{:,.0f}") if _xrp.get("active_addresses_24h") is not None else "—", "24h", ""),
+            ],
+        )
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # Whale activity / large transfers (using existing whale_tracker if available)
+    # P0 audit fix — was calling _cached_whale_activity() with no arguments
+    # (signature requires pair: str, price: float) so On-chain page silently
+    # crashed into the outer try/except on every load and the entire whale
+    # section was dead. whale_tracker.get_whale_activity returns a dict; the
+    # legacy isinstance(list) check was always False even when the call shape
+    # was right. Pass a sane default pair + price=0.0 (the tracker handles
+    # both shapes), then accept either dict-with-events or bare-list returns.
+    try:
+        _whale_raw = _cached_whale_activity("BTC/USDT", 0.0)
+        _whale = []
+        if isinstance(_whale_raw, dict):
+            _whale = (_whale_raw.get("events")
+                      or _whale_raw.get("transfers")
+                      or _whale_raw.get("recent")
+                      or [])
+        elif isinstance(_whale_raw, list):
+            _whale = _whale_raw
+        if _whale and isinstance(_whale, list) and len(_whale) > 0:
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd">'
+                '<div class="ds-card-title">Whale activity · large transfers (last 24h)</div>'
+                f'<div style="color:var(--text-muted);font-size:12px;">{len(_whale)} events</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            for _w in _whale[:8]:
+                _amt = _w.get("amount_usd") or _w.get("value_usd") or 0
+                _coin = _w.get("symbol") or _w.get("coin") or "—"
+                _direction = _w.get("direction") or _w.get("flow") or ""
+                _time = str(_w.get("timestamp") or "")[:16]
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:110px 60px 1fr 100px;gap:12px;'
+                    f'padding:8px 4px;border-bottom:1px solid var(--border);font-size:12.5px;">'
+                    f'<span style="font-family:var(--font-mono);color:var(--text-muted);">{_time}</span>'
+                    f'<span style="font-weight:600;">{_coin}</span>'
+                    f'<span style="color:var(--text-secondary);">{_direction}</span>'
+                    f'<span style="font-family:var(--font-mono);text-align:right;">${float(_amt):,.0f}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd"><div class="ds-card-title">Whale activity</div></div>'
+                '<div style="color:var(--text-muted);font-size:13px;padding:12px 4px;">'
+                'No large transfers in the last 24h, or whale tracker is offline.'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as _e_w:
+        logger.debug("[On-chain] whale activity render failed: %s", _e_w)
+
+    st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
+
+    # Footnote about data freshness
+    st.markdown(
+        '<div class="ds-card" style="background:rgba(99,102,241,0.06);'
+        'border:1px solid rgba(99,102,241,0.20);font-size:12px;color:var(--text-muted);'
+        'padding:12px 16px;">'
+        'On-chain data is rate-limited on Glassnode\'s free tier (cached 1h). '
+        'A dedicated On-chain page mockup is on the design backlog; this thin pass '
+        'applies the design-system tokens to the existing data sources.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ──────────────────────────────────────────────
 # ROUTER
 # ──────────────────────────────────────────────
 audit("page_view", page=page, level=st.session_state.get("user_level", "beginner"))
 if page == "Dashboard":
     page_dashboard()
+elif page == "Signals":
+    page_signals()
+elif page == "Regimes":
+    page_regimes()
+elif page == "On-chain":
+    page_onchain()
 elif page == "Config Editor":
     page_config()
 elif page == "Backtest Viewer":

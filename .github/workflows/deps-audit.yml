@@ -16,5 +16,13 @@ jobs:
           python-version: "3.11"
       - name: Install pip-audit
         run: pip install pip-audit
+      # P1 audit fix — was `|| true` which suppressed every CVE finding;
+      # pip-audit failures are now CI-gating. pip-audit already exits
+      # non-zero when ANY vulnerability is found, so dropping `|| true`
+      # alone is sufficient. (`--strict` was attempted in an earlier
+      # commit but isn't a real pip-audit flag — it gets parsed as a
+      # project_path and conflicts with -r. Removed.) Specific
+      # known-and-accepted CVEs go in --ignore-vuln (mirror of
+      # security.yml).
       - name: Run pip-audit
-        run: pip-audit -r requirements.txt || true
+        run: pip-audit -r requirements.txt

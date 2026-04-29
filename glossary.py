@@ -34,7 +34,7 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
     "Impermanent Loss": {
         "beginner":     "When you deposit two tokens and one price changes a lot, you end up with less value than if you'd just held them. It's 'impermanent' because it reverses if prices return.",
-        "intermediate": "Divergence loss vs holding: IL = 2√P − 1 − P where P = price ratio change. Worst at extremes; offset by trading fees if volume is high enough.",
+        "intermediate": "Divergence loss vs holding: IL = 2·√P / (1 + P) − 1, where P is the price ratio (post / pre). Always ≤ 0; worst at extremes. Trading fees offset the loss when volume is high enough.",
         "advanced":     "IL = 2√(P_ratio) / (1 + P_ratio) − 1. Amplified in concentrated liquidity (v3). Delta-hedge via perps or options to reduce. Compare to fee APY to judge net return.",
     },
     "Yield Farming": {

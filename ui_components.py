@@ -4,6 +4,7 @@ Glass-morphism, gradient borders, fluid typography, animated backgrounds.
 Inspired by KOI, Flare Network, dYdX, and Uniswap visual design systems.
 """
 import logging
+from html import escape as _esc
 import streamlit as st
 
 logger = logging.getLogger(__name__)
@@ -12,14 +13,57 @@ logger = logging.getLogger(__name__)
 
 _CSS = """
 <style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   2026-04-25 LEGACY-CSS AUDIT (Cowork directive: a=keep / b=delete / c=flag).
+   The design system (ui/design_system.py) + overrides (ui/overrides.py) own
+   the look of the redesign. This file is the legacy stylesheet trimmed to
+   the rules that are still load-bearing or whose purpose is unclear enough
+   that we'd rather keep them with a flag than risk a regression.
+
+   DELETED (b) — covered by ui/design_system.py + ui/overrides.py:
+     * html/body font-family declaration (DS sets it)
+     * .stApp radial-mesh background (mockup uses solid bg-0)
+     * h1 / h2 / h3 gradient & sizing (overrides.py .ds-page-title wins;
+       the legacy h1 gradient was actively fighting the redesign)
+     * [data-testid="metric-container"] glassmorphic + ::before bar
+       (overrides.py styles stMetric simpler; the gradient border was
+       fighting the mockup card look)
+     * stMetricLabel / stMetricValue / stMetricDelta sizing
+       (overrides.py covers these)
+     * [data-testid="stExpander"] glassmorphic gradient border + summary
+       padding (overrides.py styles expander as a plain card)
+     * Global 0.85rem rules for stMarkdownContainer / stMain / stSidebar
+       (DS controls font sizes via the page-level Inter/Mono stack +
+       per-component rules in overrides.py; the blanket 0.85rem was
+       shrinking nav items + page headers in unwanted places)
+     * Sidebar radial-gradient background + stRadio styling
+       (DS sets sidebar bg; no radio widgets remain in the rail post
+       2026-04-25 redesign)
+     * Sidebar [data-testid="stExpander"] override — Legal expander now
+       inherits its style from the main expander rules in overrides.py
+
+   KEPT (a/c) — see inline comments below.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════
    GOOGLE FONTS — Inter (UI) + JetBrains Mono (data)
+   AUDIT (a) load-bearing: design system imports the same font families
+   but extra weights here are still referenced by inline styles using
+   font-weight: 800. Cheap to keep.
 ═══════════════════════════════════════════════ */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* ═══════════════════════════════════════════════
-   DESIGN TOKENS — single source of truth
+   DESIGN TOKENS — legacy :root variables
+   AUDIT (c) flag: dozens of inline-style strings across app.py and the
+   helper functions in this file reference --primary, --bull, --bear,
+   --bg-glass, --r-sm, --t-base, etc. Cannot delete safely without a
+   sweep through every inline style. The redesign tokens (--accent,
+   --bg-0, --text-primary, etc.) are added BY ui/design_system.py at
+   page-load time and shadow these where they overlap. Both sets live
+   side-by-side — legacy code keeps working, redesign code uses DS
+   tokens. Future cleanup: migrate inline styles to DS tokens, then
+   delete this :root block.
 ═══════════════════════════════════════════════ */
 :root {
     /* backgrounds */
@@ -35,7 +79,7 @@ _CSS = """
     --primary-dim:   #10b981;
     --primary-glow:  rgba(0, 212, 170, 0.18);
     --primary-glow2: rgba(0, 212, 170, 0.06);
-    --accent:        #8b5cf6;   /* indigo accent — dYdX-inspired */
+    --accent:        #8b5cf6;   /* indigo accent — dYdX-inspired (legacy) */
     --accent-glow:   rgba(99, 102, 241, 0.14);
 
     /* signal */
@@ -63,8 +107,10 @@ _CSS = """
     /* typography — fluid (clamp: min, preferred, max) */
     --font-ui:   'Inter', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-    --fs-xxs:    clamp(9px,  0.65vw, 10px);
-    --fs-xs:     clamp(11px, 0.75vw, 12px);
+    /* P1-32: --fs-xxs raised to 11px floor (was 9–10px) per CLAUDE.md §8 label floor.
+       Now identical to --fs-xs; legacy callers continue to work without change. */
+    --fs-xxs:    clamp(11px, 0.75vw, 13px);
+    --fs-xs:     clamp(11px, 0.75vw, 13px);
     --fs-sm:     clamp(12px, 0.85vw, 13px);
     --fs-base:   clamp(13px, 0.9vw,  14px);
     --fs-md:     clamp(14px, 1vw,    16px);
@@ -92,201 +138,45 @@ _CSS = """
     --t-slow:  0.38s ease;
 }
 
-/* ═══════════════════════════════════════════════
-   BASE — typography & font
-═══════════════════════════════════════════════ */
-html, body, [class*="css"], .stApp {
-    font-family: var(--font-ui) !important;
-    -webkit-font-smoothing: antialiased !important;
-    text-rendering: optimizeLegibility !important;
-}
+/* AUDIT (b) DELETED — html/body font-family / antialias / text-rendering:
+   ui/design_system.py inject_theme already sets these. */
 
-/* ═══════════════════════════════════════════════
-   APP BACKGROUND — radial mesh (dYdX / KOI style)
-   Two subtle color orbs give depth without distraction
-═══════════════════════════════════════════════ */
-.stApp {
-    background:
-        radial-gradient(ellipse 80% 50% at 15% 0%,   rgba(99,102,241,0.07) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 40% at 85% 100%, rgba(0,212,170,0.06)  0%, transparent 55%),
-        radial-gradient(ellipse 100% 80% at 50% 0%,  rgba(0,0,0,0.3)        0%, transparent 100%),
-        #0d0e14 !important;
-    background-attachment: fixed !important;
-}
-[data-testid="stAppViewContainer"] > .main {
-    background: transparent !important;
-}
+/* AUDIT (b) DELETED — .stApp radial mesh background:
+   The mockup uses solid var(--bg-0). The radial gradient was darkening the
+   home page and not matching the design. DS now drives .stApp background. */
 
-/* ═══════════════════════════════════════════════
-   HEADINGS — fluid + gradient on h1
-═══════════════════════════════════════════════ */
-h1 {
-    font-size: var(--fs-xl) !important;
-    font-weight: 800 !important;
-    letter-spacing: -0.6px !important;
-    background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%) !important;
-    -webkit-background-clip: text !important;
-    -webkit-text-fill-color: transparent !important;
-    background-clip: text !important;
-    padding-bottom: 2px !important;
-}
-h2 {
-    font-size: var(--fs-md) !important;
-    font-weight: 600 !important;
-    color: #cbd5e1 !important;
-    letter-spacing: -0.2px !important;
-}
-h3 {
-    font-size: var(--fs-sm) !important;
-    font-weight: 600 !important;
-    color: #94a3b8 !important;
-}
+/* AUDIT (b) DELETED — h1 gradient + h2/h3 sizing:
+   overrides.py .ds-page-title wins for redesigned page headers. The legacy
+   h1 gradient was actively fighting our 22px h1 in the page header. */
 
-/* ═══════════════════════════════════════════════
-   METRIC CARDS — glassmorphic + gradient border
-   Technique: gradient background-box + padding-box clipping
-═══════════════════════════════════════════════ */
-[data-testid="metric-container"] {
-    background:
-        linear-gradient(var(--bg-glass), var(--bg-glass)) padding-box,
-        linear-gradient(135deg, rgba(0,212,170,0.22) 0%, rgba(99,102,241,0.15) 50%, rgba(255,255,255,0.04) 100%) border-box !important;
-    border: 1px solid transparent !important;
-    border-radius: var(--r-md) !important;
-    padding: 18px 20px !important;
-    position: relative !important;
-    overflow: hidden !important;
-    backdrop-filter: blur(16px) !important;
-    -webkit-backdrop-filter: blur(16px) !important;
-    transition: box-shadow var(--t-base), transform var(--t-fast) !important;
-    box-shadow: var(--shadow-card) !important;
-}
-/* teal top accent bar */
-[data-testid="metric-container"]::before {
-    content: '' !important;
-    position: absolute !important;
-    top: 0; left: 0; right: 0 !important;
-    height: 2px !important;
-    background: linear-gradient(90deg, var(--primary) 0%, var(--accent) 100%) !important;
-    opacity: 0.7 !important;
-    border-radius: var(--r-md) var(--r-md) 0 0 !important;
-}
-[data-testid="metric-container"]:hover {
-    box-shadow: var(--shadow-glow), var(--shadow-card) !important;
-    transform: translateY(-2px) !important;
-}
+/* AUDIT (b) DELETED — [data-testid="metric-container"] glassmorphic frame
+   + ::before teal bar + hover lift. overrides.py .ds-card/.ds-strip + the
+   stMetric rule cover the redesigned cards. */
 
-/* Metric label */
-[data-testid="stMetricLabel"],
-[data-testid="stMetricLabel"] > div {
-    color: rgba(168,180,200,0.7) !important;
-    font-size: var(--fs-xxs) !important;
-    font-weight: 600 !important;
-    letter-spacing: 1.1px !important;
-    text-transform: uppercase !important;
-}
+/* AUDIT (b) DELETED — stMetricLabel / stMetricValue / stMetricDelta:
+   overrides.py [data-testid="stMetricValue"]/[data-testid="stMetricLabel"]
+   covers the redesigned metric look. */
 
-/* Metric value */
-[data-testid="stMetricValue"] > div,
-[data-testid="stMetricValue"] {
-    color: var(--text-1) !important;
-    font-size: clamp(20px, 1.5vw, 26px) !important;
-    font-weight: 700 !important;
-    letter-spacing: -0.5px !important;
-    font-family: var(--font-mono) !important;
-}
+/* AUDIT (b) DELETED — [data-testid="stExpander"] glassmorphic gradient.
+   overrides.py styles expander as a plain ds-card. */
 
-/* Deltas */
-[data-testid="stMetricDelta"][data-direction="positive"] { color: #22c55e !important; }
-[data-testid="stMetricDelta"][data-direction="negative"] { color: #ef4444 !important; }
+/* AUDIT (b) DELETED — global 0.85rem font-size rules across stMarkdown,
+   stMain labels/inputs, stSidebar, stExpander summary. The blanket
+   shrinking conflicted with the redesign's per-component sizing
+   (page header 22px, sidebar nav 13px, etc.). DS + overrides set sizes
+   explicitly where they matter. */
 
-/* ═══════════════════════════════════════════════
-   EXPANDERS / PAIR CARDS — glassmorphic panels
-═══════════════════════════════════════════════ */
-[data-testid="stExpander"] {
-    background:
-        linear-gradient(rgba(14,18,30,0.8), rgba(14,18,30,0.8)) padding-box,
-        linear-gradient(160deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%) border-box !important;
-    border: 1px solid transparent !important;
-    border-radius: var(--r-md) !important;
-    margin-bottom: 8px !important;
-    overflow: hidden !important;
-    backdrop-filter: blur(12px) !important;
-    -webkit-backdrop-filter: blur(12px) !important;
-    transition: box-shadow var(--t-base), border-color var(--t-fast) !important;
-    box-shadow: var(--shadow-sm) !important;
-}
-[data-testid="stExpander"]:hover {
-    background:
-        linear-gradient(rgba(16,20,34,0.85), rgba(16,20,34,0.85)) padding-box,
-        linear-gradient(160deg, rgba(0,212,170,0.25) 0%, rgba(99,102,241,0.15) 100%) border-box !important;
-    box-shadow: 0 0 0 0 transparent, 0 4px 20px rgba(0,0,0,0.5) !important;
-}
-[data-testid="stExpander"] > details[open] {
-    background:
-        linear-gradient(rgba(14,18,30,0.9), rgba(14,18,30,0.9)) padding-box,
-        linear-gradient(160deg, rgba(0,212,170,0.3) 0%, rgba(99,102,241,0.18) 60%, rgba(255,255,255,0.06) 100%) border-box !important;
-    box-shadow: var(--shadow-glow) !important;
-}
-[data-testid="stExpander"] > details > summary {
-    padding: 13px 18px !important;
-    font-weight: 600 !important;
-    font-size: var(--fs-sm) !important;
-    cursor: pointer !important;
-    color: var(--text-2) !important;
-}
-[data-testid="stExpander"] > details > div {
-    padding: 4px 18px 18px 18px !important;
-}
-
-/* ═══════════════════════════════════════════════
-   GLOBAL BASE FONT — 0.85rem for all interactive + body elements
-   Metric values (1rem+) and page titles kept large intentionally.
-   Captions/badges kept at 0.75rem for visual hierarchy.
-═══════════════════════════════════════════════ */
-[data-testid="stMarkdownContainer"] div,
-[data-testid="stMarkdownContainer"] span { font-size: 0.85rem; }
-[data-testid="stMain"] label, [data-testid="stMain"] label p, [data-testid="stMain"] label span { font-size: 0.85rem !important; }
-[data-testid="stMain"] input, [data-testid="stMain"] textarea { font-size: 0.85rem !important; }
-[data-testid="stMain"] [data-baseweb="select"] span, [data-testid="stMain"] [data-baseweb="select"] div, [data-testid="stMain"] [data-baseweb="select"] input { font-size: 0.85rem !important; }
-[data-testid="stMain"] [role="listbox"] li, [data-testid="stMain"] [role="option"], [data-testid="stMain"] [role="option"] * { font-size: 0.85rem !important; }
-[data-testid="stMain"] button p, [data-testid="stMain"] button span, [data-testid="stFormSubmitButton"] button p { font-size: 0.85rem !important; }
-[data-testid="stMain"] [data-testid="stTab"] p, [data-testid="stMain"] [data-testid="stTab"] span { font-size: 0.85rem !important; }
-[data-testid="stMain"] p { font-size: 0.85rem !important; }
-[data-testid="stSidebar"] label, [data-testid="stSidebar"] label p, [data-testid="stSidebar"] label span { font-size: 0.85rem !important; }
-[data-testid="stSidebar"] p { font-size: 0.85rem !important; }
-[data-testid="stExpander"] > details > summary { font-size: 0.85rem !important; }
-[data-testid="stCaptionContainer"] p, [data-testid="stMain"] small { font-size: 0.75rem !important; }
-
-/* ═══════════════════════════════════════════════
-   SIDEBAR — deeper glass panel
-═══════════════════════════════════════════════ */
-[data-testid="stSidebar"] {
-    background:
-        radial-gradient(ellipse 120% 60% at 50% 0%, rgba(0,212,170,0.05) 0%, transparent 60%),
-        #0d0e14 !important;
-    border-right: 1px solid rgba(255,255,255,0.06) !important;
-}
-[data-testid="stSidebar"] .stRadio label {
-    font-size: var(--fs-sm) !important;
-    color: rgba(168,180,200,0.65) !important;
-    padding: 6px 0 !important;
-    transition: color var(--t-fast) !important;
-}
-[data-testid="stSidebar"] .stRadio label:hover {
-    color: var(--primary) !important;
-}
-[data-testid="stSidebar"] [data-testid="stExpander"] {
-    background: rgba(255,255,255,0.025) !important;
-    border-color: rgba(255,255,255,0.05) !important;
-    border-radius: var(--r-sm) !important;
-    backdrop-filter: none !important;
-}
+/* AUDIT (b) DELETED — sidebar radial bg, stRadio rules, stExpander rule.
+   ui/design_system.py + ui/overrides.py own the rail look post-redesign. */
 
 /* ═══════════════════════════════════════════════
    BUTTONS — gradient primary, ghost secondary
+   AUDIT (a) load-bearing: main-area buttons (scan, run backtest,
+   etc.) want the gradient look. Scoped to `section.main` post-2026-04-25
+   so ui/overrides.py wins for the sidebar nav.
 ═══════════════════════════════════════════════ */
-.stButton > button[kind="primary"],
-button[kind="primary"] {
+section.main .stButton > button[kind="primary"],
+section.main button[kind="primary"] {
     background: linear-gradient(135deg, #00d4aa 0%, #10b981 60%, #a78bfa 100%) !important;
     border: none !important;
     color: #0d0e14 !important;
@@ -298,21 +188,22 @@ button[kind="primary"] {
     box-shadow: 0 2px 14px rgba(0,212,170,0.25) !important;
     padding: 8px 18px !important;
 }
-.stButton > button[kind="primary"]:hover,
-button[kind="primary"]:hover {
+section.main .stButton > button[kind="primary"]:hover,
+section.main button[kind="primary"]:hover {
     box-shadow: 0 4px 28px rgba(0,212,170,0.45), 0 0 0 1px rgba(0,212,170,0.3) !important;
     transform: translateY(-2px) !important;
 }
-.stButton > button[kind="primary"]:active,
-button[kind="primary"]:active {
+section.main .stButton > button[kind="primary"]:active,
+section.main button[kind="primary"]:active {
     transform: translateY(0) !important;
     box-shadow: 0 1px 8px rgba(0,212,170,0.25) !important;
 }
 
-/* Secondary / ghost buttons */
-.stButton > button[kind="secondary"],
-button[kind="secondary"],
-.stButton > button:not([kind]) {
+/* Secondary / ghost buttons (also scoped — sidebar nav uses its own
+   plain text-link look in ui/overrides.py). */
+section.main .stButton > button[kind="secondary"],
+section.main button[kind="secondary"],
+section.main .stButton > button:not([kind]) {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.1) !important;
     color: rgba(168,180,200,0.75) !important;
@@ -321,17 +212,17 @@ button[kind="secondary"],
     transition: all var(--t-base) !important;
     backdrop-filter: blur(8px) !important;
 }
-.stButton > button[kind="secondary"]:hover,
-.stButton > button:not([kind]):hover {
+section.main .stButton > button[kind="secondary"]:hover,
+section.main .stButton > button:not([kind]):hover {
     border-color: rgba(0,212,170,0.35) !important;
     color: var(--primary) !important;
     background: rgba(0,212,170,0.06) !important;
     box-shadow: 0 0 12px rgba(0,212,170,0.1) !important;
 }
-.stButton > button:disabled { opacity: 0.32 !important; cursor: not-allowed !important; }
+section.main .stButton > button:disabled { opacity: 0.32 !important; cursor: not-allowed !important; }
 
-/* Download buttons */
-.stDownloadButton > button {
+/* Download buttons — AUDIT (a) load-bearing, scoped to section.main */
+section.main .stDownloadButton > button {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.1) !important;
     color: rgba(168,180,200,0.7) !important;
@@ -339,7 +230,7 @@ button[kind="secondary"],
     font-size: var(--fs-sm) !important;
     transition: all var(--t-base) !important;
 }
-.stDownloadButton > button:hover {
+section.main .stDownloadButton > button:hover {
     border-color: var(--bull-border) !important;
     color: var(--primary) !important;
     box-shadow: 0 0 10px var(--primary-glow2) !important;
@@ -347,6 +238,8 @@ button[kind="secondary"],
 
 /* ═══════════════════════════════════════════════
    TABS — pill-style active indicator (KOI-inspired)
+   AUDIT (a) load-bearing: Settings + Backtester pages use st.tabs
+   extensively. overrides.py doesn't restyle tabs.
 ═══════════════════════════════════════════════ */
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
     background: rgba(255,255,255,0.025) !important;
@@ -379,6 +272,9 @@ button[kind="secondary"],
 
 /* ═══════════════════════════════════════════════
    INPUT FIELDS — glass style + teal focus ring
+   AUDIT (a) load-bearing: overrides.py sets bg/border but no focus ring.
+   The teal focus halo is the only signal that an input is keyboard-focused
+   inside Settings forms.
 ═══════════════════════════════════════════════ */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input {
@@ -412,7 +308,7 @@ button[kind="secondary"],
     border-radius: var(--r-sm) !important;
 }
 
-/* Slider */
+/* Slider — AUDIT (a) load-bearing: weight slider, threshold slider in Settings */
 [data-baseweb="slider"] [role="slider"] {
     background: var(--primary) !important;
     border-color: var(--primary) !important;
@@ -420,7 +316,7 @@ button[kind="secondary"],
 }
 
 /* ═══════════════════════════════════════════════
-   DATA TABLES / DATAFRAMES
+   DATA TABLES / DATAFRAMES — AUDIT (a) load-bearing, not in overrides
 ═══════════════════════════════════════════════ */
 [data-testid="stDataFrame"],
 [data-testid="stDataFrameResizable"] {
@@ -431,7 +327,8 @@ button[kind="secondary"],
 }
 
 /* ═══════════════════════════════════════════════
-   PROGRESS BAR — animated gradient
+   PROGRESS BAR — animated shimmer gradient
+   AUDIT (a) load-bearing: scan progress + backtest progress bars use this.
 ═══════════════════════════════════════════════ */
 @keyframes shimmer-bar {
     0%   { background-position: -200% center; }
@@ -450,6 +347,8 @@ button[kind="secondary"],
 
 /* ═══════════════════════════════════════════════
    ALERTS / STATUS BANNERS
+   AUDIT (a) load-bearing: st.success / st.error / st.warning / st.info
+   semantic colors. overrides.py doesn't restyle these.
 ═══════════════════════════════════════════════ */
 [data-testid="stAlert"] {
     border-radius: var(--r-sm) !important;
@@ -531,8 +430,12 @@ footer    { visibility: hidden; }
 
 /* ═══════════════════════════════════════════════
    POPOVER
+   AUDIT (a) load-bearing for main-area popovers (e.g. account menu).
+   Scoped to section.main so the sidebar Glossary popover gets the
+   design-system look from ui/overrides.py instead of this ghost-button
+   chrome.
 ═══════════════════════════════════════════════ */
-[data-testid="stPopover"] button {
+section.main [data-testid="stPopover"] button {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.09) !important;
     border-radius: var(--r-xs) !important;
@@ -541,13 +444,14 @@ footer    { visibility: hidden; }
     padding: 3px 10px !important;
     transition: all var(--t-fast) !important;
 }
-[data-testid="stPopover"] button:hover {
+section.main [data-testid="stPopover"] button:hover {
     border-color: rgba(0,212,170,0.4) !important;
     color: var(--primary) !important;
 }
 
 /* ═══════════════════════════════════════════════
-   PULSING LIVE DOT — expanded glow ring
+   PULSING LIVE DOT — AUDIT (a): used by live_dot_html() helper for
+   "data is live" indicators across the dashboard.
 ═══════════════════════════════════════════════ */
 @keyframes pulse-dot {
     0%   { box-shadow: 0 0 0 0   rgba(0,212,170,0.8); }
@@ -566,7 +470,7 @@ footer    { visibility: hidden; }
 }
 
 /* ═══════════════════════════════════════════════
-   FADE-IN-UP — applied to custom HTML cards
+   FADE-IN-UP — AUDIT (a): used by .fade-up class on custom cards.
 ═══════════════════════════════════════════════ */
 @keyframes fade-up {
     from { opacity: 0; transform: translateY(10px); }
@@ -575,7 +479,7 @@ footer    { visibility: hidden; }
 .fade-up { animation: fade-up 0.35s ease forwards; }
 
 /* ═══════════════════════════════════════════════
-   SHIMMER GRADIENT — loading skeleton style
+   SHIMMER — AUDIT (a): used by .shimmer class on loading skeletons.
 ═══════════════════════════════════════════════ */
 @keyframes shimmer {
     0%   { background-position: -400px 0; }
@@ -592,20 +496,21 @@ footer    { visibility: hidden; }
 }
 
 /* ═══════════════════════════════════════════════
-   GLOBAL UTILITY CLASSES
+   GLOBAL UTILITY CLASSES — AUDIT (a): .mono / .bull / .bear / .warn /
+   .muted / .upper used pervasively in inline-style HTML across app.py
+   helpers (signal pills, regime labels, value chips).
 ═══════════════════════════════════════════════ */
 .mono  { font-family: var(--font-mono) !important; }
 .bull  { color: var(--bull) !important; }
 .bear  { color: var(--bear) !important; }
 .warn  { color: var(--warn) !important; }
 .muted { color: var(--text-3) !important; }
-.upper { text-transform: uppercase; letter-spacing: 0.8px; font-size: 10px; font-weight: 600; }
+.upper { text-transform: uppercase; letter-spacing: 0.8px; font-size: var(--fs-xs); font-weight: 600; }  /* P1-32 */
 
 /* ═══════════════════════════════════════════════
-   BEGINNER MODE — hide advanced elements
-   Toggle via st.session_state["beginner_mode"]
-   Inject class "advanced-only" on elements to hide in simple view.
-   JS reads session state cookie to apply/remove body class.
+   BEGINNER MODE — AUDIT (a) load-bearing: drives the user_level system
+   from CLAUDE.md §7. inject_beginner_mode_js() toggles body.beginner-mode
+   based on level; .advanced-only elements vanish in beginner view.
 ═══════════════════════════════════════════════ */
 body.beginner-mode .advanced-only {
     display: none !important;
@@ -625,17 +530,31 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 /* Beginner mode body tag injected by inject_beginner_mode_js() */
 
 /* ═══════════════════════════════════════════════
+   GLOBAL 44px TAP TARGETS  (P1-33)
+   AUDIT (a) load-bearing: WCAG AA + CLAUDE.md §8 — 44×44 minimum tap target
+   on all interactive elements, every breakpoint (covers Surface, iPad in
+   landscape, and other desktop touch users). Scoped to section.main so the
+   compact 30px sidebar nav remains design-system-controlled.
+═══════════════════════════════════════════════ */
+section.main div[data-testid="stButton"] > button { min-height: 44px !important; }
+section.main [data-testid="stPopover"] button { min-height: 44px !important; }
+section.main [data-testid="stRadio"] label { min-height: 44px !important; }
+section.main [data-testid="stCheckbox"] label { min-height: 44px !important; }
+section.main [data-testid="stToggle"] label { min-height: 44px !important; }
+section.main [data-baseweb="select"] { min-height: 44px !important; }
+
+/* ═══════════════════════════════════════════════
    MOBILE — 768px breakpoint + 44px tap targets
+   AUDIT (a) load-bearing: WCAG AA compliance per CLAUDE.md §8.
+   Button rule already scoped to section.main so sidebar nav stays compact.
 ═══════════════════════════════════════════════ */
 @media (max-width: 768px) {
     .stApp { font-size: var(--fs-sm) !important; }
     .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
-    /* 44px minimum tap targets */
-    div[data-testid="stButton"] > button { min-height: 44px !important; }
-    [data-testid="stRadio"] label { min-height: 44px !important; padding: 10px 0 !important; }
-    [data-testid="stCheckbox"] label { min-height: 44px !important; padding: 10px 0 !important; }
-    [data-testid="stToggle"] label { min-height: 44px !important; }
-    [data-baseweb="select"] { min-height: 44px !important; }
+    /* 44px minimum tap targets (mobile) — extra padding for radio/checkbox
+       to keep total touchable area generous at small screen sizes. */
+    [data-testid="stRadio"] label { padding: 10px 0 !important; }
+    [data-testid="stCheckbox"] label { padding: 10px 0 !important; }
     /* Stack columns */
     [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
     [data-testid="stColumn"] { min-width: 100% !important; }
@@ -643,7 +562,7 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 /* ═══════════════════════════════════════════════
    PHONE — 375px breakpoint (iPhone SE / small Android)
-   Item 16: Small-phone layout hardening
+   AUDIT (a) load-bearing: small-phone hardening per CLAUDE.md §8.
 ═══════════════════════════════════════════════ */
 @media (max-width: 390px) {
     /* Tighter padding on very small screens */
@@ -661,8 +580,9 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
     .rank-stop-col { display: none !important; }
     /* Sidebar: smaller text */
     [data-testid="stSidebar"] { font-size: 12px !important; }
-    /* Buttons: full width, 44px minimum height */
-    div[data-testid="stButton"] > button {
+    /* Buttons: full width, 44px minimum height (main section only —
+       sidebar keeps the design-system compact nav style). */
+    section.main div[data-testid="stButton"] > button {
         min-height: 44px !important;
         width: 100% !important;
         font-size: 14px !important;
@@ -679,7 +599,13 @@ body.beginner-mode [data-testid="stMetricValue"] > div {
 
 /* ═══════════════════════════════════════════════
    LIGHT MODE — full WCAG AA implementation
-   Body class toggled by render_theme_toggle_sg() JS
+   AUDIT (c) flag: ui/design_system.py inject_theme also handles theme
+   tokens by rebuilding :root variables when theme="light". The legacy
+   body.light-mode rules below are STILL needed for components that hit
+   hardcoded dark colors via inline styles (sections 19-20 do explicit
+   dark-color → light-color mappings on inline `style="color:#..."`).
+   Once the inline-color sweep is done (post May 1 demo), most of this
+   block can collapse to just the design-token mappings. Keep for now.
 ═══════════════════════════════════════════════ */
 
 /* 1. Override all design token variables so every var() flips automatically */
@@ -809,15 +735,15 @@ body.light-mode [data-baseweb="menu-item"] { color: #1e293b !important; }
 body.light-mode [data-baseweb="list"] li:hover,
 body.light-mode [data-baseweb="menu-item"]:hover { background-color: rgba(0,212,170,0.07) !important; }
 
-/* 10. Buttons */
-body.light-mode .stButton > button[kind="secondary"],
-body.light-mode .stButton > button:not([kind]) {
+/* 10. Buttons — scoped to main section so sidebar nav uses design-system look */
+body.light-mode section.main .stButton > button[kind="secondary"],
+body.light-mode section.main .stButton > button:not([kind]) {
     background: rgba(255,255,255,0.92) !important;
     border: 1px solid rgba(0,0,0,0.12) !important;
     color: #334155 !important;
 }
-body.light-mode .stButton > button[kind="secondary"]:hover,
-body.light-mode .stButton > button:not([kind]):hover {
+body.light-mode section.main .stButton > button[kind="secondary"]:hover,
+body.light-mode section.main .stButton > button:not([kind]):hover {
     border-color: rgba(0,212,170,0.4) !important;
     color: #10b981 !important;
     background: rgba(0,212,170,0.06) !important;
@@ -910,11 +836,20 @@ body.light-mode div[style*="border:1px solid rgba(255,255,255,0.0"] { border-col
 # Flipping st.session_state["sg_up_is_red"] flips every gain/loss color.
 
 def color_up() -> str:
-    """Return the hex color for positive/up moves per the user's regional preference."""
+    """Return the hex color for positive/up moves per the user's regional preference.
+
+    NOTE: Returns a hex string rather than a CSS var() because callers feed
+    the result into Plotly chart configs (where var(--success) doesn't resolve)
+    and into f-string concatenations producing alpha tricks like ``{color}33``.
+    Hex literals match design tokens: --success=#22c55e / --danger=#ef4444.
+    """
     return "#ef4444" if st.session_state.get("sg_up_is_red", False) else "#22c55e"
 
 def color_down() -> str:
-    """Return the hex color for negative/down moves per the user's regional preference."""
+    """Return the hex color for negative/down moves per the user's regional preference.
+
+    NOTE: see color_up() — hex string for Plotly + alpha-trick compatibility.
+    """
     return "#22c55e" if st.session_state.get("sg_up_is_red", False) else "#ef4444"
 
 def color_for_delta(delta, default: str = "#64748b") -> str:
@@ -975,7 +910,12 @@ def render_quick_access_row() -> None:
             _recent = _sg_recent_alerts()
             if _recent:
                 for _a in _recent:
-                    st.markdown(f"• {_a.get('timestamp','—')[:16]} — {_a.get('message','—')[:60]}")
+                    # P1-34/P1-35: alert message is from JSONL — could contain
+                    # markdown control chars or HTML. Use st.text to render
+                    # untrusted content as plain text (no HTML / markdown parse).
+                    _ts  = str(_a.get("timestamp", "—"))[:16]
+                    _msg = str(_a.get("message",   "—"))[:60]
+                    st.text(f"• {_ts} — {_msg}")
             else:
                 st.caption("No alerts yet — configure in Settings.")
     with _scans:
@@ -1002,20 +942,24 @@ def render_quick_access_row() -> None:
 
 def render_regional_color_toggle() -> None:
     """Side-by-side Western/Asian swatch picker for up/down color convention."""
+    # P1-30: hex → CSS-variable tokens. Active border uses --accent (signal
+    # green); +/- text uses --success / --danger; muted label uses
+    # --text-secondary; card surface uses --bg-1 directly so light/dark
+    # both flip cleanly.
     st.markdown(
-        "<div style='color:#94a3b8; font-size:0.88rem; margin-bottom:8px;'>"
+        "<div style='color:var(--text-secondary); font-size:0.88rem; margin-bottom:8px;'>"
         "Regional color convention for gains and losses.</div>",
         unsafe_allow_html=True,
     )
     _is_asian = st.session_state.get("sg_up_is_red", False)
     _c1, _c2, _c3 = st.columns([4, 1, 4])
     with _c1:
-        _active = "border:1px solid #00d4aa;" if not _is_asian else "border:1px solid rgba(148,163,184,0.15);"
+        _active = "border:1px solid var(--accent);" if not _is_asian else "border:1px solid var(--border);"
         st.markdown(
-            f"<div style='{_active} border-radius:10px; padding:14px; background:rgba(15,23,42,0.5);'>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#22c55e; font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#ef4444; font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
-            f"<div style='color:#94a3b8; font-size:0.8rem; margin-top:6px;'>Western (US, EU)</div>"
+            f"<div style='{_active} border-radius:10px; padding:14px; background:var(--bg-2);'>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--success); font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--danger); font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
+            f"<div style='color:var(--text-secondary); font-size:0.8rem; margin-top:6px;'>Western (US, EU)</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -1030,12 +974,12 @@ def render_regional_color_toggle() -> None:
                 st.session_state["sg_up_is_red"] = False
                 st.rerun()
     with _c3:
-        _active = "border:1px solid #00d4aa;" if _is_asian else "border:1px solid rgba(148,163,184,0.15);"
+        _active = "border:1px solid var(--accent);" if _is_asian else "border:1px solid var(--border);"
         st.markdown(
-            f"<div style='{_active} border-radius:10px; padding:14px; background:rgba(15,23,42,0.5);'>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#ef4444; font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
-            f"<div style='font-size:1.25rem; font-weight:700; color:#22c55e; font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
-            f"<div style='color:#94a3b8; font-size:0.8rem; margin-top:6px;'>Asian (CN, JP, KR)</div>"
+            f"<div style='{_active} border-radius:10px; padding:14px; background:var(--bg-2);'>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--danger); font-variant-numeric:tabular-nums;'>+1.00 ▲</div>"
+            f"<div style='font-size:1.25rem; font-weight:700; color:var(--success); font-variant-numeric:tabular-nums;'>-1.00 ▼</div>"
+            f"<div style='color:var(--text-secondary); font-size:0.8rem; margin-top:6px;'>Asian (CN, JP, KR)</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -1096,10 +1040,14 @@ def section_header(title: str, subtitle: str = None, icon: str = None):
     Render a styled section header.
     Uses gradient text for title, teal left-border + muted subtitle.
     """
-    icon_html = f'<span style="margin-right:8px;font-size:15px;opacity:0.85">{icon}</span>' if icon else ''
+    # P1-34/P1-35: escape caller-derived strings before HTML interpolation.
+    _icon_safe     = _esc(str(icon)) if icon else ""
+    _title_safe    = _esc(str(title)) if title else ""
+    _subtitle_safe = _esc(str(subtitle)) if subtitle else ""
+    icon_html = f'<span style="margin-right:8px;font-size:15px;opacity:0.85">{_icon_safe}</span>' if icon else ''
     subtitle_html = (
         f'<p style="color:rgba(168,180,200,0.45);font-size:12px;margin:4px 0 0 0;'
-        f'font-weight:400;letter-spacing:0.2px;line-height:1.4">{subtitle}</p>'
+        f'font-weight:400;letter-spacing:0.2px;line-height:1.4">{_subtitle_safe}</p>'
     ) if subtitle else ''
     st.markdown(
         f"""
@@ -1117,7 +1065,7 @@ def section_header(title: str, subtitle: str = None, icon: str = None):
                 -webkit-text-fill-color: transparent;
                 background-clip: text;
                 display: inline-block">
-                {icon_html}{title}
+                {icon_html}{_title_safe}
             </div>
             {subtitle_html}
         </div>
@@ -1152,7 +1100,10 @@ def render_card(title: str = None, icon: str = None, accent: str = "#00d4aa",
     pad = "12px 14px" if compact else padding
     header_html = ""
     if icon or title:
-        label = f"{icon} {title}" if icon and title else (icon or title)
+        # P1-34/P1-35: escape caller-supplied title/icon before HTML interpolation.
+        _icon_safe  = _esc(str(icon)) if icon else ""
+        _title_safe = _esc(str(title)) if title else ""
+        label = f"{_icon_safe} {_title_safe}" if icon and title else (_icon_safe or _title_safe)
         header_html = (
             f'<div style="font-size:11px;font-weight:600;color:rgba(168,180,200,0.55);'
             f'text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px">{label}</div>'
@@ -1171,49 +1122,65 @@ def render_card(title: str = None, icon: str = None, accent: str = "#00d4aa",
 
 # ── Signal direction pill ──────────────────────────────────────────────────────
 
+# P1-31: shape encoding — color is paired with a directional shape token so
+# color-blind users get a redundant cue. ▲ for BUY-family, ▼ for SELL-family,
+# ■ for NEUTRAL. Mirrors signal_badge_html() pattern.
+# P1-30: hex → CSS-var tokens. STRONG BUY uses --accent (brand teal),
+# BUY uses --success, SELL/STRONG SELL uses --danger, NEUTRAL uses --bg-2/
+# --text-secondary. The glow rgba strings stay raw — they're computed off
+# the same color values and would be empty if vars resolved to themselves.
 _PILL_CFG = {
-    "STRONG BUY":  ("#00d4aa", "#0d0e14", "0 0 12px rgba(0,212,170,0.5)"),
-    "BUY":         ("#22c55e", "#0d0e14", "0 0 8px  rgba(0,192,118,0.35)"),
-    "STRONG SELL": ("#ef4444", "#fff",    "0 0 12px rgba(246,70,93,0.5)"),
-    "SELL":        ("#ef4444", "#fff",    "0 0 8px  rgba(192,57,43,0.35)"),
-    "NEUTRAL":     ("#1e293b", "#64748b", "none"),
+    "STRONG BUY":  ("▲", "var(--accent)",  "var(--accent-ink)",      "0 0 12px rgba(0,212,170,0.5)"),
+    "BUY":         ("▲", "var(--success)", "var(--accent-ink)",      "0 0 8px  rgba(0,192,118,0.35)"),
+    "STRONG SELL": ("▼", "var(--danger)",  "#fff",                   "0 0 12px rgba(246,70,93,0.5)"),
+    "SELL":        ("▼", "var(--danger)",  "#fff",                   "0 0 8px  rgba(192,57,43,0.35)"),
+    "NEUTRAL":     ("■", "var(--bg-2)",    "var(--text-secondary)",  "none"),
 }
 
 def signal_pill(direction: str) -> str:
-    """Return an HTML colored pill badge for a signal direction."""
+    """Return an HTML colored pill badge for a signal direction.
+
+    P1-31: Shape encoding — every badge prepends a direction shape (▲/▼/■)
+    so color-blind users get a redundant cue beyond color alone.
+    """
+    # TODO P1-34: html.escape inputs — direction is user-derivable
     # UI-06: guard against None direction to prevent TypeError in `key in direction`
     direction = direction or ""
-    for key, (bg, fg, glow) in _PILL_CFG.items():
+    for key, (shape, bg, fg, glow) in _PILL_CFG.items():
         if key in direction:
             return (
                 f'<span style="background:{bg};color:{fg};'
                 f'padding:4px 13px;border-radius:999px;'
                 f'font-size:11px;font-weight:800;letter-spacing:0.5px;'
                 f'display:inline-block;box-shadow:{glow};'
-                f'text-transform:uppercase">{key}</span>'
+                f'text-transform:uppercase">{shape} {key}</span>'
             )
     return (
-        f'<span style="background:#1e293b;color:#64748b;'
+        f'<span style="background:var(--bg-2);color:var(--text-secondary);'
         f'padding:4px 13px;border-radius:999px;font-size:11px;'
-        f'font-weight:700;display:inline-block">{direction}</span>'
+        f'font-weight:700;display:inline-block">■ {direction}</span>'
     )
 
 
 # ── Confidence badge ───────────────────────────────────────────────────────────
 
 def conf_badge_html(conf: float) -> str:
-    """Return an HTML confidence percentage badge with color tier."""
+    """Return an HTML confidence percentage badge with color tier.
+
+    P1-31: Shape encoding — leading dot count (●●●/●●/●) gives a redundant
+    cue for high/mid/low confidence beyond color alone (color-blind safe).
+    """
     if conf >= 75:
-        color, bg = "#00d4aa", "rgba(0,212,170,0.1)"
+        color, bg, shape = "#00d4aa", "rgba(0,212,170,0.1)", "●●●"
     elif conf >= 60:
-        color, bg = "#f59e0b", "rgba(245,158,11,0.1)"
+        color, bg, shape = "#f59e0b", "rgba(245,158,11,0.1)", "●●"
     else:
-        color, bg = "#ef4444", "rgba(246,70,93,0.1)"
+        color, bg, shape = "#ef4444", "rgba(246,70,93,0.1)", "●"
     return (
         f'<span style="background:{bg};color:{color};'
         f'padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;'
         f'border:1px solid {color}38;display:inline-block;'
-        f'font-family:\'JetBrains Mono\',monospace">{conf:.0f}%</span>'
+        f'font-family:\'JetBrains Mono\',monospace">{shape} {conf:.0f}%</span>'
     )
 
 
@@ -1236,9 +1203,9 @@ def market_stat_bar(stats: dict):
         _stat_items.append(f"""
         <div style="display:flex;flex-direction:column;align-items:center;
                     padding:0 18px;flex-shrink:0;gap:3px">
-            <span style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+            <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                          letter-spacing:1.1px;font-weight:600">{k}</span>
-            <span style="font-size:14px;font-weight:700;color:#e2e8f0;
+            <span style="font-size:14px;font-weight:700;color:var(--text-primary);
                          font-family:'JetBrains Mono',monospace;letter-spacing:-0.3px">{v}</span>
         </div>
         {sep}""")
@@ -1285,17 +1252,20 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
         regime_color    = "rgba(245,158,11,0.08)"
 
     hc_badge = (
-        '<span style="background:rgba(0,212,170,0.12);color:#00d4aa;'
+        '<span style="background:rgba(0,212,170,0.12);color:var(--accent);'
         'border:1px solid rgba(0,212,170,0.3);'
-        'padding:2px 10px;border-radius:999px;font-size:10px;font-weight:700;'
+        'padding:2px 10px;border-radius:999px;font-size:var(--fs-xs);font-weight:700;'
         'letter-spacing:0.6px;margin-left:8px;'
         'box-shadow:0 0 8px rgba(0,212,170,0.15)">⚡ TOP PICK</span>'
         if is_hc else ""
     )
 
     # Plain English labels
-    regime_display = REGIME_PLAIN.get(regime, regime or "—")
-    bias_display   = BIAS_PLAIN.get(bias, bias or "—")
+    # P1-34/P1-35: escape caller-derived strings (regime/bias may be user-supplied
+    # or come from upstream model output that includes free-form text).
+    regime_display = _esc(str(REGIME_PLAIN.get(regime, regime or "—")))
+    bias_display   = _esc(str(BIAS_PLAIN.get(bias, bias or "—")))
+    _pair_safe     = _esc(str(pair)) if pair else ""
 
     st.markdown(
         f"""
@@ -1308,14 +1278,14 @@ def signal_card_header(pair: str, direction: str, conf: float, bias: str, regime
                         box-shadow:0 0 8px rgba(0,212,170,0.3)"></div>
             <div style="flex:1;min-width:0">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:5px">
-                    <span style="font-size:17px;font-weight:800;color:#e2e8f0;
+                    <span style="font-size:17px;font-weight:800;color:var(--text-primary);
                                 font-family:'JetBrains Mono',monospace;
-                                letter-spacing:-0.3px">{pair}</span>{hc_badge}
+                                letter-spacing:-0.3px">{_pair_safe}</span>{hc_badge}
                 </div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.55);
                             display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                     <span style="background:{regime_color};padding:2px 9px;border-radius:999px;
-                                font-size:10px;font-weight:600;color:rgba(168,180,200,0.75)">{regime_display}</span>
+                                font-size:var(--fs-xs);font-weight:600;color:rgba(168,180,200,0.75)">{regime_display}</span>
                     <span style="opacity:0.4">·</span>
                     <span>{bias_display}</span>
                     <span style="opacity:0.4">·</span>
@@ -1338,7 +1308,7 @@ def kpi_card_html(label: str, value: str, delta: str = None,
     Return HTML for a standalone glassmorphic KPI card.
     Render with st.markdown(..., unsafe_allow_html=True).
     """
-    delta_color = "#22c55e" if delta_positive else ("#ef4444" if delta_positive is False else "#64748b")
+    delta_color = "var(--success)" if delta_positive else ("var(--danger)" if delta_positive is False else "var(--text-muted)")
     delta_html  = (
         f'<div style="font-size:11px;color:{delta_color};margin-top:4px;'
         f'font-family:\'JetBrains Mono\',monospace;font-weight:600">{delta}</div>'
@@ -1359,9 +1329,9 @@ def kpi_card_html(label: str, value: str, delta: str = None,
                     background:linear-gradient(90deg,{accent},{accent}88,transparent);
                     border-radius:12px 12px 0 0"></div>
         {icon_html}
-        <div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+        <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                     letter-spacing:1.1px;font-weight:600;margin-bottom:6px">{label}</div>
-        <div style="font-size:22px;font-weight:700;color:#e2e8f0;
+        <div style="font-size:22px;font-weight:700;color:var(--text-primary);
                     font-family:'JetBrains Mono',monospace;letter-spacing:-0.5px">{value}</div>
         {delta_html}
     </div>"""
@@ -1392,7 +1362,7 @@ def badge_row_html(badges: list[tuple]) -> str:
         <div style="display:flex;flex-direction:column;align-items:center;gap:1px;
                     background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.07);
                     border-radius:8px;padding:5px 12px;flex-shrink:0">
-            <span style="font-size:9px;color:rgba(168,180,200,0.42);text-transform:uppercase;
+            <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.42);text-transform:uppercase;
                          letter-spacing:0.9px;font-weight:600">{label}</span>
             <span style="font-size:13px;font-weight:700;color:{color};
                          font-family:'JetBrains Mono',monospace">{value}</span>
@@ -1458,7 +1428,7 @@ def sidebar_header(version: str, exchange: str, n_pairs: int):
                 </div>
                 <!-- version + model tag -->
                 <div style="
-                    font-size: 9px;
+                    font-size: var(--fs-xs);
                     color: rgba(168,180,200,0.35);
                     letter-spacing: 1.3px;
                     text-transform: uppercase;
@@ -1477,7 +1447,7 @@ def sidebar_header(version: str, exchange: str, n_pairs: int):
                         color: #00d4aa;
                         font-weight: 700;
                         letter-spacing: 0.3px">
-                        {exchange.upper()}
+                        {_esc(str(exchange).upper())}
                     </div>
                     <div style="
                         background: rgba(255,255,255,0.04);
@@ -1608,13 +1578,13 @@ def plain_english_box(text: str, direction: str) -> None:
     """
     d = (direction or "").upper()
     if "BUY" in d:
-        accent = "#00d4aa"
+        accent = "var(--accent)"
         bg     = "rgba(0,212,170,0.05)"
     elif "SELL" in d:
-        accent = "#ef4444"
+        accent = "var(--danger)"
         bg     = "rgba(246,70,93,0.05)"
     else:
-        accent = "#f59e0b"
+        accent = "var(--warning)"
         bg     = "rgba(245,158,11,0.05)"
     st.markdown(
         f'<div style="background:{bg};border-left:3px solid {accent};'
@@ -1724,15 +1694,15 @@ def fng_gauge_html(fng_value: int, fng_category: str) -> str:
 
     # Emoji that matches the mood
     if pct <= 20:
-        emoji, mood_color, advice = "😱", "#ef4444", "Markets are very fearful — historically a buying opportunity, but use caution."
+        emoji, mood_color, advice = "😱", "var(--danger)", "Markets are very fearful — historically a buying opportunity, but use caution."
     elif pct <= 40:
-        emoji, mood_color, advice = "😟", "#f59e0b", "Markets are fearful — some may see this as a buying opportunity."
+        emoji, mood_color, advice = "😟", "var(--warning)", "Markets are fearful — some may see this as a buying opportunity."
     elif pct <= 60:
-        emoji, mood_color, advice = "😐", "#64748b", "Markets are neutral — no strong emotion either way. Wait for a clearer signal."
+        emoji, mood_color, advice = "😐", "var(--text-secondary)", "Markets are neutral — no strong emotion either way. Wait for a clearer signal."
     elif pct <= 80:
-        emoji, mood_color, advice = "🤩", "#00d4aa", "Markets are greedy — prices may be elevated. Be careful chasing gains."
+        emoji, mood_color, advice = "🤩", "var(--accent)", "Markets are greedy — prices may be elevated. Be careful chasing gains."
     else:
-        emoji, mood_color, advice = "🤑", "#ef4444", "Extreme Greed — the market may be overheated. Historically a warning sign."
+        emoji, mood_color, advice = "🤑", "var(--danger)", "Extreme Greed — the market may be overheated. Historically a warning sign."
 
     # Track fill color gradient
     bar_gradient = f"linear-gradient(90deg, #ef4444 0%, #f59e0b 25%, #64748b 50%, #22c55e 75%, #00d4aa 100%)"
@@ -1761,7 +1731,7 @@ def fng_gauge_html(fng_value: int, fng_category: str) -> str:
         </div>
         <!-- Scale labels -->
         <div style="display:flex;justify-content:space-between;
-                    font-size:9px;color:rgba(168,180,200,0.35);margin-top:6px">
+                    font-size:var(--fs-xs);color:rgba(168,180,200,0.35);margin-top:6px">
             <span>😱 Extreme Fear</span><span>😐 Neutral</span><span>🤑 Extreme Greed</span>
         </div>
         <div style="margin-top:8px;font-size:11px;color:rgba(168,180,200,0.55);
@@ -1783,15 +1753,15 @@ def signal_strength_stars(conf: float) -> str:
     filled = max(0, min(5, filled))
 
     if conf >= 75:
-        label, dot_color = "Very Strong", "#00d4aa"
+        label, dot_color = "Very Strong", "var(--accent)"
     elif conf >= 60:
-        label, dot_color = "Strong", "#22c55e"
+        label, dot_color = "Strong", "var(--success)"
     elif conf >= 45:
-        label, dot_color = "Moderate", "#f59e0b"
+        label, dot_color = "Moderate", "var(--warning)"
     elif conf >= 30:
-        label, dot_color = "Weak", "#ef4444"
+        label, dot_color = "Weak", "var(--danger)"
     else:
-        label, dot_color = "Very Weak", "#ef4444"
+        label, dot_color = "Very Weak", "var(--danger)"
 
     dots = ""
     for i in range(5):
@@ -1812,20 +1782,25 @@ def risk_level_badge_html(conf: float, pos_pct: float = None) -> str:
     """
     Return HTML for a color-coded risk level chip.
     Risk is LOW when confidence is high and position size is small.
+
+    P1-31: Shape encoding — leading dot count (●/●●/●●●) gives a redundant
+    cue for LOW / MODERATE / HIGHER risk so color-blind users get the
+    severity through shape, not color alone.
+    P1-32: font-size raised from 10px → var(--fs-xs) (11px floor).
     """
     # Determine risk: low conf or large position = higher risk
     size = pos_pct if pos_pct else 10.0
     if conf >= 70 and size <= 15:
-        label, bg, border, tc = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "#00d4aa"
+        label, bg, border, tc, shape = "LOW RISK", "rgba(0,212,170,0.12)", "rgba(0,212,170,0.35)", "var(--accent)", "●"
     elif conf >= 55 and size <= 25:
-        label, bg, border, tc = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "#f59e0b"
+        label, bg, border, tc, shape = "MODERATE RISK", "rgba(245,158,11,0.12)", "rgba(245,158,11,0.35)", "var(--warning)", "●●"
     else:
-        label, bg, border, tc = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "#ef4444"
+        label, bg, border, tc, shape = "HIGHER RISK", "rgba(246,70,93,0.12)", "rgba(246,70,93,0.35)", "var(--danger)", "●●●"
 
     return (
         f'<span style="display:inline-block;background:{bg};border:1px solid {border};'
-        f'color:{tc};border-radius:999px;padding:2px 10px;font-size:10px;'
-        f'font-weight:700;letter-spacing:0.5px">{label}</span>'
+        f'color:{tc};border-radius:999px;padding:2px 10px;font-size:var(--fs-xs);'
+        f'font-weight:700;letter-spacing:0.5px">{shape} {label}</span>'
     )
 
 
@@ -1840,7 +1815,7 @@ def beginner_welcome_html() -> str:
                 padding:28px 32px;margin:8px 0 24px 0;
                 box-shadow:0 4px 32px rgba(0,0,0,0.4)">
         <div style="font-size:28px;margin-bottom:10px">👋</div>
-        <div style="font-size:20px;font-weight:800;color:#e2e8f0;margin-bottom:6px">
+        <div style="font-size:20px;font-weight:800;color:var(--text-primary);margin-bottom:6px">
             Welcome to Family Office · Signal Intelligence
         </div>
         <div style="font-size:13px;color:rgba(168,180,200,0.75);line-height:1.7;margin-bottom:18px">
@@ -1851,34 +1826,34 @@ def beginner_welcome_html() -> str:
             <div style="background:rgba(0,212,170,0.07);border:1px solid rgba(0,212,170,0.15);
                         border-radius:10px;padding:14px 16px">
                 <div style="font-size:20px;margin-bottom:6px">1️⃣</div>
-                <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px">Run the Scan</div>
+                <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Run the Scan</div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.6)">
-                    Click <strong style="color:#00d4aa">▶ Analyze Market Now</strong> above.
+                    Click <strong style="color:var(--accent)">▶ Analyze Market Now</strong> above.
                     The model will fetch live market data for all coins (~1–3 min).
                 </div>
             </div>
             <div style="background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.15);
                         border-radius:10px;padding:14px 16px">
                 <div style="font-size:20px;margin-bottom:6px">2️⃣</div>
-                <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px">Read the Results</div>
+                <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Read the Results</div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.6)">
-                    Each coin gets a <strong style="color:#e2e8f0">BUY / SELL / HOLD</strong> signal
+                    Each coin gets a <strong style="color:var(--text-primary)">BUY / SELL / HOLD</strong> signal
                     with a plain-English explanation. Look for ⚡ Top Picks.
                 </div>
             </div>
             <div style="background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.15);
                         border-radius:10px;padding:14px 16px">
                 <div style="font-size:20px;margin-bottom:6px">3️⃣</div>
-                <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px">Do Your Research</div>
+                <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Do Your Research</div>
                 <div style="font-size:11px;color:rgba(168,180,200,0.6)">
-                    This model is a research tool — <strong style="color:#f59e0b">not financial advice.</strong>
+                    This model is a research tool — <strong style="color:var(--warning)">not financial advice.</strong>
                     Always do your own due diligence before trading.
                 </div>
             </div>
         </div>
         <div style="background:rgba(246,70,93,0.07);border:1px solid rgba(246,70,93,0.18);
                     border-radius:10px;padding:10px 14px;font-size:11px;color:rgba(168,180,200,0.65)">
-            ⚠️ <strong style="color:#f59e0b">Risk Warning:</strong>
+            ⚠️ <strong style="color:var(--warning)">Risk Warning:</strong>
             Cryptocurrency trading carries a <strong>high level of risk</strong> and may not be
             suitable for all investors. Only invest money you can afford to lose.
             Past model performance does not guarantee future results.
@@ -1897,13 +1872,13 @@ def scan_action_cta(pair: str, direction: str, conf: float,
     d = (direction or "").upper()
     if "BUY" in d:
         action_verb = "Consider Buying"
-        accent      = "#00d4aa"
+        accent      = "var(--accent)"
         bg          = "rgba(0,212,170,0.07)"
         border      = "rgba(0,212,170,0.25)"
         arrow       = "▲"
     elif "SELL" in d:
         action_verb = "Consider Reducing / Selling"
-        accent      = "#ef4444"
+        accent      = "var(--danger)"
         bg          = "rgba(246,70,93,0.07)"
         border      = "rgba(246,70,93,0.25)"
         arrow       = "▼"
@@ -1922,14 +1897,14 @@ def scan_action_cta(pair: str, direction: str, conf: float,
         f"""
         <div style="background:{bg};border:1px solid {border};border-radius:14px;
                     padding:18px 22px;margin:12px 0 16px 0">
-            <div style="font-size:10px;color:rgba(168,180,200,0.45);text-transform:uppercase;
+            <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;
                         letter-spacing:1.1px;font-weight:600;margin-bottom:6px">
                 ⚡ Today's Best Opportunity
             </div>
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                <span style="font-size:22px;font-weight:800;color:#e2e8f0;
+                <span style="font-size:22px;font-weight:800;color:var(--text-primary);
                              font-family:'JetBrains Mono',monospace">{base}</span>
-                <span style="background:{accent};color:#0d0e14;border-radius:999px;
+                <span style="background:{accent};color:var(--bg-0);border-radius:999px;
                              padding:4px 14px;font-size:13px;font-weight:800;
                              letter-spacing:0.3px">{arrow} {direction}</span>
                 <span style="font-size:13px;color:rgba(168,180,200,0.7)">
@@ -2036,21 +2011,21 @@ def top_movers_card_html(gainers: list, losers: list) -> str:
         pct    = coin.get("price_change_24h_pct", 0.0) or 0.0
         price  = coin.get("current_price", 0.0) or 0.0
         arrow  = "▲" if is_gainer else "▼"
-        color  = "#22c55e" if is_gainer else "#ef4444"
+        color  = "var(--success)" if is_gainer else "var(--danger)"
         sign   = "+" if pct >= 0 else ""
         price_fmt = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         return (
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">'
-            f'<span style="font-weight:600;color:#e2e8f0;font-size:0.88rem;">{sym}</span>'
-            f'<span style="color:#94a3b8;font-size:0.85rem;">{price_fmt}</span>'
+            f'<span style="font-weight:600;color:var(--text-primary);font-size:0.88rem;">{sym}</span>'
+            f'<span style="color:var(--text-secondary);font-size:0.85rem;">{price_fmt}</span>'
             f'<span style="color:{color};font-weight:700;font-size:0.88rem;">'
             f'{arrow} {sign}{pct:.2f}%</span>'
             f'</div>'
         )
 
-    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:#64748b;font-size:0.85rem;padding:8px 0;">No data</div>'
-    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:#64748b;font-size:0.85rem;padding:8px 0;">No data</div>'
+    gainer_rows = "".join(_row(c, True)  for c in gainers[:3]) if gainers else '<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0;">No data</div>'
+    loser_rows  = "".join(_row(c, False) for c in losers[:3])  if losers  else '<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0;">No data</div>'
 
     return f"""
 <div style="
@@ -2065,16 +2040,16 @@ def top_movers_card_html(gainers: list, losers: list) -> str:
 ">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
     <span style="font-size:1.1rem;">🔥</span>
-    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;letter-spacing:0.02em;">Top Movers — 24h</span>
+    <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;letter-spacing:0.02em;">Top Movers — 24h</span>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     <div>
-      <div style="color:#22c55e;font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
+      <div style="color:var(--success);font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
                   text-transform:uppercase;margin-bottom:6px;">▲ Gainers</div>
       {gainer_rows}
     </div>
     <div>
-      <div style="color:#ef4444;font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
+      <div style="color:var(--danger);font-size:0.75rem;font-weight:600;letter-spacing:0.08em;
                   text-transform:uppercase;margin-bottom:6px;">▼ Losers</div>
       {loser_rows}
     </div>
@@ -2133,7 +2108,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
             rows.append(
                 f'<div style="display:flex;justify-content:space-between;'
                 f'font-size:0.85rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
-                f'<span style="color:#94a3b8;">{lbl}</span>'
+                f'<span style="color:var(--text-secondary);">{lbl}</span>'
                 f'<span style="color:{color};font-weight:600;">{val:.0f}</span>'
                 f'</div>'
             )
@@ -2157,7 +2132,7 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="font-size:1.1rem;">⚡</span>
-      <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Liquidation Cascade Risk</span>
+      <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;">Liquidation Cascade Risk</span>
     </div>
     <span style="background:{bg};color:{color};border:1px solid {color}66;border-radius:20px;
                  padding:3px 10px;font-size:0.85rem;font-weight:700;">{icon} {risk_level}</span>
@@ -2171,8 +2146,8 @@ def cascade_risk_card_html(score: float, risk_level: str, direction: str,
   </div>
 
   <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.85rem;">
-    <span style="color:{color};font-weight:700;font-size:1.1rem;">{score:.0f}<span style="font-size:0.75rem;color:#94a3b8;">/100</span></span>
-    <span style="color:#94a3b8;">{label}</span>
+    <span style="color:{color};font-weight:700;font-size:1.1rem;">{score:.0f}<span style="font-size:0.75rem;color:var(--text-secondary);">/100</span></span>
+    <span style="color:var(--text-secondary);">{label}</span>
   </div>
   {comp_html}
 </div>
@@ -2194,15 +2169,18 @@ def signal_accuracy_badge_html(win_rate: float, sample_size: int,
 
     Returns HTML string.
     """
+    # P1-31: Shape encoding — leading star count gives a redundant cue
+    # for accuracy grade so color-blind users get severity through shape,
+    # not color alone (★★★ high / ★★ mod / ★ neutral / ☆ below-avg).
     pct = win_rate * 100
     if pct >= 70:
-        color, label = "#22c55e", "High Accuracy"
+        color, label, shape = "#22c55e", "High Accuracy", "★★★"
     elif pct >= 55:
-        color, label = "#f59e0b", "Moderate"
+        color, label, shape = "#f59e0b", "Moderate", "★★"
     elif pct >= 45:
-        color, label = "#94a3b8", "Neutral"
+        color, label, shape = "#94a3b8", "Neutral", "★"
     else:
-        color, label = "#ef4444", "Below Average"
+        color, label, shape = "#ef4444", "Below Average", "☆"
 
     suffix = f" {signal_type}" if signal_type else ""
     n_text = f"{sample_size} signals" if sample_size >= 10 else "New signal"
@@ -2212,8 +2190,8 @@ def signal_accuracy_badge_html(win_rate: float, sample_size: int,
         f'style="display:inline-flex;align-items:center;gap:5px;'
         f'background:rgba(15,23,42,0.8);border:1px solid {color}44;border-radius:20px;'
         f'padding:3px 9px;font-size:0.85rem;cursor:help;">'
-        f'<span style="color:{color};font-weight:700;">{pct:.0f}%</span>'
-        f'<span style="color:#94a3b8;">{label} · {n_text}</span>'
+        f'<span style="color:{color};font-weight:700;">{shape} {pct:.0f}%</span>'
+        f'<span style="color:var(--text-secondary);">{label} · {n_text}</span>'
         f'</span>'
     )
 
@@ -2243,13 +2221,19 @@ def regime_banner_html(regime: str, hurst: float | None = None,
 
     hurst_html = ""
     if hurst is not None:
-        h_color = "#22c55e" if hurst > 0.55 else ("#ef4444" if hurst < 0.45 else "#f59e0b")
-        h_label = "Trending" if hurst > 0.55 else ("Mean-Reverting" if hurst < 0.45 else "Random Walk")
+        # P1-31: pair color with arrow shape — ↗ trending (green) / → random
+        # walk (amber) / ↙ mean-reverting (red). Color-blind safe.
+        if hurst > 0.55:
+            h_color, h_label, h_shape = "var(--success)", "Trending", "↗"
+        elif hurst < 0.45:
+            h_color, h_label, h_shape = "var(--danger)", "Mean-Reverting", "↙"
+        else:
+            h_color, h_label, h_shape = "var(--warning)", "Random Walk", "→"
         hurst_html = (
             f'<span style="background:rgba(255,255,255,0.05);border-radius:8px;'
             f'padding:3px 8px;font-size:0.85rem;margin-left:10px;">'
-            f'Hurst: <span style="color:{h_color};font-weight:700;">{hurst:.2f}</span>'
-            f' <span style="color:#64748b;">({h_label})</span></span>'
+            f'Hurst: <span style="color:{h_color};font-weight:700;">{h_shape} {hurst:.2f}</span>'
+            f' <span style="color:var(--text-muted);">({h_label})</span></span>'
         )
 
     squeeze_html = ""
@@ -2258,8 +2242,8 @@ def regime_banner_html(regime: str, hurst: float | None = None,
             '<span style="background:rgba(255,215,64,0.15);border:1px solid #f59e0b66;'
             'border-radius:8px;padding:3px 8px;font-size:0.85rem;margin-left:10px;'
             'animation:pulse 1.5s ease-in-out infinite;">'
-            '🗜 <span style="color:#f59e0b;font-weight:700;">SQUEEZE</span>'
-            ' <span style="color:#94a3b8;">— breakout imminent</span></span>'
+            '🗜 <span style="color:var(--warning);font-weight:700;">SQUEEZE</span>'
+            ' <span style="color:var(--text-secondary);">— breakout imminent</span></span>'
         )
 
     return f"""
@@ -2277,7 +2261,7 @@ def regime_banner_html(regime: str, hurst: float | None = None,
 ">
   <span style="font-size:1.2rem;">{icon}</span>
   <span style="color:{color};font-weight:700;font-size:0.95rem;">{title}</span>
-  <span style="color:#64748b;font-size:0.85rem;">— {advice}</span>
+  <span style="color:var(--text-muted);font-size:0.85rem;">— {advice}</span>
   {hurst_html}
   {squeeze_html}
 </div>
@@ -2301,22 +2285,22 @@ def position_size_card_html(recommended_pct: float, rationale: str,
     """
     if circuit_breaker_active:
         bg_color    = "rgba(255,82,82,0.08)"
-        border_col  = "#ef4444"
-        size_color  = "#ef4444"
+        border_col  = "var(--danger)"
+        size_color  = "var(--danger)"
         status_html = (
             '<div style="background:rgba(255,82,82,0.15);border:1px solid #ef444466;'
             'border-radius:8px;padding:8px 12px;margin-top:10px;font-size:0.85rem;">'
-            '🚨 <span style="color:#ef4444;font-weight:700;">Circuit Breaker ACTIVE</span>'
+            '🚨 <span style="color:var(--danger);font-weight:700;">Circuit Breaker ACTIVE</span>'
             ' — all new signals suppressed until daily/weekly loss limit resets.</div>'
         )
     else:
         bg_color    = "rgba(15,23,42,0.7)"
         border_col  = "rgba(255,255,255,0.08)"
-        size_color  = "#22c55e" if recommended_pct >= 1.0 else "#f59e0b"
-        pnl_color   = "#22c55e" if daily_pnl_pct >= 0 else "#ef4444"
+        size_color  = "var(--success)" if recommended_pct >= 1.0 else "var(--warning)"
+        pnl_color   = "var(--success)" if daily_pnl_pct >= 0 else "var(--danger)"
         pnl_sign    = "+" if daily_pnl_pct >= 0 else ""
         status_html = (
-            f'<div style="font-size:0.85rem;color:#94a3b8;margin-top:8px;">'
+            f'<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:8px;">'
             f'Today\'s P&L: <span style="color:{pnl_color};font-weight:600;">'
             f'{pnl_sign}{daily_pnl_pct:.2f}%</span>'
             f'</div>'
@@ -2337,17 +2321,17 @@ def position_size_card_html(recommended_pct: float, rationale: str,
 ">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
     <span style="font-size:1.1rem;">⚖</span>
-    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">Position Size (Vol-Adjusted)</span>
+    <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;">Position Size (Vol-Adjusted)</span>
   </div>
   <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:8px;">
     <span style="color:{size_color};font-weight:800;font-size:2rem;">{recommended_pct:.1f}%</span>
-    <span style="color:#64748b;font-size:0.85rem;">of account</span>
+    <span style="color:var(--text-muted);font-size:0.85rem;">of account</span>
   </div>
   <div style="background:rgba(255,255,255,0.06);border-radius:6px;height:6px;margin-bottom:8px;overflow:hidden;">
     <div style="width:{bar_pct}%;height:100%;border-radius:6px;
                 background:linear-gradient(90deg,#8b5cf6,{size_color});"></div>
   </div>
-  <div style="color:#94a3b8;font-size:0.85rem;">{rationale}</div>
+  <div style="color:var(--text-secondary);font-size:0.85rem;">{rationale}</div>
   {status_html}
 </div>
 """
@@ -2369,7 +2353,7 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
 
     Returns HTML string.
     """
-    _SIG_COLORS = {"BUY": "#22c55e", "SELL": "#ef4444", "NEUTRAL": "#94a3b8"}
+    _SIG_COLORS = {"BUY": "var(--success)", "SELL": "var(--danger)", "NEUTRAL": "var(--text-secondary)"}
     _SIG_ICONS  = {"BUY": "▲", "SELL": "▼", "NEUTRAL": "—"}
 
     rows = []
@@ -2378,7 +2362,7 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
         signal  = ag.get("signal", "NEUTRAL").upper()
         weight  = float(ag.get("weight", 0.5))
         contrib = float(ag.get("contrib", 0.0))
-        color   = _SIG_COLORS.get(signal, "#94a3b8")
+        color   = _SIG_COLORS.get(signal, "var(--text-secondary)")
         icon    = _SIG_ICONS.get(signal, "—")
         bar_w   = int(weight * 100)
         c_sign  = "+" if contrib >= 0 else ""
@@ -2388,16 +2372,16 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
     <span style="font-size:0.85rem;color:#cbd5e1;font-weight:500;">{name}</span>
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="color:{color};font-size:0.85rem;font-weight:700;">{icon} {signal}</span>
-      <span style="color:#64748b;font-size:0.75rem;">contrib: <span style="color:{color};">{c_sign}{contrib:.1f}</span></span>
+      <span style="color:var(--text-muted);font-size:0.75rem;">contrib: <span style="color:{color};">{c_sign}{contrib:.1f}</span></span>
     </div>
   </div>
   <div style="background:rgba(255,255,255,0.05);border-radius:4px;height:4px;overflow:hidden;">
     <div style="width:{bar_w}%;height:100%;border-radius:4px;background:{color};opacity:0.7;"></div>
   </div>
-  <div style="text-align:right;font-size:0.85rem;color:#475569;margin-top:1px;">weight {weight:.0%}</div>
+  <div style="text-align:right;font-size:0.85rem;color:var(--text-muted);margin-top:1px;">weight {weight:.0%}</div>
 </div>""")
 
-    rows_html = "".join(rows) if rows else '<div style="color:#64748b;font-size:0.85rem;">No agent data</div>'
+    rows_html = "".join(rows) if rows else '<div style="color:var(--text-muted);font-size:0.85rem;">No agent data</div>'
 
     return f"""
 <div style="
@@ -2412,8 +2396,8 @@ def agent_confidence_breakdown_html(agents: list[dict]) -> str:
 ">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
     <span style="font-size:1.1rem;">🤖</span>
-    <span style="font-weight:700;color:#e2e8f0;font-size:0.95rem;">AI Agent Votes</span>
-    <span style="color:#475569;font-size:0.75rem;">(Sharpe-weighted)</span>
+    <span style="font-weight:700;color:var(--text-primary);font-size:0.95rem;">AI Agent Votes</span>
+    <span style="color:var(--text-muted);font-size:0.75rem;">(Sharpe-weighted)</span>
   </div>
   {rows_html}
 </div>
@@ -2467,14 +2451,14 @@ def price_ticker_strip_html(prices: list[dict]) -> str:
         sym    = p.get("symbol", "?").upper()
         price  = p.get("price", 0.0) or 0.0
         chg    = p.get("change_pct", 0.0) or 0.0
-        color  = "#22c55e" if chg >= 0 else "#ef4444"
+        color  = "var(--success)" if chg >= 0 else "var(--danger)"
         arrow  = "▲" if chg >= 0 else "▼"
         sign   = "+" if chg >= 0 else ""
         pf     = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         items.append(
             f'<span class="ticker-item">'
-            f'<span style="color:#94a3b8;">{sym}</span>'
-            f'<span style="color:#e2e8f0;">{pf}</span>'
+            f'<span style="color:var(--text-secondary);">{sym}</span>'
+            f'<span style="color:var(--text-primary);">{pf}</span>'
             f'<span style="color:{color};">{arrow} {sign}{chg:.2f}%</span>'
             f'</span>'
         )
@@ -2586,18 +2570,18 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
 
         # TOP PICK badge
         hc_badge = (
-            f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            f'<span style="background:rgba(0,212,170,0.15);color:var(--accent);'
             f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
-            f'font-size:9px;font-weight:800;padding:2px 8px;margin-left:6px;'
+            f'font-size:var(--fs-xs);font-weight:800;padding:2px 8px;margin-left:6px;'
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
         ) if is_hc else ""
 
         # Cascade risk badge (shown when squeeze_data says HIGH_RISK)
         _sq_sig = (squeeze_data or {}).get(pair, "NORMAL")
         liq_badge = (
-            '<span style="background:rgba(239,68,68,0.15);color:#ef4444;'
+            '<span style="background:rgba(239,68,68,0.15);color:var(--danger);'
             'border:1px solid rgba(239,68,68,0.35);border-radius:99px;'
-            'font-size:9px;font-weight:800;padding:2px 7px;margin-left:4px;'
+            'font-size:var(--fs-xs);font-weight:800;padding:2px 7px;margin-left:4px;'
             'letter-spacing:0.4px">⚠ LIQ RISK</span>'
         ) if _sq_sig in ("HIGH_RISK", "EXTREME") else ""
 
@@ -2611,7 +2595,7 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
         ws        = ws_prices.get(pair, {})
         price     = ws.get("price") or r.get("price_usd")
         chg       = ws.get("change_24h_pct", 0) or 0
-        chg_c     = "#00d4aa" if chg >= 0 else "#ef4444"
+        chg_c     = "var(--accent)" if chg >= 0 else "var(--danger)"
         price_str = _fmt(price) if price else "—"
         chg_str   = (
             f'<span style="color:{chg_c};font-size:11px">{chg:+.2f}%</span>'
@@ -2638,25 +2622,25 @@ def coin_cards_grid_html(results: list, ws_prices: dict | None = None,
 ">
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
-      <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:-0.5px">{sym}</div>
-      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}{liq_badge}</div>
+      <div style="font-size:18px;font-weight:800;color:var(--text-primary);letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}{liq_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
   <div style="margin:8px 0 6px">
-    <span style="background:{color};color:#0d0e14;border-radius:999px;padding:4px 12px;
+    <span style="background:{color};color:var(--bg-0);border-radius:999px;padding:4px 12px;
                  font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {label}</span>
   </div>
   <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
-  <div style="display:flex;gap:10px;font-size:10px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
+  <div style="display:flex;gap:10px;font-size:var(--fs-xs);font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
-         <span style="color:#e2e8f0;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
+         <span style="color:var(--text-primary);font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
          <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
-         <span style="color:#ef4444;font-weight:600">{_fmt(stop)}</span></div>
+         <span style="color:var(--danger);font-weight:600">{_fmt(stop)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Target</span><br/>
-         <span style="color:#00d4aa;font-weight:600">{_fmt(tgt)}</span></div>
+         <span style="color:var(--accent);font-weight:600">{_fmt(tgt)}</span></div>
   </div>
 </div>"""
 
@@ -2808,11 +2792,11 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
               stroke-linecap="round" style="transition:stroke-dasharray 0.4s ease;"/>
     </svg>
     <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-                font-size:16px;font-weight:800;color:#00d4aa;
+                font-size:16px;font-weight:800;color:var(--accent);
                 font-family:JetBrains Mono,monospace;">{pct}%</div>
   </div>
 
-  <div style="font-size:14px;font-weight:600;color:#e2e8f0;margin-bottom:6px;">
+  <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">
     🔍 Scanning the market...
   </div>
   <div style="font-size:12px;color:rgba(168,180,200,0.6);margin-bottom:20px;">
@@ -2827,11 +2811,11 @@ def loading_screen_html(progress: int, total: int, pair_name: str = "",
       padding:14px 18px;
       text-align:left;
   ">
-    <div style="font-size:10px;color:rgba(0,212,170,0.7);font-weight:700;
+    <div style="font-size:var(--fs-xs);color:rgba(0,212,170,0.7);font-weight:700;
                 text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">
       💡 Did you know?
     </div>
-    <div style="font-size:13px;color:#94a3b8;line-height:1.5;">{fact}</div>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.5;">{fact}</div>
   </div>
 </div>"""
 
@@ -2873,19 +2857,19 @@ def scan_sparkline_card_html(pair: str, direction: str, conf: float,
     Compact scan-mode card with pair name, direction badge, confidence and sparkline.
     Used in scan overview mini-grid (#60).
     """
-    dir_colors = {"BUY": "#2dd4bf", "STRONG BUY": "#00D4AA",
-                  "SELL": "#ef4444", "STRONG SELL": "#EF4444"}
+    dir_colors = {"BUY": "var(--success)", "STRONG BUY": "var(--accent)",
+                  "SELL": "var(--danger)", "STRONG SELL": "var(--danger)"}
     d_upper = direction.upper()
-    d_col   = next((v for k, v in dir_colors.items() if k in d_upper), "#9CA3AF")
+    d_col   = next((v for k, v in dir_colors.items() if k in d_upper), "var(--text-secondary)")
     spk_svg = sparkline_svg(closes)
     conf_int = int(conf)
     return (
-        f'<div style="background:#111827;border:1px solid #1F2937;border-left:3px solid {d_col};'
+        f'<div style="background:var(--bg-1);border:1px solid var(--border);border-left:3px solid {d_col};'
         f'border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center">'
         f'<div>'
-        f'<div style="font-size:12px;font-weight:700;color:#E2E8F0">{pair}</div>'
-        f'<div style="font-size:10px;color:{d_col};margin-top:1px">{direction}</div>'
-        f'<div style="font-size:10px;color:#6B7280;margin-top:1px">{conf_int}% conf</div>'
+        f'<div style="font-size:12px;font-weight:700;color:var(--text-primary)">{pair}</div>'
+        f'<div style="font-size:var(--fs-xs);color:{d_col};margin-top:1px">{direction}</div>'
+        f'<div style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:1px">{conf_int}% conf</div>'
         f'</div>'
         f'<div>{spk_svg}</div>'
         f'</div>'
@@ -2905,15 +2889,15 @@ def gradient_confidence_bar_html(conf: float) -> str:
     pct = max(0, min(int(conf), 100))
     if pct >= 70:
         bar_color  = "linear-gradient(90deg,#2dd4bf,#00D4AA)"
-        label_color = "#2dd4bf"
+        label_color = "var(--success)"
         label_text  = "Strong signal"
     elif pct >= 50:
         bar_color  = "linear-gradient(90deg,#FBBF24,#f59e0b)"
-        label_color = "#FBBF24"
+        label_color = "var(--warning)"
         label_text  = "Moderate signal"
     else:
         bar_color  = "linear-gradient(90deg,#EF4444,#f59e0b)"
-        label_color = "#EF4444"
+        label_color = "var(--danger)"
         label_text  = "Weak — use caution"
     score_10 = max(0, min(10, round(pct / 10)))
     return (
@@ -2921,9 +2905,9 @@ def gradient_confidence_bar_html(conf: float) -> str:
         f'<div style="display:flex;justify-content:space-between;margin-bottom:4px">'
         f'<span style="font-size:12px;color:{label_color};font-weight:600">'
         f'Confidence: {score_10}/10 ({pct}%)</span>'
-        f'<span style="font-size:11px;color:#6B7280">{label_text}</span>'
+        f'<span style="font-size:11px;color:var(--text-muted)">{label_text}</span>'
         f'</div>'
-        f'<div style="background:#1F2937;border-radius:6px;height:10px;overflow:hidden">'
+        f'<div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">'
         f'<div style="background:{bar_color};width:{pct}%;height:100%;border-radius:6px;'
         f'transition:width 0.5s ease;box-shadow:0 0 8px rgba(52,211,153,0.3)"></div>'
         f'</div>'
@@ -2954,17 +2938,17 @@ def render_confidence_bar(confidence: float, signal: str = "") -> str:
     if "BUY" in sig_upper:
         # BUY: light green → dark green
         bar_color   = f"linear-gradient(90deg,#86efac,#00D4AA)"
-        label_color = "#00D4AA"
+        label_color = "var(--accent)"
         label_text  = "BUY Signal"
     elif "SELL" in sig_upper:
         # SELL: light red → deep red
         bar_color   = "linear-gradient(90deg,#FCA5A5,#EF4444)"
-        label_color = "#EF4444"
+        label_color = "var(--danger)"
         label_text  = "SELL Signal"
     else:
         # HOLD / NEUTRAL: amber → orange
         bar_color   = "linear-gradient(90deg,#FDE68A,#F59E0B)"
-        label_color = "#F59E0B"
+        label_color = "var(--warning)"
         label_text  = "HOLD / Neutral"
 
     score_10 = max(0, min(10, round(pct / 10)))
@@ -2974,7 +2958,7 @@ def render_confidence_bar(confidence: float, signal: str = "") -> str:
         f'<span style="font-size:12px;color:{label_color};font-weight:600">'
         f'Confidence: {score_10}/10 ({pct}%) — {label_text}</span>'
         f'</div>'
-        f'<div style="background:#1F2937;border-radius:6px;height:10px;overflow:hidden">'
+        f'<div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">'
         f'<div style="background:{bar_color};width:{pct}%;height:100%;border-radius:6px;'
         f'transition:width 0.5s ease;"></div>'
         f'</div>'
@@ -3070,7 +3054,7 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
         ws    = ws_prices.get(pair, {})
         price = ws.get("price") or r.get("price_usd")
         chg   = ws.get("change_24h_pct", 0) or 0
-        chg_c = "#00d4aa" if chg >= 0 else "#ef4444"
+        chg_c = "var(--accent)" if chg >= 0 else "var(--danger)"
         price_str = _fmt(price) if price else "—"
         chg_str = f'<span style="color:{chg_c};font-size:11px">{chg:+.2f}%</span>' if ws else ""
 
@@ -3096,9 +3080,9 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
         )
 
         hc_badge = (
-            f'<span style="background:rgba(0,212,170,0.15);color:#00d4aa;'
+            f'<span style="background:rgba(0,212,170,0.15);color:var(--accent);'
             f'border:1px solid rgba(0,212,170,0.35);border-radius:99px;'
-            f'font-size:9px;font-weight:800;padding:2px 8px;margin-left:6px;'
+            f'font-size:var(--fs-xs);font-weight:800;padding:2px 8px;margin-left:6px;'
             f'letter-spacing:0.5px">⚡ TOP PICK</span>'
         ) if is_hc else ""
 
@@ -3117,36 +3101,36 @@ def top_picks_hero_html(results: list, ws_prices: dict | None = None) -> str:
             border-radius:12px;padding:14px;box-sizing:border-box;position:relative">
   <div style="display:flex;justify-content:space-between;align-items:flex-start">
     <div>
-      <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:-0.5px">{sym}</div>
-      <div style="font-size:10px;color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
+      <div style="font-size:18px;font-weight:800;color:var(--text-primary);letter-spacing:-0.5px">{sym}</div>
+      <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);margin-top:1px">{pair}{hc_badge}</div>
     </div>
     <div style="text-align:center">{gauge_svg}</div>
   </div>
   <div style="margin:8px 0 6px">
-    <span style="background:{color};color:#0d0e14;border-radius:999px;padding:4px 12px;
+    <span style="background:{color};color:var(--bg-0);border-radius:999px;padding:4px 12px;
                  font-size:12px;font-weight:800;letter-spacing:0.3px">{arrow} {dirn}</span>
   </div>
   <div style="font-size:11px;color:rgba(200,210,230,0.75);margin-bottom:8px;line-height:1.4">{plain}</div>
-  <div style="display:flex;gap:10px;font-size:10px;font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
+  <div style="display:flex;gap:10px;font-size:var(--fs-xs);font-family:'JetBrains Mono',monospace;flex-wrap:wrap">
     <div><span style="color:rgba(168,180,200,0.45)">Price</span><br/>
-         <span style="color:#e2e8f0;font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
+         <span style="color:var(--text-primary);font-size:11px;font-weight:600">{price_str} {chg_str}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Entry</span><br/>
          <span style="color:{color};font-weight:600">{_fmt(entry)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Stop</span><br/>
-         <span style="color:#ef4444;font-weight:600">{_fmt(stop)}</span></div>
+         <span style="color:var(--danger);font-weight:600">{_fmt(stop)}</span></div>
     <div><span style="color:rgba(168,180,200,0.45)">Target</span><br/>
-         <span style="color:#00d4aa;font-weight:600">{_fmt(tgt)}</span></div>
+         <span style="color:var(--accent);font-weight:600">{_fmt(tgt)}</span></div>
   </div>
 </div>"""
 
     return f"""
 <div style="margin:0 0 20px 0">
-  <div style="font-size:10px;color:rgba(168,180,200,0.4);text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.4);text-transform:uppercase;
               letter-spacing:1px;font-weight:600;margin-bottom:10px">
     ⚡ Today's Top Picks — model's highest-confidence signals
   </div>
   <div style="display:flex;gap:12px;flex-wrap:wrap">{cards_html}</div>
-  <div style="font-size:10px;color:rgba(168,180,200,0.3);margin-top:8px">
+  <div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.3);margin-top:8px">
     Score 7–10/10 = actionable signal &nbsp;·&nbsp; 5–6 = watch &nbsp;·&nbsp;
     1–4 = avoid &nbsp;·&nbsp; Always set a Stop Loss before entering any trade
   </div>
@@ -3163,15 +3147,15 @@ def how_it_works_html(win_rate: float = 0, n_months: int = 0,
     mo_str = f"{n_months} months" if n_months else "extensive history"
     return f"""
 <div style="background:rgba(0,212,170,0.04);border:1px solid rgba(0,212,170,0.15);
-            border-left:3px solid #00d4aa;border-radius:10px;padding:14px 18px;
+            border-left:3px solid var(--accent);border-radius:10px;padding:14px 18px;
             margin:0 0 16px 0;font-size:12px;color:rgba(200,210,230,0.8);line-height:1.7">
-  <div style="font-size:11px;color:#00d4aa;font-weight:700;text-transform:uppercase;
+  <div style="font-size:11px;color:var(--accent);font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:6px">🔬 How This Model Works</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
-    <div>📊 Watches <strong style="color:#e2e8f0">{n_indicators} indicators</strong>
+    <div>📊 Watches <strong style="color:var(--text-primary)">{n_indicators} indicators</strong>
          across 4 timeframes</div>
-    <div>🕐 Backtested over <strong style="color:#e2e8f0">{mo_str}</strong> of data</div>
-    <div>🎯 Win rate in backtesting: <strong style="color:#00d4aa">{wr_str}</strong></div>
+    <div>🕐 Backtested over <strong style="color:var(--text-primary)">{mo_str}</strong> of data</div>
+    <div>🎯 Win rate in backtesting: <strong style="color:var(--accent)">{wr_str}</strong></div>
     <div>🛡️ Signals 7/10+ confidence have historically been most reliable</div>
   </div>
 </div>"""
@@ -3186,11 +3170,11 @@ def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
     """
     d = (direction or "").upper()
     if "BUY" in d:
-        accent = "#00d4aa"
+        accent = "var(--accent)"
         verb   = "going UP"
         action = "BUY"
     elif "SELL" in d:
-        accent = "#ef4444"
+        accent = "var(--danger)"
         verb   = "going DOWN"
         action = "SELL (or skip)"
     else:
@@ -3205,11 +3189,11 @@ def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
         risk_usd   = portfolio_usd * (risk_pct / 100)
         reward_usd = portfolio_usd * (reward_pct / 100)
         numbers = (
-            f"On a <strong style='color:#e2e8f0'>${portfolio_usd:,.0f}</strong> position — "
-            f"risk up to <strong style='color:#ef4444'>${risk_usd:,.0f}</strong> "
+            f"On a <strong style='color:var(--text-primary)'>${portfolio_usd:,.0f}</strong> position — "
+            f"risk up to <strong style='color:var(--danger)'>${risk_usd:,.0f}</strong> "
             f"({risk_pct:.1f}%) to potentially gain "
-            f"<strong style='color:#00d4aa'>${reward_usd:,.0f}</strong> "
-            f"({reward_pct:.1f}%). Risk/reward = <strong style='color:#e2e8f0'>{rr:.1f}×</strong>."
+            f"<strong style='color:var(--accent)'>${reward_usd:,.0f}</strong> "
+            f"({reward_pct:.1f}%). Risk/reward = <strong style='color:var(--text-primary)'>{rr:.1f}×</strong>."
         )
     else:
         numbers = "Set your portfolio size in Settings to see your personal dollar figures."
@@ -3219,7 +3203,7 @@ def wdtmfm_html(direction: str, entry: float, stop: float, target: float,
             border-left:3px solid {accent};border-radius:10px;
             padding:12px 16px;margin:8px 0 12px 0;font-size:12px;
             color:rgba(200,210,230,0.85);line-height:1.7">
-  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:{accent};font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:4px">💡 What Does This Mean For Me?</div>
   The model thinks this coin has a <strong style="color:{accent}">{conf:.0f}%</strong>
   chance of {verb}. Confidence score: <strong style="color:{accent}">{score}/10</strong>
@@ -3250,7 +3234,7 @@ def why_signal_html(
     is_sell = "SELL" in d
     is_hold = not is_buy and not is_sell
 
-    accent = "#00d4aa" if is_buy else "#ef4444" if is_sell else "#f59e0b"
+    accent = "var(--accent)" if is_buy else "var(--danger)" if is_sell else "var(--warning)"
     reasons: list[str] = []
 
     # ── HOLD-specific reasons ─────────────────────────────────────────────────
@@ -3296,7 +3280,7 @@ def why_signal_html(
 <div style="background:rgba(20,24,36,0.6);border:1px solid rgba(255,255,255,0.06);
             border-radius:10px;padding:14px 16px;margin:4px 0 8px 0;font-size:12.5px;
             color:rgba(200,210,230,0.85);line-height:1.65">
-  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:{accent};font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:10px">🔍 Why HOLD?</div>
   {bullet_html}
 </div>"""
@@ -3383,7 +3367,7 @@ def why_signal_html(
 <div style="background:rgba(20,24,36,0.6);border:1px solid rgba(255,255,255,0.06);
             border-radius:10px;padding:14px 16px;margin:4px 0 8px 0;font-size:12.5px;
             color:rgba(200,210,230,0.85);line-height:1.65">
-  <div style="font-size:10px;color:{accent};font-weight:700;text-transform:uppercase;
+  <div style="font-size:var(--fs-xs);color:{accent};font-weight:700;text-transform:uppercase;
               letter-spacing:0.8px;margin-bottom:10px">🔍 Why this signal?</div>
   {bullet_html}
 </div>"""
@@ -3466,16 +3450,19 @@ def render_micro_tutorial() -> None:
             st.rerun()
 
 
-def tt(term: str, definition: str, color: str = "#00d4aa") -> str:
+def tt(term: str, definition: str, color: str = "var(--accent)") -> str:
     """
     Item 10 — Inline glossary tooltip. Wraps a jargon term with a dashed
     underline and HTML title attribute (hover tooltip).
     Returns HTML string: <span title="definition">term</span>
     """
-    safe_def = definition.replace('"', '&quot;').replace("'", "&#39;")
+    # P1-34/P1-35: escape both the definition (used in attribute) and term
+    # (used in element body). Caller may supply arbitrary strings.
+    safe_def  = _esc(str(definition), quote=True)
+    safe_term = _esc(str(term))
     return (
         f'<span title="{safe_def}" style="border-bottom:1px dashed {color};'
-        f'cursor:help;color:inherit">{term}</span>'
+        f'cursor:help;color:inherit">{safe_term}</span>'
     )
 
 
@@ -3489,15 +3476,15 @@ def freshness_dot_html(last_updated_ts: float | None, max_age_sec: int,
     """
     import time as _time
     if last_updated_ts is None:
-        color, tip = "#6b7280", f"{label}: unknown age"
+        color, tip = "var(--text-muted)", f"{label}: unknown age"
     else:
         age = _time.time() - last_updated_ts
         if age < max_age_sec:
-            color, tip = "#22c55e", f"{label}: {int(age//60)}m ago (fresh)"
+            color, tip = "var(--success)", f"{label}: {int(age//60)}m ago (fresh)"
         elif age < max_age_sec * 2:
-            color, tip = "#f59e0b", f"{label}: {int(age//60)}m ago (aging)"
+            color, tip = "var(--warning)", f"{label}: {int(age//60)}m ago (aging)"
         else:
-            color, tip = "#ef4444", f"{label}: {int(age//60)}m ago (stale)"
+            color, tip = "var(--danger)", f"{label}: {int(age//60)}m ago (stale)"
     return (
         f'<span title="{tip}" style="display:inline-block;width:8px;height:8px;'
         f'border-radius:50%;background:{color};margin-right:4px;'
@@ -3531,24 +3518,24 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
         hc    = r.get("high_conf", False)
 
         if "BUY" in d:
-            dir_color  = "#00d4aa"
+            dir_color  = "var(--accent)"
             dir_symbol = "▲"
             dir_label  = "BUY" if "STRONG" not in d else "STRONG BUY"
-            bar_color  = "#00d4aa"
+            bar_color  = "var(--accent)"
         elif "SELL" in d:
-            dir_color  = "#ef4444"
+            dir_color  = "var(--danger)"
             dir_symbol = "▼"
             dir_label  = "SELL" if "STRONG" not in d else "STRONG SELL"
-            bar_color  = "#ef4444"
+            bar_color  = "var(--danger)"
         else:
-            dir_color  = "#888"
+            dir_color  = "var(--text-muted)"
             dir_symbol = "■"
             dir_label  = "WAIT"
-            bar_color  = "#888"
+            bar_color  = "var(--text-muted)"
 
         score    = max(1, min(10, round(conf / 10)))
         bar_w    = max(4, int(conf))
-        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:#00d4aa;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
+        hc_badge = ' <span style="background:rgba(0,212,170,0.15);color:var(--accent);font-size:var(--fs-xs);padding:1px 5px;border-radius:4px;font-weight:700">⚡ TOP PICK</span>' if hc else ""
 
         entry_str = f"${entry:,.4f}" if entry else "—"
         stop_str  = f"${stop:,.4f}"  if stop  else "—"
@@ -3558,7 +3545,7 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
             border-bottom:1px solid rgba(255,255,255,0.04);
             background:{'rgba(0,212,170,0.03)' if hc else 'transparent'}">
   <span style="color:rgba(168,180,200,0.35);font-size:11px;min-width:18px;text-align:right">{i}</span>
-  <span style="font-size:13px;font-weight:700;color:#e2e8f0;min-width:52px">{coin}</span>
+  <span style="font-size:13px;font-weight:700;color:var(--text-primary);min-width:52px">{coin}</span>
   <span style="background:rgba({('0,212,170' if 'BUY' in d else ('246,70,93' if 'SELL' in d else '136,136,136'))},0.15);
               color:{dir_color};border-radius:5px;padding:2px 7px;font-size:11px;
               font-weight:700;min-width:70px;text-align:center">{dir_symbol} {dir_label}</span>
@@ -3567,16 +3554,16 @@ def signal_rank_list_html(results: list, max_show: int | None = None) -> str:
                 transition:width 0.3s ease"></div>
   </div>
   <span style="font-size:11px;color:{bar_color};font-weight:700;min-width:32px;text-align:right">{score}/10</span>
-  <span style="font-size:10px;color:rgba(168,180,200,0.5);min-width:80px">▶ {entry_str}</span>
-  <span style="font-size:10px;color:rgba(246,70,93,0.7);min-width:80px">✕ {stop_str}</span>
+  <span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);min-width:80px">▶ {entry_str}</span>
+  <span style="font-size:var(--fs-xs);color:rgba(246,70,93,0.7);min-width:80px">✕ {stop_str}</span>
   {hc_badge}
 </div>"""
 
     return f"""
-<div style="background:#0d0e14;border:1px solid rgba(255,255,255,0.07);border-radius:10px;
+<div style="background:var(--bg-0);border:1px solid rgba(255,255,255,0.07);border-radius:10px;
             overflow:hidden;margin-bottom:8px">
   <div style="display:flex;gap:10px;padding:6px 10px;background:rgba(255,255,255,0.03);
-              border-bottom:1px solid rgba(255,255,255,0.06);font-size:10px;
+              border-bottom:1px solid rgba(255,255,255,0.06);font-size:var(--fs-xs);
               color:rgba(168,180,200,0.4);font-weight:600;text-transform:uppercase;
               letter-spacing:0.6px">
     <span style="min-width:18px">#</span>
@@ -3604,14 +3591,14 @@ def arb_opportunity_story_html(pair: str, buy_ex: str, sell_ex: str,
             border-left:3px solid {color};border-radius:12px;
             padding:16px 20px;margin:8px 0;font-size:13px;
             color:rgba(200,210,230,0.9)">
-  <div style="font-weight:700;font-size:15px;color:#e2e8f0;margin-bottom:6px">
+  <div style="font-weight:700;font-size:15px;color:var(--text-primary);margin-bottom:6px">
     {pair.replace('/USDT','')} &nbsp;
     <span style="color:{color};font-size:13px">{net_spread_pct:.2f}% profit</span>
   </div>
-  Buy on <strong style="color:#e2e8f0">{buy_ex}</strong> at
-  <strong style="color:#e2e8f0">${buy_price:,.4f}</strong>,
-  sell on <strong style="color:#e2e8f0">{sell_ex}</strong> at
-  <strong style="color:#e2e8f0">${sell_price:,.4f}</strong> —
+  Buy on <strong style="color:var(--text-primary)">{buy_ex}</strong> at
+  <strong style="color:var(--text-primary)">${buy_price:,.4f}</strong>,
+  sell on <strong style="color:var(--text-primary)">{sell_ex}</strong> at
+  <strong style="color:var(--text-primary)">${sell_price:,.4f}</strong> —
   pocket <strong style="color:{color}">{net_spread_pct:.2f}%</strong> after fees.<br/>
   <span style="font-size:11px;color:rgba(168,180,200,0.5)">
     On a $1,000 trade that's approximately
@@ -3630,13 +3617,13 @@ def signal_badge_html(direction: str, label: str = "") -> str:
     """
     _dir = direction.upper().strip()
     if _dir in {"BUY", "BULLISH", "BULL", "LONG", "STRONG_BUY"}:
-        _shape, _bg, _txt, _border = "▲", "rgba(0,212,170,0.12)", "#00d4aa", "rgba(0,212,170,0.35)"
+        _shape, _bg, _txt, _border = "▲", "rgba(0,212,170,0.12)", "var(--accent)", "rgba(0,212,170,0.35)"
         _default = "BUY"
     elif _dir in {"SELL", "BEARISH", "BEAR", "SHORT", "STRONG_SELL"}:
-        _shape, _bg, _txt, _border = "▼", "rgba(246,70,93,0.12)", "#ef4444", "rgba(246,70,93,0.35)"
+        _shape, _bg, _txt, _border = "▼", "rgba(246,70,93,0.12)", "var(--danger)", "rgba(246,70,93,0.35)"
         _default = "SELL"
     else:
-        _shape, _bg, _txt, _border = "■", "rgba(100,116,139,0.12)", "#64748b", "rgba(100,116,139,0.3)"
+        _shape, _bg, _txt, _border = "■", "rgba(100,116,139,0.12)", "var(--text-muted)", "rgba(100,116,139,0.3)"
         _default = "NEUTRAL"
     _display = label if label else _default
     return (
@@ -3702,11 +3689,11 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
         _avg30 = _avg7
 
     def _fg_label(v: float) -> tuple[str, str]:
-        if v <= 25:  return "Extreme Fear",  "#ef4444"
-        if v <= 45:  return "Fear",           "#f59e0b"
-        if v <= 55:  return "Neutral",        "#64748b"
-        if v <= 75:  return "Greed",          "#f59e0b"
-        return "Extreme Greed", "#22c55e"
+        if v <= 25:  return "Extreme Fear",  "var(--danger)"
+        if v <= 45:  return "Fear",           "var(--warning)"
+        if v <= 55:  return "Neutral",        "var(--text-secondary)"
+        if v <= 75:  return "Greed",          "var(--warning)"
+        return "Extreme Greed", "var(--success)"
 
     _cl, _cc = _fg_label(_cur)
     _7l, _7c = _fg_label(_avg7)
@@ -3722,7 +3709,7 @@ def render_fear_greed_trend_sg(user_level: str = "beginner") -> None:
             st.markdown(
                 f"<div style='text-align:center;padding:12px;"
                 f"background:var(--bg-1);border-radius:8px;border:1px solid var(--border);'>"
-                f"<div style='font-size:0.62rem;color:var(--text-3);text-transform:uppercase;"
+                f"<div style='font-size:var(--fs-xs);color:var(--text-3);text-transform:uppercase;"
                 f"letter-spacing:0.8px;margin-bottom:4px'>{_period}</div>"
                 f"<div style='font-size:1.9rem;font-weight:800;color:{_chex};"
                 f"font-family:var(--font-mono)'>{_val:.0f}</div>"
@@ -3800,21 +3787,21 @@ def render_market_regime_banner(results: list, fng_value: int = 50,
     if _buy_pct >= 60 and fng_value >= 45:
         _regime   = "BULL MARKET"
         _icon     = "📈"
-        _color    = "#22c55e"
+        _color    = "var(--success)"
         _bg       = "rgba(34,197,94,0.08)"
         _border   = "rgba(34,197,94,0.3)"
         _desc     = f"{_buy_pct:.0f}% of signals bullish · F&G {fng_value} · {altcoin_season}"
     elif _sell_pct >= 60 or fng_value <= 25:
         _regime   = "BEAR MARKET"
         _icon     = "📉"
-        _color    = "#ef4444"
+        _color    = "var(--danger)"
         _bg       = "rgba(239,68,68,0.08)"
         _border   = "rgba(239,68,68,0.3)"
         _desc     = f"{_sell_pct:.0f}% of signals bearish · F&G {fng_value} · {macro_regime.replace('_',' ')}"
     else:
         _regime   = "SIDEWAYS / MIXED"
         _icon     = "➡️"
-        _color    = "#f59e0b"
+        _color    = "var(--warning)"
         _bg       = "rgba(245,158,11,0.08)"
         _border   = "rgba(245,158,11,0.3)"
         _desc     = f"{_buy_pct:.0f}% bullish · {_sell_pct:.0f}% bearish · F&G {fng_value}"
@@ -3836,7 +3823,7 @@ def render_market_regime_banner(results: list, fng_value: int = 50,
         f"<span style='font-size:18px;font-weight:800;color:{_color}'>{_icon} {_regime}</span>"
         f"{_macro_badge}"
         f"</div>"
-        f"<div style='color:#9ca3af;font-size:12px'>{_desc}</div>"
+        f"<div style='color:var(--text-secondary);font-size:12px'>{_desc}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -3908,15 +3895,20 @@ def render_ttm_squeeze_panel(sparkline_data: dict, results: list,
     _cols = _st.columns(min(len(squeeze_pairs), 4))
     for _ci, _sp in enumerate(squeeze_pairs[:8]):
         _col    = "#f59e0b" if _sp["state"] == "COMPRESSION" else "#ef4444"
-        _dir_cl = "#22c55e" if "BUY" in _sp["direction"] else "#ef4444" if "SELL" in _sp["direction"] else "#9ca3af"
+        _dir_cl = "var(--success)" if "BUY" in _sp["direction"] else "var(--danger)" if "SELL" in _sp["direction"] else "var(--text-secondary)"
+        # P1-34/P1-35: pair/state/direction trace back to scan results
+        # (exchange-supplied symbols + model output strings) — escape before HTML.
+        _pair_safe  = _esc(str(_sp["pair"]).replace("/USDT", ""))
+        _state_safe = _esc(str(_sp["state"]))
+        _dir_safe   = _esc(str(_sp["direction"]))
         with _cols[_ci % 4]:
             _st.markdown(
                 f"<div style='background:rgba(0,0,0,0.25);border:1px solid {_col}44;"
                 f"border-top:2px solid {_col};border-radius:8px;padding:10px 12px;margin-bottom:8px'>"
-                f"<div style='font-size:12px;color:#9ca3af'>{_sp['pair'].replace('/USDT','')}</div>"
-                f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_sp['state']}</div>"
-                f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_sp['direction']}</div>"
-                f"<div style='font-size:10px;color:#475569;margin-top:2px'>"
+                f"<div style='font-size:12px;color:var(--text-secondary)'>{_pair_safe}</div>"
+                f"<div style='font-size:14px;font-weight:700;color:{_col}'>🗜 {_state_safe}</div>"
+                f"<div style='font-size:11px;color:{_dir_cl};margin-top:4px'>Signal: {_dir_safe}</div>"
+                f"<div style='font-size:var(--fs-xs);color:var(--text-muted);margin-top:2px'>"
                 f"BB width: {_sp['bb_width_pct']:.2f}% · Mom: {_sp['momentum']:+.1f}%</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -3991,7 +3983,7 @@ def render_hurst_exponent_panel(sparkline_data: dict, results: list,
         closes = sparkline_data.get(p, [])
         h      = _hurst(closes)
         _label = "TRENDING" if h > 0.6 else "RANDOM" if h > 0.4 else "MEAN-REVERTING"
-        _color = "#22c55e" if h > 0.6 else "#9ca3af" if h > 0.4 else "#f59e0b"
+        _color = "var(--success)" if h > 0.6 else "var(--text-secondary)" if h > 0.4 else "var(--warning)"
         _strat = "▲ Follow signals" if h > 0.6 else "■ Reduce position size" if h > 0.4 else "▼ Fade extremes"
         _hurst_rows.append({
             "Pair":    p.replace("/USDT", ""),
@@ -4051,16 +4043,24 @@ def render_rsi_macd_divergence_panel(results: list, user_level: str = "beginner"
 
     for _da in _div_alerts[:10]:
         _is_bull = _da["type"] == "BULLISH"
-        _col     = "#22c55e" if _is_bull else "#ef4444"
+        _col     = "var(--success)" if _is_bull else "var(--danger)"
         _icon    = "▲" if _is_bull else "▼"
+        # P1-34/P1-35: escape model-output strings (timeframes dict values
+        # may contain free-form text from data feed adapters).
+        _type_safe = _esc(str(_da["type"]))
+        _pair_safe = _esc(str(_da["pair"]).replace("/USDT", ""))
+        _tf_safe   = _esc(str(_da["tf"]))
+        _rsi_safe  = _esc(str(_da["rsi"]))
+        _dir_safe  = _esc(str(_da["direction"]))
+        _div_safe  = _esc(str(_da["macd_div"]))
         _st.markdown(
             f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_col};"
             f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
-            f"<b style='color:{_col}'>{_icon} {_da['type']} DIVERGENCE</b> · "
-            f"<b>{_da['pair'].replace('/USDT','')}</b> · {_da['tf']} · "
-            f"RSI: <b>{_da['rsi']}</b> · "
-            f"Model signal: <span style='color:#9ca3af'>{_da['direction']}</span><br>"
-            f"<span style='font-size:11px;color:#475569'>{_da['macd_div']}</span>"
+            f"<b style='color:{_col}'>{_icon} {_type_safe} DIVERGENCE</b> · "
+            f"<b>{_pair_safe}</b> · {_tf_safe} · "
+            f"RSI: <b>{_rsi_safe}</b> · "
+            f"Model signal: <span style='color:var(--text-secondary)'>{_dir_safe}</span><br>"
+            f"<span style='font-size:11px;color:var(--text-muted)'>{_div_safe}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -4108,7 +4108,7 @@ def render_funding_rate_arb_panel(results: list, user_level: str = "beginner") -
 
         if abs(_fr_pct) >= 0.05:  # 0.05% threshold for notable funding
             _arb_type  = "LONGS PAY" if _fr_pct > 0 else "SHORTS PAY"
-            _arb_col   = "#f59e0b" if _fr_pct > 0 else "#22c55e"
+            _arb_col   = "var(--warning)" if _fr_pct > 0 else "var(--success)"
             _arb_action = ("Buy spot + Short perp to collect funding" if _fr_pct > 0.1
                            else "Short spot + Long perp to collect funding" if _fr_pct < -0.05
                            else "Watch — elevated but not extreme")
@@ -4129,15 +4129,20 @@ def render_funding_rate_arb_panel(results: list, user_level: str = "beginner") -
         return
 
     for _fa in _fr_alerts[:8]:
-        _badge_col = "#ef4444" if _fa["fr_pct"] > 0.15 else "#f59e0b" if _fa["fr_pct"] > 0.05 else "#22c55e"
+        _badge_col = "var(--danger)" if _fa["fr_pct"] > 0.15 else "var(--warning)" if _fa["fr_pct"] > 0.05 else "var(--success)"
+        # P1-34/P1-35: escape pair, arb_type, arb_action (fr_raw not rendered
+        # here, but we escape anyway since exchange feeds can include junk).
+        _pair_safe   = _esc(str(_fa["pair"]).replace("/USDT", ""))
+        _atype_safe  = _esc(str(_fa["arb_type"]))
+        _action_safe = _esc(str(_fa["arb_action"]))
         _st.markdown(
             f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_fa['arb_color']};"
             f"border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px'>"
-            f"<b>{_fa['pair'].replace('/USDT','')}</b> · "
+            f"<b>{_pair_safe}</b> · "
             f"<span style='color:{_badge_col}'><b>{_fa['fr_pct']:+.4f}%</b></span> · "
-            f"<span style='color:{_fa['arb_color']}'>{_fa['arb_type']}</span><br>"
-            f"<span style='font-size:11px;color:#9ca3af'>"
-            f"Arb: {_fa['arb_action']}</span>"
+            f"<span style='color:{_fa['arb_color']}'>{_atype_safe}</span><br>"
+            f"<span style='font-size:11px;color:var(--text-secondary)'>"
+            f"Arb: {_action_safe}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -4426,14 +4431,20 @@ def render_threshold_alerts_panel(results: list, user_level: str = "beginner") -
 
     if _thr_alerts:
         for _ta in _thr_alerts[:10]:
-            _dir_col = "#22c55e" if "BUY" in _ta["dir"] else "#ef4444" if "SELL" in _ta["dir"] else "#9ca3af"
+            _dir_col = "var(--success)" if "BUY" in _ta["dir"] else "var(--danger)" if "SELL" in _ta["dir"] else "var(--text-secondary)"
+            # P1-34/P1-35: escape pair, dir, and joined fired-rule strings
+            # (fired list contains numeric values + threshold names — safe by
+            # construction internally, but escape defensively).
+            _pair_safe  = _esc(str(_ta["pair"]).replace("/USDT", ""))
+            _dir_safe   = _esc(str(_ta["dir"]))
+            _fired_safe = _esc("  ·  ".join(str(x) for x in _ta["fired"]))
             _st.markdown(
                 f"<div style='background:rgba(0,0,0,0.2);border-left:3px solid {_dir_col};"
                 f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
-                f"<b style='color:{_dir_col}'>🔔 {_ta['pair'].replace('/USDT','')}</b> · "
-                f"<span style='color:#9ca3af'>{_ta['dir']} · {_ta['conf']:.0f}% confidence</span><br>"
-                f"<span style='font-size:11px;color:#64748b'>"
-                f"{'  ·  '.join(_ta['fired'])}</span>"
+                f"<b style='color:{_dir_col}'>🔔 {_pair_safe}</b> · "
+                f"<span style='color:var(--text-secondary)'>{_dir_safe} · {_ta['conf']:.0f}% confidence</span><br>"
+                f"<span style='font-size:11px;color:var(--text-secondary)'>"
+                f"{_fired_safe}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -4651,7 +4662,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
         f'border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;'
         f'justify-content:space-between;align-items:center">'
         f'<div>'
-        f'<span style="font-size:10px;color:rgba(168,180,200,0.5);text-transform:uppercase;'
+        f'<span style="font-size:var(--fs-xs);color:rgba(168,180,200,0.5);text-transform:uppercase;'
         f'letter-spacing:1px;font-weight:600">Macro Environment</span><br/>'
         f'<span style="font-size:22px;font-weight:800;color:{_sig_col}">'
         f'{_ms.replace("_", " ")}</span>'
@@ -4670,42 +4681,42 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
 
     def _mini_card(col, label, value, sub, color, plain=""):
         _plain_div = (
-            '<div style="font-size:9px;color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3">'
+            '<div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.35);margin-top:5px;line-height:1.3">'
             + plain + '</div>'
         ) if plain else ""
         col.markdown(
             f'<div style="background:linear-gradient(145deg,rgba(17,24,40,0.98),rgba(24,32,56,0.95));'
             f'border:1px solid rgba(255,255,255,0.06);border-top:3px solid {color};'
             f'border-radius:10px;padding:12px 14px">'
-            f'<div style="font-size:9px;color:rgba(168,180,200,0.45);text-transform:uppercase;'
+            f'<div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.45);text-transform:uppercase;'
             f'letter-spacing:0.8px;font-weight:600;margin-bottom:4px">{label}</div>'
             f'<div style="font-size:15px;font-weight:700;color:{color}">{value}</div>'
-            f'<div style="font-size:10px;color:rgba(168,180,200,0.55);margin-top:3px">{sub}</div>'
+            f'<div style="font-size:var(--fs-xs);color:rgba(168,180,200,0.55);margin-top:3px">{sub}</div>'
             f'{_plain_div}'
             f'</div>',
             unsafe_allow_html=True,
         )
 
     _m2t  = macro_data.get("m2_trend", "—")
-    _m2c  = {"EXPANDING": "#00d4aa", "CONTRACTING": "#ef4444", "FLAT": "#6b7280"}.get(_m2t, "#6b7280")
+    _m2c  = {"EXPANDING": "var(--accent)", "CONTRACTING": "var(--danger)", "FLAT": "var(--text-muted)"}.get(_m2t, "var(--text-muted)")
     _m2p  = macro_data.get("m2_pct_change_90d", 0.0)
     _mini_card(_c1, "Global M2", _m2t, f"{_m2p:+.2f}% (90d)", _m2c,
                "Expanding = more liquidity = crypto tailwind" if user_level == "beginner" else "")
 
     _yct  = macro_data.get("yield_curve", "—")
-    _ycc  = {"NORMAL": "#22c55e", "FLAT": "#f59e0b", "INVERTED": "#ef4444"}.get(_yct, "#6b7280")
+    _ycc  = {"NORMAL": "var(--success)", "FLAT": "var(--warning)", "INVERTED": "var(--danger)"}.get(_yct, "var(--text-muted)")
     _spr  = macro_data.get("yield_spread_pp", 0.0)
     _mini_card(_c2, "Yield Curve (10Y–2Y)", _yct, f"Spread {_spr:+.2f}pp", _ycc,
                "Inverted = recession warning" if user_level == "beginner" else "")
 
     _dxt  = macro_data.get("dxy_trend", "—")
-    _dxc  = {"STRONG_DOLLAR": "#ef4444", "NEUTRAL": "#6b7280", "WEAK_DOLLAR": "#00d4aa"}.get(_dxt, "#6b7280")
+    _dxc  = {"STRONG_DOLLAR": "var(--danger)", "NEUTRAL": "var(--text-muted)", "WEAK_DOLLAR": "var(--accent)"}.get(_dxt, "var(--text-muted)")
     _dxv  = macro_data.get("dxy", 104.0)
     _mini_card(_c3, "US Dollar (DXY)", _dxt.replace("_", " "), f"DXY {_dxv:.1f}", _dxc,
                "Weak dollar = crypto tailwind" if user_level == "beginner" else "")
 
     _vxt  = macro_data.get("vix_structure", "—")
-    _vxc  = {"CONTANGO": "#22c55e", "FLAT": "#6b7280", "BACKWARDATION": "#ef4444"}.get(_vxt, "#6b7280")
+    _vxc  = {"CONTANGO": "var(--success)", "FLAT": "var(--text-muted)", "BACKWARDATION": "var(--danger)"}.get(_vxt, "var(--text-muted)")
     _vxv  = macro_data.get("vix", 18.0)
     _vx3  = macro_data.get("vix3m", 20.0)
     _mini_card(_c4, "VIX Term Structure", _vxt, f"VIX {_vxv:.1f} · VIX3M {_vx3:.1f}", _vxc,
@@ -4787,7 +4798,7 @@ def render_macro_scorecard_panel(macro_data: dict, user_level: str = "beginner")
         _adj = _df.get_macro_signal_adjustment()
         _adj_pts = _adj.get("adjustment", 0)
         _adj_regime = _adj.get("regime", "MACRO_NEUTRAL")
-        _adj_col = "#00d4aa" if _adj_pts > 0 else ("#ef4444" if _adj_pts < 0 else "#6b7280")
+        _adj_col = "var(--accent)" if _adj_pts > 0 else ("var(--danger)" if _adj_pts < 0 else "var(--text-muted)")
         _st.markdown(
             f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);'
             f'border-radius:8px;padding:10px 14px;margin-top:8px;font-size:11px;'

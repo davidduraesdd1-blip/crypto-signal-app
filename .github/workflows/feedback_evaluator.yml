@@ -36,13 +36,25 @@ jobs:
           pip install anthropic requests numpy ccxt python-dotenv 2>/dev/null || true
           pip install -r requirements.txt 2>/dev/null || true
 
+      # P1 audit fix — `continue-on-error: true` combined with the
+      # contents:write auto-commit below could push a poisoned
+      # checkpoint to main when the evaluator silently failed. The
+      # commit step below is now gated on this step's `outcome ==
+      # 'success'`, so a failed evaluator no longer publishes partial
+      # state. The id: lets the next step reference its outcome.
       - name: Run headless evaluator
+        id: evaluator
         run: python evaluate_headless.py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         continue-on-error: true
 
       - name: Commit feedback checkpoint
+        # P1 audit fix — only auto-commit when the evaluator actually
+        # succeeded. Previously this ran unconditionally because of
+        # `continue-on-error` on the previous step, so a partial
+        # checkpoint from a failed run could land on main.
+        if: steps.evaluator.outcome == 'success'
         run: |
           git config user.name  "GitHub Actions — Feedback Evaluator"
           git config user.email "actions@github.com"

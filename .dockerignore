@@ -1,0 +1,54 @@
+# Secrets and runtime credentials — never bake into image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.toml
+.streamlit/secrets.toml
+
+# Local config that may contain user keys (alerts.py persists OKX creds here)
+alerts_config.json
+agent_config.json
+config_overrides.json
+
+# Local data: caches, scan outputs, backtests, optuna studies, ML models
+data/
+crypto_scan_*.csv
+crypto_dashboard_*.xlsx
+crypto_dashboard_*.html
+optuna_studies.sqlite
+backtest_equity*.png
+*.parquet
+*.pkl
+*.pickle
+
+# Worktree / VCS / dev cache
+.git/
+.github/
+.claude/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Test/audit artifacts
+docs/audits/
+docs/signal-regression/
+htmlcov/
+.coverage
+coverage.xml
+
+# OS / build artifacts
+*.log
+*.tmp
+nohup.out

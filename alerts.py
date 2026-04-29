@@ -99,8 +99,30 @@ _DEFAULTS = {
 }
 
 
+# P1 audit fix — sensitive creds (OKX trading keys + email password) were
+# previously persisted in plaintext alerts_config.json. chmod 0o600 is a
+# no-op on Windows, so on dev workstations any process the user runs could
+# read them. Adding env-var precedence so operators can move creds out of
+# the JSON file (env > file). Code path keeps reading from file as a
+# fallback so existing installs keep working unchanged. Recommended:
+# set OKX_API_KEY / OKX_SECRET / OKX_PASSPHRASE / EMAIL_APP_PASSWORD in
+# the environment and clear the JSON values.
+_SENSITIVE_ENV_MAP = {
+    "okx_api_key":    "OKX_API_KEY",
+    "okx_secret":     "OKX_SECRET",
+    "okx_passphrase": "OKX_PASSPHRASE",
+    "email_pass":     "EMAIL_APP_PASSWORD",
+}
+
+
 def load_alerts_config():
-    """Load alert config from disk, merged with defaults for any missing keys."""
+    """Load alert config from disk, merged with defaults for any missing keys.
+
+    Sensitive credentials (OKX trading keys, email app password) are
+    overridden from environment variables when present — see
+    _SENSITIVE_ENV_MAP. Env value wins; falling back to the JSON file
+    preserves backward compatibility with existing installs.
+    """
     config = dict(_DEFAULTS)
     if os.path.exists(_ALERTS_CONFIG_FILE):
         try:
@@ -108,6 +130,11 @@ def load_alerts_config():
                 config.update(json.load(f))
         except Exception as e:
             logging.error("[alerts] Failed to load config from %s: %s", _ALERTS_CONFIG_FILE, e)
+    # Env-var override for sensitive creds (P1 audit fix)
+    for _cfg_key, _env_name in _SENSITIVE_ENV_MAP.items():
+        _env_val = (os.environ.get(_env_name) or "").strip()
+        if _env_val:
+            config[_cfg_key] = _env_val
     return config
 
 
