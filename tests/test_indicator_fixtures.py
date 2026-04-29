@@ -349,3 +349,178 @@ def test_gaussian_channel_short_input_returns_nan() -> None:
     assert gc_mid.isna().all()
     assert gc_upper.isna().all()
     assert gc_lower.isna().all()
+
+
+# ── Support / Resistance pivots ─────────────────────────────────────────────
+EXPECTED_SR_SUPPORT     = 100.208644
+EXPECTED_SR_RESISTANCE  = 113.094658
+EXPECTED_SR_BREAKOUT    = "No Breakout"
+EXPECTED_SR_STATUS      = "Away from S/R"
+
+def test_support_resistance_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """compute_support_resistance returns 4-tuple (support, resistance, breakout, status).
+
+    NOT a dict — documented here so future maintainers don't get the
+    return signature wrong.
+    """
+    out = cmc.compute_support_resistance(synthetic_ohlcv, lookback=20)
+    assert isinstance(out, tuple)
+    assert len(out) == 4
+    support, resistance, breakout, status = out
+    assert abs(support    - EXPECTED_SR_SUPPORT)    < _TOLERANCE
+    assert abs(resistance - EXPECTED_SR_RESISTANCE) < _TOLERANCE
+    assert breakout == EXPECTED_SR_BREAKOUT
+    assert status   == EXPECTED_SR_STATUS
+    # Sanity: resistance > support; breakout/status from closed enum
+    assert resistance > support
+    assert breakout in ("Bullish Breakout", "Bearish Breakout", "No Breakout")
+    assert status   in ("Near Resistance", "Near Support", "Away from S/R")
+
+
+def test_support_resistance_short_input_returns_none() -> None:
+    """S/R on < lookback bars returns (None, None, 'N/A', 'N/A')."""
+    short_df = pd.DataFrame({
+        "open":   [100.0] * 5,
+        "high":   [101.0] * 5,
+        "low":    [99.0]  * 5,
+        "close":  [100.0] * 5,
+        "volume": [1000.0] * 5,
+    })
+    s, r, b, st = cmc.compute_support_resistance(short_df, lookback=20)
+    assert s is None and r is None
+    assert b  == "N/A"
+    assert st == "N/A"
+
+
+# ── MACD divergence ────────────────────────────────────────────────────────
+EXPECTED_MACD_DIVERGENCE_TYPE     = "Bearish (hidden)"
+EXPECTED_MACD_DIVERGENCE_STRENGTH = "Strong"
+
+def test_macd_divergence_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """detect_macd_divergence_improved needs a df enriched with 'macd' col.
+
+    Returns a 2-tuple (divergence_type: str, strength: str), NOT a dict.
+    The synthetic fixture's noisy peaks produce a hidden bearish divergence.
+    """
+    df_e = cmc._enrich_df(synthetic_ohlcv)
+    div_type, strength = cmc.detect_macd_divergence_improved(df_e)
+    assert div_type == EXPECTED_MACD_DIVERGENCE_TYPE
+    assert strength == EXPECTED_MACD_DIVERGENCE_STRENGTH
+    # Sanity: enums
+    assert div_type in (
+        "None", "Bearish (regular)", "Bearish (hidden)",
+        "Bullish (regular)", "Bullish (hidden)",
+    )
+    assert strength in ("N/A", "Mild", "Strong")
+
+
+def test_macd_divergence_short_input_returns_none() -> None:
+    """MACD divergence with no 'macd' column returns ('None', 'N/A')."""
+    plain_df = pd.DataFrame({"close": [100.0, 101.0, 102.0]})
+    div_type, strength = cmc.detect_macd_divergence_improved(plain_df)
+    assert div_type == "None"
+    assert strength == "N/A"
+
+
+# ── RSI divergence ─────────────────────────────────────────────────────────
+EXPECTED_RSI_DIVERGENCE_TYPE     = "None"
+EXPECTED_RSI_DIVERGENCE_STRENGTH = "N/A"
+
+def test_rsi_divergence_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """detect_rsi_divergence needs a df enriched with 'rsi' col.
+
+    Returns a 2-tuple (divergence_type: str, strength: str). The synthetic
+    fixture's monotone-noisy RSI does not form a clean divergence on the
+    last 100 bars after the 200-EMA trend filter, so 'None'/'N/A' is the
+    locked baseline.
+    """
+    df_e = cmc._enrich_df(synthetic_ohlcv)
+    div_type, strength = cmc.detect_rsi_divergence(df_e)
+    assert div_type == EXPECTED_RSI_DIVERGENCE_TYPE
+    assert strength == EXPECTED_RSI_DIVERGENCE_STRENGTH
+    # Sanity: enums
+    assert div_type in (
+        "None", "Bearish (regular)", "Bearish (hidden)",
+        "Bullish (regular)", "Bullish (hidden)",
+    )
+    assert strength in ("N/A", "Mild", "Strong")
+
+
+# ── Candlestick patterns ───────────────────────────────────────────────────
+EXPECTED_CANDLESTICK_PATTERNS = []
+EXPECTED_CANDLESTICK_SCORE    = 0
+
+def test_candlestick_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """detect_candlestick_patterns returns 2-tuple (list[str], int).
+
+    The synthetic fixture's last 3 candles don't satisfy any of the 14
+    pattern thresholds, so the list is empty and the score is 0.
+    """
+    patterns, score = cmc.detect_candlestick_patterns(synthetic_ohlcv)
+    assert isinstance(patterns, list)
+    assert isinstance(score, int)
+    assert patterns == EXPECTED_CANDLESTICK_PATTERNS
+    assert score    == EXPECTED_CANDLESTICK_SCORE
+
+
+def test_candlestick_detects_bull_engulfing() -> None:
+    """Targeted: hand-crafted bull engulfing candle should be detected."""
+    # Down candle then big up engulfing candle
+    bull_engulf_df = pd.DataFrame({
+        "open":   [100.0, 100.5, 100.5, 100.5, 102.0,  98.0],
+        "high":   [101.0, 101.0, 101.0, 101.0, 102.5, 105.0],
+        "low":    [ 99.0,  99.5,  99.5,  99.5, 100.0,  97.5],
+        "close":  [100.5, 100.5, 100.5, 100.5,  98.5, 104.5],
+        "volume": [1000] * 6,
+    })
+    patterns, score = cmc.detect_candlestick_patterns(bull_engulf_df)
+    # Should have a bullish pattern detected
+    assert score > 0, f"expected bullish score, got {score} with patterns={patterns}"
+
+
+# ── Wyckoff phase ──────────────────────────────────────────────────────────
+EXPECTED_WYCKOFF_PHASE       = "Markup"
+EXPECTED_WYCKOFF_CONFIDENCE  = 80
+EXPECTED_WYCKOFF_SIGNAL_BIAS = 4.0
+EXPECTED_WYCKOFF_SPRING      = False
+EXPECTED_WYCKOFF_UPTHRUST    = False
+
+def test_wyckoff_canonical(synthetic_ohlcv: pd.DataFrame) -> None:
+    """detect_wyckoff_phase returns a dict with 8 keys including 'scores'.
+
+    The synthetic fixture (positive drift, expanding volume) reads as
+    Markup phase with confidence 80, signal_bias +4.0 — bullish but not
+    spring/upthrust.
+    """
+    df_e = cmc._enrich_df(synthetic_ohlcv)
+    out = cmc.detect_wyckoff_phase(df_e, lookback=50)
+    assert isinstance(out, dict)
+    # Required keys present
+    for k in ("phase", "confidence", "signal_bias", "description",
+              "plain_english", "spring", "upthrust", "scores"):
+        assert k in out, f"missing Wyckoff key: {k!r}"
+
+    assert out["phase"]       == EXPECTED_WYCKOFF_PHASE
+    assert out["confidence"]  == EXPECTED_WYCKOFF_CONFIDENCE
+    assert abs(out["signal_bias"] - EXPECTED_WYCKOFF_SIGNAL_BIAS) < _TOLERANCE
+    assert bool(out["spring"])   == EXPECTED_WYCKOFF_SPRING
+    assert bool(out["upthrust"]) == EXPECTED_WYCKOFF_UPTHRUST
+    # Sanity: phase from closed enum, confidence in [0, 100]
+    assert out["phase"] in (
+        "Accumulation", "Markup", "Distribution", "Markdown", "Unknown",
+    )
+    assert 0 <= out["confidence"] <= 100
+
+
+def test_wyckoff_short_input_returns_unknown() -> None:
+    """Wyckoff on < lookback bars returns the 'Unknown' fallback dict."""
+    short_df = pd.DataFrame({
+        "open":   [100.0] * 10,
+        "high":   [101.0] * 10,
+        "low":    [99.0]  * 10,
+        "close":  [100.0] * 10,
+        "volume": [1000.0] * 10,
+    })
+    out = cmc.detect_wyckoff_phase(short_df, lookback=50)
+    assert out["phase"] == "Unknown"
+    assert out["confidence"] == 0
