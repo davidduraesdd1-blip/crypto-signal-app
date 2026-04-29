@@ -5098,9 +5098,31 @@ def page_config():
                     logger.warning("[app] settings save error: %s", _e)
                     st.error("Settings could not be saved — check file permissions and try again.")
 
-        with st.expander("🔧 Advanced Settings (for experienced users)", expanded=False):
-            st.info("These are technical settings. Leave them as-is unless you know what you're doing.")
-        return  # beginners only see the 3-control view above
+        # C5 fix (2026-04-28): the previous shape rendered an empty
+        # "Advanced Settings" expander then `return`'d immediately, so
+        # beginner-tier users could NEVER reach the Trading / Signal &
+        # Risk / Alerts / Dev Tools / Execution tabs even though those
+        # tabs were fully wired below. The handoff doc described this
+        # as "Config Editor appears wiring-stripped" — the wiring was
+        # intact, but unreachable for the default user level. We now
+        # fall through to the full tab-stack below; the simplified 3-
+        # control view above stays as a quick-edit shortcut, and a
+        # clearly labelled section header introduces the deeper tabs
+        # so beginners aren't surprised by the additional surface.
+        st.markdown('<div style="height:18px;"></div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="border-top:1px solid var(--border);padding-top:14px;'
+            'margin-top:6px;">'
+            '<div style="font-size:13px;color:var(--text-muted);'
+            'letter-spacing:0.04em;text-transform:uppercase;font-weight:600;'
+            'margin-bottom:4px;">More settings</div>'
+            '<div style="font-size:14px;color:var(--text-muted);">'
+            'Optional — leave these as defaults unless you want fine '
+            'control over pairs, signal weights, alert rules, dev tools, '
+            'or execution.</div></div>',
+            unsafe_allow_html=True,
+        )
+        # No early return — fall through to the full tab-stack below.
 
     overrides = {}
 
