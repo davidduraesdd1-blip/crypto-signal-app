@@ -162,6 +162,12 @@ def test_cryptorank_funding_rounds_returns_dict_or_none(monkeypatch) -> None:
     monkeypatch.delenv("CRYPTORANK_API_KEY", raising=False)
     df = importlib.import_module("data_feeds")
 
+    # Clear any cached payload from earlier tests / module import — the
+    # function returns cached data within its 4h TTL, which would mask
+    # the network-failure path being exercised here.
+    if hasattr(df, "_CRYPTORANK_FUNDING_CACHE"):
+        df._CRYPTORANK_FUNDING_CACHE.clear()
+
     # Force every HTTP call to raise — proves the helper swallows errors.
     def _boom(*a, **k):
         raise RuntimeError("network unreachable in test")
