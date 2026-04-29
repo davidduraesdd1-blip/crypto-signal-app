@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Crypto Signal · Settings · Dev Tools</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--accent:#22d36f;--accent-soft:rgba(34,211,111,0.12);--accent-ink:#0a0a0f;--gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;--gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;--font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;--rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;--bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);--text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);--border:var(--gray-3);--border-strong:var(--gray-4);}
+html[data-theme="light"]{--bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;--text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;--border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);}
+*,*::before,*::after{box-sizing:border-box;min-width:0;}html,body{margin:0;padding:0;overflow-x:hidden;max-width:100vw;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11";}
+.app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;max-width:100vw;overflow-x:hidden;}
+.rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;}
+.brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
+.nav-group{margin:18px 0 6px;padding:0 10px;color:var(--text-primary);font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-secondary);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none;}
+.nav-item:hover{background:var(--bg-2);color:var(--text-primary);}.nav-item.active{background:var(--accent-soft);color:var(--text-primary);}
+.topbar{grid-area:topbar;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;padding:0 24px;position:sticky;top:0;z-index:10;}
+.crumbs{color:var(--text-muted);font-size:13px;}.crumbs b{color:var(--text-primary);font-weight:500;}
+.topbar-spacer{flex:1;}
+.level-group,.theme-btn,.refresh-btn{display:inline-flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text-secondary);cursor:pointer;}
+.level-group{padding:2px;gap:0;}
+.level-group button{all:unset;cursor:pointer;padding:4px 10px;border-radius:6px;font-size:12.5px;color:var(--text-muted);font-weight:500;}
+.level-group button.on{background:var(--accent-soft);color:var(--text-primary);}
+.main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
+.page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:16px;}
+.page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;max-width:min(640px,100%);min-width:0;}
+.grid{display:grid;gap:var(--gap);max-width:100%;}
+.grid>*{min-width:0;max-width:100%;}
+.grid.cols-2{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+.grid.cols-5{grid-template-columns:repeat(5,minmax(0,1fr));}
+.card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
+html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
+.card-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+.card-title{font-size:13px;color:var(--text-primary);font-weight:600;}
+.card-sub{font-size:12px;color:var(--text-muted);}
+
+.tabs{display:flex;gap:28px;border-bottom:1px solid var(--border);margin-bottom:24px;flex-wrap:wrap;}
+.tabs button{all:unset;cursor:pointer;padding:12px 0;font-size:13.5px;color:var(--text-muted);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;align-items:center;gap:6px;}
+.tabs button:hover{color:var(--text-primary);}
+.tabs button.on{color:var(--text-primary);border-bottom-color:var(--accent);font-weight:600;}
+
+.kpi-lbl{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;}
+.kpi-val{font-size:18px;font-weight:600;font-family:var(--font-mono);line-height:1.1;margin-top:6px;}
+.kpi-sub{font-size:11.5px;color:var(--text-muted);margin-top:4px;}
+
+/* Status badge — circuit breakers */
+.status-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;}
+.status-badge.ok{background:color-mix(in srgb,var(--success) 16%,transparent);color:var(--success);}
+.status-badge.halt{background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger);}
+
+/* Tool list (sidebar legacy widgets) */
+.tool-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
+.tool-row{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;}
+.tool-row .ic{width:28px;height:28px;border-radius:6px;background:var(--bg-1);display:grid;place-items:center;font-size:14px;flex-shrink:0;}
+.tool-row .body{flex:1;min-width:0;}
+.tool-row .name{font-size:13px;font-weight:500;}
+.tool-row .desc{font-size:11.5px;color:var(--text-muted);margin-top:1px;}
+.tool-row .action{font-size:12px;color:var(--text-secondary);cursor:pointer;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-1);}
+.tool-row .action:hover{color:var(--text-primary);border-color:var(--border-strong);}
+
+.form-row{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+.form-row label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.form-row input{all:unset;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;color:var(--text-primary);font-family:var(--font-mono);}
+
+.api-table{display:flex;flex-direction:column;font-size:12.5px;}
+.api-table .h{display:grid;grid-template-columns:60px minmax(0,1fr) 60px;gap:12px;padding:8px 4px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:10.5px;text-transform:uppercase;letter-spacing:0.05em;}
+.api-table .r{display:grid;grid-template-columns:60px minmax(0,1fr) 60px;gap:12px;padding:8px 4px;border-bottom:1px solid var(--border);align-items:center;font-size:12px;}
+.api-table .r:last-child{border-bottom:none;}
+.api-table .meth{font-family:var(--font-mono);font-weight:600;font-size:11px;padding:2px 6px;border-radius:4px;text-align:center;}
+.api-table .meth.get{background:color-mix(in srgb,var(--success) 16%,transparent);color:var(--success);}
+.api-table .meth.post{background:color-mix(in srgb,var(--info) 16%,transparent);color:var(--info);}
+.api-table .ep{font-family:var(--font-mono);color:var(--text-secondary);font-size:11.5px;}
+.api-table .auth{font-family:var(--font-mono);font-size:11px;text-align:center;color:var(--text-muted);}
+
+.btn{all:unset;cursor:pointer;background:var(--accent);color:var(--accent-ink);padding:9px 18px;border-radius:8px;font-weight:600;font-size:13px;}
+.btn:hover{filter:brightness(1.1);}
+.btn-secondary{background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);}
+
+.code-block{font-family:var(--font-mono);font-size:11.5px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;color:var(--text-secondary);overflow-x:auto;}
+
+@media(max-width:1024px){.grid.cols-2,.grid.cols-5{grid-template-columns:1fr;}.tool-list{grid-template-columns:1fr;}}
+@media(max-width:768px){
+  .app{grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+  .rail{position:fixed;bottom:0;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+  .brand,.nav-group{display:none;}
+  .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+  .main{padding:16px 16px 80px;}
+  .level-group{display:none;}
+  .refresh-btn,.theme-btn{padding:6px 8px;font-size:12px;}
+  .tabs{gap:14px;}
+  .grid.cols-5{grid-template-columns:1fr 1fr;}
+  .api-table .h,.api-table .r{grid-template-columns:50px minmax(0,1fr) 50px;}
+}
+
+.dev-bar{position:fixed;bottom:16px;right:16px;z-index:1000;background:var(--bg-1);border:1px solid var(--border-strong);border-radius:10px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:12px;}
+.dev-bar button{all:unset;cursor:pointer;padding:6px 10px;border-radius:6px;color:var(--text-secondary);}
+.dev-bar button:hover{background:var(--bg-2);color:var(--text-primary);}
+.dev-bar button.on{background:var(--accent-soft);color:var(--text-primary);}
+.dev-bar .sep{width:1px;background:var(--border);margin:4px 0;}
+</style>
+</head>
+<body data-theme="dark">
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
+    <div class="nav-group">Markets</div>
+    <a class="nav-item">Home</a><a class="nav-item">Signals</a><a class="nav-item">Regimes</a>
+    <div class="nav-group">Research</div>
+    <a class="nav-item">Backtester</a><a class="nav-item">On-chain</a>
+    <div class="nav-group">Account</div>
+    <a class="nav-item">Alerts</a><a class="nav-item">AI Assistant</a><a class="nav-item active">Settings</a>
+  </aside>
+  <header class="topbar">
+    <div class="crumbs">Account / <b>Settings</b> / <b style="color:var(--text-muted);">Dev Tools</b></div>
+    <div class="topbar-spacer"></div>
+    <div class="level-group"><button>Beginner</button><button class="on">Intermediate</button><button>Advanced</button></div>
+    <button class="refresh-btn">↻ Refresh</button><button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+  </header>
+  <main class="main">
+    <div class="page-hd"><div><h1>Settings</h1><div class="sub">Operator-grade developer tools — circuit breakers, database health, REST API server, and the legacy sidebar utilities relocated from the 2026-04 redesign.</div></div></div>
+
+    <div class="tabs">
+      <button>📊 Trading</button>
+      <button>⚡ Signal &amp; Risk</button>
+      <button class="on">🛠️ Dev Tools</button>
+      <button>⚙️ Execution</button>
+    </div>
+
+    <!-- Sidebar legacy widgets -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-hd"><div><div class="card-title">🧰 Sidebar tools</div><div class="card-sub">relocated from the legacy left rail in the 2026-04 redesign · still operator-accessible</div></div></div>
+      <div class="tool-list">
+        <div class="tool-row"><div class="ic">🔁</div><div class="body"><div class="name">Auto-Scan</div><div class="desc">scheduled top-100 sweep · currently every 30 min</div></div><button class="action">Configure</button></div>
+        <div class="tool-row"><div class="ic">🧪</div><div class="body"><div class="name">Demo / Sandbox</div><div class="desc">paper-mode toggle · safe to play with live UI</div></div><button class="action">Open</button></div>
+        <div class="tool-row"><div class="ic">📡</div><div class="body"><div class="name">API Health</div><div class="desc">OKX · Glassnode · Dune · CoinGecko status</div></div><button class="action">Check</button></div>
+        <div class="tool-row"><div class="ic">👛</div><div class="body"><div class="name">Wallet Import</div><div class="desc">CSV / read-only address tracking</div></div><button class="action">Import</button></div>
+        <div class="tool-row"><div class="ic">🔑</div><div class="body"><div class="name">API Keys</div><div class="desc">third-party data providers · separate from execution keys</div></div><button class="action">Manage</button></div>
+        <div class="tool-row"><div class="ic">ℹ️</div><div class="body"><div class="name">Build Info</div><div class="desc">v2026.04.29 · commit 335832c · branch redesign/ui-2026-05-full-mockup-match</div></div><button class="action">Details</button></div>
+      </div>
+    </div>
+
+    <!-- Circuit Breakers -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-hd"><div><div class="card-title">🛑 Circuit breakers · Level-C 7-gate safety</div><div class="card-sub">protects the agent from runaway loss · halts fire on any gate breach</div></div><span class="status-badge ok">● All 7 gates operational</span></div>
+
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:12.5px;font-family:var(--font-mono);color:var(--text-secondary);">
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span>Gate 1 · Daily loss limit</span><span style="color:var(--success);">✓ within 5% cap</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span>Gate 2 · Max drawdown</span><span style="color:var(--success);">✓ 8.2% / 15% cap</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span>Gate 3 · Concurrent positions</span><span style="color:var(--success);">✓ 2 / 6 max</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span>Gate 4 · Cooldown after loss</span><span style="color:var(--success);">✓ inactive</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span>Gate 5 · Trade-size cap</span><span style="color:var(--success);">✓ 10% · enforced</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span>Gate 6 · Allowlist (TIER1 ∪ TIER2)</span><span style="color:var(--success);">✓ all pairs valid</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;"><span>Gate 7 · Emergency stop flag</span><span style="color:var(--success);">✓ inactive</span></div>
+      </div>
+      <div style="margin-top:12px;font-size:11.5px;color:var(--text-muted);">Last check: 2026-04-29 14:32:14 UTC · Resume count (lifetime): 0 · No halts in current session</div>
+    </div>
+
+    <!-- Database Health -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-hd"><div><div class="card-title">🗄️ Database health</div><div class="card-sub">SQLite WAL-mode · row counts and disk usage · auto-vacuum nightly</div></div></div>
+
+      <div class="grid cols-5" style="margin-bottom:14px;">
+        <div><div class="kpi-lbl">Feedback log</div><div class="kpi-val">14,832</div><div class="kpi-sub">rows</div></div>
+        <div><div class="kpi-lbl">Signal history</div><div class="kpi-val">142,910</div><div class="kpi-sub">rows · 2023-01 →</div></div>
+        <div><div class="kpi-lbl">Backtest trades</div><div class="kpi-val">8,924</div><div class="kpi-sub">rows · 482 unique runs</div></div>
+        <div><div class="kpi-lbl">Paper trades</div><div class="kpi-val">3,847</div><div class="kpi-sub">rows</div></div>
+        <div><div class="kpi-lbl">DB size</div><div class="kpi-val">182,940</div><div class="kpi-sub">KB · 178 MB</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);padding:10px 14px;background:var(--bg-2);border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;">
+        <span>▸ Show all 18 table counts</span>
+        <span style="color:var(--text-muted);">expand</span>
+      </div>
+    </div>
+
+    <!-- REST API Server -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-hd"><div><div class="card-title">🚀 REST API server</div><div class="card-sub">FastAPI + Uvicorn · 14 endpoints for external integrations and TradingView webhooks</div></div></div>
+
+      <div class="grid cols-2" style="margin-bottom:16px;">
+        <div>
+          <div class="form-row">
+            <label>API Key (X-API-Key header)</label>
+            <input type="password" placeholder="●●●● (saved)" />
+          </div>
+          <div class="form-row">
+            <label>Host</label>
+            <input type="text" value="0.0.0.0" />
+          </div>
+          <div class="form-row">
+            <label>Port</label>
+            <input type="text" value="8000" />
+          </div>
+          <button class="btn" style="margin-top:6px;">💾 Save API Config</button>
+        </div>
+        <div>
+          <div style="font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;margin-bottom:8px;">Start command</div>
+          <div class="code-block">cd "/path/to/crypto-signal-app"
+python -m uvicorn api:app \
+  --host 0.0.0.0 --port 8000 \
+  --reload</div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px;">Swagger UI: <span style="color:var(--accent);font-family:var(--font-mono);">http://localhost:8000/docs</span></div>
+        </div>
+      </div>
+
+      <div style="font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;margin-bottom:8px;">Endpoint reference (14)</div>
+      <div class="api-table">
+        <div class="h"><span>Method</span><span>Endpoint</span><span>Auth</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/health</span><span class="auth">—</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/signals</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/signals/{pair}</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/signals/history</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/positions</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/paper-trades</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/backtest</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/backtest/trades</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/backtest/runs</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/weights</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/scan/status</span><span class="auth">—</span></div>
+        <div class="r"><span class="meth post">POST</span><span class="ep">/scan/trigger</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth post">POST</span><span class="ep">/webhook/tradingview</span><span class="auth">key</span></div>
+        <div class="r"><span class="meth get">GET</span><span class="ep">/alerts/log</span><span class="auth">key</span></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+<div class="dev-bar">
+  <button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button>
+  <button id="btn-light" onclick="setTheme('light')">Light</button>
+  <div class="sep"></div>
+  <button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button>
+  <button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button>
+</div>
+<script>
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.getElementById('btn-dark').classList.toggle('on',t==='dark');document.getElementById('btn-light').classList.toggle('on',t==='light');}
+function toggleTheme(){setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function setViewport(v){document.body.classList.toggle('preview-mobile',v==='mobile');document.getElementById('btn-desktop').classList.toggle('on',v==='desktop');document.getElementById('btn-mobile').classList.toggle('on',v==='mobile');}
+</script>
+</body>
+</html>

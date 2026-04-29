@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Crypto Signal · Settings · Signal &amp; Risk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--accent:#22d36f;--accent-soft:rgba(34,211,111,0.12);--accent-ink:#0a0a0f;--gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;--gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;--font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;--rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;--bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);--text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);--border:var(--gray-3);--border-strong:var(--gray-4);}
+html[data-theme="light"]{--bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;--text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;--border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);}
+*,*::before,*::after{box-sizing:border-box;min-width:0;}html,body{margin:0;padding:0;overflow-x:hidden;max-width:100vw;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11";}
+.app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;max-width:100vw;overflow-x:hidden;}
+.rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;}
+.brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
+.nav-group{margin:18px 0 6px;padding:0 10px;color:var(--text-primary);font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-secondary);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none;}
+.nav-item:hover{background:var(--bg-2);color:var(--text-primary);}.nav-item.active{background:var(--accent-soft);color:var(--text-primary);}
+.topbar{grid-area:topbar;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;padding:0 24px;position:sticky;top:0;z-index:10;}
+.crumbs{color:var(--text-muted);font-size:13px;}.crumbs b{color:var(--text-primary);font-weight:500;}
+.topbar-spacer{flex:1;}
+.level-group,.theme-btn,.refresh-btn{display:inline-flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text-secondary);cursor:pointer;}
+.level-group{padding:2px;gap:0;}
+.level-group button{all:unset;cursor:pointer;padding:4px 10px;border-radius:6px;font-size:12.5px;color:var(--text-muted);font-weight:500;}
+.level-group button.on{background:var(--accent-soft);color:var(--text-primary);}
+.main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
+.page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:16px;}
+.page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;max-width:min(640px,100%);min-width:0;}
+.grid{display:grid;gap:var(--gap);max-width:100%;}
+.grid>*{min-width:0;max-width:100%;}
+.grid.cols-2{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+.card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
+html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
+.card-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+.card-title{font-size:13px;color:var(--text-primary);font-weight:600;}
+.card-sub{font-size:12px;color:var(--text-muted);}
+
+.tabs{display:flex;gap:28px;border-bottom:1px solid var(--border);margin-bottom:24px;flex-wrap:wrap;}
+.tabs button{all:unset;cursor:pointer;padding:12px 0;font-size:13.5px;color:var(--text-muted);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;align-items:center;gap:6px;}
+.tabs button:hover{color:var(--text-primary);}
+.tabs button.on{color:var(--text-primary);border-bottom-color:var(--accent);font-weight:600;}
+
+.form-row{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.form-row label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.form-row input{all:unset;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;color:var(--text-primary);font-family:var(--font-mono);}
+.form-row .help{font-size:11.5px;color:var(--text-muted);}
+
+.slider-row{display:flex;flex-direction:column;gap:8px;margin-bottom:18px;}
+.slider-row .head{display:flex;justify-content:space-between;align-items:baseline;}
+.slider-row .head label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.slider-row .head .val{font-family:var(--font-mono);font-size:14px;font-weight:600;color:var(--accent);}
+.slider-track{height:6px;background:var(--bg-3);border-radius:999px;position:relative;}
+.slider-fill{position:absolute;top:0;left:0;height:100%;background:var(--accent);border-radius:999px;}
+.slider-thumb{position:absolute;top:50%;width:14px;height:14px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 3px var(--accent-soft);}
+
+.btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+.btn{all:unset;cursor:pointer;background:var(--accent);color:var(--accent-ink);padding:9px 18px;border-radius:8px;font-weight:600;font-size:13px;}
+.btn:hover{filter:brightness(1.1);}
+.btn-secondary{background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);}
+
+@media(max-width:1024px){.grid.cols-2{grid-template-columns:1fr;}}
+@media(max-width:768px){
+  .app{grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+  .rail{position:fixed;bottom:0;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+  .brand,.nav-group{display:none;}
+  .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+  .main{padding:16px 16px 80px;}
+  .level-group{display:none;}
+  .refresh-btn,.theme-btn{padding:6px 8px;font-size:12px;}
+  .tabs{gap:16px;}
+}
+
+.dev-bar{position:fixed;bottom:16px;right:16px;z-index:1000;background:var(--bg-1);border:1px solid var(--border-strong);border-radius:10px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:12px;}
+.dev-bar button{all:unset;cursor:pointer;padding:6px 10px;border-radius:6px;color:var(--text-secondary);}
+.dev-bar button:hover{background:var(--bg-2);color:var(--text-primary);}
+.dev-bar button.on{background:var(--accent-soft);color:var(--text-primary);}
+.dev-bar .sep{width:1px;background:var(--border);margin:4px 0;}
+body.preview-mobile .app{max-width:390px;margin:0 auto;border:1px solid var(--border-strong);border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-height:844px;grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+body.preview-mobile .rail{position:relative;bottom:auto;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+body.preview-mobile .brand,body.preview-mobile .nav-group{display:none;}
+body.preview-mobile .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+body.preview-mobile .main{padding:16px 16px 80px;}
+body.preview-mobile .grid.cols-2{grid-template-columns:1fr;}
+body.preview-mobile .level-group{display:none;}
+</style>
+</head>
+<body data-theme="dark">
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
+    <div class="nav-group">Markets</div>
+    <a class="nav-item">Home</a><a class="nav-item">Signals</a><a class="nav-item">Regimes</a>
+    <div class="nav-group">Research</div>
+    <a class="nav-item">Backtester</a><a class="nav-item">On-chain</a>
+    <div class="nav-group">Account</div>
+    <a class="nav-item">Alerts</a><a class="nav-item">AI Assistant</a><a class="nav-item active">Settings</a>
+  </aside>
+  <header class="topbar">
+    <div class="crumbs">Account / <b>Settings</b> / <b style="color:var(--text-muted);">Signal &amp; Risk</b></div>
+    <div class="topbar-spacer"></div>
+    <div class="level-group"><button>Beginner</button><button class="on">Intermediate</button><button>Advanced</button></div>
+    <button class="refresh-btn">↻ Refresh</button><button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+  </header>
+  <main class="main">
+    <div class="page-hd"><div><h1>Settings</h1><div class="sub">Signal sizing thresholds and portfolio-level risk caps. These bind the composite signal model and any auto-execution loop.</div></div></div>
+
+    <div class="tabs">
+      <button>📊 Trading</button>
+      <button class="on">⚡ Signal &amp; Risk</button>
+      <button>🛠️ Dev Tools</button>
+      <button>⚙️ Execution</button>
+    </div>
+
+    <div class="grid cols-2" style="margin-bottom:20px;">
+
+      <div class="card">
+        <div class="card-hd"><div><div class="card-title">Position sizing</div><div class="card-sub">how much capital each signal commits</div></div></div>
+
+        <div class="form-row">
+          <label>Portfolio size (USD)</label>
+          <input type="text" value="100,000" />
+          <div class="help">Used to compute position sizes when exchange balance is unreachable</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head"><label>Risk per trade (%)</label><span class="val">2.0%</span></div>
+          <div class="slider-track"><div class="slider-fill" style="width:20%;"></div><div class="slider-thumb" style="left:20%;"></div></div>
+          <div class="help" style="font-size:11.5px;color:var(--text-muted);">Max loss per trade as % of portfolio · 0.5% to 10%</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head"><label>Max exposure (%)</label><span class="val">35%</span></div>
+          <div class="slider-track"><div class="slider-fill" style="width:35%;"></div><div class="slider-thumb" style="left:35%;"></div></div>
+          <div class="help" style="font-size:11.5px;color:var(--text-muted);">Total open-position equity as % of portfolio · sums all concurrent trades</div>
+        </div>
+
+        <div class="form-row">
+          <label>Max position cap (USD)</label>
+          <input type="text" value="25,000" />
+          <div class="help">Hard ceiling per single position · trades larger than this are rejected at post-gate</div>
+        </div>
+
+        <div class="form-row">
+          <label>Max open per pair</label>
+          <input type="text" value="1" />
+          <div class="help">1 = single concurrent position per pair · 2+ enables ladder entries</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><div><div class="card-title">Signal thresholds</div><div class="card-sub">composite-score floors that gate signal action</div></div></div>
+
+        <div class="slider-row">
+          <div class="head"><label>High-confidence threshold (%)</label><span class="val">75%</span></div>
+          <div class="slider-track"><div class="slider-fill" style="width:75%;"></div><div class="slider-thumb" style="left:75%;"></div></div>
+          <div class="help" style="font-size:11.5px;color:var(--text-muted);">Below this, signal is "watch only" · above, signal becomes actionable (BUY/SELL)</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head"><label>MTF alignment threshold (%)</label><span class="val">60%</span></div>
+          <div class="slider-track"><div class="slider-fill" style="width:60%;"></div><div class="slider-thumb" style="left:60%;"></div></div>
+          <div class="help" style="font-size:11.5px;color:var(--text-muted);">% of active timeframes that must agree before signal fires · 60% = 4 of 6 default</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head"><label>Regime-confidence floor (%)</label><span class="val">55%</span></div>
+          <div class="slider-track"><div class="slider-fill" style="width:55%;"></div><div class="slider-thumb" style="left:55%;"></div></div>
+          <div class="help" style="font-size:11.5px;color:var(--text-muted);">HMM regime must report ≥ this confidence to weight regime-adjusted scoring</div>
+        </div>
+
+        <div class="form-row" style="margin-top:18px;">
+          <label>Composite layer weights</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:var(--font-mono);font-size:12.5px;color:var(--text-secondary);background:var(--bg-2);border-radius:6px;padding:10px 12px;">
+            <span>Layer 1 · Technical</span><span style="text-align:right;">0.30</span>
+            <span>Layer 2 · Macro</span><span style="text-align:right;">0.15</span>
+            <span>Layer 3 · Sentiment</span><span style="text-align:right;">0.20</span>
+            <span>Layer 4 · On-chain</span><span style="text-align:right;">0.35</span>
+          </div>
+          <div class="help">Auto-adjusted per regime · Bull bias on-chain, Distribution bias macro · edit per-regime in Advanced</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="btn-row">
+      <button class="btn">💾 Save Signal &amp; Risk Config</button>
+      <button class="btn btn-secondary">↺ Revert to defaults</button>
+    </div>
+
+  </main>
+</div>
+<div class="dev-bar">
+  <button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button>
+  <button id="btn-light" onclick="setTheme('light')">Light</button>
+  <div class="sep"></div>
+  <button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button>
+  <button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button>
+</div>
+<script>
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.getElementById('btn-dark').classList.toggle('on',t==='dark');document.getElementById('btn-light').classList.toggle('on',t==='light');}
+function toggleTheme(){setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function setViewport(v){document.body.classList.toggle('preview-mobile',v==='mobile');document.getElementById('btn-desktop').classList.toggle('on',v==='desktop');document.getElementById('btn-mobile').classList.toggle('on',v==='mobile');}
+</script>
+</body>
+</html>
