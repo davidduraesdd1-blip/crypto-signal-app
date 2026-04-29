@@ -390,6 +390,99 @@ def _cached_news_sentiment(pair: str) -> dict:
     return _news_mod.get_news_sentiment(pair)
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=12)
+def _sg_cached_composite_per_pair(pair: str) -> dict:
+    """Compute the 4-layer composite signal for a single pair on demand.
+
+    C3 follow-up (2026-04-29): the Signals → BTC detail composite-score
+    card and the Regimes / BTC detail layer breakdown both pulled
+    `layer_technical / layer_macro / layer_sentiment / layer_onchain`
+    from the latest scan_result. When no scan had run yet (cold cache,
+    fresh deploy), every layer was None and the composite_score_card
+    rendered four empty bars + score "—". This wrapper fills the gap
+    by composing the proven fetchers (proven by §22 fixtures + §4
+    regression baseline) and calling `composite_signal.compute_composite_
+    signal(...)` directly.
+
+    5-minute TTL matches the §12 composite-signal recompute cycle.
+
+    Returns:
+      The full compute_composite_signal output dict, or {} on failure
+      so the caller can graceful-fall to its existing "—" rendering.
+    """
+    try:
+        from composite_signal import compute_composite_signal as _cs
+    except Exception as _e:
+        logger.debug("[App] composite_signal import failed: %s", _e)
+        return {}
+
+    # Macro is global (DXY / VIX / yield spread / CPI) — same for every pair.
+    try:
+        _macro_enr = data_feeds.get_macro_enrichment() or {}
+    except Exception as _e:
+        logger.debug("[App] macro fetch for composite failed: %s", _e)
+        _macro_enr = {}
+    macro_data = {
+        "dxy":                 _macro_enr.get("dxy"),
+        "vix":                 _macro_enr.get("vix"),
+        "yield_spread_2y10y":  _macro_enr.get("yield_spread_pp"),
+        # cpi_yoy isn't in get_macro_enrichment — leave None so the
+        # composite layer renormalises over surviving sub-signals
+        # (P1 audit fix in compute_composite_signal handles this).
+        "cpi_yoy":             None,
+    }
+
+    # On-chain — per-pair via the proven (and now cache-warmed by C4) helper.
+    try:
+        onchain_data = data_feeds.get_onchain_metrics(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] onchain fetch for composite %s failed: %s", pair, _e)
+        onchain_data = {}
+
+    # Fear & Greed (24h cache).
+    try:
+        _fng = _sg_cached_fear_greed() or {}
+        fg_value = _fng.get("value")
+    except Exception:
+        fg_value = None
+
+    # Per-pair BTC funding rate (10min cache). For non-BTC pairs we still
+    # fetch the BTC funding because the sentiment layer treats it as a
+    # market-wide crowding signal, not a per-pair one.
+    try:
+        _fr = _sg_cached_funding_rate("BTC/USDT") or {}
+        btc_fund_pct = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+    except Exception:
+        btc_fund_pct = None
+
+    # TA — for BTC use the dedicated fetcher; for other pairs we just
+    # let it fall to {} so compute_composite_signal renormalises across
+    # the surviving 3 layers (Macro/Sentiment/On-chain). Per-pair TA
+    # would require a fresh OHLCV fetch + indicator computation; out of
+    # scope for this fallback (it's what the scanner does in batch).
+    ta_data: dict = {}
+    if pair.upper().startswith("BTC"):
+        try:
+            ta_data = data_feeds.fetch_btc_ta_signals() or {}
+        except Exception as _e:
+            logger.debug("[App] BTC TA fetch for composite failed: %s", _e)
+            ta_data = {}
+
+    try:
+        return _cs(
+            macro_data=macro_data,
+            onchain_data=onchain_data,
+            fg_value=fg_value,
+            put_call_ratio=None,
+            ta_data=ta_data,
+            fg_30d_avg=None,
+            btc_funding_rate_pct=btc_fund_pct,
+        ) or {}
+    except Exception as _e:
+        logger.debug("[App] compute_composite_signal for %s failed: %s", pair, _e)
+        return {}
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=24)
 def _cached_google_trends_score(keyword: str) -> dict:
     """Streamlit-level cache for Google Trends — 24 hr TTL.
@@ -1029,6 +1122,7 @@ def _refresh_all_data() -> None:
             _cached_agent_log_df, _cached_api_health, _cached_arb_opportunities_df,
             _cached_resolved_feedback_df, _cached_alerts_config, _cached_news_sentiment,
             _cached_whale_activity, _cached_google_trends_score,
+            _sg_cached_composite_per_pair,
         ]:
             try:
                 _fn.clear()
@@ -9164,6 +9258,46 @@ def page_signals():
         _l_sent = _result.get("layer_sentiment") or _result.get("sentiment_score")
         _l_onch = _result.get("layer_onchain") or _result.get("onchain_score")
         _composite = _result.get("composite_score") or _conf
+
+        # C3 fallback (2026-04-29): when no scan result has populated
+        # the layer scores yet, compute them on demand via the cached
+        # per-pair composite helper. Without this, the four progress
+        # bars and the score in the composite_score_card all render
+        # empty on cold load — the bug the handoff doc described as
+        # "All 4 composite layers + technical indicators + on-chain
+        # values empty". The helper has a 5-min TTL so repeated detail-
+        # page renders don't re-run compute_composite_signal each time.
+        if (
+            _l_tech is None and _l_macro is None
+            and _l_sent is None and _l_onch is None
+        ):
+            try:
+                _cs_out = _sg_cached_composite_per_pair(_pair) or {}
+                _layers = (_cs_out or {}).get("layers") or {}
+                # compute_composite_signal returns layer scores in
+                # [-1.0, +1.0] (each "score" key inside the per-layer
+                # dict). The composite_score_card expects 0-100 scale,
+                # so we map: display = (score + 1.0) / 2.0 * 100.
+                def _to_card_scale(v):
+                    if v is None:
+                        return None
+                    try:
+                        return max(0.0, min(100.0, (float(v) + 1.0) * 50.0))
+                    except Exception:
+                        return None
+                _l_tech  = _to_card_scale((_layers.get("technical") or {}).get("score"))
+                _l_macro = _to_card_scale((_layers.get("macro")     or {}).get("score"))
+                _l_sent  = _to_card_scale((_layers.get("sentiment") or {}).get("score"))
+                _l_onch  = _to_card_scale((_layers.get("onchain")   or {}).get("score"))
+                # The card's `score` field is also 0-100; map the
+                # full composite score the same way.
+                if _composite is None:
+                    _comp_raw = _cs_out.get("score")
+                    if _comp_raw is not None:
+                        _composite = (float(_comp_raw) + 1.0) * 50.0
+            except Exception as _e_csf:
+                logger.debug("[Signals] C3 composite fallback failed: %s", _e_csf)
+
         try:
             _composite_f = float(_composite) if _composite is not None else None
         except Exception:
