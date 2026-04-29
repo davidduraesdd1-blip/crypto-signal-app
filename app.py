@@ -501,6 +501,23 @@ def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 4
         return None
 
 
+@st.cache_data(ttl=8 * 3600, show_spinner=False, max_entries=120)
+def _sg_cached_token_unlocks(pair: str) -> dict:
+    """Token unlock schedule per pair — 8h TTL (matches cryptorank
+    primary cache window in data_feeds._CRYPTORANK_UNLOCKS_TTL).
+
+    Wraps `data_feeds.get_token_unlock_schedule(pair)` which uses
+    cryptorank as PRIMARY (P1-26) + Tokenomist as fallback. Returns
+    {"signal", "next_unlock_days", "unlock_pct_supply", "source",
+    "error", "_ts"} or an empty dict on hard failure.
+    """
+    try:
+        return data_feeds.get_token_unlock_schedule(pair) or {}
+    except Exception as _e:
+        logger.debug("[App] cached token-unlock fetch %s failed: %s", pair, _e)
+        return {}
+
+
 # ──────────────────────────────────────────────
 # MODULE-LEVEL THREAD STATE (progress only — results go to file)
 # ──────────────────────────────────────────────
@@ -8999,6 +9016,34 @@ def page_signals():
                 _fund = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
             except Exception:
                 pass
+            # P1 follow-up — cryptorank token unlock surfacing (8h cache).
+            # Shows the next unlock signal as the 5th info-strip cell so
+            # users see imminent supply pressure inline with vol/ATR/beta/
+            # funding. PoW pairs (BTC/LTC/DOGE) return signal=NO_UNLOCK and
+            # the cell renders "—".
+            _unlock_signal = "—"
+            _unlock_sub = ""
+            try:
+                _ul = _sg_cached_token_unlocks(_pair)
+                _us = (_ul or {}).get("signal") or "N/A"
+                _udays = (_ul or {}).get("next_unlock_days")
+                _upct = (_ul or {}).get("unlock_pct_supply")
+                if _us == "UNLOCK_IMMINENT":
+                    _unlock_signal = f"⚠ {_udays}d"
+                    _unlock_sub = f"{_upct:.1f}% supply" if _upct is not None else "imminent"
+                elif _us == "UNLOCK_SOON":
+                    _unlock_signal = f"{_udays}d"
+                    _unlock_sub = f"{_upct:.1f}% supply" if _upct is not None else "soon"
+                elif _us == "NO_UNLOCK":
+                    _unlock_signal = "None"
+                    _unlock_sub = "no vesting"
+                elif _us == "N/A":
+                    _unlock_signal = "—"
+                    _unlock_sub = ""
+                else:
+                    _unlock_signal = str(_us)
+            except Exception as _e_ul:
+                logger.debug("[Signals] token unlock fetch failed: %s", _e_ul)
             def _fmt_vol(v):
                 if v is None:
                     return "—"
@@ -9023,6 +9068,7 @@ def page_signals():
                 f'<div class="ds-ind"><div class="ds-ind-lbl">ATR (14d)</div><div class="ds-ind-val">{("$" + f"{float(_atr):,.0f}") if _atr is not None else "—"}</div><div class="ds-ind-sub"></div></div>'
                 f'<div class="ds-ind"><div class="ds-ind-lbl">Beta vs S&amp;P</div><div class="ds-ind-val">{(f"{float(_beta):.2f}") if _beta is not None else "—"}</div><div class="ds-ind-sub">90d rolling</div></div>'
                 f'<div class="ds-ind"><div class="ds-ind-lbl">Funding (8h)</div><div class="ds-ind-val">{_fmt_pct(_fund)}</div><div class="ds-ind-sub"></div></div>'
+                f'<div class="ds-ind"><div class="ds-ind-lbl">Next Unlock</div><div class="ds-ind-val">{_unlock_signal}</div><div class="ds-ind-sub">{_unlock_sub}</div></div>'
                 '</div>'
             )
             st.markdown(_ind_html, unsafe_allow_html=True)
