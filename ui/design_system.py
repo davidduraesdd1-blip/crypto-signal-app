@@ -100,7 +100,7 @@ class Tokens:
     font_display: str = "'Source Serif 4', Georgia, serif"
 
     # Sibling defaults
-    rail_w: str = "240px"
+    rail_w: str = "150px"
     topbar_h: str = "56px"
     card_radius: str = "12px"
     card_pad: str = "16px"
@@ -198,6 +198,38 @@ def _build_css(app: AppId, fam: str, accent: dict, scale: dict, theme: str) -> s
       -webkit-font-smoothing: antialiased;
     }}
     .stApp {{ background: var(--bg-0); }}
+
+    /* C1 (2026-04-29): mobile overflow defenses. Phase B mockup ports
+       added several full-width grids (hero cards, KPI strips, controls
+       rows) that overflow horizontally on narrow viewports because
+       Streamlit's stHorizontalBlock doesn't wrap by default. Without
+       these rules, mobile users see a horizontal scrollbar on every
+       page and the topbar pills sit off-screen.
+       Defenses (least-aggressive first):
+         1. clip horizontal overflow at the html/body level
+         2. cap stApp + main block-container width to viewport
+         3. let horizontal blocks wrap when their content overflows
+         4. bound any direct child of an stHorizontalBlock to its column */
+    html, body {{
+      overflow-x: hidden;
+      max-width: 100vw;
+    }}
+    .stApp,
+    section.main > div.block-container {{
+      max-width: 100vw;
+      overflow-x: hidden;
+    }}
+    @media (max-width: 768px) {{
+      [data-testid="stHorizontalBlock"] {{
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+      }}
+      [data-testid="stHorizontalBlock"] > [data-testid="column"] {{
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex-basis: auto !important;
+      }}
+    }}
 
     /* Tabular nums for everything that looks like a number */
     .num, [data-testid="stMetricValue"] {{

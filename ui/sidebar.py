@@ -70,29 +70,41 @@ NavItem = tuple[str, str, str]  # (key, label, icon)
 # PAGE_KEY_TO_APP below — preserves existing logic, only relabels.
 DEFAULT_NAV: dict[str, list[NavItem]] = {
     "Markets": [
-        ("home",     "Home",       "◉"),
-        ("signals",  "Signals",    "▲"),
-        ("regimes",  "Regimes",    "◈"),
+        ("home",     "Home",         "◉"),
+        ("signals",  "Signals",      "▲"),
+        ("regimes",  "Regimes",      "◈"),
     ],
     "Research": [
         ("backtester", "Backtester", "∿"),
         ("onchain",    "On-chain",   "⬡"),
     ],
     "Account": [
-        ("alerts",   "Alerts",     "◐"),
-        ("settings", "Settings",   "⚙"),
+        ("alerts",   "Alerts",       "◐"),
+        # C1 (2026-04-29): AI Assistant promoted from a sub-link inside
+        # Settings to a first-class nav item — matches the full-mockup-
+        # match spec and exposes the agent surface (page_agent at the
+        # `Agent` page-router key) without burying it in Settings.
+        ("agent",    "AI Assistant", "✦"),
+        ("settings", "Settings",     "⚙"),
     ],
 }
 
 # Maps the mockup-friendly key → existing app.py page key. Keeps all the
 # existing page_* functions intact — only the presentation changes.
+#
+# C1 (2026-04-29): the legacy aliases for signals/regimes/onchain
+# all routed to "Dashboard" (a Tabs container that no longer exists
+# post-redesign), so clicking those nav items navigated to the wrong
+# page. Each now maps to its real page-router key — see app.py
+# `if page == "..." :` block at line 9923+.
 PAGE_KEY_TO_APP: dict[str, str] = {
     "home":       "Dashboard",
-    "signals":    "Dashboard",        # Signals tab inside Dashboard
-    "regimes":    "Dashboard",        # Regime section inside Dashboard
+    "signals":    "Signals",
+    "regimes":    "Regimes",
     "backtester": "Backtest Viewer",
-    "onchain":    "Dashboard",        # On-chain subsection inside Dashboard
+    "onchain":    "On-chain",
     "alerts":     "Config Editor",    # Alerts tab in Settings
+    "agent":      "Agent",
     "settings":   "Config Editor",
 }
 

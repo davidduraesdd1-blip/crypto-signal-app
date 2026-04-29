@@ -50,11 +50,14 @@ def inject_streamlit_overrides() -> None:
     }
     .ds-brand-wm { color: var(--text-primary); }
 
-    /* Nav group header */
+    /* Nav group header — C1 (2026-04-29): bolded + primary text color
+       + 12px size + 0.12em letter-spacing for stronger visual
+       hierarchy between section labels and the nav items below them.
+       Matches the full-mockup-match spec. */
     .ds-nav-group {
       margin: 14px 0 4px; padding: 0 10px;
-      color: var(--text-muted); font-size: 11px; font-weight: 500;
-      letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--text-primary); font-size: 12px; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase;
     }
 
     /* Sidebar nav buttons — compact left-aligned items so the whole rail
