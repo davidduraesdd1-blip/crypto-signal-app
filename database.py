@@ -1717,6 +1717,62 @@ def get_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     return df.drop(columns=["id"], errors="ignore")
 
 
+def recent_agent_decisions(limit: int = 10) -> list[dict]:
+    """C5 (Phase C plan §C5.3): return the most-recent agent decisions
+    in the spec-shaped form for the AI Assistant page's Recent
+    Decisions log.
+
+    The spec proposed a fresh `agent_decisions` table; this codebase
+    already has `agent_log` (added pre-redesign) which records the
+    exact same fields under slightly different names. Rather than
+    duplicate the schema + the per-cycle insert path, this helper
+    queries `agent_log` and maps the columns to the spec shape:
+
+        timestamp, pair, decision, confidence, rationale,
+        status, cycle_id (optional)
+
+    Mapping:
+        logged_at        → timestamp
+        pair             → pair
+        claude_decision  → decision (approve/reject/skip/null)
+        confidence       → confidence
+        claude_rationale → rationale
+        action_taken     → status (executed/dry_run/skipped/error)
+
+    Returns a list of dicts (not a DataFrame) so the caller can render
+    the rows directly without pandas-shape assumptions.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT logged_at, pair, claude_decision, confidence,
+                      claude_rationale, action_taken, execution_result, notes
+                 FROM agent_log
+                 ORDER BY logged_at DESC
+                 LIMIT ?""",
+            (int(limit),),
+        )
+        rows = []
+        for r in cur.fetchall():
+            (logged_at, pair, decision, confidence, rationale,
+             action_taken, execution_result, notes) = r
+            rows.append({
+                "timestamp":   logged_at,
+                "pair":        pair,
+                "decision":    (decision or "").lower() or None,
+                "confidence":  float(confidence) if confidence is not None else None,
+                "rationale":   rationale or "",
+                "status":      action_taken or "",
+                "execution":   execution_result or "",
+                "notes":       notes or "",
+            })
+        return rows
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 # ──────────────────────────────────────────────
 # DB STATS  (used by Config Editor / health check)
 # ──────────────────────────────────────────────

@@ -1105,6 +1105,35 @@ def _toggle_theme() -> None:
         logger.debug("[App] Plotly template re-register failed: %s", _e_plt)
 
 # ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
+# C5 (Phase C plan §C5.5, 2026-04-30): agent status pill — visible in
+# the topbar's status_pills slot on every page that wants it. Lets a
+# user tell at a glance whether the autonomous agent is running, even
+# when they're not on the AI Assistant page. Returns a list shaped
+# for render_top_bar's `status_pills` parameter (each pill: dict with
+# `tone`, `icon`, `label`).
+def _agent_topbar_pills() -> list[dict]:
+    """Return the topbar-pill list reflecting the autonomous agent's
+    runtime state. Empty list when agent.py couldn't import or the
+    supervisor's status raises (defensive — the topbar must NEVER
+    crash a page on a transient agent backend hiccup)."""
+    if _agent is None:
+        return []
+    try:
+        s = _agent.supervisor.status() or {}
+    except Exception as _e:
+        logger.debug("[topbar] agent status() failed: %s", _e)
+        return []
+    if s.get("running"):
+        return [{
+            "tone":  "success",
+            "icon":  "●",
+            "label": f"Agent · running · cycle {int(s.get('cycles_total') or 0)}",
+        }]
+    if s.get("kill_requested"):
+        return [{"tone": "warning", "icon": "■", "label": "Agent · stopping"}]
+    return [{"tone": "info", "icon": "○", "label": "Agent · stopped"}]
+
+
 # 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
 # (see render_top_bar). The sidebar "Refresh All Data" button has been
 # removed so the topbar ↻ chip is the single control surface. Both the
@@ -1714,7 +1743,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -5200,7 +5229,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -6074,124 +6103,66 @@ def page_config():
                     logger.warning("[Execution] OKX connection failed: %s", _conn['error'])
                     st.error("Connection failed — check your OKX API key, secret, and passphrase in Settings.")
 
-        # ── Autonomous Agent Settings ──────────────────────────────────────────────
+        # ── Autonomous Agent (link card — moved to AI Assistant page) ────────
+        # C5 (Phase C plan §C5.4, 2026-04-30): the autonomous agent's
+        # config + start/stop controls + status panel were duplicated
+        # here AND on the AI Assistant page (page_agent). Per the plan
+        # the AI Assistant page is now the canonical home; this slot
+        # is reduced to a small link card so users on Settings →
+        # Execution still see the agent exists but get redirected
+        # rather than presented with a competing config form.
         st.markdown("---")
         _ui.section_header(
             "Autonomous AI Agent",
-            "24/7 LangGraph + Claude reasoning loop — approve/reject trades without human interaction",
+            "Configuration + start/stop + decision log live on the AI Assistant page.",
             icon="🤖",
         )
-        st.caption(
-            "The agent runs independently in a background thread, scanning all pairs every "
-            "**interval_seconds** and asking Claude to approve or reject each signal. "
-            "Hard Python risk gates fire before AND after Claude — Claude never calls place_order directly. "
-            "**Dry-run mode** (recommended) logs all decisions without placing orders."
+        st.markdown(
+            '<div style="padding:14px 16px;border:1px solid var(--border);'
+            'border-radius:12px;background:var(--bg-1);">'
+            '<div style="font-weight:600;color:var(--text-primary);'
+            'margin-bottom:6px;">Where to find agent settings</div>'
+            '<div style="color:var(--text-muted);font-size:13.5px;'
+            'line-height:1.6;">All agent runtime controls — Dry-run, '
+            'cycle interval, min-confidence threshold, max concurrent '
+            'positions, daily-loss limit, portfolio size, max trade '
+            'size, max drawdown, cooldown after loss, emergency stop, '
+            'and the live decision log — are now on the '
+            '<b>AI Assistant</b> page (sidebar → Account → '
+            'AI Assistant). The agent and its execution settings '
+            'share runtime state, so consolidating them on one page '
+            'avoids the two-form-of-truth bug that used to ship '
+            'whenever this Settings → Execution form was edited '
+            'while the AI Assistant page was open in another tab.'
+            '</div></div>',
+            unsafe_allow_html=True,
         )
-        st.warning(
-            "⚠ Enabling live trading via the agent means real orders will be placed 24/7 "
-            "without your review. Start with Dry-run=ON and monitor the Agent Decisions log "
-            "in the Dashboard for at least a few days before disabling dry-run."
-        )
+        # Tiny "jump to AI Assistant" button — uses the same routing
+        # mechanism as the deprecated Arbitrage stub: write _nav_target
+        # and rerun, the sidebar router picks it up and lands on Agent.
+        if st.button("Open AI Assistant →", key="cfg_exec_open_agent",
+                     type="primary"):
+            st.session_state["_nav_target"] = "Agent"
+            st.session_state["_ds_current_nav_label"] = "AI Assistant"
+            st.rerun()
 
-        _ag_ui_cfg = _cached_alerts_config()
-        with st.form("agent_config_form"):
-            _ag_enabled = st.toggle(
-                "🤖 Enable Autonomous Agent",
-                value=bool(_ag_ui_cfg.get("agent_enabled", False)),
-                help="Start the 24/7 agent loop. Pairs are cycled every interval_seconds.",
-            )
-            _ag_dry = st.toggle(
-                "Dry-run (log only — no orders placed)",
-                value=bool(_ag_ui_cfg.get("agent_dry_run", True)),
-                help="When ON, agent logs approve/reject decisions but never calls place_order.",
-            )
-            if _ag_enabled and not _ag_dry:
-                st.error("DRY-RUN IS OFF — approved signals will place real/paper orders.")
-
-            _ag_col1, _ag_col2 = st.columns(2)
-            _ag_interval = _ag_col1.number_input(
-                "Interval (seconds per cycle)",
-                min_value=30, max_value=3600,
-                value=int(_ag_ui_cfg.get("agent_interval_seconds", 60)),
-                step=30,
-                help="Time between complete pair-scan cycles. Min 30s to respect API rate limits.",
-            )
-            _ag_min_conf = _ag_col2.slider(
-                "Min Confidence to Consider (%)",
-                min_value=60, max_value=95,
-                value=int(_ag_ui_cfg.get("agent_min_confidence", 80)),
-                step=5,
-                help="Signals below this threshold are skipped before calling Claude.",
-            )
-            _ag_col3, _ag_col4 = st.columns(2)
-            _ag_max_pos = _ag_col3.number_input(
-                "Max Concurrent Positions",
-                min_value=1, max_value=10,
-                value=int(_ag_ui_cfg.get("agent_max_concurrent_positions", 3)),
-                step=1,
-            )
-            _ag_loss_limit = _ag_col4.number_input(
-                "Daily Loss Limit (%)",
-                min_value=1.0, max_value=20.0,
-                value=float(_ag_ui_cfg.get("agent_daily_loss_limit_pct", 5.0)),
-                step=0.5,
-                help="Agent stops trading for the day when cumulative PnL hits this loss.",
-            )
-            _ag_portfolio = st.number_input(
-                "Portfolio Size (USD)",
-                min_value=100.0,
-                value=float(_ag_ui_cfg.get("agent_portfolio_size_usd", 10_000.0)),
-                step=500.0,
-                help="Used to calculate position sizes when balance cannot be fetched from OKX.",
-            )
-            if st.form_submit_button("💾 Save Agent Config", type="primary"):
-                _ag_ui_cfg.update({
-                    "agent_enabled":                  _ag_enabled,
-                    "agent_dry_run":                  _ag_dry,
-                    "agent_interval_seconds":         int(_ag_interval),
-                    "agent_min_confidence":           float(_ag_min_conf),
-                    "agent_max_concurrent_positions": int(_ag_max_pos),
-                    "agent_daily_loss_limit_pct":     float(_ag_loss_limit),
-                    "agent_portfolio_size_usd":       float(_ag_portfolio),
-                })
-                _save_alerts_config_and_clear(_ag_ui_cfg)
-                if _agent is not None:
-                    if _ag_enabled and not _agent.supervisor.is_running():
-                        _agent.supervisor.start()
-                    elif not _ag_enabled and _agent.supervisor.is_running():
-                        _agent.supervisor.stop()
-                st.success("Agent config saved. Refresh Dashboard to see status panel.")
-
-        # Agent runtime controls
-        if _agent is None:
-            st.error("agent.py failed to import — check logs.")
-        else:
-            _ag_c1, _ag_c2 = st.columns(2)
-            with _ag_c1:
-                if st.button("▶ Start Agent Now", key="agent_btn_start", width="stretch",
-                             disabled=_agent.supervisor.is_running()):
-                    _agent.supervisor.start()
-                    st.success("Agent started.")
-                    st.rerun()
-            with _ag_c2:
-                if st.button("⏹ Stop Agent", key="agent_btn_stop", width="stretch",
-                             disabled=not _agent.supervisor.is_running()):
-                    _agent.supervisor.stop()
-                    st.warning("Agent stop requested.")
-                    st.rerun()
-
-            # Live status summary
-            try:  # APP-10: status() may raise or return partial dict during agent init
-                _ag_live = _agent.supervisor.status() or {}
-            except Exception:
-                _ag_live = {}
-            st.markdown(
-                f"**Agent status:** {'🟢 Running' if _ag_live.get('running') else '🔴 Stopped'} "
-                f"| Cycles: {_ag_live.get('cycles_total', 0)} "
-                f"| Last decision: {_ag_live.get('last_decision') or '—'} "
-                f"| Restarts: {_ag_live.get('restart_count', 0)} "
-                f"| Engine: {'LangGraph' if _ag_live.get('langgraph') else 'Fallback pipeline'}"
-            )
+        # All legacy agent config form, runtime controls, and live
+        # status display were removed here in C5 (Phase C plan §C5.4).
+        # They lived from the now-deleted block of ~120 lines that
+        # duplicated the AI Assistant page's surfaces. Removed
+        # outright per the plan ("REMOVE the Autonomous Agent
+        # block ... replace with a small link card").
+        # The link card above is now the entire Settings → Execution
+        # agent surface; AI Assistant is the canonical home.
+        # ── _LEGACY_REMOVED_C5 (2026-04-30) ─────────────────────────────────
+        # The Settings → Execution Autonomous-Agent block previously
+        # rendered a duplicate of the AI Assistant page's config form,
+        # Start/Stop runtime controls, and live status summary. ~120
+        # lines deleted here per Phase C plan §C5.4: "REMOVE the
+        # Autonomous Agent block ... replace with a small link card".
+        # The link card above is the entire surface now; AI Assistant
+        # is the canonical home for all agent config + control.
+        # Search this sentinel in git blame to recover the deleted code.
 
 
         # ── Watchlist Alerts ───────────────────────────────────────────────────────
@@ -6331,7 +6302,7 @@ def page_backtest():
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -8876,7 +8847,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)
@@ -9188,6 +9159,7 @@ def page_signals():
         user_level=_ds_level,
         on_refresh=_refresh_all_data,
         on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
     )
 
     # C3 (Phase C plan §C3.1): pair_dropdown — 5 quick pills + "More ▾ +28"
@@ -9647,6 +9619,7 @@ def page_regimes():
         user_level=_ds_level,
         on_refresh=_refresh_all_data,
         on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
     )
     _ds_page_header(
         title="Regimes",
@@ -9955,6 +9928,7 @@ def page_onchain():
         user_level=_oc_lv,
         on_refresh=_refresh_all_data,
         on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
     )
     _ds_page_header(
         title="On-chain",
