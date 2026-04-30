@@ -9949,28 +9949,34 @@ def page_regimes():
         # use it. Otherwise show a representative example using the latest
         # known state (single 100% segment) so the layout still renders.
         try:
-            _segments: list[tuple[str, float]] = []
-            _btc_state = "bull"
-            _btc_conf = None
+            # C8-fix (2026-04-30): focus the placeholder lookup on the
+            # currently-selected focus pair (set by the C3 More
+            # dropdown), not hardcoded BTC. Was a real bug — picking
+            # SOL kept the bar showing BTC's state because the loop
+            # below only matched `_p.startswith("BTC")`.
+            _focus_pair = st.session_state.get(
+                "regimes_focus_pair", "BTC/USDT",
+            )
+            _focus_short = (_focus_pair.split("/")[0].split("-")[0]
+                            or "BTC").upper()
+            _state_now = "bull"
+            _conf_now = None
             for _r in (st.session_state.get("scan_results") or []):
                 _p = str(_r.get("pair") or "").upper()
-                if _p.startswith("BTC"):
+                if _p.startswith(_focus_short):
                     _state_raw = str(_r.get("regime") or _r.get("regime_label") or "").strip()
                     for _pre in ("Regime: ", "Regime:", "Regime "):
                         if _state_raw.lower().startswith(_pre.lower()):
                             _state_raw = _state_raw[len(_pre):].strip()
                             break
-                    _btc_state = (_state_raw or "bull").lower()
-                    _btc_conf = _r.get("regime_confidence")
+                    _state_now = (_state_raw or "bull").lower()
+                    _conf_now = _r.get("regime_confidence")
                     break
-            # C8 (Phase C plan §C8, 2026-04-30): real segmented 90d
-            # history from regime_history table. Falls back to a
-            # single 100%-current-state segment if the table doesn't
-            # have BTC rows yet (fresh deploy, no scans run).
-            _segments = []
-            _focus_pair = st.session_state.get(
-                "regimes_focus_pair", "BTC/USDT",
-            )
+            # C8 (Phase C plan §C8): real segmented 90d history from
+            # regime_history table when available. Fall back to a
+            # single 100%-current-state segment when the table has no
+            # rows for this focus pair (fresh deploy, no scans run).
+            _segments: list[tuple[str, float]] = []
             try:
                 from database import regime_history_segments as _rh_segs
                 _segments = _rh_segs(_focus_pair, days=90)
@@ -9979,17 +9985,13 @@ def page_regimes():
                              _e_rh)
                 _segments = []
             if not _segments:
-                # No history yet — surface the current state full-width
-                # so the layout still renders meaningfully.
-                _segments = [(_btc_state, 100.0)]
+                _segments = [(_state_now, 100.0)]
             # Build a 90d label scale for the bar's date row when we
             # have real history. Three labels: -90d / -45d / today.
             _date_labels = ["-90d", "-45d", "today"] if len(_segments) > 1 else None
-            _focus_short = (_focus_pair.split("/")[0].split("-")[0]
-                            or "BTC")
             _note = (f"HMM 4-state model over composite score + on-chain + "
-                     f"macro features. Current state: {_btc_state.title()}"
-                     f"{f', confidence {int(_btc_conf)}%' if _btc_conf is not None else ''}.")
+                     f"macro features. Current state: {_state_now.title()}"
+                     f"{f', confidence {int(_conf_now)}%' if _conf_now is not None else ''}.")
             _ds_state_bar(
                 _segments,
                 title=f"{_focus_short} regime state · last 90d",
