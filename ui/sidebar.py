@@ -847,10 +847,13 @@ def segmented_control(
         return active
 
     # Validate the active value early — easier to spot caller bugs.
-    valid_values = {v for v, _ in items}
+    # Use an ORDERED fallback (first item) so the regression test for
+    # invalid `active` is deterministic; Python set iteration order is
+    # implementation-dependent and can flip across pytest workers.
+    valid_values = [v for v, _ in items]
     if active not in valid_values:
         # Fall back to first item; never raise (this is a UI primitive).
-        active = next(iter(valid_values), active)
+        active = valid_values[0] if valid_values else active
 
     def _on_segment_click(value: str) -> None:
         st.session_state[key] = value
@@ -882,6 +885,322 @@ def segmented_control(
                 type=("primary" if value == active else "secondary"),
                 on_click=_on_segment_click,
                 args=(value,),
+            )
+
+    return st.session_state.get(key, active)
+
+
+# ── Pair-selection affordances (C3 — Phase C plan §C3) ───────────────
+# Four primitives shared across Home / Signals / Regimes / On-chain to
+# give every page a consistent way to swap pairs:
+#
+#   pair_dropdown            "More ▾ +N" — opens a searchable list
+#   ticker_pill_button       per-card swap (Home heroes + On-chain)
+#   watchlist_customize_btn  add/remove panel for the Home watchlist
+#   multi_timeframe_strip    1m/5m/.../1w strip on Signals
+#
+# All four use on_click=callback for first-paint state updates (same
+# pattern as segmented_control, render_sidebar nav, topbar refresh).
+
+def pair_dropdown(
+    pairs: Sequence[str],
+    *,
+    active: str,
+    key: str,
+    label: str | None = None,
+    on_select: Callable[[str], None] | None = None,
+) -> str:
+    """Quick-access pill row (5 fastest pairs) + "More ▾ +N" popover.
+
+    Args:
+        pairs:   full universe of selectable pairs (e.g. all 33 entries
+                 of `model.PAIRS`). The first 5 are surfaced as direct
+                 pill buttons; the rest live behind the "More ▾"
+                 popover.
+        active:  currently-selected pair (whatever value lives in
+                 `st.session_state[key]`).
+        key:     session_state key the click handler writes to.
+        label:   optional override for the popover trigger label.
+                 Defaults to "More ▾ +N" where N is len(pairs)-5.
+        on_select: optional callback fired with the new value AFTER
+                 session_state is updated.
+
+    Returns:
+        The currently-selected pair after any click handler has run.
+
+    Persistence: clicks write `session_state[key] = chosen_pair` BEFORE
+    the next script re-run via on_click. First-click correctness is
+    therefore guaranteed (no two-click highlight bug).
+    """
+    if st is None:
+        return active
+
+    if not pairs:
+        return active
+
+    # Accept either bare tickers ("BTC") or full pairs ("BTC/USDT") —
+    # the popover label uses whatever the caller provided.
+    quick = list(pairs[:5])
+    rest = list(pairs[5:])
+
+    if active not in pairs:
+        active = quick[0] if quick else (rest[0] if rest else active)
+
+    def _on_pick(value: str) -> None:
+        st.session_state[key] = value
+        if on_select is not None:
+            try:
+                on_select(value)
+            except Exception:  # pragma: no cover
+                pass
+
+    # Render row: 5 quick pills + popover trigger. Width ratios keep
+    # the row compact even when the More label is long.
+    cols = st.columns(len(quick) + (1 if rest else 0))
+    for i, p in enumerate(quick):
+        with cols[i]:
+            st.button(
+                str(p),
+                key=f"_pdpd_quick_{key}_{p}",
+                use_container_width=True,
+                type=("primary" if p == active else "secondary"),
+                on_click=_on_pick,
+                args=(p,),
+            )
+
+    if rest:
+        more_label = label or f"More ▾  +{len(rest)}"
+        with cols[-1]:
+            with st.popover(more_label, use_container_width=True):
+                # Search filter for long universes — invisible if <=8.
+                search = ""
+                if len(rest) > 8:
+                    search = st.text_input(
+                        "Search",
+                        key=f"_pdpd_search_{key}",
+                        placeholder="filter…",
+                        label_visibility="collapsed",
+                    )
+                filt = rest
+                if search:
+                    s = search.lower()
+                    filt = [p for p in rest if s in str(p).lower()]
+                # Render a button per filtered pair — clicking writes
+                # session_state immediately; popover dismisses on rerun.
+                for p in filt:
+                    st.button(
+                        str(p),
+                        key=f"_pdpd_more_{key}_{p}",
+                        use_container_width=True,
+                        type=("primary" if p == active else "secondary"),
+                        on_click=_on_pick,
+                        args=(p,),
+                    )
+
+    return st.session_state.get(key, active)
+
+
+def ticker_pill_button(
+    ticker: str,
+    *,
+    pairs: Sequence[str],
+    key: str,
+    on_swap: Callable[[str], None] | None = None,
+    label_override: str | None = None,
+) -> str:
+    """Per-card ticker that opens a pair-swap popover on click.
+
+    Used on Home hero cards (3 independent slots) and On-chain detail
+    cards (3 independent slots). Each instance is bound to its own
+    `key` so the slot-1 swap doesn't affect slot-2.
+
+    Args:
+        ticker:  the currently-displayed ticker (e.g. "BTC", "BTC/USDT").
+        pairs:   universe of pairs the slot can be swapped to.
+        key:     session_state key — also used to namespace the popover
+                 widget so multiple instances don't collide.
+        on_swap: optional callback fired with the new ticker after
+                 session_state is updated.
+        label_override: alternative label to render inside the popover
+                 trigger. Defaults to `ticker`.
+
+    Returns:
+        The currently-selected ticker after any click handler has run.
+    """
+    if st is None:
+        return ticker
+
+    if ticker not in pairs and pairs:
+        # Caller may have passed a stale value; fall back to the first
+        # pair so the popover doesn't render with no active row.
+        ticker = pairs[0]
+
+    def _on_pick(value: str) -> None:
+        st.session_state[key] = value
+        if on_swap is not None:
+            try:
+                on_swap(value)
+            except Exception:  # pragma: no cover
+                pass
+
+    trigger = label_override or f"{ticker}  ▾"
+    with st.popover(trigger, use_container_width=False):
+        st.caption("Swap this card to a different pair")
+        for p in pairs:
+            st.button(
+                str(p),
+                key=f"_tpb_{key}_{p}",
+                use_container_width=True,
+                type=("primary" if p == ticker else "secondary"),
+                on_click=_on_pick,
+                args=(p,),
+            )
+
+    return st.session_state.get(key, ticker)
+
+
+def watchlist_customize_btn(
+    *,
+    available: Sequence[str],
+    current: Sequence[str],
+    key: str,
+    on_save: Callable[[Sequence[str]], None] | None = None,
+    label: str = "Customize  ▾",
+) -> Sequence[str]:
+    """Open a popover with checkboxes to add/remove pairs from the
+    watchlist. Selection persists in `st.session_state[key]`.
+
+    Args:
+        available: full universe of pairs the user can choose from.
+        current:   currently-watched pairs (sourced from session_state
+                   if persistence has already been seeded).
+        key:       session_state key for the chosen list.
+        on_save:   optional callback fired with the new list after
+                   session_state is updated.
+        label:     popover trigger label.
+
+    Returns:
+        The currently-watched list after any save.
+    """
+    if st is None:
+        return current
+
+    # Seed session_state on first render so the popover's checkboxes
+    # know what to display as already-checked.
+    if key not in st.session_state:
+        st.session_state[key] = list(current)
+
+    with st.popover(label, use_container_width=False):
+        st.caption("Tick the pairs you want to watch")
+        # Render two columns of checkboxes for compactness on long
+        # universes. The state is kept in scratch keys until the user
+        # presses Save — that way mid-edit toggles don't churn the
+        # downstream watchlist render.
+        scratch_key = f"_wclb_scratch_{key}"
+        if scratch_key not in st.session_state:
+            st.session_state[scratch_key] = list(st.session_state[key])
+
+        cols = st.columns(2)
+        for i, p in enumerate(available):
+            with cols[i % 2]:
+                checked = p in st.session_state[scratch_key]
+                new_val = st.checkbox(
+                    str(p),
+                    value=checked,
+                    key=f"_wclb_cb_{key}_{p}",
+                )
+                if new_val and p not in st.session_state[scratch_key]:
+                    st.session_state[scratch_key].append(p)
+                elif not new_val and p in st.session_state[scratch_key]:
+                    st.session_state[scratch_key].remove(p)
+
+        def _on_save_click():
+            new_list = list(st.session_state[scratch_key])
+            st.session_state[key] = new_list
+            if on_save is not None:
+                try:
+                    on_save(new_list)
+                except Exception:  # pragma: no cover
+                    pass
+
+        st.button(
+            "💾 Save watchlist",
+            key=f"_wclb_save_{key}",
+            use_container_width=True,
+            type="primary",
+            on_click=_on_save_click,
+        )
+
+    return st.session_state.get(key, list(current))
+
+
+def multi_timeframe_strip(
+    timeframes: Sequence[str],
+    *,
+    active: str,
+    key: str,
+    signals: dict[str, tuple[str, float]] | None = None,
+    on_select: Callable[[str], None] | None = None,
+) -> str:
+    """Multi-cell timeframe selector for the Signals page.
+
+    Each cell shows the timeframe label plus an optional per-timeframe
+    signal letter (BUY/HOLD/SELL) and confidence score from `signals`.
+    The active cell is rendered as the primary chip.
+
+    Args:
+        timeframes: ordered list of timeframes to render (e.g.
+                    ["1h", "4h", "1d", "1w"] or the full 8-cell
+                    ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]).
+        active:     currently-selected timeframe.
+        key:        session_state key for persistence.
+        signals:    optional `{tf: (signal_letter, score)}` map. Cells
+                    without an entry just show the timeframe label.
+        on_select:  optional callback fired with the clicked timeframe.
+
+    Returns:
+        The currently-selected timeframe after any click handler.
+    """
+    if st is None:
+        return active
+
+    if not timeframes:
+        return active
+    if active not in timeframes:
+        active = timeframes[0]
+
+    def _on_pick(tf: str) -> None:
+        st.session_state[key] = tf
+        if on_select is not None:
+            try:
+                on_select(tf)
+            except Exception:  # pragma: no cover
+                pass
+
+    # Marker so overrides.py can scope the strip's CSS without
+    # touching every other st.columns row.
+    st.markdown(
+        f'<div class="ds-tf-strip" data-tf-key="{_html.escape(str(key))}"></div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(len(timeframes))
+    for col, tf in zip(cols, timeframes):
+        sig = (signals or {}).get(tf)
+        if sig is not None:
+            letter, score = sig
+            label = f"{tf}\n{_html.escape(str(letter))} · {score:.0f}"
+        else:
+            label = tf
+        with col:
+            st.button(
+                label,
+                key=f"_tfs_{key}_{tf}",
+                use_container_width=True,
+                type=("primary" if tf == active else "secondary"),
+                on_click=_on_pick,
+                args=(tf,),
+                help=f"Switch to {tf} timeframe",
             )
 
     return st.session_state.get(key, active)

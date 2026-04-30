@@ -230,6 +230,43 @@ def inject_streamlit_overrides() -> None:
       font-size: 12.5px !important;
     }
 
+    /* ── Multi-timeframe strip (C3 — Phase C plan §C3) ──────────────────
+       8-cell row on the Signals page (1m/5m/15m/30m/1h/4h/1d/1w). The
+       Python helper renders an empty marker <div class="ds-tf-strip">
+       just before an st.columns row of buttons. Same scoping pattern as
+       segmented_control. */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] {
+      gap: 4px !important;
+      margin-bottom: 14px;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button {
+      padding: 8px 6px !important;
+      font-size: 11.5px !important;
+      line-height: 1.2 !important;
+      white-space: pre-line !important;  /* honour the \n in label */
+      min-height: 44px !important;       /* §8 mobile tap-target floor */
+      border-radius: 6px !important;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      font-weight: 600 !important;
+    }
+
+    /* ── Pair-dropdown popover content (C3) ─────────────────────────────
+       The popover's trigger button is styled by the default sidebar
+       popover rule; here we just tighten the inner button list so the
+       "More ▾" panel reads as a list-of-options rather than a stack
+       of full-width chip-buttons. */
+    [data-testid="stPopover"] [data-testid="stVerticalBlock"] [data-testid="stButton"] > button {
+      padding: 6px 10px !important;
+      font-size: 13px !important;
+      min-height: 32px !important;
+    }
+
     /* Top bar */
     .ds-topbar {
       background: var(--bg-0);

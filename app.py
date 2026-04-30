@@ -1942,10 +1942,45 @@ def page_dashboard():
                 "regime_confidence": _ds_regime_conf(r),
             }
 
+        # C3 §C3.4: per-card swap — each hero slot is independently
+        # bound to a ticker_pill_button. Defaults to BTC/ETH/XRP for
+        # backwards compat; swaps persist across reruns.
+        try:
+            from ui import ticker_pill_button as _ds_ticker_pill
+            _hero_universe_pairs = list(model.PAIRS or [])
+            _hero_slot_keys = [
+                ("home_hero_slot_1", "BTC/USDT"),
+                ("home_hero_slot_2", "ETH/USDT"),
+                ("home_hero_slot_3", "XRP/USDT"),
+            ]
+            for _k, _default in _hero_slot_keys:
+                if st.session_state.get(_k) not in _hero_universe_pairs:
+                    st.session_state[_k] = _default
+            _hero_picker_cols = st.columns(3)
+            for _i, (_k, _default) in enumerate(_hero_slot_keys):
+                with _hero_picker_cols[_i]:
+                    _ds_ticker_pill(
+                        st.session_state[_k],
+                        pairs=_hero_universe_pairs,
+                        key=_k,
+                        label_override=f"Hero {_i+1}: {st.session_state[_k]}  ▾",
+                    )
+        except Exception as _hero_pick_err:
+            logger.debug("[Home] hero ticker-pill row failed: %s", _hero_pick_err)
+            # Fall through to the static layout below.
+
+        _hero_pair_1 = st.session_state.get("home_hero_slot_1", "BTC/USDT")
+        _hero_pair_2 = st.session_state.get("home_hero_slot_2", "ETH/USDT")
+        _hero_pair_3 = st.session_state.get("home_hero_slot_3", "XRP/USDT")
+
+        def _hero_label(p: str) -> str:
+            t = p.split("/")[0].split("-")[0]
+            return f"{t} / USD"
+
         _ds_hero_row([
-            _ds_build_hero("BTC/USDT", "BTC / USD"),
-            _ds_build_hero("ETH/USDT", "ETH / USD"),
-            _ds_build_hero("XRP/USDT", "XRP / USD"),
+            _ds_build_hero(_hero_pair_1, _hero_label(_hero_pair_1)),
+            _ds_build_hero(_hero_pair_2, _hero_label(_hero_pair_2)),
+            _ds_build_hero(_hero_pair_3, _hero_label(_hero_pair_3)),
         ])
 
         # Macro strip — rendered AFTER hero cards to match the mockup order.
@@ -2101,6 +2136,33 @@ def page_dashboard():
 
             _ds_col1, _ds_col2 = st.columns(2)
             with _ds_col1:
+                # C3 §C3.4: watchlist customize button — opens an
+                # add/remove panel, persisted to
+                # st.session_state["watchlist_pairs"]. The watchlist
+                # card render below uses the customised list when
+                # present; otherwise falls through to the legacy top-
+                # cap scan (`_ds_wl_rows`) as the default seed.
+                try:
+                    from ui import watchlist_customize_btn as _ds_wl_custom
+                    _wl_universe_pairs = list(model.PAIRS or [])
+                    _wl_default_pairs = [r.get("pair") for r in (_ds_wl_rows or [])
+                                         if r.get("pair")]
+                    _wl_pairs = _ds_wl_custom(
+                        available=_wl_universe_pairs,
+                        current=_wl_default_pairs,
+                        key="watchlist_pairs",
+                    )
+                    # Filter the rows to those present in the user's
+                    # customised list (preserve order from the user's
+                    # selection so reordering via toggle is honoured).
+                    if _wl_pairs and _ds_wl_rows:
+                        _row_by_pair = {r.get("pair"): r for r in _ds_wl_rows
+                                        if r.get("pair")}
+                        _ds_wl_rows = [_row_by_pair[p] for p in _wl_pairs
+                                       if p in _row_by_pair]
+                except Exception as _wl_custom_err:
+                    logger.debug("[Home] watchlist customize failed: %s",
+                                 _wl_custom_err)
                 _ds_watchlist(
                     title="Watchlist · top-cap",
                     subtitle=f"scan refreshed {_scan_ts_label}",
@@ -8997,7 +9059,8 @@ def page_signals():
         from ui import (
             render_top_bar as _ds_top_bar,
             page_header as _ds_page_header,
-            coin_picker as _ds_coin_picker,
+            pair_dropdown as _ds_pair_dropdown,
+            multi_timeframe_strip as _ds_tf_strip,
             signal_hero_detail_card as _ds_signal_hero,
             composite_score_card as _ds_composite,
             indicator_card as _ds_ind_card,
@@ -9016,44 +9079,58 @@ def page_signals():
         on_theme=_toggle_theme,
     )
 
-    # Coin picker — top of page. The chip-group HTML is rendered alongside
-    # a real Streamlit selectbox (label hidden) so clicks actually register.
-    _signals_coins = ["BTC", "ETH", "XRP", "SOL", "AVAX"]
-    _signals_pair_map = {
-        "BTC": "BTC/USDT", "ETH": "ETH/USDT", "XRP": "XRP/USDT",
-        "SOL": "SOL/USDT", "AVAX": "AVAX/USDT",
-    }
-    _signals_active = st.session_state.get("signals_active_coin", "BTC")
-    if _signals_active not in _signals_coins:
-        _signals_active = "BTC"
+    # C3 (Phase C plan §C3.1): pair_dropdown — 5 quick pills + "More ▾ +28"
+    # popover backed by the full model.PAIRS universe. Persists in
+    # st.session_state["selected_pair"] (per the plan's spec).
+    # Migrated from the legacy 5-button row that used the if-button-rerun
+    # pattern (which had the two-click highlight bug class).
+    _signals_universe = list(model.PAIRS) or ["BTC/USDT", "ETH/USDT"]
+    # Keep the pre-redesign session_state key alive for back-compat —
+    # any downstream code reading "signals_active_coin" still works.
+    _legacy_active = st.session_state.get("signals_active_coin")
+    _selected_pair = st.session_state.get("selected_pair")
+    if _selected_pair is None and _legacy_active:
+        _selected_pair = f"{_legacy_active}/USDT"
+        st.session_state["selected_pair"] = _selected_pair
+    if _selected_pair is None or _selected_pair not in _signals_universe:
+        _selected_pair = _signals_universe[0]
+        st.session_state["selected_pair"] = _selected_pair
 
-    _hd_l, _hd_r = st.columns([4, 2])
-    with _hd_l:
-        _ds_page_header(
-            title="Signal detail",
-            subtitle="Layer-by-layer composite signal breakdown for a single coin.",
-            data_sources=[
-                (str(model.TA_EXCHANGE).upper(), "live"),
-                ("Glassnode", "live"),
-                ("News sentiment", "cached"),
-            ],
-        )
-    with _hd_r:
-        # Real Streamlit-button row that mirrors the .ds-coin-pick mockup chip group.
-        _cp_cols = st.columns(len(_signals_coins))
-        for _i, _c in enumerate(_signals_coins):
-            with _cp_cols[_i]:
-                if st.button(
-                    _c,
-                    key=f"signals_coin_{_c}",
-                    use_container_width=True,
-                    type=("primary" if _c == _signals_active else "secondary"),
-                ):
-                    st.session_state["signals_active_coin"] = _c
-                    st.rerun()
+    _ds_page_header(
+        title="Signal detail",
+        subtitle="Layer-by-layer composite signal breakdown for a single coin.",
+        data_sources=[
+            (str(model.TA_EXCHANGE).upper(), "live"),
+            ("Glassnode", "live"),
+            ("News sentiment", "cached"),
+        ],
+    )
+    _selected_pair = _ds_pair_dropdown(
+        _signals_universe,
+        active=_selected_pair,
+        key="selected_pair",
+    )
 
-    _coin = _signals_active
-    _pair = _signals_pair_map.get(_coin, f"{_coin}/USDT")
+    # Multi-timeframe strip — visible selector backed by
+    # st.session_state["selected_timeframe"]. Wires into model.TIMEFRAMES
+    # (1h/4h/1d/1w). Per-timeframe signals dict is computed below from
+    # whatever per-tf data the latest scan_result carries; cells without
+    # data render bare label only. The active timeframe drives the
+    # composite_score_card and indicator selection further down.
+    _signals_tfs = list(getattr(model, "TIMEFRAMES", ["1h", "4h", "1d", "1w"]))
+    _selected_tf = st.session_state.get("selected_timeframe")
+    if _selected_tf not in _signals_tfs:
+        _selected_tf = "1d" if "1d" in _signals_tfs else _signals_tfs[0]
+        st.session_state["selected_timeframe"] = _selected_tf
+    _selected_tf = _ds_tf_strip(_signals_tfs, active=_selected_tf,
+                                 key="selected_timeframe")
+
+    # Maintain back-compat: keep `signals_active_coin` in sync with
+    # the new `selected_pair` so any unmigrated readers below still
+    # see the current selection.
+    _coin = _selected_pair.split("/")[0].split("-")[0]
+    _pair = _selected_pair
+    st.session_state["signals_active_coin"] = _coin
 
     # ── Pull data: latest scan result (or DB fallback) for the active pair ──
     _result = {}
@@ -9470,6 +9547,38 @@ def page_regimes():
         ],
     )
 
+    # C3 §C3.2: Regimes header — "Showing 8 of 33 pairs · click any to
+    # drill in · More ▾ +25" with the More popover backed by the full
+    # universe. Selected pair from the popover is added to
+    # `regimes_visible_pairs` so it appears in the 8-card grid.
+    _regimes_universe = list(model.PAIRS or [])
+    _universe_n = len(_regimes_universe)
+    try:
+        from ui import pair_dropdown as _ds_pair_dropdown
+    except Exception:
+        _ds_pair_dropdown = None  # type: ignore[assignment]
+
+    # Header text + popover row. Two columns: text on left, More on right.
+    _rg_l, _rg_r = st.columns([4, 2])
+    with _rg_l:
+        st.markdown(
+            f'<div style="font-size:13px;color:var(--text-muted);'
+            f'margin:0 0 10px 2px;">Showing 8 of {_universe_n} pairs · '
+            f'click any to drill in · use the dropdown to swap any pair into '
+            f'the visible 8.</div>',
+            unsafe_allow_html=True,
+        )
+    with _rg_r:
+        if _ds_pair_dropdown is not None and _regimes_universe:
+            _ds_pair_dropdown(
+                _regimes_universe,
+                active=st.session_state.get(
+                    "regimes_focus_pair", _regimes_universe[0]
+                ),
+                key="regimes_focus_pair",
+                label=f"More ▾  +{max(0, _universe_n - 5)}",
+            )
+
     # ── Top: 8-card regime grid ──
     try:
         _df_sig = _cached_signals_df(500)
@@ -9722,6 +9831,7 @@ def page_onchain():
             render_top_bar as _ds_top_bar,
             page_header as _ds_page_header,
             indicator_card as _ds_ind_card,
+            ticker_pill_button as _ds_ticker_pill,
         )
     except Exception as _e_imp:
         logger.error("[On-chain] import failed: %s", _e_imp)
@@ -9744,6 +9854,30 @@ def page_onchain():
             ("Native RPC", "live"),
         ],
     )
+
+    # C3 §C3.3: each card slot is independently swappable to any pair
+    # in the universe. Default slots are BTC / ETH / XRP (matching the
+    # legacy hardcoded layout). Selections persist across reruns under
+    # the per-slot keys so a user's swap on slot 1 doesn't move slot 2.
+    _oc_universe_tickers = sorted({p.split("/")[0].split("-")[0]
+                                   for p in (model.PAIRS or [])}) or ["BTC", "ETH", "XRP"]
+    _oc_slot_keys = [
+        ("onchain_slot_1_ticker", "BTC"),
+        ("onchain_slot_2_ticker", "ETH"),
+        ("onchain_slot_3_ticker", "XRP"),
+    ]
+    for _k, _default in _oc_slot_keys:
+        if st.session_state.get(_k) not in _oc_universe_tickers:
+            st.session_state[_k] = _default
+    _oc_picker_cols = st.columns(3)
+    for _i, (_k, _default) in enumerate(_oc_slot_keys):
+        with _oc_picker_cols[_i]:
+            _ds_ticker_pill(
+                st.session_state[_k],
+                pairs=_oc_universe_tickers,
+                key=_k,
+                label_override=f"Slot {_i+1}: {st.session_state[_k]}  ▾",
+            )
 
     # Pull on-chain data per coin from the latest scan result (or DB fallback,
     # or — C4 fix, 2026-04-28 — a direct on-chain fetch as last resort so the
@@ -9803,50 +9937,51 @@ def page_onchain():
         except Exception:
             return str(x)
 
-    # Three indicator cards — BTC / ETH / overall flow snapshot.
-    _btc = _result_for("BTC")
-    _eth = _result_for("ETH")
-    _xrp = _result_for("XRP")
+    # C3 §C3.3: 3 indicator card slots, each independently bound to its
+    # own ticker_pill_button selection. Was previously hardcoded BTC /
+    # ETH / XRP — now reads from session_state per slot so the user can
+    # swap any slot to any pair in the universe.
+    _slot_tickers = [st.session_state[k] for k, _ in _oc_slot_keys]
+    _slot_data = [_result_for(t) for t in _slot_tickers]
 
     _c1, _c2, _c3 = st.columns(3)
-    with _c1:
-        _ds_ind_card(
-            "BTC · valuation & flows",
-            [
-                ("MVRV-Z",        _v(_btc.get("mvrv_z") or _btc.get("mvrv"), "{:.2f}"),
-                 "mid-cycle" if (_btc.get("mvrv_z") and 1 < float(_btc.get("mvrv_z") or 0) < 5) else "",
-                 ""),
-                ("SOPR",          _v(_btc.get("sopr"), "{:.3f}"),
-                 "profit taking" if (_btc.get("sopr") and float(_btc.get("sopr") or 0) > 1) else "",
-                 ""),
-                ("Exch. reserve", _v(_btc.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _btc.get("exchange_reserve_delta_7d") is not None else "—",
-                 "outflow 7d" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else "inflow 7d",
-                 "success" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
-                ("Active addr.",  _v(_btc.get("active_addresses_24h"), "{:,.0f}") if _btc.get("active_addresses_24h") is not None else "—",
-                 "24h",
-                 ""),
-            ],
-        )
-    with _c2:
-        _ds_ind_card(
-            "ETH · valuation & flows",
-            [
-                ("MVRV-Z",        _v(_eth.get("mvrv_z") or _eth.get("mvrv"), "{:.2f}"),                            "", ""),
-                ("SOPR",          _v(_eth.get("sopr"), "{:.3f}"),                                                  "", ""),
-                ("Exch. reserve", _v(_eth.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _eth.get("exchange_reserve_delta_7d") is not None else "—", "7d", "success" if (_eth.get("exchange_reserve_delta_7d") and float(_eth.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
-                ("Active addr.",  _v(_eth.get("active_addresses_24h"), "{:,.0f}") if _eth.get("active_addresses_24h") is not None else "—", "24h", ""),
-            ],
-        )
-    with _c3:
-        _ds_ind_card(
-            "XRP · valuation & flows",
-            [
-                ("MVRV-Z",        _v(_xrp.get("mvrv_z") or _xrp.get("mvrv"), "{:.2f}"), "", ""),
-                ("SOPR",          _v(_xrp.get("sopr"), "{:.3f}"),                       "", ""),
-                ("Exch. reserve", _v(_xrp.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _xrp.get("exchange_reserve_delta_7d") is not None else "—", "7d", ""),
-                ("Active addr.",  _v(_xrp.get("active_addresses_24h"), "{:,.0f}") if _xrp.get("active_addresses_24h") is not None else "—", "24h", ""),
-            ],
-        )
+    for _slot_col, _slot_ticker, _slot_d in zip(
+        (_c1, _c2, _c3), _slot_tickers, _slot_data
+    ):
+        with _slot_col:
+            _ds_ind_card(
+                f"{_slot_ticker} · valuation & flows",
+                [
+                    ("MVRV-Z",
+                     _v(_slot_d.get("mvrv_z") or _slot_d.get("mvrv"), "{:.2f}"),
+                     ("mid-cycle" if (_slot_d.get("mvrv_z")
+                                      and 1 < float(_slot_d.get("mvrv_z") or 0) < 5)
+                      else ""),
+                     ""),
+                    ("SOPR",
+                     _v(_slot_d.get("sopr"), "{:.3f}"),
+                     ("profit taking" if (_slot_d.get("sopr")
+                                          and float(_slot_d.get("sopr") or 0) > 1)
+                      else ""),
+                     ""),
+                    ("Exch. reserve",
+                     (_v(_slot_d.get("exchange_reserve_delta_7d"), "{:+,.0f}")
+                      if _slot_d.get("exchange_reserve_delta_7d") is not None
+                      else "—"),
+                     ("outflow 7d" if (_slot_d.get("exchange_reserve_delta_7d")
+                                       and float(_slot_d.get("exchange_reserve_delta_7d") or 0) < 0)
+                      else "inflow 7d"),
+                     ("success" if (_slot_d.get("exchange_reserve_delta_7d")
+                                    and float(_slot_d.get("exchange_reserve_delta_7d") or 0) < 0)
+                      else "")),
+                    ("Active addr.",
+                     (_v(_slot_d.get("active_addresses_24h"), "{:,.0f}")
+                      if _slot_d.get("active_addresses_24h") is not None
+                      else "—"),
+                     "24h",
+                     ""),
+                ],
+            )
 
     st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
 
