@@ -9977,9 +9977,14 @@ def page_regimes():
             # single 100%-current-state segment when the table has no
             # rows for this focus pair (fresh deploy, no scans run).
             _segments: list[tuple[str, float]] = []
+            _hist_count = 0
             try:
-                from database import regime_history_segments as _rh_segs
+                from database import (
+                    regime_history_segments as _rh_segs,
+                    regime_history_count as _rh_count,
+                )
                 _segments = _rh_segs(_focus_pair, days=90)
+                _hist_count = _rh_count(_focus_pair, days=90)
             except Exception as _e_rh:
                 logger.debug("[Regimes] regime_history fetch failed: %s",
                              _e_rh)
@@ -9989,9 +9994,34 @@ def page_regimes():
             # Build a 90d label scale for the bar's date row when we
             # have real history. Three labels: -90d / -45d / today.
             _date_labels = ["-90d", "-45d", "today"] if len(_segments) > 1 else None
+            # C8-fix (2026-04-30): the bar visual is identical when
+            # there are 0 DB rows vs N rows that all share the same
+            # state. Surface the actual snapshot count in the note so
+            # users can tell whether their scans are landing in the
+            # regime_history table even when the bar still looks like
+            # a single segment.
+            if _hist_count == 0:
+                _hist_msg = (
+                    "No regime history recorded for "
+                    f"{_focus_short}/USDT yet — run a scan that includes "
+                    "this pair and the bar will start segmenting."
+                )
+            elif len(_segments) == 1:
+                _hist_msg = (
+                    f"{_hist_count} scan snapshot{'s' if _hist_count != 1 else ''} "
+                    f"recorded for {_focus_short}/USDT, all in the "
+                    f"{_segments[0][0].title()} state — bar will segment "
+                    "once the regime changes across scans."
+                )
+            else:
+                _hist_msg = (
+                    f"{_hist_count} scan snapshots over the last 90d, "
+                    f"{len(_segments)} distinct regime bands."
+                )
             _note = (f"HMM 4-state model over composite score + on-chain + "
                      f"macro features. Current state: {_state_now.title()}"
-                     f"{f', confidence {int(_conf_now)}%' if _conf_now is not None else ''}.")
+                     f"{f', confidence {int(_conf_now)}%' if _conf_now is not None else ''}. "
+                     f"{_hist_msg}")
             _ds_state_bar(
                 _segments,
                 title=f"{_focus_short} regime state · last 90d",

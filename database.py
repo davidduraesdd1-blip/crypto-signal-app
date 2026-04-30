@@ -1881,6 +1881,32 @@ def record_regime_state(
                 conn.close()
 
 
+def regime_history_count(pair: str, days: int = 90) -> int:
+    """C8 diagnostic helper (2026-04-30): number of regime_history
+    rows recorded for `pair` in the last `days`. Used by page_regimes
+    to surface a "N snapshots over Y range" line so users can verify
+    their scans are actually landing in the DB even when all
+    snapshots happen to share the same state (which renders as a
+    single-segment bar visually identical to the empty-state
+    placeholder)."""
+    if days <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM regime_history WHERE pair = ? AND timestamp >= ?",
+            (pair, cutoff),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as _e:
+        logger.debug("[DB] regime_history_count %s failed: %s", pair, _e)
+        return 0
+    finally:
+        conn.close()
+
+
 def regime_history_segments(
     pair: str,
     days: int = 90,
