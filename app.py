@@ -1111,6 +1111,90 @@ def _toggle_theme() -> None:
 # when they're not on the AI Assistant page. Returns a list shaped
 # for render_top_bar's `status_pills` parameter (each pill: dict with
 # `tone`, `icon`, `label`).
+def _render_alerts_configure() -> None:
+    """C6 (Phase C plan §C6, 2026-04-30): Email-alerts configuration
+    block — was nested inside `page_config` as `_render_alerts_tab`,
+    lifted here so the new `page_alerts()` route can reuse it without
+    importing through page_config. Body kept identical to the legacy
+    nested helper so behaviour matches one-for-one."""
+    _at_cfg = _cached_alerts_config()
+
+    with st.expander("📧 Email Alerts",
+                     expanded=_at_cfg.get("email_enabled", False)):
+        _at_em = _at_cfg.copy()
+        em_on = st.toggle(
+            "Enable Email",
+            value=_at_em.get("email_enabled", False),
+            key="cfg_em_on_v2",
+        )
+        em_to = st.text_input(
+            "Recipient",
+            value=_at_em.get("email_to", ""),
+            placeholder="you@example.com",
+            key="cfg_em_to_v2",
+            disabled=not em_on,
+        )
+        em_from = st.text_input(
+            "Sender (Gmail)",
+            value=_at_em.get("email_from", ""),
+            placeholder="yourbot@gmail.com",
+            key="cfg_em_from_v2",
+            disabled=not em_on,
+        )
+        # Audit R2f: never pre-fill a password into text_input — DOM
+        # leak every rerun. Blank on load; empty submit = keep stored.
+        _em_pass_has_value = bool(_at_em.get("email_pass"))
+        em_pass = st.text_input(
+            "App Password",
+            value="",
+            type="password",
+            key="cfg_em_pass_v2",
+            disabled=not em_on,
+            placeholder="●●●● (saved)" if _em_pass_has_value else "",
+            help="Leave blank to keep the stored app password.",
+        )
+        em_min = st.slider(
+            "Alert threshold (%)",
+            50, 95,
+            int(_at_em.get("email_min_confidence", 70)),
+            step=5,
+            key="cfg_em_thresh_v2",
+            disabled=not em_on,
+        )
+        cse, cte = st.columns(2)
+        with cse:
+            if st.button("Save Email", key="cfg_em_save_v2",
+                         width="stretch"):
+                _new_em_pass = em_pass if em_pass else _at_em.get("email_pass", "")
+                _at_em.update({
+                    "email_enabled": em_on,
+                    "email_to": em_to.strip(),
+                    "email_from": em_from.strip(),
+                    "email_pass": _new_em_pass,
+                    "email_min_confidence": em_min,
+                })
+                _save_alerts_config_and_clear(_at_em)
+                st.success("Saved!")
+        with cte:
+            if st.button("Test", key="cfg_em_test_v2",
+                         width="stretch", disabled=not em_on):
+                _test_em_pass = em_pass if em_pass else _at_em.get("email_pass", "")
+                ok, err = _alerts.send_email_alert(
+                    em_from.strip(), _test_em_pass, em_to.strip(),
+                    "Crypto Signal Model — Test Alert",
+                    "✓ Email alert test successful.",
+                )
+                if ok:
+                    st.success("Email sent!")
+                else:
+                    st.error(err or "Test failed — check your Gmail "
+                             "App Password and email settings.")
+        st.caption(
+            "Use a Gmail App Password (Settings → Security → 2FA → "
+            "App passwords)"
+        )
+
+
 def _agent_topbar_pills() -> list[dict]:
     """Return the topbar-pill list reflecting the autonomous agent's
     runtime state. Empty list when agent.py couldn't import or the
@@ -1192,7 +1276,9 @@ _DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("onchain",    "On-chain",   "On-chain"),
     ]),
     ("Account", [
-        ("alerts",       "Alerts",       "Config Editor"),
+        # C6 (2026-04-30): Alerts is now a first-class page — was
+        # previously routed to Config Editor → Alerts tab.
+        ("alerts",       "Alerts",       "Alerts"),
         # C1 reconcile (2026-04-29): nav key is `ai_assistant` per Phase C
         # plan §C1 (not `agent` — that name is reserved for the
         # autonomous-agent runtime namespace). Page-router target stays
@@ -1248,8 +1334,12 @@ for _grp_name, _grp_items in _ds_nav_current:
             _ds_new_key_selected = _k
             # Side-effect routing for items that share a target page —
             # e.g. "Alerts" should land on the Alerts tab inside Settings.
-            if _k == "alerts":
-                st.session_state["_settings_tab"] = "🔔 Alerts"
+            # C6 (2026-04-30): the legacy `_settings_tab="🔔 Alerts"`
+            # side-effect — which deep-linked the sidebar Alerts entry
+            # to Settings → Alerts tab — is removed. Alerts now has
+            # its own first-class page (page_alerts), so the nav
+            # router maps `alerts` → "Alerts" page key directly via
+            # _DS_NAV. No tab override needed.
 
 if _ds_new_label_selected:
     st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
@@ -5355,11 +5445,16 @@ def page_config():
     # ── Auto-jump to Alerts tab when navigated from sidebar
     _cfg_initial_tab = 0
     _st_tab_override = st.session_state.pop("_settings_tab", None)
-    _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🔔 Alerts", "🛠️ Dev Tools", "⚙️ Execution"]
+    # C6 (Phase C plan §C6.4-5, 2026-04-30): "🔔 Alerts" removed from
+    # Settings tabs — alerts now have a first-class page (page_alerts).
+    # Tab vars renumbered: _cfg_t3 used to be Alerts (now Dev Tools);
+    # _cfg_t4 used to be Dev Tools (now Execution); the legacy fifth
+    # var is gone.
+    _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🛠️ Dev Tools", "⚙️ Execution"]
     if _st_tab_override and _st_tab_override in _cfg_tab_names:
         _cfg_initial_tab = _cfg_tab_names.index(_st_tab_override)
 
-    _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4, _cfg_t5 = st.tabs(_cfg_tab_names)
+    _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4 = st.tabs(_cfg_tab_names)
 
     # ── ALERTS TAB content definition (full config moved from sidebar)
     def _render_alerts_tab():
@@ -5730,11 +5825,8 @@ def page_config():
 
 
 
-    # ── Tab 3: Alerts (full config + notifications)
+    # ── Tab 3: Dev Tools (consolidated — Alerts moved to page_alerts in C6)
     with _cfg_t3:
-        _render_alerts_tab()
-        st.markdown('---')
-        st.markdown('#### Notifications & Scheduler')
         # ── Paid API Keys ──
         st.markdown("---")
         _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
@@ -5873,8 +5965,9 @@ def page_config():
 
 
 
-    # ── Tab 4: Dev Tools
-    with _cfg_t4:
+    # ── Tab 3 (cont.): the rest of the legacy Dev Tools content,
+    #    re-entering the same tab via Streamlit's tab-context API.
+    with _cfg_t3:
         # ── Sidebar legacy widgets (relocated from sidebar in 2026-04-25 redesign)
         _ui.section_header("Sidebar tools", "Auto-Scan, Demo / Sandbox, API Health, Wallet Import, API Keys, Build Info", icon="🧰")
         try:
@@ -5996,7 +6089,7 @@ def page_config():
 
 
     # ── Tab 5: Live Execution
-    with _cfg_t5:
+    with _cfg_t4:  # was _cfg_t5 before C6 dropped the Alerts tab
         # ── Live Execution Settings ────────────────────────────────────────────────
         st.markdown("---")
         _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
@@ -8833,6 +8926,125 @@ def _render_arbitrage_view():
 # ──────────────────────────────────────────────
 # PAGE: AUTONOMOUS AGENT
 # ──────────────────────────────────────────────
+def page_alerts():
+    """C6 (Phase C plan §C6, 2026-04-30): Alerts is now a first-class
+    page (was a tab inside Settings → Config Editor). Two views via
+    primary segmented control:
+      - Configure: email-config form (lifted from the old Alerts tab
+        body — see _render_alerts_configure)
+      - History:   filter row + table from the new alerts_log DB
+    """
+    _al_lv = st.session_state.get("user_level", "beginner")
+    try:
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            segmented_control as _ds_seg,
+        )
+    except Exception as _e_imp:
+        logger.error("[Alerts] import failed: %s", _e_imp)
+        st.error("Alerts page failed to load — check logs.")
+        return
+
+    _ds_top_bar(
+        breadcrumb=("Account", "Alerts"),
+        user_level=_al_lv,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
+    )
+    _ds_page_header(
+        title="Alerts",
+        subtitle="Configure email + watchlist alerts and review the dispatch history.",
+    )
+
+    _al_view = st.session_state.get("alerts_view", "configure")
+    if _al_view not in ("configure", "history"):
+        _al_view = "configure"
+    _al_view = _ds_seg(
+        [("configure", "Configure"), ("history", "History")],
+        active=_al_view,
+        key="alerts_view",
+        variant="primary",
+    )
+
+    if _al_view == "configure":
+        _render_alerts_configure()
+        return
+
+    # ── History view ──────────────────────────────────────────────────
+    # C6 (Phase C plan §C6.3): filter row + alert log table backed by
+    # the new alerts_log DB table. Filters cascade as ANDs.
+    try:
+        from database import recent_alerts as _recent_alerts
+    except Exception as _e_ra:
+        logger.error("[Alerts] recent_alerts import failed: %s", _e_ra)
+        st.error("Alert history database helper unavailable — check logs.")
+        return
+
+    _f1, _f2, _f3, _f4 = st.columns(4)
+    with _f1:
+        _flt_type = st.selectbox(
+            "Type",
+            options=["(all)", "email_signal", "watchlist", "agent_decision",
+                     "scan_error"],
+            index=0,
+            key="alerts_hist_type",
+        )
+    with _f2:
+        _flt_status = st.selectbox(
+            "Status",
+            options=["(all)", "sent", "failed", "suppressed"],
+            index=0,
+            key="alerts_hist_status",
+        )
+    with _f3:
+        _flt_channel = st.selectbox(
+            "Channel",
+            options=["(all)", "email", "webhook", "slack", "tradingview"],
+            index=0,
+            key="alerts_hist_channel",
+        )
+    with _f4:
+        _flt_limit = st.selectbox(
+            "Show",
+            options=[25, 50, 100, 250, 500],
+            index=2,
+            key="alerts_hist_limit",
+        )
+
+    _flt_kwargs: dict = {}
+    if _flt_type != "(all)":
+        _flt_kwargs["alert_type"] = _flt_type
+    if _flt_status != "(all)":
+        _flt_kwargs["status"] = _flt_status
+    if _flt_channel != "(all)":
+        _flt_kwargs["channel"] = _flt_channel
+    rows = _recent_alerts(limit=int(_flt_limit), **_flt_kwargs)
+
+    if not rows:
+        st.info("No alerts have fired yet — once an email or webhook "
+                "dispatches, the row appears here.")
+        return
+
+    # Render a compact table. Status gets a colour tag for at-a-glance
+    # scan; everything else stays plain text.
+    _hist_rows = []
+    for r in rows:
+        _status_icon = {"sent": "🟢", "failed": "🔴",
+                        "suppressed": "⚪"}.get(r.get("status"), "")
+        _hist_rows.append({
+            "Time": r.get("time_str", ""),
+            "Type": r.get("type", ""),
+            "Asset": r.get("asset", "") or "—",
+            "Channel": r.get("channel", "") or "—",
+            "Status": f"{_status_icon} {r.get('status', '')}",
+            "Message": (r.get("message") or "")[:140],
+        })
+    st.dataframe(_hist_rows, width="stretch", hide_index=True)
+    st.caption(f"{len(rows)} of last {int(_flt_limit)} dispatches shown.")
+
+
 def page_agent():
     _ag_lv = st.session_state.get("user_level", "beginner")
     _ag_title = "AI Assistant" if _ag_lv in ("beginner", "intermediate") else "Autonomous Agent"
@@ -10160,6 +10372,11 @@ elif page == "Arbitrage":
     page_arbitrage()
 elif page == "Agent":
     page_agent()
+elif page == "Alerts":
+    # C6 (Phase C plan §C6, 2026-04-30): Alerts is now a first-class
+    # page — used to deep-link into Settings → Alerts tab via the
+    # _settings_tab=Alerts side-effect (now removed).
+    page_alerts()
 
 # ── Persistent footer: past-performance disclaimer + legal (R3h Tier-1) ───────
 # Audit R3c HIGH: every main page must carry the disclaimer (compliance red flag

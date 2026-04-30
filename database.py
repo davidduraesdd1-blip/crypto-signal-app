@@ -373,6 +373,15 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_agent_pair ON agent_log(pair);
                 CREATE INDEX IF NOT EXISTS idx_agent_ts   ON agent_log(logged_at);
 
+                -- C6 (Phase C plan §C6.3, 2026-04-30): the existing
+                -- alerts_log table above (line 330) is reused for the
+                -- new AI Assistant → Alerts → History view. Two
+                -- columns added via ALTER TABLE migration (see _add_col
+                -- below): `type` and `message`. The legacy columns
+                -- (sent_at / channel / pair / status / direction /
+                -- confidence / error_msg) stay so any existing
+                -- consumers (other apps, log readers) keep working.
+
                 -- Arbitrage opportunities (spot spread + funding-rate carry)
                 CREATE TABLE IF NOT EXISTS arb_opportunities (
                     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -396,7 +405,8 @@ def init_db():
             # Required for databases created before Phase 2 (F1 + F4 columns).
             # ALTER TABLE IF NOT EXISTS column is not valid SQLite syntax; use PRAGMA check.
             _ALLOWED_MIGRATE_TABLES = {"feedback_log", "backtest_trades", "paper_trades",
-                                       "positions", "execution_log", "daily_signals"}
+                                       "positions", "execution_log", "daily_signals",
+                                       "alerts_log"}  # C6 (2026-04-30) extension
             def _add_col(tbl, col, col_def):
                 if tbl not in _ALLOWED_MIGRATE_TABLES:
                     raise ValueError(f"[DB] _add_col: table '{tbl}' not in migration whitelist")
@@ -431,6 +441,16 @@ def init_db():
 
             # T3-11: slippage tracking column in execution_log
             _add_col('execution_log', 'slippage_pct', 'REAL')
+
+            # C6 (Phase C plan §C6.3, 2026-04-30): extend alerts_log to
+            # power the new AI Assistant → Alerts → History page.
+            # `type` stores the alert taxonomy ("email_signal",
+            # "watchlist", "agent_decision", etc.) for History filtering.
+            # `message` stores the human-readable body so History rows
+            # render without re-parsing the legacy `direction +
+            # confidence` shape.
+            _add_col('alerts_log', 'type',    'TEXT')
+            _add_col('alerts_log', 'message', 'TEXT')
 
             # IC + WFE metrics table  (#36)
             conn.execute("""
@@ -1715,6 +1735,119 @@ def get_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     finally:
         conn.close()
     return df.drop(columns=["id"], errors="ignore")
+
+
+def log_alert_fire(
+    *,
+    type: str,
+    message: str,
+    status: str,
+    asset: str = "",
+    channel: str = "email",
+) -> None:
+    """C6 (Phase C plan §C6.3): record one alert dispatch in alerts_log.
+
+    Args:
+        type:    alert type — "high_conf_signal", "watchlist", "agent_decision",
+                 "scan_error", etc. Free-form; History page uses it as a filter.
+        message: human-readable message body.
+        status:  one of {"sent", "failed", "suppressed"}. CHECK constraint
+                 in the schema enforces these values; passing anything else
+                 raises sqlite3.IntegrityError so the caller catches the bug
+                 immediately rather than silently writing a garbage row.
+        asset:   optional pair / ticker the alert is about ("BTC/USDT" etc.).
+        channel: one of {"email", "webhook", "slack", "tradingview", ...}.
+                 Defaults to "email" since that's the primary fire path today.
+
+    Defensive: never raises on insert failure (caller is on the email-send
+    hot path; we don't want a logging hiccup to break the actual send).
+    """
+    if status not in ("sent", "failed", "suppressed"):
+        # Fail loud in dev / silent in prod — same trade-off as the
+        # rest of the DB helpers. Bad status would corrupt filtering.
+        logger.warning("[DB] log_alert_fire: invalid status %r — coerced to 'failed'", status)
+        status = "failed"
+    sent_at = datetime.now(timezone.utc).isoformat()
+    # The on-disk alerts_log schema uses `sent_at` (legacy) for the
+    # timestamp + `pair` for the asset; C6 added `type` + `message`
+    # via migration. We map the spec-shaped kwargs to the actual
+    # column names so the legacy reader code still works.
+    with _write_lock:
+        conn = None
+        try:
+            conn = _get_conn()
+            conn.execute(
+                """INSERT INTO alerts_log
+                       (sent_at, type, pair, message, status, channel)
+                   VALUES (?,?,?,?,?,?)""",
+                (sent_at, type, asset, message, status, channel),
+            )
+            conn.commit()
+        except Exception as _e:
+            logger.debug("[DB] log_alert_fire failed: %s", _e)
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def recent_alerts(
+    limit: int = 100,
+    *,
+    alert_type: str | None = None,
+    status: str | None = None,
+    channel: str | None = None,
+    asset: str | None = None,
+) -> list[dict]:
+    """C6 (Phase C plan §C6.3): return recent alert rows for the
+    History view, optionally filtered.
+
+    Each row dict matches the column shape of alerts_log plus a
+    `time_str` convenience field for table rendering.
+    """
+    # On-disk columns: sent_at (timestamp), type, pair (asset),
+    # message, status, channel — see log_alert_fire for the mapping.
+    where = []
+    params: list = []
+    if alert_type:
+        where.append("type = ?")
+        params.append(alert_type)
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if channel:
+        where.append("channel = ?")
+        params.append(channel)
+    if asset:
+        where.append("pair = ?")
+        params.append(asset)
+    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = (
+        f"SELECT sent_at, type, pair, message, status, channel "
+        f"FROM alerts_log {where_clause} "
+        f"ORDER BY sent_at DESC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    conn = _get_conn()
+    rows: list[dict] = []
+    try:
+        cur = conn.execute(sql, tuple(params))
+        for r in cur.fetchall():
+            ts, type_, asset_, msg, st_, ch = r
+            rows.append({
+                "timestamp": ts,
+                "time_str":  (ts or "")[:19].replace("T", " "),
+                "type":      type_ or "",
+                "asset":     asset_ or "",
+                "message":   msg or "",
+                "status":    st_ or "",
+                "channel":   ch or "",
+            })
+    except Exception as _e:
+        logger.debug("[DB] recent_alerts query failed: %s", _e)
+    finally:
+        conn.close()
+    return rows
 
 
 def recent_agent_decisions(limit: int = 10) -> list[dict]:

@@ -106,7 +106,7 @@ PAGE_KEY_TO_APP: dict[str, str] = {
     "regimes":      "Regimes",
     "backtester":   "Backtest Viewer",
     "onchain":      "On-chain",
-    "alerts":       "Config Editor",   # TODO C6 — split into page_alerts
+    "alerts":       "Alerts",           # C6 (2026-04-30): page_alerts
     "ai_assistant": "Agent",
     "settings":     "Config Editor",
 }

@@ -257,12 +257,39 @@ def send_email_alert(
             server.starttls()
             server.login(sender, app_password)
             server.sendmail(sender, recipient, msg.as_string())
+        # C6 (Phase C plan §C6.3, 2026-04-30): log every fire to alerts_log
+        # so the new AI Assistant → Alerts → History page has data. Best-
+        # effort — never raise out of send_email_alert just because the
+        # log helper hiccups.
+        try:
+            from database import log_alert_fire as _log_fire
+            _log_fire(
+                type="email_signal",
+                message=str(subject)[:240],
+                status="sent",
+                asset="",
+                channel="email",
+            )
+        except Exception:
+            pass
         return True, None
     except smtplib.SMTPAuthenticationError:
+        try:
+            from database import log_alert_fire as _log_fire
+            _log_fire(type="email_signal", message=str(subject)[:240],
+                      status="failed", channel="email")
+        except Exception:
+            pass
         return False, "Authentication failed — check your Gmail App Password"
     except Exception as e:
         # Audit R1f: don't raw-dump exception — type only.
         logger.warning("[alerts] send_email_alert failed: %s", type(e).__name__)
+        try:
+            from database import log_alert_fire as _log_fire
+            _log_fire(type="email_signal", message=str(subject)[:240],
+                      status="failed", channel="email")
+        except Exception:
+            pass
         return False, "Send failed — check your email settings and network, then try again."
 
 
