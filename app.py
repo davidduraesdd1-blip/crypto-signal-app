@@ -5335,53 +5335,60 @@ def page_config():
 
     # ── Item 14: Beginner simplified settings — 3 controls only ──────────────
     if _cfg_lv == "beginner":
-        st.markdown("### The 3 things that matter most")
-        _beg_overrides = {}
-        bc1, bc2 = st.columns(2)
-        with bc1:
-            _beg_port = st.number_input(
-                "💰 How much money are you trading with? (USD)",
-                min_value=100.0, max_value=10_000_000.0,
-                value=float(model.PORTFOLIO_SIZE_USD), step=100.0,
-                help="This sets the dollar amount used to calculate trade sizes and risk. Example: if you have $1,000 to trade, enter 1000.",
-            )
-            _beg_overrides["PORTFOLIO_SIZE_USD"] = _beg_port
-        with bc2:
-            _beg_risk = st.number_input(
-                "🛡️ Max risk per trade (%)",
-                min_value=0.1, max_value=5.0,
-                value=float(model.RISK_PER_TRADE_PCT), step=0.1,
-                help="The maximum % of your portfolio to risk on any single trade. 1-2% is a safe starting range. Higher = bigger possible gains AND bigger possible losses.",
-            )
-            _beg_overrides["RISK_PER_TRADE_PCT"] = _beg_risk
+        # C7 (Phase C plan §C7.1, 2026-04-30): wrap the panel in a
+        # keyed container so overrides.py can target its inputs with
+        # the mockup's `.beg-panel input` styling — bg-0 / border-
+        # strong / 15px / mono / 500 weight. Streamlit 1.42+ exposes
+        # the container's `key` as a `data-stkey` attribute on the
+        # rendered DOM node, which is a stable CSS hook.
+        with st.container(key="ds_beg_panel"):
+            st.markdown("### The 3 things that matter most")
+            _beg_overrides = {}
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                _beg_port = st.number_input(
+                    "💰 How much money are you trading with? (USD)",
+                    min_value=100.0, max_value=10_000_000.0,
+                    value=float(model.PORTFOLIO_SIZE_USD), step=100.0,
+                    help="This sets the dollar amount used to calculate trade sizes and risk. Example: if you have $1,000 to trade, enter 1000.",
+                )
+                _beg_overrides["PORTFOLIO_SIZE_USD"] = _beg_port
+            with bc2:
+                _beg_risk = st.number_input(
+                    "🛡️ Max risk per trade (%)",
+                    min_value=0.1, max_value=5.0,
+                    value=float(model.RISK_PER_TRADE_PCT), step=0.1,
+                    help="The maximum % of your portfolio to risk on any single trade. 1-2% is a safe starting range. Higher = bigger possible gains AND bigger possible losses.",
+                )
+                _beg_overrides["RISK_PER_TRADE_PCT"] = _beg_risk
 
-        # API key quick-entry (most-needed for beginners to get live data)
-        with st.expander("🔑 API Keys", expanded=False):
-            st.caption("Enter your exchange API keys to enable live price data and alerts. You can skip this for now — the app works without them using public data.")
-            _ak1, _ak2 = st.columns(2)
-            with _ak1:
-                _beg_ok_key = st.text_input("OKX API Key", type="password", key="beg_okx_key",
-                                             help="Get your free API key from okx.com → Account → API.")
-            with _ak2:
-                _beg_ok_sec = st.text_input("OKX Secret Key", type="password", key="beg_okx_sec")
+            # API key quick-entry (most-needed for beginners to get live data)
+            with st.expander("🔑 API Keys", expanded=False):
+                st.caption("Enter your exchange API keys to enable live price data and alerts. You can skip this for now — the app works without them using public data.")
+                _ak1, _ak2 = st.columns(2)
+                with _ak1:
+                    _beg_ok_key = st.text_input("OKX API Key", type="password", key="beg_okx_key",
+                                                 help="Get your free API key from okx.com → Account → API.")
+                with _ak2:
+                    _beg_ok_sec = st.text_input("OKX Secret Key", type="password", key="beg_okx_sec")
 
-        _beg_saved_col, _ = st.columns([1, 3])
-        with _beg_saved_col:
-            if st.button("💾 Save Settings", type="primary", width="stretch", key="beg_save_cfg"):
-                try:
-                    import json as _json, os as _os
-                    _ov_path = "config_overrides.json"
-                    _existing = {}
-                    if _os.path.exists(_ov_path):
-                        with open(_ov_path) as _f:
-                            _existing = _json.load(_f)
-                    _existing.update(_beg_overrides)
-                    with open(_ov_path, "w") as _f:
-                        _json.dump(_existing, _f, indent=2)
-                    st.success("✅ Settings saved! They'll apply on the next scan.")
-                except Exception as _e:
-                    logger.warning("[app] settings save error: %s", _e)
-                    st.error("Settings could not be saved — check file permissions and try again.")
+            _beg_saved_col, _ = st.columns([1, 3])
+            with _beg_saved_col:
+                if st.button("💾 Save Settings", type="primary", width="stretch", key="beg_save_cfg"):
+                    try:
+                        import json as _json, os as _os
+                        _ov_path = "config_overrides.json"
+                        _existing = {}
+                        if _os.path.exists(_ov_path):
+                            with open(_ov_path) as _f:
+                                _existing = _json.load(_f)
+                        _existing.update(_beg_overrides)
+                        with open(_ov_path, "w") as _f:
+                            _json.dump(_existing, _f, indent=2)
+                        st.success("✅ Settings saved! They'll apply on the next scan.")
+                    except Exception as _e:
+                        logger.warning("[app] settings save error: %s", _e)
+                        st.error("Settings could not be saved — check file permissions and try again.")
 
         # C5 fix (2026-04-28): the previous shape rendered an empty
         # "Advanced Settings" expander then `return`'d immediately, so

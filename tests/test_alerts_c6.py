@@ -64,7 +64,10 @@ def test_settings_dropped_to_four_tabs():
     # The new tab-names list must NOT contain Alerts.
     cfg_idx = s.find("def page_config():")
     assert cfg_idx > 0
-    body = s[cfg_idx:cfg_idx + 8000]
+    # page_config is large + grew during C7 (st.container wrapper on
+    # the beginner panel). The tab-names list lives further down than
+    # the 8000-char window we used to take, so slice generously.
+    body = s[cfg_idx:cfg_idx + 20000]
     code_only = "\n".join(line for line in body.splitlines()
                           if not line.lstrip().startswith("#"))
     assert '"📊 Trading", "⚡ Signal & Risk", "🛠️ Dev Tools", "⚙️ Execution"' in code_only, (

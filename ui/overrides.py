@@ -476,18 +476,66 @@ def inject_streamlit_overrides() -> None:
     }
     [data-testid="stExpander"] summary { color: var(--text-primary); }
 
-    /* Tabs */
+    /* Tabs — C7 (Phase C plan §C7.2, 2026-04-30): underline pattern
+       matching docs/mockups/sibling-family-crypto-signal-SETTINGS.html
+       lines 44-48 (.tabs / .tabs button.on). Active tab gets the
+       accent-coloured 2px underline + 600 weight; gap and font-size
+       bumped to mockup values. */
     [data-testid="stTabs"] [data-baseweb="tab-list"] {
-      gap: 4px; border-bottom: 1px solid var(--border);
+      gap: 28px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
     }
     [data-testid="stTabs"] button[role="tab"] {
-      background: transparent; color: var(--text-muted);
-      border-radius: 6px 6px 0 0; padding: 8px 14px;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 0;
+      padding: 12px 0;
+      font-size: 13.5px;
       font-weight: 500;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: all 120ms;
+    }
+    [data-testid="stTabs"] button[role="tab"]:hover {
+      color: var(--text-primary);
     }
     [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
       color: var(--text-primary);
-      border-bottom: 2px solid var(--accent);
+      border-bottom-color: var(--accent);
+      font-weight: 600;
+    }
+    /* Mobile gap reduction per mockup line 112 (@media max-width: 768px) */
+    @media (max-width: 768px) {
+      [data-testid="stTabs"] [data-baseweb="tab-list"] { gap: 16px; }
+    }
+
+    /* Beginner Quick Setup panel (C7 §C7.1) — boosted-contrast input
+       fields per docs/mockups/sibling-family-crypto-signal-SETTINGS.html
+       line 92 (.beg-panel .form-row input). The panel is rendered in
+       app.py inside `with st.container(key="ds_beg_panel"):`; Streamlit
+       1.42+ exposes the container's `key` as `data-stkey` on the DOM
+       node, giving us a stable scope for these rules. */
+    [data-stkey="ds_beg_panel"] [data-testid="stNumberInput"] input,
+    [data-stkey="ds_beg_panel"] [data-testid="stTextInput"] input {
+      background: var(--bg-0) !important;
+      border: 1px solid var(--border-strong) !important;
+      font-family: var(--font-mono) !important;
+      font-size: 15px !important;
+      font-weight: 500 !important;
+      padding: 10px 14px !important;
+      border-radius: 6px;
+    }
+    [data-stkey="ds_beg_panel"] [data-testid="stNumberInput"] input:focus,
+    [data-stkey="ds_beg_panel"] [data-testid="stTextInput"] input:focus {
+      border-color: var(--accent) !important;
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    [data-stkey="ds_beg_panel"] label p {
+      font-size: 11px !important;
+      color: var(--text-secondary) !important;
+      font-weight: 600 !important;
+      letter-spacing: 0.02em;
     }
 
     /* Dataframes */
