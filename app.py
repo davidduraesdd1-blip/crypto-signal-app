@@ -1225,7 +1225,17 @@ def _agent_topbar_pills() -> list[dict]:
 def _refresh_all_data() -> None:
     """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
     helpers, the data_feeds module-level dicts, and the cycle_indicators
-    in-memory caches. Caller is responsible for st.rerun()."""
+    in-memory caches. Caller is responsible for st.rerun().
+
+    C8-fix (2026-04-30): level-aware. At Beginner level the topbar
+    Refresh chip is relabelled to "↻ Update" and ALSO triggers a
+    background scan after the cache clear — beginners shouldn't have
+    to learn the distinction between "refresh = cache clear" and
+    "scan = recompute signals". For Intermediate/Advanced the chip
+    stays as "↻ Refresh" and only clears caches (the explicit
+    "▶ Run Scan" button on Home stays the scan trigger). Guarded
+    against re-entry: if a scan is already running, no second start.
+    """
     try:
         st.cache_data.clear()
     except Exception:
@@ -1251,6 +1261,23 @@ def _refresh_all_data() -> None:
         _ccc()
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
+
+    # C8-fix (2026-04-30): Beginner-level refresh ALSO kicks off a
+    # scan. Re-entry guard: only fires if no scan is currently
+    # running. Int/Adv users keep the explicit two-button distinction.
+    try:
+        _ref_lv = st.session_state.get("user_level", "beginner")
+        if _ref_lv == "beginner":
+            _already_scanning = st.session_state.get("scan_running", False)
+            try:
+                with _scan_lock:
+                    _already_scanning = _already_scanning or _scan_state.get("running", False)
+            except Exception:
+                pass
+            if not _already_scanning:
+                _start_scan()
+    except Exception as _e_auto_scan:
+        logger.debug("[App] beginner auto-scan after refresh failed: %s", _e_auto_scan)
 
 st.sidebar.markdown("---")
 

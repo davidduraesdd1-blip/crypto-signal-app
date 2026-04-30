@@ -349,11 +349,23 @@ def render_top_bar(
     if show_refresh:
         with cols[4]:
             if on_refresh is not None:
+                # C8-fix (2026-04-30): Beginner level uses one combined
+                # "Update" button that refreshes caches AND kicks off a
+                # scan (the cache-clear + scan-trigger split is a power-
+                # user distinction). Int/Adv keep the cheap "Refresh"
+                # behaviour and the explicit "Run Scan" button on Home.
+                _ref_lbl = "↻ Update" if user_level == "beginner" else "↻ Refresh"
+                _ref_help = (
+                    "Refresh all data and run a fresh scan in the background"
+                    if user_level == "beginner"
+                    else "Clear all caches and reload data from all sources "
+                         "(does not re-run the scan pipeline)"
+                )
                 st.button(
-                    "↻ Refresh",
+                    _ref_lbl,
                     key="ds_topbar_refresh",
                     use_container_width=True,
-                    help="Clear all caches and reload data from all sources",
+                    help=_ref_help,
                     on_click=_on_topbar_refresh,
                 )
                 # Persistent caption directly under the button so users
