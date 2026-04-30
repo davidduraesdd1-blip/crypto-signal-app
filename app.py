@@ -9963,15 +9963,37 @@ def page_regimes():
                     _btc_state = (_state_raw or "bull").lower()
                     _btc_conf = _r.get("regime_confidence")
                     break
-            # Without a regime history table, render the current state full-width
-            _segments = [(_btc_state, 100.0)]
-            _note = (f"HMM 4-state model over composite score + on-chain + macro features. "
-                     f"Current state: {_btc_state.title()}"
+            # C8 (Phase C plan §C8, 2026-04-30): real segmented 90d
+            # history from regime_history table. Falls back to a
+            # single 100%-current-state segment if the table doesn't
+            # have BTC rows yet (fresh deploy, no scans run).
+            _segments = []
+            _focus_pair = st.session_state.get(
+                "regimes_focus_pair", "BTC/USDT",
+            )
+            try:
+                from database import regime_history_segments as _rh_segs
+                _segments = _rh_segs(_focus_pair, days=90)
+            except Exception as _e_rh:
+                logger.debug("[Regimes] regime_history fetch failed: %s",
+                             _e_rh)
+                _segments = []
+            if not _segments:
+                # No history yet — surface the current state full-width
+                # so the layout still renders meaningfully.
+                _segments = [(_btc_state, 100.0)]
+            # Build a 90d label scale for the bar's date row when we
+            # have real history. Three labels: -90d / -45d / today.
+            _date_labels = ["-90d", "-45d", "today"] if len(_segments) > 1 else None
+            _focus_short = (_focus_pair.split("/")[0].split("-")[0]
+                            or "BTC")
+            _note = (f"HMM 4-state model over composite score + on-chain + "
+                     f"macro features. Current state: {_btc_state.title()}"
                      f"{f', confidence {int(_btc_conf)}%' if _btc_conf is not None else ''}.")
             _ds_state_bar(
                 _segments,
-                title="BTC regime state · last 90d",
-                date_labels=None,  # Only show labels when we have real segmentation
+                title=f"{_focus_short} regime state · last 90d",
+                date_labels=_date_labels,
                 note=_note,
             )
         except Exception as _e_sbar:

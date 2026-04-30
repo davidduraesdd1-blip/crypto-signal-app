@@ -373,6 +373,22 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_agent_pair ON agent_log(pair);
                 CREATE INDEX IF NOT EXISTS idx_agent_ts   ON agent_log(logged_at);
 
+                -- Regime history (C8 — Phase C plan §C8, 2026-04-30).
+                -- Powers the Regimes page state-bar timeline (last 90d
+                -- segmented bull/bear/accum/dist/transition bands).
+                -- Composite primary key (pair, timestamp) prevents
+                -- duplicate inserts when scans re-fire faster than the
+                -- HMM cache TTL.
+                CREATE TABLE IF NOT EXISTS regime_history (
+                    pair       TEXT NOT NULL,
+                    timestamp  TEXT NOT NULL,
+                    state      TEXT NOT NULL,
+                    confidence REAL,
+                    PRIMARY KEY (pair, timestamp)
+                );
+                CREATE INDEX IF NOT EXISTS idx_regime_history_pair_ts
+                    ON regime_history(pair, timestamp DESC);
+
                 -- C6 (Phase C plan §C6.3, 2026-04-30): the existing
                 -- alerts_log table above (line 330) is reused for the
                 -- new AI Assistant → Alerts → History view. Two
@@ -1152,6 +1168,27 @@ def append_to_master(results: list):
             raise
         finally:
             conn.close()
+    # C8 (Phase C plan §C8.2, 2026-04-30): record one regime_history
+    # row per pair per scan. Wraps each call in its own try/except —
+    # one bad pair must not fail the whole batch (or this whole
+    # function — the daily_signals write above is the source of truth
+    # for scan results).
+    for r in results:
+        _pair = r.get("pair")
+        _state = r.get("regime") or r.get("regime_label")
+        if not _pair or not _state:
+            continue
+        try:
+            record_regime_state(
+                pair=_pair,
+                state=_state,
+                confidence=r.get("regime_confidence") or r.get("regime_conf_pct"),
+                timestamp=ts,  # share the master scan timestamp so
+                               # all pairs from a given scan align in
+                               # regime_history's PK ordering.
+            )
+        except Exception as _e_rh:
+            logger.debug("[DB] regime_history hook %s failed: %s", _pair, _e_rh)
 
 
 def get_signals_df(limit: int = 500) -> pd.DataFrame:
@@ -1788,6 +1825,133 @@ def log_alert_fire(
         finally:
             if conn is not None:
                 conn.close()
+
+
+def record_regime_state(
+    pair: str,
+    state: str,
+    confidence: float | None = None,
+    timestamp: str | None = None,
+) -> None:
+    """C8 (Phase C plan §C8.2, 2026-04-30): UPSERT one row into
+    regime_history. Called from append_to_master(...) per scan-result
+    pair so the Regimes page state bar has real segmentation data.
+
+    State is normalised to lowercase; the canonical taxonomy is
+    {bull, bear, accumulation, distribution, transition}. Synonyms
+    ('accum', 'dist', 'trans', 'ranging', 'neutral') are mapped at
+    insert time so the segment-builder downstream can rely on the
+    canonical set.
+
+    Defensive: never raises — caller is on the scan hot path.
+    """
+    if not pair or not state:
+        return
+    _state_norm = str(state).strip().lower()
+    _alias = {
+        "accum":   "accumulation",
+        "dist":    "distribution",
+        "trans":   "transition",
+        "ranging": "transition",
+        "neutral": "transition",
+    }
+    state_canonical = _alias.get(_state_norm, _state_norm)
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+    with _write_lock:
+        conn = None
+        try:
+            conn = _get_conn()
+            # SQLite UPSERT — the (pair, timestamp) PK prevents dup
+            # rows when multiple scans land in the same second.
+            conn.execute(
+                """INSERT INTO regime_history (pair, timestamp, state, confidence)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(pair, timestamp) DO UPDATE SET
+                     state = excluded.state,
+                     confidence = excluded.confidence""",
+                (pair, timestamp, state_canonical,
+                 float(confidence) if confidence is not None else None),
+            )
+            conn.commit()
+        except Exception as _e:
+            logger.debug("[DB] record_regime_state %s failed: %s", pair, _e)
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def regime_history_segments(
+    pair: str,
+    days: int = 90,
+) -> list[tuple[str, float]]:
+    """C8 (Phase C plan §C8.3): return segmented `[(state, pct), ...]`
+    list for the regime_state_bar widget — last `days` worth of
+    history, contiguous same-state runs collapsed into one segment
+    sized by duration.
+
+    Returns an empty list if no rows are recorded yet (caller falls
+    back to a single-segment placeholder of the current state).
+    """
+    if days <= 0:
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+    conn = _get_conn()
+    rows: list[tuple[str, str]] = []
+    try:
+        cur = conn.execute(
+            """SELECT timestamp, state FROM regime_history
+                 WHERE pair = ? AND timestamp >= ?
+                 ORDER BY timestamp ASC""",
+            (pair, cutoff),
+        )
+        rows = list(cur.fetchall())
+    except Exception as _e:
+        logger.debug("[DB] regime_history_segments %s failed: %s", pair, _e)
+        return []
+    finally:
+        conn.close()
+
+    if not rows:
+        return []
+
+    # Collapse contiguous same-state runs into segment durations.
+    # Each row is a snapshot at scan time; we treat the duration
+    # between consecutive snapshots as belonging to the EARLIER
+    # snapshot's state. Last snapshot extends to "now".
+    from datetime import datetime as _dt
+    def _parse(ts: str) -> _dt:
+        try:
+            return _dt.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return datetime.now(timezone.utc)
+
+    parsed = [(_parse(ts), state) for ts, state in rows]
+    end = datetime.now(timezone.utc)
+    durations: dict[str, float] = {}
+    total_secs = 0.0
+    for i, (ts, state) in enumerate(parsed):
+        next_ts = parsed[i + 1][0] if i + 1 < len(parsed) else end
+        secs = max(0.0, (next_ts - ts).total_seconds())
+        durations[state] = durations.get(state, 0.0) + secs
+        total_secs += secs
+
+    if total_secs <= 0:
+        return []
+
+    # Order segments by canonical state list so the bar reads
+    # left-to-right as bear → transition → accumulation → bull →
+    # distribution. States not in the canonical order tail at end.
+    canonical_order = ["bear", "transition", "accumulation",
+                       "bull", "distribution"]
+    segments: list[tuple[str, float]] = []
+    for s in canonical_order:
+        if s in durations:
+            segments.append((s, round(durations[s] / total_secs * 100.0, 2)))
+    for s, secs in durations.items():
+        if s not in canonical_order:
+            segments.append((s, round(secs / total_secs * 100.0, 2)))
+    return segments
 
 
 def recent_alerts(
