@@ -1170,7 +1170,13 @@ _DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
         # "Agent" since page_agent() is the existing entry point.
         ("ai_assistant", "AI Assistant", "Agent"),
         ("settings",     "Settings",     "Config Editor"),
-        ("opps",         "Arbitrage",    "Arbitrage"),
+        # C4 (2026-04-29): "Arbitrage" was promoted into a primary
+        # segmented control on the Backtester page. The standalone nav
+        # entry is removed so users land on Arbitrage via Backtester →
+        # Arbitrage segment. The legacy `page == "Arbitrage"` route is
+        # kept alive in the dispatcher (page_arbitrage stub sets
+        # bt_view=arbitrage and renders Backtester) so any inbound
+        # deep links / programmatic jumps still work.
     ]),
 ]
 _ds_nav_current = _DS_NAV
@@ -6308,8 +6314,19 @@ def _backtest_progress():
 # ──────────────────────────────────────────────
 def page_backtest():
     _bt_lv = st.session_state.get("user_level", "beginner")
-    _bt_title = "Backtester"
-    _bt_sub = "Composite signal backtested across the historical universe. Optuna-tuned hyperparams."
+    # C4 (2026-04-29): Backtester now hosts two views via primary
+    # segmented control — "backtest" (default) and "arbitrage" (was
+    # the standalone Arbitrage page; merged in per §C4).
+    _bt_view = st.session_state.get("bt_view", "backtest")
+    if _bt_view not in ("backtest", "arbitrage"):
+        _bt_view = "backtest"
+    _bt_title = "Arbitrage" if _bt_view == "arbitrage" else "Backtester"
+    _bt_sub = (
+        "Cross-exchange spot price spreads and funding-rate carry trades."
+        if _bt_view == "arbitrage"
+        else "Composite signal backtested across the historical universe. "
+             "Optuna-tuned hyperparams."
+    )
     # ── 2026-05 redesign: mockup-style top bar + page header (matches
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
@@ -6323,6 +6340,73 @@ def page_backtest():
             f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
             unsafe_allow_html=True,
         )
+
+    # C4: primary segmented control swaps Backtester ↔ Arbitrage. Both
+    # views share the page surface (topbar + page_header above) and
+    # the run-time URL — so deep-link `?bt_view=arbitrage` lands on
+    # Arbitrage without changing the page slot.
+    try:
+        from ui import segmented_control as _ds_seg
+        _bt_view = _ds_seg(
+            [("backtest", "Backtest"), ("arbitrage", "Arbitrage")],
+            active=_bt_view,
+            key="bt_view",
+            variant="primary",
+        )
+    except Exception as _e_seg_primary:
+        logger.debug("[Backtest] primary segmented control failed: %s",
+                     _e_seg_primary)
+
+    # If the user has flipped to the Arbitrage view, hand off to the
+    # extracted helper and skip the rest of the Backtester body.
+    if _bt_view == "arbitrage":
+        try:
+            _render_arbitrage_view()
+        except Exception as _e_arb_render:
+            logger.error("[Backtest] arbitrage view render failed: %s",
+                         _e_arb_render)
+            st.error("Arbitrage scanner failed to load — check logs.")
+        return
+
+    # ── C4: Universe selector — drives every backtest query below.
+    # Persists in st.session_state["bt_universe"]. Items match the
+    # spec: per-pair singles + Top 10 / Top 25 / All 33 / Custom.
+    try:
+        _bt_uni_universe = list(model.PAIRS or [])
+        _bt_uni_options = (
+            [f"{p} only" for p in _bt_uni_universe[:8]]
+            + ["Top 10 cap", "Top 25 cap", "All 33", "Custom multi-select"]
+        )
+        _bt_uni_default = st.session_state.get("bt_universe", "Top 10 cap")
+        if _bt_uni_default not in _bt_uni_options:
+            _bt_uni_default = "Top 10 cap"
+            st.session_state["bt_universe"] = _bt_uni_default
+        _bt_uni_l, _bt_uni_r = st.columns([3, 5])
+        with _bt_uni_l:
+            _bt_uni_picked = st.selectbox(
+                "Universe",
+                options=_bt_uni_options,
+                index=_bt_uni_options.index(_bt_uni_default),
+                key="bt_universe_select",
+                help="Filters every backtest metric, KPI, equity curve, "
+                     "Optuna result and trade row below to the chosen scope.",
+            )
+            if _bt_uni_picked != st.session_state.get("bt_universe"):
+                st.session_state["bt_universe"] = _bt_uni_picked
+        with _bt_uni_r:
+            if _bt_uni_picked == "Custom multi-select":
+                _bt_custom = st.multiselect(
+                    "Custom pairs",
+                    options=_bt_uni_universe,
+                    default=st.session_state.get(
+                        "bt_universe_custom",
+                        _bt_uni_universe[:5],
+                    ),
+                    key="bt_universe_custom",
+                    label_visibility="collapsed",
+                )
+    except Exception as _e_uni:
+        logger.debug("[Backtest] universe selector failed: %s", _e_uni)
 
     # ── Controls row (Universe / Period / Initial / Rebalance / Costs) + Run button
     try:
@@ -6589,13 +6673,29 @@ def page_backtest():
     except Exception as _e_mockup:
         logger.debug("[Backtest] mockup sections failed: %s", _e_mockup)
 
-    _bt_t1, _bt_t2, _bt_t3 = st.tabs([
-        "📊 Summary",
-        "📋 Trade History",
-        "🔬 Advanced Backtests",
-    ])
+    # C4 §C4.2: secondary segmented control replaces the legacy
+    # `st.tabs([Summary, Trade History, Advanced])`. Per Q8 Option B —
+    # segmented controls give first-click highlight (no two-click lag)
+    # and let us conditionally skip the heavy Advanced render unless
+    # the user actually opens that view.
+    try:
+        from ui import segmented_control as _ds_seg2
+        _bt_subview = st.session_state.get("bt_subview", "summary")
+        if _bt_subview not in ("summary", "trades", "advanced"):
+            _bt_subview = "summary"
+        _bt_subview = _ds_seg2(
+            [("summary", "Summary"),
+             ("trades", "Trade History"),
+             ("advanced", "Advanced")],
+            active=_bt_subview,
+            key="bt_subview",
+            variant="small",
+        )
+    except Exception as _e_seg2:
+        logger.debug("[Backtest] secondary segmented control failed: %s", _e_seg2)
+        _bt_subview = "summary"
 
-    with _bt_t1:
+    if _bt_subview == "summary":
         if st.session_state.get("backtest_error"):
             logger.warning("[Backtest] error: %s", st.session_state["backtest_error"])
             st.error("Backtest could not complete — try running the scan first to generate signal history.")
@@ -7042,7 +7142,7 @@ def page_backtest():
                     st.warning(mc_r['error'])
 
 
-    with _bt_t2:
+    elif _bt_subview == "trades":
         tab_master, tab_paper, tab_feedback, tab_exec, tab_slip = st.tabs([
             "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log", "Slippage Analytics"
         ])
@@ -7430,7 +7530,7 @@ def page_backtest():
                     )
 
 
-    with _bt_t3:
+    elif _bt_subview == "advanced":
         if _bt_lv == 'beginner':
             st.markdown(
                 '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
@@ -8344,24 +8444,25 @@ def _start_backtest():
 # PAGE: ARBITRAGE
 # ──────────────────────────────────────────────
 def page_arbitrage():
+    """C4 (2026-04-29): Arbitrage is now a sub-view of the Backtester
+    page (per Phase C plan §C4). This function is kept alive as a
+    deprecation stub so any inbound deep links / programmatic jumps to
+    `page=="Arbitrage"` still land somewhere sensible — it sets the
+    Backtester view state to `arbitrage` and renders Backtester, which
+    detects the state and pivots to the Arbitrage view."""
+    st.session_state["bt_view"] = "arbitrage"
+    page_backtest()
+
+
+def _render_arbitrage_view():
+    """Arbitrage scanner content (formerly page_arbitrage). Called from
+    page_backtest when the primary segmented control is on Arbitrage.
+
+    Note: this helper does NOT render its own topbar / page_header —
+    those are owned by page_backtest now since Arbitrage shares the
+    Backtester page surface.
+    """
     _arb_lv = st.session_state.get("user_level", "beginner")
-    _arb_title = "Opportunities" if _arb_lv in ("beginner", "intermediate") else "Arbitrage Scanner"
-    _arb_sub = (
-        "Sometimes the same coin costs different amounts on different exchanges. "
-        "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another."
-        if _arb_lv == "beginner"
-        else "Cross-exchange spot price spreads and funding-rate carry trades. "
-             "Net spread = gross spread − round-trip taker fees."
-    )
-    # ── 2026-05 redesign: top bar + page header ──
-    try:
-        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
-        _ds_page_header(title=_arb_title, subtitle=_arb_sub)
-    except Exception as _ds_arb_err:
-        logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
-        st.title(f"⚡ {_arb_title}")
-        st.caption(_arb_sub)
 
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])

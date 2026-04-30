@@ -52,14 +52,16 @@ def test_run_backtest_button_uses_on_click_callback():
     rendered as 'enabled' for one extra paint."""
     src = APP_PY.read_text(encoding="utf-8")
 
-    # Find the page_backtest function body.
-    bt_idx = src.find("def page_backtest():")
-    assert bt_idx > 0, "page_backtest() not found in app.py"
-    # Take a generous slice (page_backtest is large but the run button is near the top).
-    bt_body = src[bt_idx:bt_idx + 6000]
+    # Locate the run button by its key. The window between page_backtest
+    # and the next top-level def can grow as Phase C lands more controls
+    # (e.g. C4 added primary segmented + Universe dropdown above the run
+    # button), so we slice from the run-button key directly out to a
+    # generous tail rather than from page_backtest's first byte.
+    btn_idx = src.find('key="bt_btn_run"')
+    assert btn_idx > 0, "run button key 'bt_btn_run' not found in app.py"
+    btn_body = src[max(0, btn_idx - 1500): btn_idx + 1500]
 
-    assert 'key="bt_btn_run"' in bt_body, "run button key not found"
-    assert "on_click=_on_run_backtest_click" in bt_body, (
+    assert "on_click=_on_run_backtest_click" in btn_body, (
         "page_backtest run button no longer uses on_click=callback. "
         "Without it, the click frame won't show immediate 'running' "
         "feedback — the button stays as 'enabled' for one extra render."
@@ -67,7 +69,7 @@ def test_run_backtest_button_uses_on_click_callback():
 
     # And the legacy shape must NOT be present in executable code.
     legacy = 'if st.button("▶ Run Backtest", key="bt_btn_run"'
-    assert legacy not in bt_body, (
+    assert legacy not in btn_body, (
         "Legacy `if st.button(\"▶ Run Backtest\", ...): _start_backtest()` "
         "shape is back. Replace with on_click=callback to keep C2 fixed."
     )
