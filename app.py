@@ -9850,10 +9850,45 @@ def page_signals():
     # ── Three-col: Technical / On-chain / Sentiment indicator cards ──
     _ic1, _ic2, _ic3 = st.columns(3)
     with _ic1:
-        _rsi = _result.get("rsi_14") or _result.get("rsi")
-        _macd_h = _result.get("macd_hist")
-        _supert = _result.get("supertrend_signal") or _result.get("supertrend")
-        _adx = _result.get("adx_14") or _result.get("adx")
+        # C9-fix (2026-04-30): the multi-timeframe strip now drives the
+        # per-TF indicator values. Scan results already store per-TF
+        # data under `_result["timeframes"][tf]` (rsi/adx/supertrend/
+        # confidence/direction), so we overlay that view onto the
+        # legacy top-level `_result.get("rsi_14") ...` reads. Falls
+        # back to the top-level value (1d-canonical) when no per-TF
+        # entry exists.
+        _tf_view = (_result.get("timeframes", {}) or {}).get(
+            _selected_tf, {}
+        ) or {}
+
+        def _tf_or_top(top_keys: list[str], tf_key: str | None = None):
+            """Prefer the per-TF value when present + numeric; else
+            fall back to the first non-None top-level key."""
+            if tf_key and tf_key in _tf_view:
+                v = _tf_view.get(tf_key)
+                if v not in (None, "N/A", ""):
+                    return v
+            for k in top_keys:
+                v = _result.get(k)
+                if v is not None:
+                    return v
+            return None
+
+        _rsi = _tf_or_top(["rsi_14", "rsi"], "rsi")
+        _macd_h = _result.get("macd_hist")  # not in per-TF dict shape
+        _supert = _tf_or_top(
+            ["supertrend_signal", "supertrend"], "supertrend"
+        )
+        _adx = _tf_or_top(["adx_14", "adx"], "adx")
+        # Surface "showing X data" caption so users can tell which
+        # timeframe the values below reflect — avoids the impression
+        # that the strip click did nothing if the per-TF values
+        # happen to be missing for the selected TF.
+        st.caption(
+            f"Showing {_selected_tf} data" if _tf_view else
+            f"Showing 1d data ({_selected_tf} not available — run a "
+            f"scan that includes {_selected_tf}.)"
+        )
         def _v(x, fmt="{:.1f}"):
             if x is None:
                 return "—"
