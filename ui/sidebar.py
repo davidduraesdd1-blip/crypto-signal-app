@@ -19,7 +19,7 @@ Every page should:
 from __future__ import annotations
 
 import html as _html
-from typing import Iterable, Literal, Sequence
+from typing import Callable, Iterable, Literal, Sequence
 
 try:
     import streamlit as st
@@ -790,6 +790,101 @@ def regime_card_html(
         f'{since_html}'
         f'</div>'
     )
+
+
+# ── Segmented control (C2 — Phase C plan §C2) ────────────────────────
+# Mockup target: docs/mockups/sibling-family-crypto-signal-BACKTESTER.html
+#   .seg-ctrl       — primary variant ([Backtest][Arbitrage] at top of
+#                     Backtester page)
+#   .seg-ctrl-sm    — small variant ([Summary][Trade History][Advanced]
+#                     sub-view switcher)
+#
+# Critical: uses on_click callback (NOT `if button(): write_state();
+# rerun()`). The inline pattern triggers the same two-click highlight
+# bug we fixed in render_sidebar (see H5 fix in commit 075bec9). With
+# on_click, Streamlit invokes the callback BEFORE the script body
+# re-runs, so the segment paints with the new active state on the
+# very first render.
+
+# Sentinel marker class so overrides.py can scope CSS to this widget
+# without touching every st.columns row in the app.
+_SEG_CTRL_MARKER_CLS = "ds-seg-ctrl"
+_SEG_CTRL_SM_MARKER_CLS = "ds-seg-ctrl ds-seg-ctrl-sm"
+
+
+def segmented_control(
+    items: Sequence[tuple[str, str]],
+    *,
+    active: str,
+    key: str,
+    on_select: Callable[[str], None] | None = None,
+    variant: Literal["primary", "small"] = "primary",
+) -> str:
+    """Mockup-style segmented control with first-click highlight.
+
+    Args:
+        items:   `[(value, label), ...]` — value is the canonical id,
+                 label is the visible text.
+        active:  the currently-selected value (the segment painted as
+                 "on"). Caller is responsible for sourcing this from
+                 session_state if persistence across reruns is wanted.
+        key:     session_state key the click handler writes to. The
+                 callback writes BEFORE the next script re-run so the
+                 first-click paint already shows the new active segment.
+        on_select: optional callback fired with the new value after
+                 session_state is updated. Use for side-effects like
+                 cache invalidation; do NOT use to write more state
+                 (that's what `key` is for).
+        variant: 'primary' (Backtester top-of-page) or 'small' (sub-
+                 view switcher). Drives which CSS class is emitted on
+                 the marker div.
+
+    Returns:
+        The currently-selected value AFTER any click handler has run
+        (i.e. session_state[key] if set, else `active`).
+    """
+    if st is None:
+        return active
+
+    # Validate the active value early — easier to spot caller bugs.
+    valid_values = {v for v, _ in items}
+    if active not in valid_values:
+        # Fall back to first item; never raise (this is a UI primitive).
+        active = next(iter(valid_values), active)
+
+    def _on_segment_click(value: str) -> None:
+        st.session_state[key] = value
+        if on_select is not None:
+            try:
+                on_select(value)
+            except Exception:  # pragma: no cover — defensive only
+                # Component must never crash a page just because a
+                # caller's on_select callback raised.
+                pass
+
+    # Marker div — CSS in overrides.py uses :has() to scope the seg-
+    # ctrl styling to the stHorizontalBlock that immediately follows
+    # this marker.
+    marker_cls = (_SEG_CTRL_SM_MARKER_CLS if variant == "small"
+                  else _SEG_CTRL_MARKER_CLS)
+    st.markdown(
+        f'<div class="{marker_cls}" data-seg-key="{_html.escape(str(key))}"></div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(len(items))
+    for col, (value, label) in zip(cols, items):
+        with col:
+            st.button(
+                str(label),
+                key=f"_segctrl_{key}_{value}",
+                use_container_width=True,
+                type=("primary" if value == active else "secondary"),
+                on_click=_on_segment_click,
+                args=(value,),
+            )
+
+    return st.session_state.get(key, active)
 
 
 # ── SIGNALS page (sibling-family-crypto-signal-SIGNALS.html) helpers ──

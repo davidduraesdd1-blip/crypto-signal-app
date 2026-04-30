@@ -163,6 +163,73 @@ def inject_streamlit_overrides() -> None:
       margin-top: 4px !important;
     }
 
+    /* ── Segmented control (C2 — Phase C plan §C2) ──────────────────────
+       Mockup target: docs/mockups/sibling-family-crypto-signal-BACKTESTER.html
+         .seg-ctrl     primary  — [Backtest][Arbitrage]
+         .seg-ctrl-sm  small    — [Summary][Trade History][Advanced]
+       The Python helper renders an empty marker <div class="ds-seg-ctrl">
+       just before an st.columns row of buttons. We use :has() on the
+       marker's stElementContainer to scope all the seg-ctrl rules to
+       the stHorizontalBlock that immediately follows it. */
+
+    /* Container — the row of buttons styled as an inline-flex pill */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] {
+      display: inline-flex !important;
+      width: auto !important;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 18px;
+      gap: 0 !important;
+      flex-wrap: nowrap !important;
+    }
+    /* Each column shrinks to its content so the segments pack tightly */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+      width: auto !important;
+      min-width: 0 !important;
+      flex: 0 0 auto !important;
+    }
+    /* Each segment button — flat, hover lift, primary = filled chip */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button {
+      background: transparent !important;
+      border: none !important;
+      box-shadow: none !important;
+      color: var(--text-muted) !important;
+      font-weight: 500 !important;
+      font-size: 13px !important;
+      padding: 8px 18px !important;
+      border-radius: 5px !important;
+      transition: all 120ms;
+      min-height: 0 !important;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button:hover {
+      background: var(--bg-2) !important;
+      color: var(--text-primary) !important;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      font-weight: 600 !important;
+    }
+
+    /* Small variant — tighter padding + smaller font */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl-sm)
+      + [data-testid="stHorizontalBlock"] {
+      padding: 2px;
+      margin-bottom: 14px;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl-sm)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button {
+      padding: 6px 14px !important;
+      font-size: 12.5px !important;
+    }
+
     /* Top bar */
     .ds-topbar {
       background: var(--bg-0);
