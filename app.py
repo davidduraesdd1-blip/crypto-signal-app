@@ -9556,6 +9556,127 @@ def page_signals():
         unsafe_allow_html=True,
     )
 
+    # C9 (Phase C plan §C9, 2026-04-30): level-aware rationale block
+    # under the hero card. Beginner gets plain English; Intermediate
+    # gets the composite + 4-layer summary; Advanced gets the raw
+    # numbers (RSI, MACD, regime confidence). Per CLAUDE.md §7.
+    try:
+        _l_tech = _result.get("layer_technical") or _result.get("tech_score")
+        _l_macro = _result.get("layer_macro") or _result.get("macro_score")
+        _l_sent = _result.get("layer_sentiment") or _result.get("sentiment_score")
+        _l_onch = _result.get("layer_onchain") or _result.get("onchain_score")
+        _composite_score = _result.get("composite_score") or _conf
+        _rsi = _result.get("rsi_14") or _result.get("rsi")
+        _macd_line = _result.get("macd_line") or _result.get("macd")
+        _macd_sig = _result.get("macd_signal")
+        _adx = _result.get("adx_14") or _result.get("adx")
+
+        if _ds_level == "beginner":
+            # Plain English, no jargon. Ground the description in the
+            # current direction + regime + 24h change so it's specific
+            # to what the user sees.
+            if _signal_letter == "BUY":
+                _rat = (
+                    f"{_coin_full} is showing positive momentum — the model "
+                    f"sees more upside signals than downside. Regime: "
+                    f"{_regime_clean.title() or 'Transition'}."
+                )
+            elif _signal_letter == "SELL":
+                _rat = (
+                    f"{_coin_full} is showing weakness — the model is leaning "
+                    f"toward a defensive posture. Regime: "
+                    f"{_regime_clean.title() or 'Transition'}."
+                )
+            else:
+                _rat = (
+                    f"{_coin_full} is in a wait-and-see zone — no strong "
+                    f"directional edge right now. Regime: "
+                    f"{_regime_clean.title() or 'Transition'}."
+                )
+            st.markdown(
+                f'<div class="ds-card" style="margin-top:12px;'
+                f'background:var(--bg-1);">'
+                f'<div style="font-size:13px;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:0.06em;'
+                f'margin-bottom:6px;">What this means</div>'
+                f'<div style="font-size:14px;line-height:1.5;'
+                f'color:var(--text-primary);">{_html.escape(_rat)}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        elif _ds_level == "intermediate":
+            # Condensed signal interpretation with key numbers visible.
+            _layers_alignment = sum(
+                1 for v in (_l_tech, _l_macro, _l_sent, _l_onch)
+                if v is not None and float(v) >= 50
+            )
+            _comp_str = (f"{float(_composite_score):.0f}"
+                         if _composite_score is not None else "—")
+            _rat = (
+                f"Composite signal: **{_signal_letter or 'HOLD'}** · "
+                f"score {_comp_str} · "
+                f"{_layers_alignment}/4 layers above neutral · "
+                f"regime {_regime_clean.title() or '—'}."
+            )
+            st.markdown(
+                f'<div class="ds-card" style="margin-top:12px;">'
+                f'<div style="font-size:13px;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:0.06em;'
+                f'margin-bottom:6px;">Signal summary</div>'
+                f'<div style="font-size:14px;line-height:1.5;">{_rat}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:  # advanced
+            # Raw numbers: RSI / MACD / ADX / per-layer scores / regime
+            # confidence. Mono font for the number column.
+            _adv_lines = []
+            if _rsi is not None:
+                _adv_lines.append(f"RSI(14)={float(_rsi):.1f}")
+            if _macd_line is not None:
+                if _macd_sig is not None:
+                    _adv_lines.append(
+                        f"MACD={float(_macd_line):.3f} / "
+                        f"signal={float(_macd_sig):.3f}"
+                    )
+                else:
+                    _adv_lines.append(f"MACD={float(_macd_line):.3f}")
+            if _adx is not None:
+                _adv_lines.append(f"ADX(14)={float(_adx):.1f}")
+            if _composite_score is not None:
+                _adv_lines.append(f"composite={float(_composite_score):.1f}")
+            if _regime_conf is not None:
+                _adv_lines.append(
+                    f"regime={_regime_clean.title() or '—'} "
+                    f"(HMM conf {float(_regime_conf):.0f}%)"
+                )
+            _layer_str = " · ".join(
+                f"{name}={(float(v)):.0f}" for name, v in (
+                    ("TA",     _l_tech),
+                    ("Macro",  _l_macro),
+                    ("Sent",   _l_sent),
+                    ("OnCh",   _l_onch),
+                ) if v is not None
+            )
+            if _layer_str:
+                _adv_lines.append(f"layers: {_layer_str}")
+            _rat_html = (
+                ("<br>".join(_html.escape(s) for s in _adv_lines))
+                or "Insufficient indicator data — run a scan to populate."
+            )
+            st.markdown(
+                f'<div class="ds-card" style="margin-top:12px;">'
+                f'<div style="font-size:13px;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:0.06em;'
+                f'margin-bottom:6px;">Advanced diagnostics</div>'
+                f'<div class="num" style="font-size:13px;line-height:1.6;'
+                f'color:var(--text-secondary);">{_rat_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as _e_rat:
+        logger.debug("[Signals] level-aware rationale render failed: %s", _e_rat)
+
     # ── Two-col: price chart + composite score ──
     _col1, _col2 = st.columns([1.2, 1])
     with _col1:
@@ -10045,10 +10166,28 @@ def page_regimes():
                     f"{_hist_count} scan snapshots over the last 90d, "
                     f"{len(_segments)} distinct regime bands."
                 )
-            _note = (f"HMM 4-state model over composite score + on-chain + "
-                     f"macro features. Current state: {_state_now.title()}"
-                     f"{f', confidence {int(_conf_now)}%' if _conf_now is not None else ''}. "
-                     f"{_hist_msg}")
+            # C9 (2026-04-30): level-aware note. Beginner gets plain
+            # English; Intermediate the standard HMM line; Advanced
+            # the full HMM diagnostic + snapshot count.
+            if _ds_level == "beginner":
+                _note = (
+                    f"Right now, {_focus_short} looks {_state_now.title()} "
+                    f"to the model. The bar above shows how the regime has "
+                    f"moved over the last 90 days. {_hist_msg}"
+                )
+            elif _ds_level == "intermediate":
+                _note = (
+                    f"HMM regime: {_state_now.title()}"
+                    f"{f' · confidence {int(_conf_now)}%' if _conf_now is not None else ''}. "
+                    f"{_hist_msg}"
+                )
+            else:  # advanced
+                _note = (
+                    f"HMM 4-state model over composite score + on-chain + "
+                    f"macro features. Current state: {_state_now.title()}"
+                    f"{f', confidence {int(_conf_now)}%' if _conf_now is not None else ''}. "
+                    f"{_hist_msg}"
+                )
             _ds_state_bar(
                 _segments,
                 title=f"{_focus_short} regime state · last 90d",
@@ -10230,9 +10369,24 @@ def page_onchain():
         on_theme=_toggle_theme,
         status_pills=_agent_topbar_pills(),
     )
+    # C9 (Phase C plan §C9, 2026-04-30): level-aware page subtitle.
+    # Beginner gets a plain-English description of what on-chain
+    # metrics actually measure; Intermediate gets a condensed
+    # technical line; Advanced gets the original full reference.
+    if _oc_lv == "beginner":
+        _oc_sub = ("These numbers come straight from the blockchain itself — "
+                   "they show what holders are actually doing with their coins, "
+                   "not just what the price chart says. Useful for spotting "
+                   "long-cycle inflection points.")
+    elif _oc_lv == "intermediate":
+        _oc_sub = ("On-chain valuation + flow metrics for major pairs: "
+                   "MVRV-Z, SOPR, exchange reserve deltas, active addresses.")
+    else:  # advanced
+        _oc_sub = ("Glassnode + Dune metrics for the major majors. "
+                   "MVRV-Z, SOPR, exchange flows, active addresses.")
     _ds_page_header(
         title="On-chain",
-        subtitle="Glassnode + Dune metrics for the major majors. MVRV-Z, SOPR, exchange flows, active addresses.",
+        subtitle=_oc_sub,
         data_sources=[
             ("Glassnode", "live"),
             ("Dune", "cached"),
