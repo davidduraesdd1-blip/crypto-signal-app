@@ -6418,7 +6418,17 @@ def page_backtest():
         )
         # Pull config-driven values where available; fall back to sensible defaults.
         _bt_cfg = _cached_alerts_config() or {}
-        _bt_universe = _bt_cfg.get("backtest_universe", "Top 10 cap")
+        # C4-fix (2026-04-30): the legacy controls-row pill was reading
+        # `backtest_universe` from alerts_config, while the new C4
+        # selectbox above writes to `st.session_state["bt_universe"]`.
+        # When the user picked "All 33" but alerts_config still said
+        # "Top 10 cap", the page showed two competing universes and
+        # users couldn't tell which one was active. Now the pill reads
+        # the session-state key first so both surfaces always agree.
+        _bt_universe = (
+            st.session_state.get("bt_universe")
+            or _bt_cfg.get("backtest_universe", "Top 10 cap")
+        )
         _bt_period = _bt_cfg.get("backtest_period", "2023-01-01 → today")
         _bt_initial = _bt_cfg.get("backtest_initial_usd", "$100,000")
         _bt_rebalance = _bt_cfg.get("backtest_rebalance", "Weekly")
