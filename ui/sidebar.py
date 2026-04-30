@@ -79,13 +79,16 @@ DEFAULT_NAV: dict[str, list[NavItem]] = {
         ("onchain",    "On-chain",   "⬡"),
     ],
     "Account": [
-        ("alerts",   "Alerts",       "◐"),
+        ("alerts",       "Alerts",       "◐"),
         # C1 (2026-04-29): AI Assistant promoted from a sub-link inside
         # Settings to a first-class nav item — matches the full-mockup-
         # match spec and exposes the agent surface (page_agent at the
         # `Agent` page-router key) without burying it in Settings.
-        ("agent",    "AI Assistant", "✦"),
-        ("settings", "Settings",     "⚙"),
+        # Key is `ai_assistant` (not `agent`) per Phase C plan §C1; that
+        # leaves `agent` available as a session_state namespace for the
+        # autonomous agent runtime without colliding with the nav key.
+        ("ai_assistant", "AI Assistant", "💬"),
+        ("settings",     "Settings",     "⚙"),
     ],
 }
 
@@ -98,14 +101,14 @@ DEFAULT_NAV: dict[str, list[NavItem]] = {
 # page. Each now maps to its real page-router key — see app.py
 # `if page == "..." :` block at line 9923+.
 PAGE_KEY_TO_APP: dict[str, str] = {
-    "home":       "Dashboard",
-    "signals":    "Signals",
-    "regimes":    "Regimes",
-    "backtester": "Backtest Viewer",
-    "onchain":    "On-chain",
-    "alerts":     "Config Editor",    # Alerts tab in Settings
-    "agent":      "Agent",
-    "settings":   "Config Editor",
+    "home":         "Dashboard",
+    "signals":      "Signals",
+    "regimes":      "Regimes",
+    "backtester":   "Backtest Viewer",
+    "onchain":      "On-chain",
+    "alerts":       "Config Editor",   # TODO C6 — split into page_alerts
+    "ai_assistant": "Agent",
+    "settings":     "Config Editor",
 }
 
 

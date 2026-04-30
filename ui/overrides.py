@@ -59,9 +59,9 @@ def inject_streamlit_overrides() -> None:
     /* Nav group header — C1 (2026-04-29): bolded + primary text color
        + 12px size + 0.12em letter-spacing for stronger visual
        hierarchy between section labels and the nav items below them.
-       Matches the full-mockup-match spec. */
+       Matches the Phase C plan §C1 spec exactly (margin 18/6). */
     .ds-nav-group {
-      margin: 14px 0 4px; padding: 0 10px;
+      margin: 18px 0 6px; padding: 0 10px;
       color: var(--text-primary); font-size: 12px; font-weight: 700;
       letter-spacing: 0.12em; text-transform: uppercase;
     }
@@ -150,7 +150,7 @@ def inject_streamlit_overrides() -> None:
       font-size: 12px !important;
       font-weight: 700 !important;
       color: var(--text-primary) !important;
-      margin: 10px 0 2px 0 !important;
+      margin: 18px 0 6px 0 !important;
       padding: 6px 10px 4px 10px !important;
       text-transform: uppercase !important;
       letter-spacing: 0.12em !important;

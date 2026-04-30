@@ -1163,13 +1163,14 @@ _DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("onchain",    "On-chain",   "On-chain"),
     ]),
     ("Account", [
-        ("alerts",   "Alerts",       "Config Editor"),
-        # C1-fix (2026-04-29): "AI Agent" → "AI Assistant" per spec; promoted
-        # above Settings so it sits between Alerts and Settings (was previously
-        # buried under Settings in the old order). Arbitrage stays last.
-        ("agent",    "AI Assistant", "Agent"),
-        ("settings", "Settings",     "Config Editor"),
-        ("opps",     "Arbitrage",    "Arbitrage"),
+        ("alerts",       "Alerts",       "Config Editor"),
+        # C1 reconcile (2026-04-29): nav key is `ai_assistant` per Phase C
+        # plan §C1 (not `agent` — that name is reserved for the
+        # autonomous-agent runtime namespace). Page-router target stays
+        # "Agent" since page_agent() is the existing entry point.
+        ("ai_assistant", "AI Assistant", "Agent"),
+        ("settings",     "Settings",     "Config Editor"),
+        ("opps",         "Arbitrage",    "Arbitrage"),
     ]),
 ]
 _ds_nav_current = _DS_NAV
