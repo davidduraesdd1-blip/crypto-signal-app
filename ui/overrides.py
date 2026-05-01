@@ -47,12 +47,17 @@ def inject_streamlit_overrides() -> None:
        because neither .ds-rail-brand nor .ds-brand-wm had white-space:
        nowrap. Streamlit's outer flex container shrinks the wordmark
        below its intrinsic width and the dot+span flex gap forces the
-       break. Drop font-size from 15px to 14px and pin both the row
-       and the wordmark to nowrap. */
+       break.
+       C-fix-02b (2026-05-02): the 14px font-size still ellipsised on
+       prod ("Signal..." instead of "Signal.app") because at 14px Inter,
+       the 10-char wordmark measures ~75-78px, just over the ~74px the
+       150px rail leaves after the 22px dot + 10px gap + 20px brand
+       padding. Drop to 13px (~6px breathing room) and tighten brand
+       padding to 8px so adjacent items (Glossary popover) stop clipping. */
     .ds-rail-brand {
       display: flex; align-items: center; gap: 10px;
-      padding: 6px 10px 20px;
-      font-weight: 600; font-size: 14px; letter-spacing: -0.01em;
+      padding: 6px 8px 20px;
+      font-weight: 600; font-size: 13px; letter-spacing: -0.01em;
       color: var(--text-primary);
       white-space: nowrap;
       overflow: hidden;

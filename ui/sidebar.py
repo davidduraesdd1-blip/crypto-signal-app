@@ -358,17 +358,15 @@ def render_top_bar(
     if show_refresh:
         with cols[4]:
             if on_refresh is not None:
-                # C8-fix (2026-04-30): Beginner level uses one combined
-                # "Update" button that refreshes caches AND kicks off a
-                # scan (the cache-clear + scan-trigger split is a power-
-                # user distinction). Int/Adv keep the cheap "Refresh"
-                # behaviour and the explicit "Run Scan" button on Home.
-                _ref_lbl = "↻ Update" if user_level == "beginner" else "↻ Refresh"
+                # C-fix-10 (2026-05-02): unified label across all user
+                # levels. The previous level-aware split ("↻ Update" for
+                # Beginner; "↻ Refresh" for Int/Adv) was rejected — every
+                # user gets one button that does the full "make everything
+                # fresh" action (clear caches + run full scan + repaint).
+                _ref_lbl = "↻ Update"
                 _ref_help = (
-                    "Refresh all data and run a fresh scan in the background"
-                    if user_level == "beginner"
-                    else "Clear all caches and reload data from all sources "
-                         "(does not re-run the scan pipeline)"
+                    "Clear all caches and run a fresh full scan in the "
+                    "background. Updates the entire UI when the scan completes."
                 )
                 st.button(
                     _ref_lbl,

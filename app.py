@@ -795,6 +795,14 @@ def _get_scheduler() -> BackgroundScheduler:
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
+        # C-fix-12 (2026-05-02): bootstrap the autoscan job from saved
+        # config on first scheduler init. Without this, autoscan was
+        # only registered when the user opened Settings → Dev Tools,
+        # so fresh sessions had no scheduled scans at all.
+        try:
+            _bootstrap_autoscan_from_config()
+        except Exception as _e_boot:
+            logger.debug("[App] autoscan bootstrap failed: %s", _e_boot)
         # P1: Startup catch-up — delayed 90 seconds so the initial Streamlit render
         # completes and all @st.cache_data caches warm up before the feedback thread
         # acquires _exchange_cache_lock for load_markets(). Running immediately caused
@@ -843,6 +851,31 @@ def _setup_calibration_job():
             replace_existing=True,
             next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
         )
+
+
+def _bootstrap_autoscan_from_config() -> None:
+    """C-fix-12 (2026-05-02): start the autoscan job at app boot if the
+    saved config has it enabled. Pre-fix the job was only registered
+    when the user navigated to Settings → Dev Tools — meaning a fresh
+    session that never opens Settings would have NO automatic scans
+    despite §12 spec, defeating the autoscan entirely. This is now
+    called once during scheduler init so the job lives as long as the
+    Streamlit process. Safe to call repeatedly: _setup_autoscan uses
+    replace_existing=True."""
+    try:
+        _cfg = _cached_alerts_config() or {}
+    except Exception as _e:
+        logger.debug("[Bootstrap] alerts_config read for autoscan failed: %s", _e)
+        _cfg = {}
+    # Match the same defaults the Settings UI uses — §12 compliant.
+    _enabled = bool(_cfg.get("autoscan_enabled", True))
+    _interval = int(_cfg.get("autoscan_interval_minutes", 15) or 15)
+    if _enabled:
+        try:
+            _setup_autoscan(_interval)
+            logger.info("[Bootstrap] Autoscan registered: every %d min", _interval)
+        except Exception as _e:
+            logger.debug("[Bootstrap] autoscan registration failed: %s", _e)
 
 
 def _setup_autoscan(interval_minutes: int):
@@ -967,6 +1000,98 @@ def init_state():
 
 init_state()
 
+
+# C-fix-12 (2026-05-02): initialise the BackgroundScheduler at app boot
+# so the autoscan job registers from saved config (defaults: enabled,
+# 15 min interval per §12). Pre-fix _get_scheduler() was only called
+# from _setup_autoscan / _render_relocated_sidebar_widgets, neither of
+# which fires during a normal Home-page render — meaning the autoscan
+# never ran at all unless the user manually opened Settings → Dev Tools.
+# _get_scheduler() is idempotent (singleton guarded by `if _scheduler is None`).
+try:
+    _get_scheduler()
+except Exception as _e_sched_boot:
+    logger.debug("[App] scheduler boot failed: %s", _e_sched_boot)
+
+
+# ──────────────────────────────────────────────
+# C-fix-11 (2026-05-02): MANDATORY FIRST-SESSION SCAN — definition only
+#
+# On first session startup, if no scan has been run recently (< 15 min
+# old per CLAUDE.md §12), kick one off automatically. Without this,
+# users landing on Home before the autoscan scheduler had a chance to
+# run saw empty hero cards / "scan refreshed not yet run" / blank
+# composite — exactly the cold-start gap the post-deploy audit flagged.
+#
+# The CALL is placed later in the file (right before page dispatch)
+# because it depends on `_start_scan`, which is defined further down.
+# Gated by:
+#   - st.session_state["_c11_first_init_done"] — fires ONCE per session
+#     so navigation between pages doesn't re-trigger
+#   - the existing thread-state re-entry guard — no second scan if one
+#     is already running (e.g. fired by the autoscan scheduler)
+#
+# Staleness check: prefer the in-session scan_timestamp; fall back to
+# the DB-stored scan_status so a fresh process attaching to a recent
+# scan doesn't refire. > 15 min stale OR no timestamp at all → scan.
+# ──────────────────────────────────────────────
+def _maybe_fire_first_session_scan() -> None:
+    if st.session_state.get("_c11_first_init_done"):
+        return
+    st.session_state["_c11_first_init_done"] = True
+
+    # If a scan is already running we have nothing to do — the sidebar
+    # progress fragment + in-line banner already show feedback.
+    _running = (
+        _SCAN_STATUS.get("running", False)
+        or _scan_state.get("running", False)
+    )
+    if _running:
+        return
+
+    # Compute staleness. Try session timestamp first, then DB.
+    _ts = st.session_state.get("scan_timestamp")
+    _ts_dt: datetime | None = None
+    if _ts is not None:
+        if isinstance(_ts, datetime):
+            _ts_dt = _ts
+        else:
+            try:
+                _ts_dt = datetime.fromisoformat(str(_ts))
+            except Exception:
+                _ts_dt = None
+    if _ts_dt is None:
+        try:
+            _db_status = _read_scan_status() or {}
+            _db_ts_raw = _db_status.get("timestamp")
+            if isinstance(_db_ts_raw, datetime):
+                _ts_dt = _db_ts_raw
+            elif _db_ts_raw:
+                try:
+                    _ts_dt = datetime.fromisoformat(str(_db_ts_raw))
+                except Exception:
+                    _ts_dt = None
+        except Exception as _e_ts:
+            logger.debug("[Init] scan-timestamp DB read failed: %s", _e_ts)
+
+    _stale = True
+    if _ts_dt is not None:
+        try:
+            # Tolerate naive or aware timestamps — assume UTC for naive.
+            _now = datetime.now(timezone.utc)
+            _age_s = (_now - (_ts_dt if _ts_dt.tzinfo else _ts_dt.replace(tzinfo=timezone.utc))).total_seconds()
+            _stale = _age_s > 15 * 60
+        except Exception:
+            _stale = True
+
+    if _stale:
+        try:
+            _start_scan()
+            logger.info("[Init] First-session mandatory scan started (data was stale or absent)")
+        except Exception as _e_init_scan:
+            logger.debug("[Init] first-session scan start failed: %s", _e_init_scan)
+
+
 # Start WebSocket live price feed (idempotent — safe on every Streamlit rerun)
 _ws.start(model.PAIRS)
 
@@ -1076,11 +1201,55 @@ def _topbar_pills() -> list[dict]:
 # that's always in view no matter where the user is on the page.
 @st.fragment(run_every=2)
 def _sg_sidebar_progress():
-    _running = (
-        st.session_state.get("scan_running", False)
-        or _SCAN_STATUS.get("running", False)
+    # Authoritative scan-state lives in the in-memory _SCAN_STATUS +
+    # _scan_state dicts (the scan thread writes both at start, end, and
+    # error). st.session_state["scan_running"] is a session-scoped CACHE
+    # that the UI button reads — it MUST track the in-memory flag.
+    _thread_running = (
+        _SCAN_STATUS.get("running", False)
         or _scan_state.get("running", False)
     )
+    _session_thinks_running = st.session_state.get("scan_running", False)
+
+    # C-fix-08 (2026-05-02): completion writeback. The scan thread sets
+    # _SCAN_STATUS / _scan_state running=False on completion + error
+    # (lines 2624-2625), but nothing was clearing st.session_state
+    # ["scan_running"] — the dead `_scan_progress()` fragment used to
+    # do it on line 1891 but is never invoked. Result: the Home page
+    # "Analyzing…" button label and any other code reading scan_running
+    # via session_state stayed stuck on True forever after the first
+    # scan completed. Detect the desync here and clean it up — runs
+    # every 2s so completion clears within 2s of the thread exit.
+    if _session_thinks_running and not _thread_running:
+        st.session_state["scan_running"] = False
+        # Persist the latest results into session_state so consumers
+        # don't have to re-read SQLite. Use the same writeback shape
+        # as the dead _scan_progress fragment did.
+        try:
+            _final_st = _read_scan_status() or {}
+            _cached = _read_scan_results()
+            if _cached is not None:
+                st.session_state["scan_results"] = _cached
+                st.session_state["scan_error"]     = _final_st.get("error")
+                st.session_state["scan_timestamp"] = _final_st.get("timestamp")
+        except Exception as _wb_err:
+            logger.debug("[App] scan-completion writeback failed: %s", _wb_err)
+        # Trigger a full-page rerun so the Home button label reverts to
+        # "🔍 Run a fresh scan now" and watchlist / hero cards re-read
+        # the fresh scan_results from session_state. scope="app" because
+        # this runs inside @st.fragment — the default scope="fragment"
+        # would only re-render this sidebar block, leaving the stale
+        # button label in the main column.
+        try:
+            st.rerun(scope="app")
+        except TypeError:
+            # Streamlit < 1.36 doesn't accept the scope kwarg; fall back
+            # to the bare rerun (still triggers the rerun, may need a
+            # second tick to propagate fully).
+            st.rerun()
+        return  # rerun aborts current pass; defensive
+
+    _running = _thread_running or _session_thinks_running
     if not _running:
         return
     _prog = (
@@ -1327,18 +1496,26 @@ def _agent_topbar_pills() -> list[dict]:
 # removed so the topbar ↻ chip is the single control surface. Both the
 # topbar button and any future programmatic call invoke this handler.
 def _refresh_all_data() -> None:
-    """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
-    helpers, the data_feeds module-level dicts, and the cycle_indicators
-    in-memory caches. Caller is responsible for st.rerun().
+    """Single unified update action: clear ALL caches AND run a fresh
+    full scan. Used by the topbar "↻ Update" button on every page,
+    every user level. Caller is responsible for st.rerun() if needed
+    (Streamlit auto-reruns on the click frame).
 
-    C8-fix (2026-04-30): level-aware. At Beginner level the topbar
-    Refresh chip is relabelled to "↻ Update" and ALSO triggers a
-    background scan after the cache clear — beginners shouldn't have
-    to learn the distinction between "refresh = cache clear" and
-    "scan = recompute signals". For Intermediate/Advanced the chip
-    stays as "↻ Refresh" and only clears caches (the explicit
-    "▶ Run Scan" button on Home stays the scan trigger). Guarded
-    against re-entry: if a scan is already running, no second start.
+    C-fix-10 (2026-05-02): unified across all levels. The previous
+    C8-fix implementation gated the auto-scan on
+    `user_level == "beginner"` so Intermediate/Advanced users had to
+    distinguish "↻ Refresh" (cache clear) from "▶ Run Scan" (recompute
+    signals) — a power-user distinction that David explicitly rejected
+    ("i really just want A single button that does a full scan and
+    updates the entire UI/UX regardless of the level expertize").
+    Now every click of ↻ Update at every level: clears all caches
+    AND kicks off a scan. The level label on the button is unified to
+    "↻ Update" everywhere (was "↻ Update" for beginners, "↻ Refresh"
+    for int/adv).
+
+    Re-entry guard: if a scan is already running, no second start
+    (the cache-clear still happens — the user pressed it for a
+    reason — but we don't queue a second scan thread).
     """
     try:
         st.cache_data.clear()
@@ -1366,22 +1543,20 @@ def _refresh_all_data() -> None:
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
 
-    # C8-fix (2026-04-30): Beginner-level refresh ALSO kicks off a
-    # scan. Re-entry guard: only fires if no scan is currently
-    # running. Int/Adv users keep the explicit two-button distinction.
+    # C-fix-10 (2026-05-02): always kick off a scan after the cache
+    # clear, regardless of user level. The Update button is a unified
+    # "make everything fresh" action across Beginner / Intermediate /
+    # Advanced. Re-entry guard: no second scan if one is already
+    # running.
     try:
-        _ref_lv = st.session_state.get("user_level", "beginner")
-        if _ref_lv == "beginner":
-            _already_scanning = st.session_state.get("scan_running", False)
-            try:
-                with _scan_lock:
-                    _already_scanning = _already_scanning or _scan_state.get("running", False)
-            except Exception:
-                pass
-            if not _already_scanning:
-                _start_scan()
+        _already_scanning = (
+            _SCAN_STATUS.get("running", False)
+            or _scan_state.get("running", False)
+        )
+        if not _already_scanning:
+            _start_scan()
     except Exception as _e_auto_scan:
-        logger.debug("[App] beginner auto-scan after refresh failed: %s", _e_auto_scan)
+        logger.debug("[App] auto-scan after refresh failed: %s", _e_auto_scan)
 
 st.sidebar.markdown("---")
 
@@ -1530,7 +1705,9 @@ def _render_relocated_sidebar_widgets() -> None:
         _alert_cfg = _legacy_alerts_cfg.copy()
         autoscan_on = st.toggle(
             "Enable Auto-Scan",
-            value=_alert_cfg.get("autoscan_enabled", False),
+            # C-fix-12 (2026-05-02): default True to match CLAUDE.md §12
+            # spec ("Full scan / recalc — 15 min auto").
+            value=_alert_cfg.get("autoscan_enabled", True),
             key="autoscan_toggle",
         )
         interval_options = {
@@ -1542,7 +1719,8 @@ def _render_relocated_sidebar_widgets() -> None:
             options=list(interval_options.keys()),
             index=list(interval_options.values()).index(
                 min(interval_options.values(),
-                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
+                    # C-fix-12: default 15 min per §12 (was 60).
+                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 15)))
             ),
             key="autoscan_interval",
             disabled=not autoscan_on,
@@ -2307,8 +2485,16 @@ def page_dashboard():
                     pts.append((round(_x, 1), round(_y_pt, 1)))
                 return pts
 
-            _ds_wl_rows = []
-            for _wp in model.PAIRS[:6]:
+            # C-fix-09 (2026-05-02): factor row construction so the
+            # Customize popover can rebuild rows for arbitrary user-
+            # selected pairs (not just the default 6-pair seed). Each
+            # row carries BOTH "ticker" (display) AND "pair" (lookup
+            # key) so the customize-filter dict can match correctly —
+            # the previous code only wrote "ticker" and the filter
+            # keyed on r.get("pair") which always returned None,
+            # collapsing the dict to `{None: <last row>}` and dropping
+            # every row on every customize-save.
+            def _build_wl_row(_wp: str) -> dict:
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
@@ -2318,20 +2504,22 @@ def page_dashboard():
                     logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
                     _closes = []
                 _pts = _spark_points_from_closes(_closes)
-                # Derive 24h change from closes only if WS didn't supply one
                 if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
                     try:
                         _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
                     except Exception:
                         pass
-                _wl_row = {
+                _row = {
+                    "pair": _wp,  # full "BTC/USDT" — lookup key
                     "ticker": _wp.replace("/USDT", "").replace("/USD", ""),
                     "price": _price,
                     "change_pct": _chg,
                 }
                 if _pts:
-                    _wl_row["spark_points"] = _pts
-                _ds_wl_rows.append(_wl_row)
+                    _row["spark_points"] = _pts
+                return _row
+
+            _ds_wl_rows = [_build_wl_row(_wp) for _wp in model.PAIRS[:6]]
             # Last scan timestamp
             _scan_ts_label = "not yet run"
             _ts = st.session_state.get("scan_timestamp")
@@ -2415,14 +2603,18 @@ def page_dashboard():
                         current=_wl_default_pairs,
                         key="watchlist_pairs",
                     )
-                    # Filter the rows to those present in the user's
-                    # customised list (preserve order from the user's
-                    # selection so reordering via toggle is honoured).
-                    if _wl_pairs and _ds_wl_rows:
-                        _row_by_pair = {r.get("pair"): r for r in _ds_wl_rows
-                                        if r.get("pair")}
-                        _ds_wl_rows = [_row_by_pair[p] for p in _wl_pairs
-                                       if p in _row_by_pair]
+                    # C-fix-09 (2026-05-02): when the user has a custom
+                    # watchlist, REBUILD the rows from their selection
+                    # rather than filtering the 6-pair seed. The seed
+                    # only contains model.PAIRS[:6] (BTC/ETH/...); a
+                    # user adding XRP or SOL or anything else outside
+                    # those 6 had their selection silently dropped by
+                    # the filter — visually identical to "nothing
+                    # happened on save". Now we call _build_wl_row for
+                    # every selected pair so user-added entries always
+                    # render with whatever live data we can pull.
+                    if _wl_pairs:
+                        _ds_wl_rows = [_build_wl_row(_p) for _p in _wl_pairs]
                 except Exception as _wl_custom_err:
                     logger.debug("[Home] watchlist customize failed: %s",
                                  _wl_custom_err)
@@ -2461,15 +2653,35 @@ def page_dashboard():
     # unconditionally. The session-state key is no longer read; the
     # Settings → Dev Tools toggle that wrote it is also removed.
     _ds_lvl_hide = st.session_state.get("user_level", "beginner")
-    # Compact scan CTA so users can still trigger a fresh scan from Home.
+
+    # C-fix-10 (2026-05-02): the standalone Home "🔍 Run a fresh scan
+    # now" CTA is removed. The topbar "↻ Update" button (every page,
+    # every level) is now the canonical scan trigger — clears caches +
+    # runs full scan + updates the UI. Keeping a redundant Home-only
+    # button created two divergent control surfaces that drifted (the
+    # Home button skipped the cache clear, the topbar button skipped
+    # the scan for non-beginners pre-fix).
+    #
+    # While a scan is in progress we surface a compact in-line status
+    # banner so the user has feedback they can see without scrolling
+    # back to the topbar — but it's NOT a button. The sidebar progress
+    # fragment is the live indicator.
     with _scan_lock:
         _ds_sb_running = _scan_state["running"]
-    _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
-    _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
-    if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
-        st.session_state["scan_results"] = []
-        st.session_state["scan_error"] = None
-        _start_scan()
+    _ds_sb_running = _ds_sb_running or _SCAN_STATUS.get("running", False)
+    if _ds_sb_running:
+        st.markdown(
+            '<div class="ds-card" style="margin-top:8px;padding:10px 14px;'
+            'display:flex;align-items:center;gap:10px;'
+            'background:rgba(0,212,170,0.06);'
+            'border:1px solid rgba(0,212,170,0.25);">'
+            '<span style="color:#00d4aa;font-weight:600;font-size:13px;">'
+            '⚡ Scanning the universe…</span>'
+            '<span style="color:var(--text-muted);font-size:12px;">'
+            'live progress in the sidebar — page repaints when complete</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── _LEGACY_REMOVED_C10 (2026-04-30) ─────────────────────────────────
     # The legacy 5-tab Dashboard stack (Today / All Coins / Coin Detail /
@@ -3245,12 +3457,71 @@ def page_config():
             icon="⏰",
         )
         _sched_cfg = _cached_alerts_config()
+
+        # C-fix-12 (2026-05-02): visible §12-compliance summary before the
+        # form. The user explicitly asked "when does the app run an
+        # autoscan on a regular schedule?" — this banner answers that
+        # by surfacing the spec, the configured value, and (when active)
+        # the next-scheduled-run countdown + last-scan age in one place.
+        _c12_spec_min = 15
+        _c12_cur_enabled = bool(_sched_cfg.get("autoscan_enabled", True))
+        _c12_cur_interval = int(_sched_cfg.get("autoscan_interval_minutes", _c12_spec_min) or _c12_spec_min)
+        _c12_compliant = _c12_cur_enabled and _c12_cur_interval == _c12_spec_min
+        # Last scan age (from session OR DB) so users can see whether the
+        # scheduler has actually fired recently.
+        _c12_last_scan_label = "—"
+        try:
+            _ts_obj = st.session_state.get("scan_timestamp")
+            if _ts_obj is None:
+                _db_st = _read_scan_status() or {}
+                _ts_obj = _db_st.get("timestamp")
+            if isinstance(_ts_obj, str):
+                try:
+                    _ts_obj = datetime.fromisoformat(_ts_obj)
+                except Exception:
+                    _ts_obj = None
+            if isinstance(_ts_obj, datetime):
+                _aware_ts = _ts_obj if _ts_obj.tzinfo else _ts_obj.replace(tzinfo=timezone.utc)
+                _age_s = (datetime.now(timezone.utc) - _aware_ts).total_seconds()
+                if _age_s < 60:
+                    _c12_last_scan_label = f"{int(_age_s)}s ago"
+                elif _age_s < 3600:
+                    _c12_last_scan_label = f"{int(_age_s // 60)}m ago"
+                else:
+                    _c12_last_scan_label = f"{int(_age_s // 3600)}h ago"
+        except Exception:
+            pass
+
+        if _c12_compliant:
+            st.success(
+                f"✅ **§12 compliant** — auto-scan enabled, every "
+                f"**{_c12_cur_interval} min** (spec: {_c12_spec_min} min full-scan cycle). "
+                f"Last scan: {_c12_last_scan_label}."
+            )
+        elif not _c12_cur_enabled:
+            st.warning(
+                f"⚠️ Auto-scan is **disabled** — CLAUDE.md §12 specifies a "
+                f"{_c12_spec_min}-min full-scan cycle. Enable below for the "
+                f"app to refresh signals automatically. Last scan: {_c12_last_scan_label}."
+            )
+        else:
+            st.info(
+                f"ℹ️ Auto-scan runs every **{_c12_cur_interval} min** — CLAUDE.md "
+                f"§12 specifies a {_c12_spec_min}-min cycle. Tighten below to "
+                f"match spec, or keep your current cadence. Last scan: {_c12_last_scan_label}."
+            )
+
         with st.form("autoscan_form"):
             _sc1, _sc2 = st.columns(2)
             with _sc1:
                 _sched_on = st.toggle(
                     "Enable Auto-Scan",
-                    value=_sched_cfg.get("autoscan_enabled", False),
+                    # C-fix-12: default to True so fresh installs match
+                    # CLAUDE.md §12 "Full scan / recalc — 15 min auto".
+                    # Existing users with explicit `autoscan_enabled: false`
+                    # in their saved config keep their setting (.get with
+                    # default applies only when the key is absent).
+                    value=_sched_cfg.get("autoscan_enabled", True),
                 )
                 _sched_interval_opts = {
                     "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
@@ -3261,7 +3532,8 @@ def page_config():
                     options=list(_sched_interval_opts.keys()),
                     index=list(_sched_interval_opts.values()).index(
                         min(_sched_interval_opts.values(),
-                            key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 60)))
+                            # C-fix-12: default 15 min per §12 (was 60 min).
+                            key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 15)))
                     ),
                     disabled=not _sched_on,
                 )
@@ -8127,6 +8399,12 @@ def page_onchain():
 # ──────────────────────────────────────────────
 # ROUTER
 # ──────────────────────────────────────────────
+# C-fix-11 (2026-05-02): fire the mandatory first-session scan right
+# before page render. Defined far above (after init_state) but called
+# here because it depends on `_start_scan` which lives mid-file. Idempotent
+# via session_state["_c11_first_init_done"] — only fires once per session.
+_maybe_fire_first_session_scan()
+
 audit("page_view", page=page, level=st.session_state.get("user_level", "beginner"))
 if page == "Dashboard":
     page_dashboard()

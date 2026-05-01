@@ -242,6 +242,264 @@ def test_backtester_shows_cta_when_no_results():
     )
 
 
+# ── C-fix-08: scan-completion writeback in _sg_sidebar_progress ──────────
+
+def test_sidebar_progress_clears_session_scan_running_on_completion():
+    """C-fix-08 (2026-05-02): when the scan thread finishes, it sets
+    _SCAN_STATUS["running"] = False + _scan_state["running"] = False
+    but nothing was clearing st.session_state["scan_running"] — the
+    only writeback path lived in _scan_progress() which was dead code
+    (defined but never invoked). Result: the Home page "Analyzing…"
+    button label stayed disabled forever after the first scan.
+
+    The fix puts the writeback inside _sg_sidebar_progress (the live
+    fragment that runs every 2s) so completion clears within 2s of
+    the thread exiting."""
+    src = _app_source()
+    sb_idx = src.find("def _sg_sidebar_progress")
+    assert sb_idx > 0, "fragment not found"
+    body = src[sb_idx : sb_idx + 4000]
+    # The fragment must detect the desync (session_state thinks running
+    # but in-memory thread says idle) and zero out the cache.
+    assert "_session_thinks_running" in body, (
+        "_sg_sidebar_progress no longer derives a session-vs-thread "
+        "desync check. The completion writeback for "
+        "st.session_state['scan_running'] won't fire."
+    )
+    assert 'st.session_state["scan_running"] = False' in body, (
+        "_sg_sidebar_progress no longer clears "
+        "st.session_state['scan_running'] on completion. The 'Analyzing…' "
+        "Home button label will stay stuck after every scan."
+    )
+    # And it must trigger a full-page rerun so the Home button label
+    # reverts (default fragment scope wouldn't repaint Home).
+    assert 'st.rerun(scope="app")' in body, (
+        "_sg_sidebar_progress no longer triggers an app-scope rerun on "
+        "scan completion. Without it, the sidebar updates but the Home "
+        "page button label and watchlist stay stale until next interaction."
+    )
+
+
+def test_home_scan_status_banner_uses_thread_state_not_session_cache():
+    """C-fix-08 + C-fix-10: the Home page in-line scan-status banner
+    (replacing the removed standalone 'Run a fresh scan now' button)
+    must derive its show/hide state from the authoritative in-memory
+    _scan_state / _SCAN_STATUS dicts, NOT st.session_state['scan_running']
+    which can go stale. Defence in depth: even if the sidebar fragment
+    hasn't ticked yet, the banner reflects reality."""
+    src = _app_source()
+    # Anchor on the banner text.
+    idx = src.find("Scanning the universe")
+    assert idx > 0, "Home scan-status banner not found"
+    # Read backward to find the running-flag computation.
+    block = src[max(0, idx - 1500) : idx + 200]
+    code_lines = [
+        line for line in block.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code_only = "\n".join(code_lines)
+    # Positive: banner gates on the in-memory thread flag(s).
+    assert (
+        "_scan_state[" in code_only
+        or "_SCAN_STATUS.get" in code_only
+    ), (
+        "Home scan-status banner no longer reads from the in-memory "
+        "_scan_state / _SCAN_STATUS dicts. Without it, the banner can "
+        "show stale state."
+    )
+    # Negative: the banner must NOT gate on session_state cache —
+    # the same desync that produced the C-fix-08 'Analyzing…' bug.
+    assert (
+        'st.session_state.get("scan_running"' not in code_only
+        or 'if _ds_sb_running:' in code_only
+    ), (
+        "Home scan-status banner reverted to reading scan_running "
+        "from st.session_state. Use _scan_state / _SCAN_STATUS instead."
+    )
+
+
+# ── C-fix-09: Watchlist customize rebuild rows from user selection ──────
+
+def test_watchlist_rows_carry_pair_key_for_lookup():
+    """C-fix-09 (2026-05-02): the watchlist row dicts must carry a
+    "pair" key (e.g. "BTC/USDT") so the customize popover's
+    pair → row lookup actually matches. Pre-fix, rows only had a
+    "ticker" key (e.g. "BTC"), so `_row_by_pair = {r.get("pair"): r}`
+    collapsed to `{None: <last row>}` and the customize-save filter
+    silently dropped every row."""
+    src = _app_source()
+    # Anchor on the watchlist row builder.
+    idx = src.find("def _build_wl_row(")
+    assert idx > 0, (
+        "_build_wl_row helper missing — without it the row construction "
+        "is duplicated and the 'pair' key was easy to forget."
+    )
+    body = src[idx : idx + 2000]
+    assert '"pair": _wp' in body, (
+        "Watchlist row no longer carries the full pair string under "
+        "the 'pair' key. Customize-save filter will collapse to "
+        "{None: row} and silently drop every row."
+    )
+    assert '"ticker"' in body, (
+        "Watchlist row dropped the 'ticker' key — display will break."
+    )
+
+
+def test_watchlist_customize_rebuilds_rows_from_user_selection():
+    """C-fix-09: when the user customizes their watchlist, the page
+    must REBUILD rows from their selection (so user-added pairs outside
+    the 6-pair default seed actually render), NOT filter the seed
+    (which would silently drop user additions)."""
+    src = _app_source()
+    # Find the customize-handling block.
+    idx = src.find("from ui import watchlist_customize_btn as _ds_wl_custom")
+    assert idx > 0, "watchlist customize block not found"
+    block = src[idx : idx + 2000]
+    # Positive: rebuild via _build_wl_row over the user's selection.
+    assert "_build_wl_row(_p) for _p in _wl_pairs" in block, (
+        "Customize-save no longer rebuilds rows from the user's "
+        "selection. User-added pairs outside the 6-pair default seed "
+        "will be dropped — visually identical to 'nothing happened'."
+    )
+
+
+# ── C-fix-11: mandatory first-session scan on app boot ─────────────────
+
+def test_first_session_scan_helper_is_defined():
+    """C-fix-11 (2026-05-02): the app must define
+    _maybe_fire_first_session_scan() and CALL it before page dispatch.
+    Without it, users landing on Home before the autoscan scheduler
+    fires see empty hero cards / 'scan refreshed not yet run'."""
+    src = _app_source()
+    assert "def _maybe_fire_first_session_scan" in src, (
+        "Helper _maybe_fire_first_session_scan is missing — first-"
+        "session mandatory scan path will never fire."
+    )
+
+
+def test_first_session_scan_is_called_before_router():
+    """The call to _maybe_fire_first_session_scan() must precede the
+    page dispatcher (the `if page == 'Dashboard':` block) so the scan
+    starts before any page renders. Otherwise the cold-start banner
+    won't paint until after the first render finishes."""
+    src = _app_source()
+    call_idx = src.find("_maybe_fire_first_session_scan()")
+    router_idx = src.find('if page == "Dashboard":')
+    assert call_idx > 0, "_maybe_fire_first_session_scan() is never called"
+    assert router_idx > 0, "page router not found"
+    assert call_idx < router_idx, (
+        "_maybe_fire_first_session_scan() is called AFTER the page "
+        "router. Move it earlier — the scan must start before the "
+        "page renders so the cold-start banner shows on first paint."
+    )
+
+
+def test_first_session_scan_is_idempotent_via_session_flag():
+    """The helper must guard against re-firing on every Streamlit
+    rerun by setting + checking st.session_state['_c11_first_init_done']."""
+    src = _app_source()
+    idx = src.find("def _maybe_fire_first_session_scan")
+    assert idx > 0
+    body = src[idx : idx + 4000]
+    assert '_c11_first_init_done' in body, (
+        "Idempotency guard '_c11_first_init_done' is missing. The "
+        "helper would re-fire on every rerun, queuing infinite scans."
+    )
+
+
+def test_first_session_scan_uses_15_min_staleness_threshold():
+    """Per CLAUDE.md §12 the full-scan auto-cycle is 15 min. The
+    first-session scan should fire only when the cached scan is
+    older than that — otherwise we'd refire while a recent scan
+    is still being read."""
+    src = _app_source()
+    idx = src.find("def _maybe_fire_first_session_scan")
+    body = src[idx : idx + 4000]
+    assert "15 * 60" in body or "900" in body, (
+        "_maybe_fire_first_session_scan no longer uses a 15-min "
+        "staleness threshold. CLAUDE.md §12 says the full-scan auto-"
+        "cycle is 15 min — fire only when the existing scan is older."
+    )
+
+
+# ── C-fix-12: autoscan §12 alignment + bootstrap + Settings visibility ──
+
+def test_autoscan_default_enabled_and_15_min_per_section_12():
+    """C-fix-12 (2026-05-02): the default for autoscan_enabled must be
+    True and autoscan_interval_minutes must be 15, matching CLAUDE.md
+    §12 'Full scan / recalc — 15 min auto'."""
+    src = _app_source()
+    # Enabled-default must be True (was False).
+    assert (
+        '"autoscan_enabled", True' in src
+    ), (
+        "autoscan_enabled default is no longer True. CLAUDE.md §12 "
+        "specifies the autoscan should be on by default."
+    )
+    # Interval-default must be 15 (was 60).
+    assert (
+        '"autoscan_interval_minutes", 15' in src
+    ), (
+        "autoscan_interval_minutes default is no longer 15. CLAUDE.md "
+        "§12 specifies a 15-min full-scan cycle."
+    )
+
+
+def test_autoscan_bootstrap_helper_exists():
+    """C-fix-12: a _bootstrap_autoscan_from_config() helper must exist
+    and be called at app boot. Pre-fix the autoscan job was only
+    registered when the user opened Settings → Dev Tools, so a fresh
+    session that never visited Settings had no scheduled scans at all."""
+    src = _app_source()
+    assert "def _bootstrap_autoscan_from_config" in src, (
+        "_bootstrap_autoscan_from_config helper missing — autoscan "
+        "won't register on cold start."
+    )
+    # And it must be called from _get_scheduler so the bootstrap runs
+    # whenever the scheduler initialises.
+    sched_idx = src.find("def _get_scheduler")
+    assert sched_idx > 0
+    sched_body = src[sched_idx : sched_idx + 4000]
+    assert "_bootstrap_autoscan_from_config()" in sched_body, (
+        "_get_scheduler no longer calls _bootstrap_autoscan_from_config. "
+        "Autoscan won't register on cold start."
+    )
+
+
+def test_scheduler_initialised_at_app_boot():
+    """C-fix-12: the scheduler must be init'd at app boot (after
+    init_state()) so the bootstrap actually fires. Otherwise
+    _get_scheduler is only called lazily from Settings → Dev Tools."""
+    src = _app_source()
+    # Find the init_state() call line; the boot _get_scheduler() call
+    # must come AFTER it.
+    init_idx = src.find("init_state()")
+    boot_call_idx = src.find("_get_scheduler()", init_idx)
+    assert init_idx > 0 and boot_call_idx > 0, (
+        "Cannot find boot-level _get_scheduler() call after init_state."
+    )
+    # And it must come BEFORE the page router so the scheduler is up
+    # before any page-render code reads scan_status.
+    router_idx = src.find('if page == "Dashboard":')
+    assert boot_call_idx < router_idx, (
+        "Boot _get_scheduler() call moved AFTER the page router. The "
+        "scheduler must init before pages render so the autoscan is "
+        "registered + the bootstrap has fired."
+    )
+
+
+def test_settings_page_surfaces_section_12_compliance_banner():
+    """C-fix-12: the Settings → Dev Tools → Auto-Scan Scheduler section
+    must show a visible banner indicating whether the configured
+    cadence matches CLAUDE.md §12 ('§12 compliant' for the green path)."""
+    src = _app_source()
+    assert "§12 compliant" in src or "§12-compliant" in src or "section_12" in src.lower(), (
+        "Settings page no longer surfaces the §12 compliance banner. "
+        "Users have no visibility into whether their autoscan cadence "
+        "matches the spec."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():
