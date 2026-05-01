@@ -308,6 +308,51 @@ def test_home_scan_button_uses_thread_state_not_session_cache():
     )
 
 
+# ── C-fix-09: Watchlist customize rebuild rows from user selection ──────
+
+def test_watchlist_rows_carry_pair_key_for_lookup():
+    """C-fix-09 (2026-05-02): the watchlist row dicts must carry a
+    "pair" key (e.g. "BTC/USDT") so the customize popover's
+    pair → row lookup actually matches. Pre-fix, rows only had a
+    "ticker" key (e.g. "BTC"), so `_row_by_pair = {r.get("pair"): r}`
+    collapsed to `{None: <last row>}` and the customize-save filter
+    silently dropped every row."""
+    src = _app_source()
+    # Anchor on the watchlist row builder.
+    idx = src.find("def _build_wl_row(")
+    assert idx > 0, (
+        "_build_wl_row helper missing — without it the row construction "
+        "is duplicated and the 'pair' key was easy to forget."
+    )
+    body = src[idx : idx + 2000]
+    assert '"pair": _wp' in body, (
+        "Watchlist row no longer carries the full pair string under "
+        "the 'pair' key. Customize-save filter will collapse to "
+        "{None: row} and silently drop every row."
+    )
+    assert '"ticker"' in body, (
+        "Watchlist row dropped the 'ticker' key — display will break."
+    )
+
+
+def test_watchlist_customize_rebuilds_rows_from_user_selection():
+    """C-fix-09: when the user customizes their watchlist, the page
+    must REBUILD rows from their selection (so user-added pairs outside
+    the 6-pair default seed actually render), NOT filter the seed
+    (which would silently drop user additions)."""
+    src = _app_source()
+    # Find the customize-handling block.
+    idx = src.find("from ui import watchlist_customize_btn as _ds_wl_custom")
+    assert idx > 0, "watchlist customize block not found"
+    block = src[idx : idx + 2000]
+    # Positive: rebuild via _build_wl_row over the user's selection.
+    assert "_build_wl_row(_p) for _p in _wl_pairs" in block, (
+        "Customize-save no longer rebuilds rows from the user's "
+        "selection. User-added pairs outside the 6-pair default seed "
+        "will be dropped — visually identical to 'nothing happened'."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():

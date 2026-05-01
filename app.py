@@ -2351,8 +2351,16 @@ def page_dashboard():
                     pts.append((round(_x, 1), round(_y_pt, 1)))
                 return pts
 
-            _ds_wl_rows = []
-            for _wp in model.PAIRS[:6]:
+            # C-fix-09 (2026-05-02): factor row construction so the
+            # Customize popover can rebuild rows for arbitrary user-
+            # selected pairs (not just the default 6-pair seed). Each
+            # row carries BOTH "ticker" (display) AND "pair" (lookup
+            # key) so the customize-filter dict can match correctly —
+            # the previous code only wrote "ticker" and the filter
+            # keyed on r.get("pair") which always returned None,
+            # collapsing the dict to `{None: <last row>}` and dropping
+            # every row on every customize-save.
+            def _build_wl_row(_wp: str) -> dict:
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
@@ -2362,20 +2370,22 @@ def page_dashboard():
                     logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
                     _closes = []
                 _pts = _spark_points_from_closes(_closes)
-                # Derive 24h change from closes only if WS didn't supply one
                 if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
                     try:
                         _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
                     except Exception:
                         pass
-                _wl_row = {
+                _row = {
+                    "pair": _wp,  # full "BTC/USDT" — lookup key
                     "ticker": _wp.replace("/USDT", "").replace("/USD", ""),
                     "price": _price,
                     "change_pct": _chg,
                 }
                 if _pts:
-                    _wl_row["spark_points"] = _pts
-                _ds_wl_rows.append(_wl_row)
+                    _row["spark_points"] = _pts
+                return _row
+
+            _ds_wl_rows = [_build_wl_row(_wp) for _wp in model.PAIRS[:6]]
             # Last scan timestamp
             _scan_ts_label = "not yet run"
             _ts = st.session_state.get("scan_timestamp")
@@ -2459,14 +2469,18 @@ def page_dashboard():
                         current=_wl_default_pairs,
                         key="watchlist_pairs",
                     )
-                    # Filter the rows to those present in the user's
-                    # customised list (preserve order from the user's
-                    # selection so reordering via toggle is honoured).
-                    if _wl_pairs and _ds_wl_rows:
-                        _row_by_pair = {r.get("pair"): r for r in _ds_wl_rows
-                                        if r.get("pair")}
-                        _ds_wl_rows = [_row_by_pair[p] for p in _wl_pairs
-                                       if p in _row_by_pair]
+                    # C-fix-09 (2026-05-02): when the user has a custom
+                    # watchlist, REBUILD the rows from their selection
+                    # rather than filtering the 6-pair seed. The seed
+                    # only contains model.PAIRS[:6] (BTC/ETH/...); a
+                    # user adding XRP or SOL or anything else outside
+                    # those 6 had their selection silently dropped by
+                    # the filter — visually identical to "nothing
+                    # happened on save". Now we call _build_wl_row for
+                    # every selected pair so user-added entries always
+                    # render with whatever live data we can pull.
+                    if _wl_pairs:
+                        _ds_wl_rows = [_build_wl_row(_p) for _p in _wl_pairs]
                 except Exception as _wl_custom_err:
                     logger.debug("[Home] watchlist customize failed: %s",
                                  _wl_custom_err)
