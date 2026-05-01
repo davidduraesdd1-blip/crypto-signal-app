@@ -3949,29 +3949,53 @@ def page_backtest():
             except Exception:
                 return "—"
 
-        # 5-col KPI strip
-        _ds_bt_kpis([
-            ("Total return",
-             _pct(_bt_total, 1),
-             f"vs BTC {_pct(_bt_btc_total, 1)}" if _bt_btc_total is not None else "over backtest window",
-             "success" if (_bt_total is not None and float(_bt_total) > 0) else ("danger" if _bt_total is not None and float(_bt_total) < 0 else "")),
-            ("CAGR",
-             _pct(_bt_cagr, 1),
-             f"vs BTC {_pct(_bt_btc_cagr, 1)}" if _bt_btc_cagr is not None else "annualised",
-             ""),
-            ("Sharpe",
-             f"{float(_bt_sharpe):.2f}" if _bt_sharpe is not None else "—",
-             "risk-free 4.5%",
-             "accent" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else ""),
-            ("Max drawdown",
-             _pct(_bt_dd, 1),
-             f"BTC {_pct(_bt_btc_dd, 1)}" if _bt_btc_dd is not None else "peak → trough",
-             "danger" if (_bt_dd is not None and float(_bt_dd) != 0) else ""),
-            ("Win rate",
-             _pct(_bt_wr, 0, signed=False) if _bt_wr is not None else "—",
-             f"n = {int(_bt_n)} trades" if _bt_n else "no runs yet",
-             ""),
-        ])
+        # C-fix-06 (2026-05-01): render a CTA card when there's nothing
+        # to summarise. The labels-without-values state ("TOTAL RETURN: —",
+        # "CAGR: —", "SHARPE: —" ...) was actively misleading on cold-
+        # start — users couldn't tell whether the backtest had run and
+        # produced zeros, or hadn't run at all. A guided CTA tells them
+        # exactly what to do, with the same visual weight as the strip.
+        _bt_has_any_data = any(v is not None for v in (
+            _bt_total, _bt_cagr, _bt_sharpe, _bt_dd, _bt_wr,
+        ))
+        if not _bt_has_any_data:
+            st.markdown(
+                '<div class="ds-card" style="text-align:center;padding:28px 20px;">'
+                '<div style="font-size:14px;font-weight:600;color:var(--text-primary);'
+                'margin-bottom:6px;">No backtest results yet</div>'
+                '<div style="font-size:12.5px;color:var(--text-muted);'
+                'max-width:520px;margin:0 auto 14px;">'
+                'Configure parameters below and run a backtest to populate the '
+                'KPI strip with total return, CAGR, Sharpe, max drawdown and '
+                'win rate.'
+                '</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # 5-col KPI strip
+            _ds_bt_kpis([
+                ("Total return",
+                 _pct(_bt_total, 1),
+                 f"vs BTC {_pct(_bt_btc_total, 1)}" if _bt_btc_total is not None else "over backtest window",
+                 "success" if (_bt_total is not None and float(_bt_total) > 0) else ("danger" if _bt_total is not None and float(_bt_total) < 0 else "")),
+                ("CAGR",
+                 _pct(_bt_cagr, 1),
+                 f"vs BTC {_pct(_bt_btc_cagr, 1)}" if _bt_btc_cagr is not None else "annualised",
+                 ""),
+                ("Sharpe",
+                 f"{float(_bt_sharpe):.2f}" if _bt_sharpe is not None else "—",
+                 "risk-free 4.5%",
+                 "accent" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else ""),
+                ("Max drawdown",
+                 _pct(_bt_dd, 1),
+                 f"BTC {_pct(_bt_btc_dd, 1)}" if _bt_btc_dd is not None else "peak → trough",
+                 "danger" if (_bt_dd is not None and float(_bt_dd) != 0) else ""),
+                ("Win rate",
+                 _pct(_bt_wr, 0, signed=False) if _bt_wr is not None else "—",
+                 f"n = {int(_bt_n)} trades" if _bt_n else "no runs yet",
+                 ""),
+            ])
 
         # 2-col: equity curve + Optuna top-5
         _bt_col_l, _bt_col_r = st.columns([2, 1])
@@ -7139,6 +7163,34 @@ def page_signals():
                 _fund = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
             except Exception:
                 pass
+
+            # C-fix-06 (2026-05-01): fall back to direct compute from the
+            # 1d OHLCV we already fetched above (C-fix-05 now actually
+            # returns real data here). Without this, Vol/ATR render as
+            # "—" on cold-start until the first scan completes — but the
+            # data needed to populate them is already in `_ohlcv_d`.
+            # ccxt row format: [ts_ms, open, high, low, close, volume]
+            if _vol is None and _ohlcv_d:
+                try:
+                    _last = _ohlcv_d[-1]
+                    if len(_last) >= 6:
+                        _vol = float(_last[4]) * float(_last[5])  # close * base-vol
+                except Exception:
+                    pass
+            if _atr is None and _ohlcv_d and len(_ohlcv_d) >= 15:
+                try:
+                    _trs: list[float] = []
+                    for _i in range(len(_ohlcv_d) - 14, len(_ohlcv_d)):
+                        _row = _ohlcv_d[_i]
+                        _prev = _ohlcv_d[_i - 1]
+                        if len(_row) < 5 or len(_prev) < 5:
+                            continue
+                        _h, _l, _pc = float(_row[2]), float(_row[3]), float(_prev[4])
+                        _trs.append(max(_h - _l, abs(_h - _pc), abs(_l - _pc)))
+                    if _trs:
+                        _atr = sum(_trs) / len(_trs)
+                except Exception:
+                    pass
             # P1 follow-up — cryptorank token unlock surfacing (8h cache).
             # Shows the next unlock signal as the 5th info-strip cell so
             # users see imminent supply pressure inline with vol/ATR/beta/

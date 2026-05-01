@@ -192,6 +192,56 @@ def test_sg_cached_ohlcv_returns_list_of_lists_at_runtime(monkeypatch):
     assert isinstance(out[0][4], float)
 
 
+# ── C-fix-06: tiles populate from OHLCV / Backtester shows CTA when empty ─
+
+def test_signals_info_strip_falls_back_to_ohlcv_for_vol_and_atr():
+    """C-fix-06 (2026-05-01): the Signals page Vol(24h) / ATR(14d) tiles
+    must fall back to direct compute from `_ohlcv_d` (the daily OHLCV)
+    when the scan_result lacks them. Otherwise both tiles render as "—"
+    on cold-start even though the data needed to populate them is
+    already in memory (we fetched it for the 90d price chart)."""
+    src = _app_source()
+    # Fall-back computation lives in the indicator-strip block of
+    # page_signals. Anchor by the C-fix-06 marker.
+    assert "C-fix-06 (2026-05-01)" in src, (
+        "page_signals indicator-strip is missing the C-fix-06 fallback "
+        "marker. Vol/ATR will render as dashes on cold-start."
+    )
+    # Vol fallback: close * base-vol from the last OHLCV row.
+    assert "_vol = float(_last[4]) * float(_last[5])" in src, (
+        "Vol(24h) fallback compute is missing — `close × base-volume` "
+        "from the last 1d OHLCV row should populate `_vol` when scan "
+        "result lacks `volume_24h_usd`."
+    )
+    # ATR fallback: 14-period true-range compute.
+    assert "True range" in src or "_h - _l, abs(_h - _pc), abs(_l - _pc)" in src or \
+           "max(_h - _l, abs(_h - _pc), abs(_l - _pc))" in src, (
+        "ATR(14d) fallback compute is missing — should use the standard "
+        "max(high-low, |high-prev_close|, |low-prev_close|) true-range "
+        "definition from the 1d OHLCV window."
+    )
+
+
+def test_backtester_shows_cta_when_no_results():
+    """C-fix-06 (2026-05-01): when neither session_state nor the cached
+    backtest DataFrame have any populated metric, the page must render
+    a CTA card ("No backtest results yet") instead of the empty KPI
+    strip with all values "—". The empty strip was actively misleading —
+    users couldn't distinguish "ran and produced zeros" from "never ran."""
+    src = _app_source()
+    assert "_bt_has_any_data" in src, (
+        "page_backtest no longer guards the KPI strip behind a "
+        "_bt_has_any_data check — when nothing's populated, the page "
+        "renders an empty-labels strip that misleads users into "
+        "thinking the metrics are zero rather than absent."
+    )
+    assert "No backtest results yet" in src, (
+        "page_backtest is missing the empty-state CTA card. Without it, "
+        "the cold-start view shows 'Total return —' / 'CAGR —' / 'Sharpe —' "
+        "labels-without-values which is misleading."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():
