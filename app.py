@@ -2592,11 +2592,44 @@ def page_dashboard():
                     rows=_ds_wl_rows,
                 )
             with _ds_col2:
-                _ds_bt_preview(
-                    title="Composite backtest",
-                    subtitle="latest run — Run Backtest to update",
-                    kpis=_ds_kpis,
-                )
+                # C-fix-17 (2026-05-02): when no backtest has populated
+                # any of the 4 KPIs (cold session + empty backtest_trades
+                # DB), the card was rendering "—" for every metric, which
+                # looks broken / misleading. Mirror C-fix-06's CTA card
+                # treatment from the Backtester page so users see a clear
+                # call-to-action instead. Once the user clicks "Run
+                # Backtest" on the Backtester page (or once the deeper
+                # auto-backtest follow-up lands), the card flips back to
+                # the populated KPI grid automatically.
+                _ds_bt_has_data = any(v is not None for v in (
+                    _bt_tr, _bt_dd, _bt_sh, _bt_wr,
+                ))
+                if not _ds_bt_has_data:
+                    st.markdown(
+                        '<div class="ds-card" style="padding:18px 16px;'
+                        'min-height:175px;display:flex;flex-direction:column;'
+                        'justify-content:center;text-align:center;">'
+                        '<div style="font-size:11px;color:var(--text-muted);'
+                        'text-transform:uppercase;letter-spacing:0.05em;'
+                        'margin-bottom:8px;">Composite backtest</div>'
+                        '<div style="font-size:14px;font-weight:600;'
+                        'color:var(--text-primary);margin-bottom:6px;">'
+                        'No backtest run yet</div>'
+                        '<div style="font-size:12.5px;color:var(--text-muted);'
+                        'max-width:340px;margin:0 auto 10px;">'
+                        'Open the Backtester page and click '
+                        '<strong>Run Backtest</strong> to walk historical '
+                        'composite signals against past prices and populate '
+                        'this card.</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    _ds_bt_preview(
+                        title="Composite backtest",
+                        subtitle="latest run — Run Backtest to update",
+                        kpis=_ds_kpis,
+                    )
         except Exception as _ds_wl_err:
             logger.debug("[App] watchlist/backtest preview render failed: %s", _ds_wl_err)
     except Exception as _ds_hero_err:

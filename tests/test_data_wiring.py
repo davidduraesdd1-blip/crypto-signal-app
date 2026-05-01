@@ -557,6 +557,31 @@ def test_watchlist_row_falls_back_to_sparkline_close_for_price():
     )
 
 
+def test_home_composite_backtest_card_shows_cta_when_empty():
+    """C-fix-17 (2026-05-02): the Home page composite-backtest mini-card
+    must render a CTA ("No backtest run yet") when none of the 4 KPIs
+    have populated. The labels-with-dashes layout was misleading on cold
+    start — users couldn't tell whether the metrics were genuinely zero
+    or simply absent. Mirrors the C-fix-06 CTA pattern from the full
+    Backtester page."""
+    src = _app_source()
+    # Anchor on the Home composite-backtest section.
+    assert "_ds_bt_has_data" in src, (
+        "Home composite-backtest card no longer guards on a "
+        "_ds_bt_has_data check. When no metric is populated, users see "
+        "an empty-labels grid that looks broken."
+    )
+    assert "No backtest run yet" in src, (
+        "Home composite-backtest card is missing the empty-state CTA. "
+        "Without it the cold-start view shows 'Return —' / 'CAGR —' / "
+        "'Sharpe —' / 'Win rate —' which is misleading."
+    )
+    assert "Open the Backtester page" in src, (
+        "Home composite-backtest CTA no longer directs users to the "
+        "Backtester page — the call-to-action loses meaning."
+    )
+
+
 def test_form_based_autoscan_scheduler_still_present():
     """C-fix-15: the canonical form-based Auto-Scan Scheduler lives in
     page_config and must remain. Removing the duplicate is not the same
