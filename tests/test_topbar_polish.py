@@ -167,7 +167,8 @@ def test_topbar_refresh_handler_fires_toast_and_records_timestamp():
     """The refresh handler must:
        1. Call the user-supplied on_refresh callback
        2. Record _topbar_last_refresh_at in session state
-       3. Fire st.toast for immediate user feedback
+       3. Fire st.toast for immediate user feedback (C-fix-14: wording
+          now reflects the unified Update action — scan + cache clear)
     """
     from ui.sidebar import render_top_bar
     src = inspect.getsource(render_top_bar)
@@ -175,9 +176,45 @@ def test_topbar_refresh_handler_fires_toast_and_records_timestamp():
         "Refresh handler no longer records a wall-clock timestamp — "
         "the persistent 'refreshed Xs ago' caption won't render."
     )
-    assert 'st.toast("Data refreshed"' in src, (
+    # C-fix-14: toast wording now explicitly mentions the scan kickoff.
+    # The legacy 'Data refreshed' is gone (it masked the scan side-effect).
+    assert "st.toast(" in src, (
         "Refresh handler no longer fires st.toast on click — H2 says "
         "the button needs visible feedback."
+    )
+    assert 'st.toast("Data refreshed"' not in src, (
+        "Refresh toast reverted to 'Data refreshed' — that wording "
+        "implies cache-only and masks the scan kickoff per C-fix-14."
+    )
+    assert "Update started" in src and "scan running" in src, (
+        "Refresh toast no longer surfaces the scan-running side effect. "
+        "Users need immediate confirmation that the scan kicked off."
+    )
+
+
+def test_home_status_banner_shows_on_recent_click_even_without_running_flag():
+    """C-fix-14 (2026-05-02): the in-line Home status banner must show
+    in TWO cases:
+      (a) scan thread is running (existing behaviour)
+      (b) user clicked Update within the last 5s
+    Without (b), a scan that fails fast (errors before the sidebar
+    fragment's 2s tick catches the running flag) leaves the user with
+    NO visual confirmation their click registered."""
+    from pathlib import Path
+    src = (
+        Path(__file__).resolve().parents[1] / "app.py"
+    ).read_text(encoding="utf-8")
+    # The recent-click window check must be present.
+    assert "_topbar_last_refresh_at" in src, (
+        "Home status banner no longer reads _topbar_last_refresh_at — "
+        "the recent-click window guard is gone, scan-fail-fast users "
+        "see no confirmation."
+    )
+    # And the banner must trigger on EITHER running flag OR recent click.
+    assert "_ds_sb_running or _ds_recent_click" in src, (
+        "Home status banner no longer triggers on a recent click. "
+        "If the scan thread fails before flipping the running flag, "
+        "the banner never paints."
     )
 
 

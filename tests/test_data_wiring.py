@@ -500,6 +500,53 @@ def test_settings_page_surfaces_section_12_compliance_banner():
     )
 
 
+# ── C-fix-15: duplicate Auto-Scan UI removed from sidebar tools ────────
+
+def test_no_duplicate_autoscan_expander_in_sidebar_tools():
+    """C-fix-15 (2026-05-02): the legacy "⏰ Auto-Scan" expander that
+    used to live inside _render_relocated_sidebar_widgets is removed.
+    Only the form-based Auto-Scan Scheduler remains (in the same Tab
+    3 of Settings, but rendered by the page_config code path further
+    up). Having both was redundant — and the legacy one auto-saved on
+    every widget change, forcing a save-per-edit UX while the form-
+    based one batches via st.form_submit_button."""
+    src = _app_source()
+    sb_idx = src.find("def _render_relocated_sidebar_widgets")
+    assert sb_idx > 0, "_render_relocated_sidebar_widgets not found"
+    # Read forward to the next def (~3000 chars)
+    next_def = src.find("\ndef ", sb_idx + 50)
+    body = src[sb_idx : next_def if next_def > 0 else sb_idx + 5000]
+    # The legacy expander label must be gone.
+    assert 'st.expander("⏰ Auto-Scan"' not in body, (
+        "Legacy '⏰ Auto-Scan' expander returned to "
+        "_render_relocated_sidebar_widgets. Per C-fix-15 it must stay "
+        "removed — the form-based Auto-Scan Scheduler is canonical."
+    )
+    # And the auto-save trigger pattern must not appear in this body.
+    # (Comments documenting the removal are fine.)
+    code_lines = [
+        line for line in body.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code_only = "\n".join(code_lines)
+    assert "_setup_autoscan(interval_min)" not in code_only, (
+        "Legacy autoscan-setup call returned to "
+        "_render_relocated_sidebar_widgets — it auto-saves per change. "
+        "The form-based UI is canonical."
+    )
+
+
+def test_form_based_autoscan_scheduler_still_present():
+    """C-fix-15: the canonical form-based Auto-Scan Scheduler lives in
+    page_config and must remain. Removing the duplicate is not the same
+    as removing autoscan controls."""
+    src = _app_source()
+    assert 'st.form("autoscan_form"):' in src, (
+        "The form-based Auto-Scan Scheduler is missing. C-fix-15 only "
+        "removed the duplicate; the form-based one must remain."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():

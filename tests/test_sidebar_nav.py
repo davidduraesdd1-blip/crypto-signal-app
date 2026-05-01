@@ -204,6 +204,30 @@ def test_brand_wordmark_uses_nowrap_inside_150px_rail():
     )
 
 
+def test_brand_tld_defaults_to_empty_so_wordmark_fits():
+    """C-fix-13 (2026-05-02): the rail wordmark must default to just
+    "Signal" (no ".app" TLD). At 150px rail × 13px Inter the 10-char
+    "Signal.app" repeatedly ellipsised across user zoom / DPI
+    configurations. The 6-char "Signal" alone fits comfortably and
+    matches the icon-led brand identity. The brand_tld parameter is
+    preserved on both render_sidebar and render_sidebar_brand for §6
+    future-rebrand support."""
+    import inspect
+    from ui.sidebar import render_sidebar, render_sidebar_brand
+    for fn in (render_sidebar, render_sidebar_brand):
+        sig = inspect.signature(fn)
+        tld_param = sig.parameters.get("brand_tld")
+        assert tld_param is not None, (
+            f"{fn.__name__} no longer accepts brand_tld — the parameter "
+            f"must remain so callers can still opt in to a TLD suffix."
+        )
+        assert tld_param.default == "", (
+            f"{fn.__name__} brand_tld default is no longer empty. "
+            f"C-fix-13 sets it to '' so 'Signal.app' doesn't ellipsis "
+            f"inside the 150px rail."
+        )
+
+
 def test_glossary_popover_label_is_short_and_nowrap_in_sidebar():
     """C-fix-07 (2026-05-01): the Glossary popover trigger was rendering
     across 4 lines ("📖 / Glossary / — 30 / terms / (Plain / English)")
