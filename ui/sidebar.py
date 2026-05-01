@@ -340,8 +340,15 @@ def render_top_bar(
         # Wall-clock timestamp for the "refreshed Xs ago" caption.
         import time as _time
         st.session_state["_topbar_last_refresh_at"] = _time.time()
+        # C-fix-14 (2026-05-02): toast wording explicitly reflects the
+        # full unified-Update behaviour (cache clear + scan kickoff) so
+        # users get immediate confirmation that BOTH actions fired.
+        # Pre-fix the toast just said "Data refreshed" which sounded
+        # like a cache-clear only — masking the scan that runs in
+        # the background. The 8s duration gives the sidebar progress
+        # fragment one full tick to catch the scan-running flag.
         try:
-            st.toast("Data refreshed", icon="✓")
+            st.toast("⚡ Update started — scan running in background", icon="⚡")
         except Exception:
             pass
 

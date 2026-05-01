@@ -2657,29 +2657,55 @@ def page_dashboard():
     # C-fix-10 (2026-05-02): the standalone Home "🔍 Run a fresh scan
     # now" CTA is removed. The topbar "↻ Update" button (every page,
     # every level) is now the canonical scan trigger — clears caches +
-    # runs full scan + updates the UI. Keeping a redundant Home-only
-    # button created two divergent control surfaces that drifted (the
-    # Home button skipped the cache clear, the topbar button skipped
-    # the scan for non-beginners pre-fix).
+    # runs full scan + updates the UI.
     #
-    # While a scan is in progress we surface a compact in-line status
-    # banner so the user has feedback they can see without scrolling
-    # back to the topbar — but it's NOT a button. The sidebar progress
-    # fragment is the live indicator.
+    # C-fix-14 (2026-05-02): the in-line status banner now shows in TWO
+    # cases:
+    #   (a) a scan thread is actively running (existing behaviour)
+    #   (b) the user clicked Update within the last 5 seconds, even if
+    #       the scan thread hasn't yet flipped its running flag (or
+    #       has already errored out before the sidebar fragment's 2s
+    #       tick caught it)
+    # Without (b), users who clicked Update and saw the scan fail-fast
+    # had NO visual confirmation their click registered — the screen
+    # looked identical pre- and post-click. The 5s window guarantees
+    # at least one full sidebar fragment tick gets a chance to see the
+    # running flag and start rendering progress.
+    import time as _time
     with _scan_lock:
         _ds_sb_running = _scan_state["running"]
     _ds_sb_running = _ds_sb_running or _SCAN_STATUS.get("running", False)
-    if _ds_sb_running:
+    _ds_recent_click = False
+    _ds_last_click = st.session_state.get("_topbar_last_refresh_at")
+    if _ds_last_click:
+        try:
+            _ds_recent_click = (_time.time() - float(_ds_last_click)) < 5.0
+        except Exception:
+            _ds_recent_click = False
+    if _ds_sb_running or _ds_recent_click:
+        # Pick the right status text based on whether the scan thread
+        # has actually picked up the click. "Update click registered"
+        # → "Scanning the universe" once the running flag flips.
+        _ds_status_main = (
+            "⚡ Scanning the universe…"
+            if _ds_sb_running
+            else "⚡ Update started — kicking off scan…"
+        )
+        _ds_status_sub = (
+            "live progress in the sidebar — page repaints when complete"
+            if _ds_sb_running
+            else "this banner will update once the scan thread is live"
+        )
         st.markdown(
-            '<div class="ds-card" style="margin-top:8px;padding:10px 14px;'
-            'display:flex;align-items:center;gap:10px;'
-            'background:rgba(0,212,170,0.06);'
-            'border:1px solid rgba(0,212,170,0.25);">'
-            '<span style="color:#00d4aa;font-weight:600;font-size:13px;">'
-            '⚡ Scanning the universe…</span>'
-            '<span style="color:var(--text-muted);font-size:12px;">'
-            'live progress in the sidebar — page repaints when complete</span>'
-            '</div>',
+            f'<div class="ds-card" style="margin-top:8px;padding:10px 14px;'
+            f'display:flex;align-items:center;gap:10px;'
+            f'background:rgba(0,212,170,0.06);'
+            f'border:1px solid rgba(0,212,170,0.25);">'
+            f'<span style="color:#00d4aa;font-weight:600;font-size:13px;">'
+            f'{_ds_status_main}</span>'
+            f'<span style="color:var(--text-muted);font-size:12px;">'
+            f'{_ds_status_sub}</span>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
