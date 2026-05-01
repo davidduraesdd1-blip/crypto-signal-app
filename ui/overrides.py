@@ -149,6 +149,20 @@ def inject_streamlit_overrides() -> None:
       text-align: left !important;
       justify-content: flex-start !important;
       box-shadow: none;
+      /* C-fix-07 (2026-05-01): the Glossary label wrapped to 4 lines
+         inside the 150px rail. Pin the trigger to nowrap + ellipsis. */
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    /* Push nowrap into Streamlit's inner <p> / stMarkdownContainer too
+       — without this the inner element re-introduces wrapping inside a
+       button that's nominally nowrap (same trick as topbar buttons). */
+    [data-testid="stSidebar"] [data-testid="stPopover"] button > * {
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 100% !important;
     }
     [data-testid="stSidebar"] [data-testid="stPopover"] button:hover {
       background: var(--bg-2);
