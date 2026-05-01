@@ -64,6 +64,84 @@ def test_render_top_bar_wraps_columns_in_keyed_container():
     )
 
 
+def test_topbar_refresh_label_unified_across_user_levels():
+    """C-fix-10 (2026-05-02): the topbar refresh button must use the
+    same label ('↻ Update') for every user level. The previous
+    level-aware split — '↻ Update' for Beginner, '↻ Refresh' for
+    Intermediate/Advanced, with different click semantics — was
+    rejected: the user wants ONE button that does the full
+    'make everything fresh' action regardless of level."""
+    from pathlib import Path
+    src = (
+        Path(__file__).resolve().parents[1] / "ui" / "sidebar.py"
+    ).read_text(encoding="utf-8")
+    # Locate the refresh button construction inside render_top_bar.
+    idx = src.find("def render_top_bar")
+    assert idx > 0
+    # Read forward to the show_refresh block.
+    block = src[idx : idx + 8000]
+    # The level-conditional label must be gone.
+    assert (
+        '"↻ Update" if user_level == "beginner" else "↻ Refresh"' not in block
+    ), (
+        "render_top_bar reverted to level-aware refresh labels. "
+        "Per C-fix-10 the label must be unified to '↻ Update' across "
+        "all levels."
+    )
+    # And the unified label must be present.
+    assert '_ref_lbl = "↻ Update"' in block, (
+        "render_top_bar no longer uses '↻ Update' as the unified "
+        "refresh label. Without it, the topbar button text varies "
+        "by level — confusing UX."
+    )
+
+
+def test_refresh_all_data_kicks_off_scan_for_every_level():
+    """C-fix-10: _refresh_all_data must trigger a fresh scan after
+    the cache clear regardless of user_level. The previous Beginner-
+    only auto-scan was rejected — every Update click for every level
+    should refresh caches AND run a scan."""
+    from pathlib import Path
+    src = (
+        Path(__file__).resolve().parents[1] / "app.py"
+    ).read_text(encoding="utf-8")
+    idx = src.find("def _refresh_all_data")
+    assert idx > 0
+    body = src[idx : idx + 4000]
+    # Negative: the level gate must not appear in executable code
+    # (comments documenting the change are fine).
+    code_only = "\n".join(
+        line for line in body.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert 'if _ref_lv == "beginner":' not in code_only, (
+        "_refresh_all_data still gates the auto-scan on user_level == "
+        "'beginner'. Remove the level gate per C-fix-10."
+    )
+    # Positive: scan kicks off if not already running.
+    assert "_start_scan()" in body, (
+        "_refresh_all_data no longer calls _start_scan(). The Update "
+        "button needs to fire a scan after the cache clear, every level."
+    )
+
+
+def test_home_page_no_redundant_run_scan_cta():
+    """C-fix-10: the Home page's '🔍 Run a fresh scan now' button
+    is removed. The topbar Update button is the single canonical
+    scan trigger. A pre-existing in-line status banner remains
+    (read-only, surfaces when a scan is running)."""
+    from pathlib import Path
+    src = (
+        Path(__file__).resolve().parents[1] / "app.py"
+    ).read_text(encoding="utf-8")
+    # The Home-only scan button used a specific key — guard against
+    # its return.
+    assert "ds_beginner_scan_btn" not in src, (
+        "The Home-only '🔍 Run a fresh scan now' button is back. "
+        "Remove it — the topbar Update button is the single trigger."
+    )
+
+
 def test_render_top_bar_uses_on_click_callbacks():
     """The level pills + refresh + theme buttons must use on_click=
     callbacks so the click frame paints with the new state immediately

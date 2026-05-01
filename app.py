@@ -1371,18 +1371,26 @@ def _agent_topbar_pills() -> list[dict]:
 # removed so the topbar ↻ chip is the single control surface. Both the
 # topbar button and any future programmatic call invoke this handler.
 def _refresh_all_data() -> None:
-    """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
-    helpers, the data_feeds module-level dicts, and the cycle_indicators
-    in-memory caches. Caller is responsible for st.rerun().
+    """Single unified update action: clear ALL caches AND run a fresh
+    full scan. Used by the topbar "↻ Update" button on every page,
+    every user level. Caller is responsible for st.rerun() if needed
+    (Streamlit auto-reruns on the click frame).
 
-    C8-fix (2026-04-30): level-aware. At Beginner level the topbar
-    Refresh chip is relabelled to "↻ Update" and ALSO triggers a
-    background scan after the cache clear — beginners shouldn't have
-    to learn the distinction between "refresh = cache clear" and
-    "scan = recompute signals". For Intermediate/Advanced the chip
-    stays as "↻ Refresh" and only clears caches (the explicit
-    "▶ Run Scan" button on Home stays the scan trigger). Guarded
-    against re-entry: if a scan is already running, no second start.
+    C-fix-10 (2026-05-02): unified across all levels. The previous
+    C8-fix implementation gated the auto-scan on
+    `user_level == "beginner"` so Intermediate/Advanced users had to
+    distinguish "↻ Refresh" (cache clear) from "▶ Run Scan" (recompute
+    signals) — a power-user distinction that David explicitly rejected
+    ("i really just want A single button that does a full scan and
+    updates the entire UI/UX regardless of the level expertize").
+    Now every click of ↻ Update at every level: clears all caches
+    AND kicks off a scan. The level label on the button is unified to
+    "↻ Update" everywhere (was "↻ Update" for beginners, "↻ Refresh"
+    for int/adv).
+
+    Re-entry guard: if a scan is already running, no second start
+    (the cache-clear still happens — the user pressed it for a
+    reason — but we don't queue a second scan thread).
     """
     try:
         st.cache_data.clear()
@@ -1410,22 +1418,20 @@ def _refresh_all_data() -> None:
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
 
-    # C8-fix (2026-04-30): Beginner-level refresh ALSO kicks off a
-    # scan. Re-entry guard: only fires if no scan is currently
-    # running. Int/Adv users keep the explicit two-button distinction.
+    # C-fix-10 (2026-05-02): always kick off a scan after the cache
+    # clear, regardless of user level. The Update button is a unified
+    # "make everything fresh" action across Beginner / Intermediate /
+    # Advanced. Re-entry guard: no second scan if one is already
+    # running.
     try:
-        _ref_lv = st.session_state.get("user_level", "beginner")
-        if _ref_lv == "beginner":
-            _already_scanning = st.session_state.get("scan_running", False)
-            try:
-                with _scan_lock:
-                    _already_scanning = _already_scanning or _scan_state.get("running", False)
-            except Exception:
-                pass
-            if not _already_scanning:
-                _start_scan()
+        _already_scanning = (
+            _SCAN_STATUS.get("running", False)
+            or _scan_state.get("running", False)
+        )
+        if not _already_scanning:
+            _start_scan()
     except Exception as _e_auto_scan:
-        logger.debug("[App] beginner auto-scan after refresh failed: %s", _e_auto_scan)
+        logger.debug("[App] auto-scan after refresh failed: %s", _e_auto_scan)
 
 st.sidebar.markdown("---")
 
@@ -2519,21 +2525,35 @@ def page_dashboard():
     # unconditionally. The session-state key is no longer read; the
     # Settings → Dev Tools toggle that wrote it is also removed.
     _ds_lvl_hide = st.session_state.get("user_level", "beginner")
-    # Compact scan CTA so users can still trigger a fresh scan from Home.
-    # C-fix-08 (2026-05-02): the "disabled" check now derives ONLY from
-    # the authoritative in-memory thread state, NOT the session_state
-    # cache that can desync. The sidebar fragment clears scan_running
-    # on completion within 2s, but if the user lands on Home before
-    # that fragment ticks, the button must still reflect reality.
+
+    # C-fix-10 (2026-05-02): the standalone Home "🔍 Run a fresh scan
+    # now" CTA is removed. The topbar "↻ Update" button (every page,
+    # every level) is now the canonical scan trigger — clears caches +
+    # runs full scan + updates the UI. Keeping a redundant Home-only
+    # button created two divergent control surfaces that drifted (the
+    # Home button skipped the cache clear, the topbar button skipped
+    # the scan for non-beginners pre-fix).
+    #
+    # While a scan is in progress we surface a compact in-line status
+    # banner so the user has feedback they can see without scrolling
+    # back to the topbar — but it's NOT a button. The sidebar progress
+    # fragment is the live indicator.
     with _scan_lock:
         _ds_sb_running = _scan_state["running"]
     _ds_sb_running = _ds_sb_running or _SCAN_STATUS.get("running", False)
-    _ds_sb_disabled = _ds_sb_running
-    _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
-    if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
-        st.session_state["scan_results"] = []
-        st.session_state["scan_error"] = None
-        _start_scan()
+    if _ds_sb_running:
+        st.markdown(
+            '<div class="ds-card" style="margin-top:8px;padding:10px 14px;'
+            'display:flex;align-items:center;gap:10px;'
+            'background:rgba(0,212,170,0.06);'
+            'border:1px solid rgba(0,212,170,0.25);">'
+            '<span style="color:#00d4aa;font-weight:600;font-size:13px;">'
+            '⚡ Scanning the universe…</span>'
+            '<span style="color:var(--text-muted);font-size:12px;">'
+            'live progress in the sidebar — page repaints when complete</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── _LEGACY_REMOVED_C10 (2026-04-30) ─────────────────────────────────
     # The legacy 5-tab Dashboard stack (Today / All Coins / Coin Detail /

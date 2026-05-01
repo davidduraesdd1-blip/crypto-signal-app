@@ -280,31 +280,41 @@ def test_sidebar_progress_clears_session_scan_running_on_completion():
     )
 
 
-def test_home_scan_button_uses_thread_state_not_session_cache():
-    """C-fix-08: the Home page 'Analyzing…' / 'Run a fresh scan now'
-    button must derive disabled-state from the authoritative in-memory
+def test_home_scan_status_banner_uses_thread_state_not_session_cache():
+    """C-fix-08 + C-fix-10: the Home page in-line scan-status banner
+    (replacing the removed standalone 'Run a fresh scan now' button)
+    must derive its show/hide state from the authoritative in-memory
     _scan_state / _SCAN_STATUS dicts, NOT st.session_state['scan_running']
-    which can go stale (and did, pre-fix). Defence in depth: even if
-    the sidebar fragment hasn't ticked yet, the button reflects reality."""
+    which can go stale. Defence in depth: even if the sidebar fragment
+    hasn't ticked yet, the banner reflects reality."""
     src = _app_source()
-    # Anchor on the button label line and read forward.
-    idx = src.find('"Analyzing…" if _ds_sb_disabled')
-    assert idx > 0, "Home scan button label line not found"
-    # Read backward to find the disabled-flag computation.
+    # Anchor on the banner text.
+    idx = src.find("Scanning the universe")
+    assert idx > 0, "Home scan-status banner not found"
+    # Read backward to find the running-flag computation.
     block = src[max(0, idx - 1500) : idx + 200]
-    # Negative guard: the button must NOT read scan_running directly
-    # for its disabled state. (Comments mentioning the cache are fine.)
     code_lines = [
         line for line in block.splitlines()
         if not line.lstrip().startswith("#")
     ]
     code_only = "\n".join(code_lines)
+    # Positive: banner gates on the in-memory thread flag(s).
     assert (
-        '_ds_sb_disabled = st.session_state.get("scan_running"' not in code_only
+        "_scan_state[" in code_only
+        or "_SCAN_STATUS.get" in code_only
     ), (
-        "Home scan button reverted to reading scan_running from "
-        "st.session_state for its disabled state. That cache desyncs "
-        "from the actual thread state — use _scan_state / _SCAN_STATUS."
+        "Home scan-status banner no longer reads from the in-memory "
+        "_scan_state / _SCAN_STATUS dicts. Without it, the banner can "
+        "show stale state."
+    )
+    # Negative: the banner must NOT gate on session_state cache —
+    # the same desync that produced the C-fix-08 'Analyzing…' bug.
+    assert (
+        'st.session_state.get("scan_running"' not in code_only
+        or 'if _ds_sb_running:' in code_only
+    ), (
+        "Home scan-status banner reverted to reading scan_running "
+        "from st.session_state. Use _scan_state / _SCAN_STATUS instead."
     )
 
 
