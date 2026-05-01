@@ -111,6 +111,53 @@ def test_render_sidebar_uses_on_click_callback():
     )
 
 
+def test_app_py_inlined_nav_uses_on_click_callback():
+    """C-fix-03 (2026-05-01): app.py's inlined sidebar nav (the actual
+    nav rendered by the running app — not the unused ui.sidebar
+    .render_sidebar function) must use the on_click=callback pattern.
+    The legacy `if st.sidebar.button(...): write_state()` shape causes
+    the highlight to track ONE render behind the click — visually,
+    clicking "Signals" leaves the highlight on "Home" until the next
+    interaction. H5 fixed render_sidebar but app.py's inlined version
+    was never migrated."""
+    from pathlib import Path
+    src = (
+        Path(__file__).resolve().parents[1] / "app.py"
+    ).read_text(encoding="utf-8")
+    # Locate the inlined-nav block by its anchor comment.
+    anchor = "_DS_NAV: list[tuple[str, list[tuple[str, str, str]]]]"
+    idx = src.find(anchor)
+    assert idx >= 0, (
+        "Could not find the inlined-nav block in app.py — has it been "
+        "renamed? The C-fix-03 guard depends on locating this section."
+    )
+    # Read ~200 lines forward to capture the full nav-rendering loop.
+    block = src[idx : idx + 5000]
+    assert "on_click=_ds_select_nav" in block, (
+        "app.py's inlined sidebar nav no longer uses on_click=_ds_select_nav. "
+        "Without the callback, the highlight reflects pre-click state for "
+        "one render (two-click lag bug). See C-fix-03 in the 2026-05-01 "
+        "post-deploy audit."
+    )
+    # Stronger guard: the legacy `if st.sidebar.button(` pattern must NOT
+    # appear inside this nav block (it would re-introduce the lag bug).
+    # We strip comments first so explanatory comments documenting the bug
+    # don't trip the guard.
+    code_only = "\n".join(
+        line for line in block.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    legacy_pattern = (
+        "if st.sidebar.button(" in code_only
+        and 'st.session_state["_ds_current_nav_label"]' in code_only
+        and "_ds_new_label_selected" in code_only
+    )
+    assert not legacy_pattern, (
+        "app.py's inlined nav still has the legacy `if st.sidebar.button(...): "
+        "_ds_new_label_selected = ...` pattern. Replace with on_click=callback."
+    )
+
+
 def test_brand_wordmark_uses_nowrap_inside_150px_rail():
     """C-fix-02 (2026-05-01): the rail brand "Signal.app" wordmark was
     wrapping mid-word ("Signal.a / pp") inside the 150px rail. Both

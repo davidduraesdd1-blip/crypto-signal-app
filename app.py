@@ -1424,8 +1424,26 @@ if _ds_current_label not in _ds_nav_flat_labels:
     _ds_current_label = _ds_nav_flat_labels[0] if _ds_nav_flat_labels else ""
     st.session_state["_ds_current_nav_label"] = _ds_current_label
 
-_ds_new_label_selected = None
-_ds_new_key_selected = None
+# C-fix-03 (2026-05-01): nav buttons use the on_click=callback pattern
+# instead of the legacy `if st.sidebar.button(...): write_state()` shape.
+#
+# Why this matters: with the legacy pattern, the buttons render with
+# `type=("primary" if _is_active else "secondary")` based on the
+# pre-click `_ds_current_nav_label`. The click is processed AFTER the
+# buttons have already emitted their type, so the highlight reflects
+# OLD state for one render. Two clicks were required to see the
+# highlight catch up — the exact two-render lag H5 fixed in the
+# (unused) ui.sidebar.render_sidebar function. app.py's inlined nav
+# never received the same fix and continued to exhibit the bug.
+#
+# Streamlit invokes on_click callbacks BEFORE the script body re-runs,
+# so by the time the buttons render this turn, `_ds_current_nav_label`
+# is already the new value and the active highlight tracks correctly
+# on the first click.
+def _ds_select_nav(label: str, key: str) -> None:
+    st.session_state["_ds_current_nav_label"] = label
+    st.session_state["_ds_current_nav_key"] = key
+
 for _grp_name, _grp_items in _ds_nav_current:
     # Section header — visual styling lives entirely in ui/overrides.py
     # under .ds-nav-group-header. Keeping inline style here would beat the
@@ -1436,27 +1454,18 @@ for _grp_name, _grp_items in _ds_nav_current:
     )
     for _k, _lbl, _page_key in _grp_items:
         _is_active = (_lbl == _ds_current_label)
-        if st.sidebar.button(
+        st.sidebar.button(
             _lbl,
             key=f"ds_nav_btn_{_k}",
             use_container_width=True,
             type=("primary" if _is_active else "secondary"),
-        ):
-            _ds_new_label_selected = _lbl
-            _ds_new_key_selected = _k
-            # Side-effect routing for items that share a target page —
-            # e.g. "Alerts" should land on the Alerts tab inside Settings.
-            # C6 (2026-04-30): the legacy `_settings_tab="🔔 Alerts"`
-            # side-effect — which deep-linked the sidebar Alerts entry
-            # to Settings → Alerts tab — is removed. Alerts now has
-            # its own first-class page (page_alerts), so the nav
-            # router maps `alerts` → "Alerts" page key directly via
-            # _DS_NAV. No tab override needed.
+            on_click=_ds_select_nav,
+            args=(_lbl, _k),
+        )
 
-if _ds_new_label_selected:
-    st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
-    st.session_state["_ds_current_nav_key"] = _ds_new_key_selected
-    _ds_current_label = _ds_new_label_selected
+# Re-read after callbacks have fired (they ran before this body re-rendered,
+# but `_ds_current_label` was captured above before the buttons rendered).
+_ds_current_label = st.session_state.get("_ds_current_nav_label", _ds_current_label)
 
 page = _ds_nav_label_to_page.get(_ds_current_label, "Dashboard")
 
