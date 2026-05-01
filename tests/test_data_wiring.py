@@ -363,6 +363,65 @@ def test_watchlist_customize_rebuilds_rows_from_user_selection():
     )
 
 
+# ── C-fix-11: mandatory first-session scan on app boot ─────────────────
+
+def test_first_session_scan_helper_is_defined():
+    """C-fix-11 (2026-05-02): the app must define
+    _maybe_fire_first_session_scan() and CALL it before page dispatch.
+    Without it, users landing on Home before the autoscan scheduler
+    fires see empty hero cards / 'scan refreshed not yet run'."""
+    src = _app_source()
+    assert "def _maybe_fire_first_session_scan" in src, (
+        "Helper _maybe_fire_first_session_scan is missing — first-"
+        "session mandatory scan path will never fire."
+    )
+
+
+def test_first_session_scan_is_called_before_router():
+    """The call to _maybe_fire_first_session_scan() must precede the
+    page dispatcher (the `if page == 'Dashboard':` block) so the scan
+    starts before any page renders. Otherwise the cold-start banner
+    won't paint until after the first render finishes."""
+    src = _app_source()
+    call_idx = src.find("_maybe_fire_first_session_scan()")
+    router_idx = src.find('if page == "Dashboard":')
+    assert call_idx > 0, "_maybe_fire_first_session_scan() is never called"
+    assert router_idx > 0, "page router not found"
+    assert call_idx < router_idx, (
+        "_maybe_fire_first_session_scan() is called AFTER the page "
+        "router. Move it earlier — the scan must start before the "
+        "page renders so the cold-start banner shows on first paint."
+    )
+
+
+def test_first_session_scan_is_idempotent_via_session_flag():
+    """The helper must guard against re-firing on every Streamlit
+    rerun by setting + checking st.session_state['_c11_first_init_done']."""
+    src = _app_source()
+    idx = src.find("def _maybe_fire_first_session_scan")
+    assert idx > 0
+    body = src[idx : idx + 4000]
+    assert '_c11_first_init_done' in body, (
+        "Idempotency guard '_c11_first_init_done' is missing. The "
+        "helper would re-fire on every rerun, queuing infinite scans."
+    )
+
+
+def test_first_session_scan_uses_15_min_staleness_threshold():
+    """Per CLAUDE.md §12 the full-scan auto-cycle is 15 min. The
+    first-session scan should fire only when the cached scan is
+    older than that — otherwise we'd refire while a recent scan
+    is still being read."""
+    src = _app_source()
+    idx = src.find("def _maybe_fire_first_session_scan")
+    body = src[idx : idx + 4000]
+    assert "15 * 60" in body or "900" in body, (
+        "_maybe_fire_first_session_scan no longer uses a 15-min "
+        "staleness threshold. CLAUDE.md §12 says the full-scan auto-"
+        "cycle is 15 min — fire only when the existing scan is older."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():

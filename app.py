@@ -967,6 +967,85 @@ def init_state():
 
 init_state()
 
+
+# ──────────────────────────────────────────────
+# C-fix-11 (2026-05-02): MANDATORY FIRST-SESSION SCAN — definition only
+#
+# On first session startup, if no scan has been run recently (< 15 min
+# old per CLAUDE.md §12), kick one off automatically. Without this,
+# users landing on Home before the autoscan scheduler had a chance to
+# run saw empty hero cards / "scan refreshed not yet run" / blank
+# composite — exactly the cold-start gap the post-deploy audit flagged.
+#
+# The CALL is placed later in the file (right before page dispatch)
+# because it depends on `_start_scan`, which is defined further down.
+# Gated by:
+#   - st.session_state["_c11_first_init_done"] — fires ONCE per session
+#     so navigation between pages doesn't re-trigger
+#   - the existing thread-state re-entry guard — no second scan if one
+#     is already running (e.g. fired by the autoscan scheduler)
+#
+# Staleness check: prefer the in-session scan_timestamp; fall back to
+# the DB-stored scan_status so a fresh process attaching to a recent
+# scan doesn't refire. > 15 min stale OR no timestamp at all → scan.
+# ──────────────────────────────────────────────
+def _maybe_fire_first_session_scan() -> None:
+    if st.session_state.get("_c11_first_init_done"):
+        return
+    st.session_state["_c11_first_init_done"] = True
+
+    # If a scan is already running we have nothing to do — the sidebar
+    # progress fragment + in-line banner already show feedback.
+    _running = (
+        _SCAN_STATUS.get("running", False)
+        or _scan_state.get("running", False)
+    )
+    if _running:
+        return
+
+    # Compute staleness. Try session timestamp first, then DB.
+    _ts = st.session_state.get("scan_timestamp")
+    _ts_dt: datetime | None = None
+    if _ts is not None:
+        if isinstance(_ts, datetime):
+            _ts_dt = _ts
+        else:
+            try:
+                _ts_dt = datetime.fromisoformat(str(_ts))
+            except Exception:
+                _ts_dt = None
+    if _ts_dt is None:
+        try:
+            _db_status = _read_scan_status() or {}
+            _db_ts_raw = _db_status.get("timestamp")
+            if isinstance(_db_ts_raw, datetime):
+                _ts_dt = _db_ts_raw
+            elif _db_ts_raw:
+                try:
+                    _ts_dt = datetime.fromisoformat(str(_db_ts_raw))
+                except Exception:
+                    _ts_dt = None
+        except Exception as _e_ts:
+            logger.debug("[Init] scan-timestamp DB read failed: %s", _e_ts)
+
+    _stale = True
+    if _ts_dt is not None:
+        try:
+            # Tolerate naive or aware timestamps — assume UTC for naive.
+            _now = datetime.now(timezone.utc)
+            _age_s = (_now - (_ts_dt if _ts_dt.tzinfo else _ts_dt.replace(tzinfo=timezone.utc))).total_seconds()
+            _stale = _age_s > 15 * 60
+        except Exception:
+            _stale = True
+
+    if _stale:
+        try:
+            _start_scan()
+            logger.info("[Init] First-session mandatory scan started (data was stale or absent)")
+        except Exception as _e_init_scan:
+            logger.debug("[Init] first-session scan start failed: %s", _e_init_scan)
+
+
 # Start WebSocket live price feed (idempotent — safe on every Streamlit rerun)
 _ws.start(model.PAIRS)
 
@@ -8211,6 +8290,12 @@ def page_onchain():
 # ──────────────────────────────────────────────
 # ROUTER
 # ──────────────────────────────────────────────
+# C-fix-11 (2026-05-02): fire the mandatory first-session scan right
+# before page render. Defined far above (after init_state) but called
+# here because it depends on `_start_scan` which lives mid-file. Idempotent
+# via session_state["_c11_first_init_done"] — only fires once per session.
+_maybe_fire_first_session_scan()
+
 audit("page_view", page=page, level=st.session_state.get("user_level", "beginner"))
 if page == "Dashboard":
     page_dashboard()
