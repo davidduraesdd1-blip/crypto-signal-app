@@ -242,6 +242,72 @@ def test_backtester_shows_cta_when_no_results():
     )
 
 
+# ── C-fix-08: scan-completion writeback in _sg_sidebar_progress ──────────
+
+def test_sidebar_progress_clears_session_scan_running_on_completion():
+    """C-fix-08 (2026-05-02): when the scan thread finishes, it sets
+    _SCAN_STATUS["running"] = False + _scan_state["running"] = False
+    but nothing was clearing st.session_state["scan_running"] — the
+    only writeback path lived in _scan_progress() which was dead code
+    (defined but never invoked). Result: the Home page "Analyzing…"
+    button label stayed disabled forever after the first scan.
+
+    The fix puts the writeback inside _sg_sidebar_progress (the live
+    fragment that runs every 2s) so completion clears within 2s of
+    the thread exiting."""
+    src = _app_source()
+    sb_idx = src.find("def _sg_sidebar_progress")
+    assert sb_idx > 0, "fragment not found"
+    body = src[sb_idx : sb_idx + 4000]
+    # The fragment must detect the desync (session_state thinks running
+    # but in-memory thread says idle) and zero out the cache.
+    assert "_session_thinks_running" in body, (
+        "_sg_sidebar_progress no longer derives a session-vs-thread "
+        "desync check. The completion writeback for "
+        "st.session_state['scan_running'] won't fire."
+    )
+    assert 'st.session_state["scan_running"] = False' in body, (
+        "_sg_sidebar_progress no longer clears "
+        "st.session_state['scan_running'] on completion. The 'Analyzing…' "
+        "Home button label will stay stuck after every scan."
+    )
+    # And it must trigger a full-page rerun so the Home button label
+    # reverts (default fragment scope wouldn't repaint Home).
+    assert 'st.rerun(scope="app")' in body, (
+        "_sg_sidebar_progress no longer triggers an app-scope rerun on "
+        "scan completion. Without it, the sidebar updates but the Home "
+        "page button label and watchlist stay stale until next interaction."
+    )
+
+
+def test_home_scan_button_uses_thread_state_not_session_cache():
+    """C-fix-08: the Home page 'Analyzing…' / 'Run a fresh scan now'
+    button must derive disabled-state from the authoritative in-memory
+    _scan_state / _SCAN_STATUS dicts, NOT st.session_state['scan_running']
+    which can go stale (and did, pre-fix). Defence in depth: even if
+    the sidebar fragment hasn't ticked yet, the button reflects reality."""
+    src = _app_source()
+    # Anchor on the button label line and read forward.
+    idx = src.find('"Analyzing…" if _ds_sb_disabled')
+    assert idx > 0, "Home scan button label line not found"
+    # Read backward to find the disabled-flag computation.
+    block = src[max(0, idx - 1500) : idx + 200]
+    # Negative guard: the button must NOT read scan_running directly
+    # for its disabled state. (Comments mentioning the cache are fine.)
+    code_lines = [
+        line for line in block.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code_only = "\n".join(code_lines)
+    assert (
+        '_ds_sb_disabled = st.session_state.get("scan_running"' not in code_only
+    ), (
+        "Home scan button reverted to reading scan_running from "
+        "st.session_state for its disabled state. That cache desyncs "
+        "from the actual thread state — use _scan_state / _SCAN_STATUS."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():

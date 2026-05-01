@@ -1076,11 +1076,55 @@ def _topbar_pills() -> list[dict]:
 # that's always in view no matter where the user is on the page.
 @st.fragment(run_every=2)
 def _sg_sidebar_progress():
-    _running = (
-        st.session_state.get("scan_running", False)
-        or _SCAN_STATUS.get("running", False)
+    # Authoritative scan-state lives in the in-memory _SCAN_STATUS +
+    # _scan_state dicts (the scan thread writes both at start, end, and
+    # error). st.session_state["scan_running"] is a session-scoped CACHE
+    # that the UI button reads — it MUST track the in-memory flag.
+    _thread_running = (
+        _SCAN_STATUS.get("running", False)
         or _scan_state.get("running", False)
     )
+    _session_thinks_running = st.session_state.get("scan_running", False)
+
+    # C-fix-08 (2026-05-02): completion writeback. The scan thread sets
+    # _SCAN_STATUS / _scan_state running=False on completion + error
+    # (lines 2624-2625), but nothing was clearing st.session_state
+    # ["scan_running"] — the dead `_scan_progress()` fragment used to
+    # do it on line 1891 but is never invoked. Result: the Home page
+    # "Analyzing…" button label and any other code reading scan_running
+    # via session_state stayed stuck on True forever after the first
+    # scan completed. Detect the desync here and clean it up — runs
+    # every 2s so completion clears within 2s of the thread exit.
+    if _session_thinks_running and not _thread_running:
+        st.session_state["scan_running"] = False
+        # Persist the latest results into session_state so consumers
+        # don't have to re-read SQLite. Use the same writeback shape
+        # as the dead _scan_progress fragment did.
+        try:
+            _final_st = _read_scan_status() or {}
+            _cached = _read_scan_results()
+            if _cached is not None:
+                st.session_state["scan_results"] = _cached
+                st.session_state["scan_error"]     = _final_st.get("error")
+                st.session_state["scan_timestamp"] = _final_st.get("timestamp")
+        except Exception as _wb_err:
+            logger.debug("[App] scan-completion writeback failed: %s", _wb_err)
+        # Trigger a full-page rerun so the Home button label reverts to
+        # "🔍 Run a fresh scan now" and watchlist / hero cards re-read
+        # the fresh scan_results from session_state. scope="app" because
+        # this runs inside @st.fragment — the default scope="fragment"
+        # would only re-render this sidebar block, leaving the stale
+        # button label in the main column.
+        try:
+            st.rerun(scope="app")
+        except TypeError:
+            # Streamlit < 1.36 doesn't accept the scope kwarg; fall back
+            # to the bare rerun (still triggers the rerun, may need a
+            # second tick to propagate fully).
+            st.rerun()
+        return  # rerun aborts current pass; defensive
+
+    _running = _thread_running or _session_thinks_running
     if not _running:
         return
     _prog = (
@@ -2462,9 +2506,15 @@ def page_dashboard():
     # Settings → Dev Tools toggle that wrote it is also removed.
     _ds_lvl_hide = st.session_state.get("user_level", "beginner")
     # Compact scan CTA so users can still trigger a fresh scan from Home.
+    # C-fix-08 (2026-05-02): the "disabled" check now derives ONLY from
+    # the authoritative in-memory thread state, NOT the session_state
+    # cache that can desync. The sidebar fragment clears scan_running
+    # on completion within 2s, but if the user lands on Home before
+    # that fragment ticks, the button must still reflect reality.
     with _scan_lock:
         _ds_sb_running = _scan_state["running"]
-    _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
+    _ds_sb_running = _ds_sb_running or _SCAN_STATUS.get("running", False)
+    _ds_sb_disabled = _ds_sb_running
     _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
     if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
         st.session_state["scan_results"] = []
