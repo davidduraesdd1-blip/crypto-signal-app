@@ -267,6 +267,127 @@ def inject_streamlit_overrides() -> None:
       min-height: 32px !important;
     }
 
+    /* ── AI Assistant page (Open-item #2 — Phase C polish) ───────────
+       Brings page_agent visuals close to docs/mockups/sibling-family-
+       crypto-signal-AI-ASSISTANT.html. The Python helpers below render
+       <div class="ds-agent-*"> markup wrapped around the existing
+       Streamlit form/buttons; this CSS supplies the mockup styling. */
+
+    /* Status row — RUNNING/STOPPED badge inside a single card with the
+       Start/Stop buttons sitting on the right. */
+    .ds-agent-status-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 18px 20px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--card-radius);
+      margin-bottom: 18px;
+    }
+    .ds-agent-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--success) 14%, transparent);
+      color: var(--success);
+    }
+    .ds-agent-status-badge.stopped {
+      background: color-mix(in srgb, var(--info) 14%, transparent);
+      color: var(--info);
+    }
+    .ds-agent-status-badge.warning {
+      background: color-mix(in srgb, var(--warning) 14%, transparent);
+      color: var(--warning);
+    }
+    .ds-agent-status-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent);
+      animation: dsAgentPulse 2s ease-in-out infinite;
+    }
+    .ds-agent-status-badge.stopped .dot,
+    .ds-agent-status-badge.warning .dot {
+      animation: none;
+    }
+    @keyframes dsAgentPulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.55; }
+    }
+
+    /* Metric cards (the 4-card strip + the 2-card engine/restarts row).
+       Mockup `.card.metric` shape. */
+    .ds-agent-metric-grid {
+      display: grid;
+      gap: var(--gap);
+      margin-bottom: 18px;
+      max-width: 100%;
+    }
+    .ds-agent-metric-grid.cols-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .ds-agent-metric-grid.cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .ds-agent-metric-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--card-radius);
+      padding: 14px 16px;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .ds-agent-metric-lbl {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .ds-agent-metric-val {
+      font-size: 22px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      line-height: 1.1;
+      color: var(--text-primary);
+    }
+    .ds-agent-metric-sub {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* In-progress banner — yellow stripe with the cycle status text. */
+    .ds-agent-in-progress {
+      background: color-mix(in srgb, var(--warning) 10%, var(--bg-1));
+      border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+      border-left-width: 4px;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--text-primary);
+      margin: 14px 0 18px;
+    }
+
+    /* Mobile: collapse to a single column */
+    @media (max-width: 768px) {
+      .ds-agent-metric-grid.cols-4,
+      .ds-agent-metric-grid.cols-2 {
+        grid-template-columns: 1fr;
+      }
+      .ds-agent-status-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
     /* Top bar */
     .ds-topbar {
       background: var(--bg-0);

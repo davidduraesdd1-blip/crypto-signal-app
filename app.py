@@ -483,6 +483,91 @@ def _sg_cached_composite_per_pair(pair: str) -> dict:
         return {}
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=48)
+def _sg_cached_composite_per_pair_tf(pair: str, tf_view_payload: tuple) -> dict:
+    """Open-item #3 (2026-04-30): per-timeframe composite. Same shape
+    as `_sg_cached_composite_per_pair(pair)` but accepts a TF-specific
+    `ta_data` overlay so the composite + 4-layer scores recompute
+    when the user picks a different timeframe on the Signals page.
+
+    Args:
+        pair:            e.g. "BTC/USDT"
+        tf_view_payload: a tuple of `(rsi, adx, supertrend, macd_div,
+                         vwap, ichimoku, ...)` extracted from
+                         `_result["timeframes"][tf]`. Tuple (not dict)
+                         so it's hashable and Streamlit can cache it.
+
+    Cache: 5min TTL (same as the non-TF helper) and 48 entries
+    (4 timeframes × 12 pairs).
+
+    The Macro / Sentiment / On-chain layer inputs are identical to
+    the non-TF helper since those are not per-TF concepts. Only TA
+    layer changes per timeframe.
+    """
+    try:
+        from composite_signal import compute_composite_signal as _cs
+    except Exception:
+        return {}
+
+    # Reconstruct ta_data dict from the hashable tuple payload.
+    # The tuple shape mirrors what's in _result["timeframes"][tf]:
+    #   (rsi, adx, macd_div, vwap, ichimoku, supertrend, sr_status,
+    #    regime, strategy_bias, agent_vote, consensus, funding,
+    #    open_interest, onchain, options_iv, ob_depth, cvd, tvl)
+    # Most of these aren't read by score_ta_layer but it's
+    # forward-compat to pass them through.
+    keys = ("rsi", "adx", "macd_div", "vwap", "ichimoku",
+            "supertrend", "sr_status", "regime", "strategy_bias",
+            "agent_vote", "consensus", "funding", "open_interest",
+            "onchain", "options_iv", "ob_depth", "cvd", "tvl")
+    ta_data: dict = {}
+    for k, v in zip(keys, tf_view_payload):
+        if v not in (None, "N/A", ""):
+            ta_data[k] = v
+    # score_ta_layer reads `rsi` directly; it accepts numeric or
+    # string. The other fields populate sub-signals.
+
+    # Same global / per-pair fetchers as the non-TF helper.
+    try:
+        _macro_enr = data_feeds.get_macro_enrichment() or {}
+    except Exception:
+        _macro_enr = {}
+    macro_data = {
+        "dxy":                _macro_enr.get("dxy"),
+        "vix":                _macro_enr.get("vix"),
+        "yield_spread_2y10y": _macro_enr.get("yield_spread_pp"),
+        "cpi_yoy":            None,
+    }
+    try:
+        onchain_data = data_feeds.get_onchain_metrics(pair) or {}
+    except Exception:
+        onchain_data = {}
+    try:
+        fg_value = (_sg_cached_fear_greed() or {}).get("value")
+    except Exception:
+        fg_value = None
+    try:
+        _fr = _sg_cached_funding_rate("BTC/USDT") or {}
+        btc_fund_pct = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+    except Exception:
+        btc_fund_pct = None
+
+    try:
+        return _cs(
+            macro_data=macro_data,
+            onchain_data=onchain_data,
+            fg_value=fg_value,
+            put_call_ratio=None,
+            ta_data=ta_data,
+            fg_30d_avg=None,
+            btc_funding_rate_pct=btc_fund_pct,
+        ) or {}
+    except Exception as _e:
+        logger.debug("[App] compute_composite_signal_tf %s/%s failed: %s",
+                     pair, tf_view_payload[:2], _e)
+        return {}
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=24)
 def _cached_google_trends_score(keyword: str) -> dict:
     """Streamlit-level cache for Google Trends — 24 hr TTL.
@@ -1561,20 +1646,18 @@ def _render_relocated_sidebar_widgets() -> None:
     with st.expander("🛠️ Build Info", expanded=False):
         st.caption(f"v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs")
 
+    # Open-item #4 (2026-04-30): legacy 5-tab Dashboard view toggle
+    # removed. The legacy tab body was deleted in C10 — leaving the
+    # toggle behind would just be an inert switch that did nothing.
+    # The animated price-ticker toggle stays since that block still
+    # has implementation behind it.
     with st.expander("🧪 Legacy views (advanced)", expanded=False):
         st.caption(
             "The 2026-05 redesign moved per-coin detail, regime detail, and "
             "backtest detail to dedicated pages (Signals / Regimes / Backtester). "
-            "If you want the old Home dashboard's 5-tab structure back "
-            "(Today / All Coins / Coin Detail / Market Intel / Analysis), "
-            "toggle it on here."
+            "The legacy 5-tab Dashboard view was retired in Phase C; the "
+            "animated price-ticker strip below is the only remaining toggle."
         )
-        _legacy_on = st.toggle(
-            "Show legacy 5-tab Dashboard view on Home",
-            value=st.session_state.get("show_legacy_scan_view", False),
-            key="show_legacy_scan_view_toggle",
-        )
-        st.session_state["show_legacy_scan_view"] = _legacy_on
         _legacy_ticker_on = st.toggle(
             "Show animated price-ticker strip on Home",
             value=st.session_state.get("show_legacy_price_ticker", False),
@@ -2343,18 +2426,22 @@ def page_dashboard():
     # explicitly want the legacy view can flip
     #   st.session_state["show_legacy_scan_view"] = True
     # from Settings → Dev Tools.
+    # Open-item #4 (2026-04-30): the `if not show_legacy_scan_view:`
+    # guard around the scan CTA was a holdover from the C10 deletion —
+    # the legacy tab body it was guarding is gone, so the conditional
+    # is always true. Unwrapped here so the scan CTA renders
+    # unconditionally. The session-state key is no longer read; the
+    # Settings → Dev Tools toggle that wrote it is also removed.
     _ds_lvl_hide = st.session_state.get("user_level", "beginner")
-    if not st.session_state.get("show_legacy_scan_view", False):
-        # Compact scan CTA so users can still trigger a fresh scan from Home.
-        with _scan_lock:
-            _ds_sb_running = _scan_state["running"]
-        _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
-        _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
-        if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
-            st.session_state["scan_results"] = []
-            st.session_state["scan_error"] = None
-            _start_scan()
-        return  # skip the legacy scan/tabs section — see flag above
+    # Compact scan CTA so users can still trigger a fresh scan from Home.
+    with _scan_lock:
+        _ds_sb_running = _scan_state["running"]
+    _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
+    _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
+    if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
+        st.session_state["scan_results"] = []
+        st.session_state["scan_error"] = None
+        _start_scan()
 
     # ── _LEGACY_REMOVED_C10 (2026-04-30) ─────────────────────────────────
     # The legacy 5-tab Dashboard stack (Today / All Coins / Coin Detail /
@@ -6318,20 +6405,39 @@ def page_agent():
         status = {}
     is_running = status.get("running", False)
 
-    col_status, col_start, col_stop, col_spacer = st.columns([2, 1, 1, 3])
-    with col_status:
-        if is_running:
-            _run_label = "✅ AI is watching the market" if _ag_lv == "beginner" else "▲ RUNNING"
-            st.success(_run_label)
-        elif status.get("kill_requested", False):
-            st.warning("⏳ Stopping…" if _ag_lv == "beginner" else "■ STOPPING…")
-        else:
-            _stop_label = "⏸ AI is paused — click Start to activate" if _ag_lv == "beginner" else "▼ STOPPED"
-            # Audit R10g: a default-state "paused" display should not render
-            # as a full-width red error bar — that reads as a real failure
-            # to a first-time demo audience. st.info is the neutral colour.
-            st.info(_stop_label)
-    with col_start:
+    # Open-item #2 (2026-04-30): status row matches the
+    # docs/mockups/sibling-family-crypto-signal-AI-ASSISTANT.html
+    # `.status-row` shape — single card with badge + Start/Stop.
+    if is_running:
+        _badge_cls = ""
+        _badge_txt = (
+            "✅ AI is watching the market"
+            if _ag_lv == "beginner"
+            else f"RUNNING · cycle {int(status.get('cycles_total') or 0)}"
+        )
+    elif status.get("kill_requested", False):
+        _badge_cls = " warning"
+        _badge_txt = ("⏳ Stopping…" if _ag_lv == "beginner"
+                      else "STOPPING…")
+    else:
+        _badge_cls = " stopped"
+        _badge_txt = ("⏸ AI is paused — click Start to activate"
+                      if _ag_lv == "beginner" else "STOPPED")
+
+    # Render the badge + Start/Stop in a single grid via wrapper div.
+    # The Streamlit columns inside the wrapper provide the actual
+    # button widgets; CSS positions them right of the badge.
+    st.markdown(
+        f'<div class="ds-agent-status-row">'
+        f'<div class="ds-agent-status-badge{_badge_cls}">'
+        f'<span class="dot"></span>{_badge_txt}'
+        f'</div>'
+        f'<div></div><div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    _btn_cs, _btn_start, _btn_stop, _btn_spacer = st.columns([2, 1, 1, 3])
+    with _btn_start:
         if st.button("▶ Start", width="stretch", type="primary",
                      disabled=is_running, key="agent_start_btn"):
             _ac = _cached_alerts_config()
@@ -6339,7 +6445,7 @@ def page_agent():
             _save_alerts_config_and_clear(_ac)
             _agent.supervisor.start()
             st.rerun()
-    with col_stop:
+    with _btn_stop:
         if st.button("■ Stop", width="stretch",
                      disabled=not is_running, key="agent_stop_btn"):
             _ac = _cached_alerts_config()
@@ -6348,39 +6454,101 @@ def page_agent():
             _agent.supervisor.stop()
             st.rerun()
 
-    # ── Metrics ──
-    st.markdown("---")
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Total Cycles", status.get("cycles_total", 0))
-    with m2:
-        last_ts = status.get("last_run_ts")
-        if last_ts:
-            age_s = int(time.time() - last_ts)
-            age_str = f"{age_s // 60}m {age_s % 60}s ago" if age_s >= 60 else f"{age_s}s ago"
-        else:
-            age_str = "Never"
-        st.metric("Last Cycle", age_str)
-    with m3:
-        st.metric("Last Pair", status.get("last_pair") or "—")
-    with m4:
-        _dec_icon = {"approve": "🟢", "reject": "🔴", "skip": "⚪"}.get(
-            status.get("last_decision"), "⚪"
+    # ── Metrics — 4-card strip (mockup `.grid.cols-4`) ──
+    last_ts = status.get("last_run_ts")
+    if last_ts:
+        age_s = int(time.time() - last_ts)
+        age_str = (f"{age_s // 60}m {age_s % 60}s ago"
+                   if age_s >= 60 else f"{age_s}s ago")
+        last_sub = f"interval {int(status.get('interval_s') or 60)}s"
+    else:
+        age_str = "Never"
+        last_sub = "no cycle yet"
+    _dec_raw = status.get("last_decision") or ""
+    _dec_icon = {"approve": "🟢", "reject": "🔴",
+                 "skip": "⚪"}.get(_dec_raw.lower(), "⚪")
+    _dec_label = (_dec_raw.title() if _dec_raw else "—")
+    _last_pair = status.get("last_pair") or "—"
+    _last_tf = status.get("last_timeframe") or "1h"
+
+    def _metric_card(lbl: str, val: str, sub: str = "",
+                     val_color: str = "") -> str:
+        _style = f"color:{val_color};" if val_color else ""
+        return (
+            f'<div class="ds-agent-metric-card">'
+            f'<div class="ds-agent-metric-lbl">{_html.escape(lbl)}</div>'
+            f'<div class="ds-agent-metric-val" style="{_style}">{val}</div>'
+            f'<div class="ds-agent-metric-sub">{_html.escape(sub)}</div>'
+            f'</div>'
         )
-        st.metric("Last Decision", f"{_dec_icon} {status.get('last_decision') or '—'}")
 
-    m5, m6 = st.columns([1, 3])
-    with m5:
-        st.metric("Crash Restarts", status.get("restart_count", 0))
-    with m6:
-        _lg = "LangGraph state machine" if status.get("langgraph") else "Sequential pipeline (LangGraph not installed)"
-        st.metric("Engine", _lg)
+    _cycles = int(status.get("cycles_total") or 0)
+    _since = status.get("session_started_at") or ""
+    _since_short = (_since[:10] if _since else "this session")
+    st.markdown(
+        '<div class="ds-agent-metric-grid cols-4">'
+        + _metric_card("Total Cycles", f"{_cycles:,}", f"since {_since_short}")
+        + _metric_card("Last Cycle", age_str, last_sub)
+        + _metric_card(
+            "Last Pair",
+            f'<span style="font-size:18px;">{_html.escape(str(_last_pair))}</span>',
+            f"timeframe {_last_tf}",
+        )
+        + _metric_card(
+            "Last Decision",
+            f'<span style="font-size:18px;">{_dec_icon} {_dec_label}</span>',
+            f"size {status.get('last_size_pct', '—')}% · "
+            f"conf {status.get('last_confidence', '—')}%",
+            val_color=("var(--success)" if _dec_raw.lower() == "approve"
+                       else "var(--danger)" if _dec_raw.lower() == "reject"
+                       else "var(--text-secondary)"),
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
 
-    # Show in-progress indicator when a cycle is actively running
+    # ── 2-card row: Engine + Crash Restarts ──
+    _engine_label = (
+        "LangGraph state machine"
+        if status.get("langgraph")
+        else "Sequential pipeline (LangGraph not installed)"
+    )
+    _engine_sub = (
+        "graph: 7 nodes · 12 edges · sequential fallback ready"
+        if status.get("langgraph")
+        else "fallback active — LangGraph optional dep"
+    )
+    _restarts = int(status.get("restart_count") or 0)
+    _uptime_s = int(status.get("uptime_s") or 0)
+    if _uptime_s:
+        _udays = _uptime_s // 86400
+        _uhours = (_uptime_s % 86400) // 3600
+        _uptime_str = f"supervisor active · uptime {_udays}d {_uhours}h"
+    else:
+        _uptime_str = "supervisor idle"
+    st.markdown(
+        '<div class="ds-agent-metric-grid cols-2">'
+        + _metric_card(
+            "Engine",
+            f'<span style="font-size:15px;">{_html.escape(_engine_label)}</span>',
+            _engine_sub,
+        )
+        + _metric_card("Crash Restarts", f"{_restarts}", _uptime_str)
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # In-progress indicator — mockup-styled chip.
     _cur = status.get("current_pair", "")
     _elapsed = status.get("cycle_elapsed_s", 0)
     if is_running and _cur:
-        st.info(f"⏳ Processing {_cur} — cycle running for {_elapsed}s")
+        st.markdown(
+            f'<div class="ds-agent-in-progress">'
+            f'⏳ Processing {_html.escape(str(_cur))} — cycle running '
+            f'for {int(_elapsed)}s'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Config form ──
     st.markdown("---")
@@ -7005,12 +7173,36 @@ def page_signals():
         # "All 4 composite layers + technical indicators + on-chain
         # values empty". The helper has a 5-min TTL so repeated detail-
         # page renders don't re-run compute_composite_signal each time.
+        # Open-item #3 (2026-04-30): per-timeframe composite. When
+        # the user selects a non-1d timeframe in the strip and the
+        # scan_result has a `timeframes[tf]` view, recompute the
+        # composite using that view's TA inputs. Macro / Sentiment /
+        # On-chain layer inputs stay the same since those are not
+        # per-TF concepts. Falls back to the legacy non-TF helper
+        # when the per-TF view is missing.
+        _tf_view_for_composite = (_result.get("timeframes", {}) or {}).get(
+            _selected_tf, {}
+        ) or {}
         if (
             _l_tech is None and _l_macro is None
             and _l_sent is None and _l_onch is None
         ):
             try:
-                _cs_out = _sg_cached_composite_per_pair(_pair) or {}
+                if _tf_view_for_composite:
+                    # Pack tf_view as a hashable tuple for st.cache_data.
+                    _payload = tuple(
+                        _tf_view_for_composite.get(k)
+                        for k in (
+                            "rsi", "adx", "macd_div", "vwap", "ichimoku",
+                            "supertrend", "sr_status", "regime",
+                            "strategy_bias", "agent_vote", "consensus",
+                            "funding", "open_interest", "onchain",
+                            "options_iv", "ob_depth", "cvd", "tvl",
+                        )
+                    )
+                    _cs_out = _sg_cached_composite_per_pair_tf(_pair, _payload) or {}
+                else:
+                    _cs_out = _sg_cached_composite_per_pair(_pair) or {}
                 _layers = (_cs_out or {}).get("layers") or {}
                 # compute_composite_signal returns layer scores in
                 # [-1.0, +1.0] (each "score" key inside the per-layer
@@ -7251,26 +7443,28 @@ def page_regimes():
     except Exception:
         _ds_pair_dropdown = None  # type: ignore[assignment]
 
-    # Header text + popover row. Two columns: text on left, More on right.
-    _rg_l, _rg_r = st.columns([4, 2])
-    with _rg_l:
-        st.markdown(
-            f'<div style="font-size:13px;color:var(--text-muted);'
-            f'margin:0 0 10px 2px;">Showing 8 of {_universe_n} pairs · '
-            f'click any to drill in · use the dropdown to swap any pair into '
-            f'the visible 8.</div>',
-            unsafe_allow_html=True,
+    # Header text on its own row — full width — then the pair_dropdown
+    # gets the entire row below. Open #1 fix (2026-04-30): the previous
+    # [4, 2] split crammed pair_dropdown's 6 columns (5 quick + More)
+    # into 1/3 of the page width, producing char-by-char vertical
+    # wrapping on the BTC/USDT/etc. pills. Stacking the rows gives the
+    # dropdown its full width and the pills render flat.
+    st.markdown(
+        f'<div style="font-size:13px;color:var(--text-muted);'
+        f'margin:0 0 10px 2px;">Showing 8 of {_universe_n} pairs · '
+        f'click any to drill in · use the dropdown to swap any pair into '
+        f'the visible 8.</div>',
+        unsafe_allow_html=True,
+    )
+    if _ds_pair_dropdown is not None and _regimes_universe:
+        _ds_pair_dropdown(
+            _regimes_universe,
+            active=st.session_state.get(
+                "regimes_focus_pair", _regimes_universe[0]
+            ),
+            key="regimes_focus_pair",
+            label=f"More ▾  +{max(0, _universe_n - 5)}",
         )
-    with _rg_r:
-        if _ds_pair_dropdown is not None and _regimes_universe:
-            _ds_pair_dropdown(
-                _regimes_universe,
-                active=st.session_state.get(
-                    "regimes_focus_pair", _regimes_universe[0]
-                ),
-                key="regimes_focus_pair",
-                label=f"More ▾  +{max(0, _universe_n - 5)}",
-            )
 
     # ── Top: 8-card regime grid ──
     try:
