@@ -593,6 +593,34 @@ def test_form_based_autoscan_scheduler_still_present():
     )
 
 
+def test_autoscan_form_widgets_have_no_disabled_props():
+    """C-fix-18 (2026-05-02): widgets inside the autoscan form must NOT
+    have `disabled=` props that gate on other form widgets. Streamlit
+    forms don't propagate widget value changes between siblings until
+    submit, so a `disabled=not _sched_on` on the interval selectbox
+    would force the user to click Save just to enable subsequent
+    edits — defeating the form's batch-save semantics."""
+    src = _app_source()
+    form_idx = src.find('st.form("autoscan_form"):')
+    assert form_idx > 0, "autoscan form not found"
+    # Find the form_submit_button to bound the form body.
+    end_idx = src.find('st.form_submit_button("💾 Save Scheduler Config"', form_idx)
+    assert end_idx > 0, "form submit button not found"
+    body = src[form_idx:end_idx]
+    # The disabled props that gated on _sched_on / _quiet_on must be gone.
+    bad_patterns = [
+        "disabled=not _sched_on",
+        "disabled=not (_sched_on and _quiet_on)",
+    ]
+    for pat in bad_patterns:
+        assert pat not in body, (
+            f"autoscan form still has '{pat}' on a child widget. "
+            f"Streamlit forms don't propagate sibling widget changes "
+            f"until submit, so this disabled prop blocks edits until "
+            f"the user clicks Save once — defeats batch-save semantics."
+        )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():

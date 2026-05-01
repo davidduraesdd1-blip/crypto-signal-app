@@ -3538,6 +3538,21 @@ def page_config():
                 f"match spec, or keep your current cadence. Last scan: {_c12_last_scan_label}."
             )
 
+        # C-fix-18 (2026-05-02): widgets inside an st.form do NOT
+        # propagate value changes to sibling widgets until the form is
+        # submitted. So a `disabled=not _sched_on` on the Scan Interval
+        # selectbox would stay True (disabled) for the entire form
+        # render even after the user toggled "Enable Auto-Scan" on —
+        # forcing the user to click 💾 Save once just to enable the
+        # interval field, then make their interval change, then click
+        # Save again. The intent of the form was to batch all changes
+        # into ONE save.
+        # All `disabled=` props on form children are removed. Widgets
+        # stay editable inside the form regardless of toggle state;
+        # the form's submit handler is the source of truth — the
+        # if-toggle-off-ignore-quiet-hours semantics are enforced
+        # there (or implicitly by the autoscan job not running when
+        # `autoscan_enabled=False`).
         with st.form("autoscan_form"):
             _sc1, _sc2 = st.columns(2)
             with _sc1:
@@ -3562,13 +3577,11 @@ def page_config():
                             # C-fix-12: default 15 min per §12 (was 60 min).
                             key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 15)))
                     ),
-                    disabled=not _sched_on,
                 )
             with _sc2:
                 _quiet_on = st.toggle(
                     "Quiet Hours (UTC)",
                     value=_sched_cfg.get("autoscan_quiet_hours_enabled", False),
-                    disabled=not _sched_on,
                     help="Scheduled scans are skipped during this UTC time window.",
                 )
                 _sqc1, _sqc2 = st.columns(2)
@@ -3576,13 +3589,11 @@ def page_config():
                     _quiet_start = st.text_input(
                         "Start HH:MM",
                         value=_sched_cfg.get("autoscan_quiet_start", "22:00"),
-                        disabled=not (_sched_on and _quiet_on),
                     )
                 with _sqc2:
                     _quiet_end = st.text_input(
                         "End HH:MM",
                         value=_sched_cfg.get("autoscan_quiet_end", "06:00"),
-                        disabled=not (_sched_on and _quiet_on),
                     )
             if st.form_submit_button("💾 Save Scheduler Config", type="primary"):
                 _sched_cfg.update({
