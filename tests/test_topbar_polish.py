@@ -27,10 +27,16 @@ def test_overrides_css_has_intermediate_viewport_breakpoint():
         "from wrapping. Without it, 'Intermediate' wraps to 2-3 lines "
         "in the 1.7/11-width column."
     )
-    # And the rule must actually target topbar buttons.
-    # We don't enforce exact font-size — only that the rule mentions
-    # the topbar selector inside the 1200px media block.
-    assert "data-topbar" in css_src
+    # C-fix-01 (2026-05-01): topbar selector migrated from
+    # `:has(.ds-crumbs[data-topbar="1"])` to `data-stkey="ds_topbar_row"`
+    # because the audit confirmed the :has-based scope was being beaten
+    # by section.main's default stButton specificity. The new selector
+    # is unambiguous and uses Streamlit's `st.container(key=...)` hook.
+    assert '[data-stkey="ds_topbar_row"]' in css_src, (
+        "overrides.py is missing the data-stkey topbar scope. Without it "
+        "the topbar buttons render as Streamlit defaults (oversized pills "
+        "with mid-word text wrap and ~280px row height)."
+    )
     # Inner-element nowrap (Streamlit wraps button text in <p> /
     # stMarkdownContainer with their own white-space rules — the
     # button-level nowrap alone isn't enough on tight viewports).
@@ -42,6 +48,19 @@ def test_overrides_css_has_intermediate_viewport_breakpoint():
         "button's inner elements. Streamlit wraps button labels in "
         "<p> / stMarkdownContainer which can re-introduce wrapping "
         "inside the button even when the button itself is nowrap."
+    )
+
+
+def test_render_top_bar_wraps_columns_in_keyed_container():
+    """C-fix-01 (2026-05-01): the topbar columns must be created inside
+    `st.container(key="ds_topbar_row")` so Streamlit emits the
+    `data-stkey="ds_topbar_row"` DOM hook the CSS scope depends on."""
+    from ui.sidebar import render_top_bar
+    src = inspect.getsource(render_top_bar)
+    assert 'st.container(key="ds_topbar_row")' in src, (
+        "render_top_bar no longer wraps its columns in a keyed container — "
+        "the data-stkey CSS scope will not match anything and the topbar "
+        "will revert to oversized Streamlit defaults."
     )
 
 

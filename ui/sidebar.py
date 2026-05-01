@@ -269,10 +269,19 @@ def render_top_bar(
     *rest, last = list(breadcrumb) or ["", ""]
     crumb_html = " / ".join(rest) + (" / " if rest else "") + f"<b>{last}</b>"
 
+    # C-fix-01 (2026-05-01): create the topbar columns inside a keyed
+    # st.container so Streamlit emits a stable `data-stkey="ds_topbar_row"`
+    # hook on the DOM node. The previous `:has(.ds-crumbs[data-topbar="1"])`
+    # scope was unreliable (intermediate stVerticalBlock wrappers + Streamlit
+    # specificity drift let default stButton padding through, producing
+    # 280px-tall topbars with mid-word wrapped labels). The stkey selector
+    # is unambiguous and survives DOM tree changes.
+    _topbar_ctx = st.container(key="ds_topbar_row")
+
     # 6-col row: breadcrumb + 3 level pills + refresh + theme. Ratios are
     # tuned so "Intermediate" (longest label) fits on one line at 12.5px font
     # without ellipsis on a typical desktop viewport.
-    cols = st.columns([3, 1.4, 1.7, 1.4, 1.2, 1.2])
+    cols = _topbar_ctx.columns([3, 1.4, 1.7, 1.4, 1.2, 1.2])
 
     with cols[0]:
         # data-topbar="1" is the CSS hook for scoped topbar-button styling
