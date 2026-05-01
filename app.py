@@ -1701,83 +1701,22 @@ def _render_relocated_sidebar_widgets() -> None:
     """
     _legacy_alerts_cfg = _cached_alerts_config()
 
-    with st.expander("⏰ Auto-Scan", expanded=False):
-        _alert_cfg = _legacy_alerts_cfg.copy()
-        autoscan_on = st.toggle(
-            "Enable Auto-Scan",
-            # C-fix-12 (2026-05-02): default True to match CLAUDE.md §12
-            # spec ("Full scan / recalc — 15 min auto").
-            value=_alert_cfg.get("autoscan_enabled", True),
-            key="autoscan_toggle",
-        )
-        interval_options = {
-            "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
-            "2 hours": 120, "4 hours": 240, "8 hours": 480, "24 hours": 1440,
-        }
-        interval_label = st.selectbox(
-            "Scan Interval",
-            options=list(interval_options.keys()),
-            index=list(interval_options.values()).index(
-                min(interval_options.values(),
-                    # C-fix-12: default 15 min per §12 (was 60).
-                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 15)))
-            ),
-            key="autoscan_interval",
-            disabled=not autoscan_on,
-        )
-        interval_min = interval_options[interval_label]
-
-        quiet_on = st.toggle(
-            "Quiet Hours (UTC)",
-            value=_alert_cfg.get("autoscan_quiet_hours_enabled", False),
-            key="autoscan_quiet_on",
-            disabled=not autoscan_on,
-            help="Skip scheduled scans during these hours (times are UTC).",
-        )
-        _qc1, _qc2 = st.columns(2)
-        with _qc1:
-            quiet_start = st.text_input(
-                "Start HH:MM", value=_alert_cfg.get("autoscan_quiet_start", "22:00"),
-                key="autoscan_quiet_start", disabled=not (autoscan_on and quiet_on),
-            )
-        with _qc2:
-            quiet_end = st.text_input(
-                "End HH:MM", value=_alert_cfg.get("autoscan_quiet_end", "06:00"),
-                key="autoscan_quiet_end", disabled=not (autoscan_on and quiet_on),
-            )
-
-        if autoscan_on:
-            _job_exists = bool(_get_scheduler().get_job(_AUTOSCAN_JOB_ID))
-            _interval_changed = interval_min != _alert_cfg.get("autoscan_interval_minutes")
-            if not _job_exists or _interval_changed:
-                _setup_autoscan(interval_min)
-            next_t = _get_next_autoscan_time()
-            if next_t:
-                try:
-                    if next_t.tzinfo is None:
-                        next_t = next_t.replace(tzinfo=timezone.utc)
-                    delta = next_t - datetime.now(timezone.utc)
-                except Exception:
-                    delta = timedelta(0)
-                total_secs = max(0.0, delta.total_seconds())
-                mins_left = int(total_secs // 60)
-                secs_left = int(total_secs % 60)
-                st.caption(f"Next scan in: {mins_left}m {secs_left}s")
-        else:
-            _stop_autoscan()
-            st.caption("Auto-scan is off.")
-
-        if (autoscan_on  != _alert_cfg.get("autoscan_enabled")
-                or interval_min != _alert_cfg.get("autoscan_interval_minutes")
-                or quiet_on      != _alert_cfg.get("autoscan_quiet_hours_enabled")
-                or quiet_start   != _alert_cfg.get("autoscan_quiet_start")
-                or quiet_end     != _alert_cfg.get("autoscan_quiet_end")):
-            _alert_cfg["autoscan_enabled"]             = autoscan_on
-            _alert_cfg["autoscan_interval_minutes"]    = interval_min
-            _alert_cfg["autoscan_quiet_hours_enabled"] = quiet_on
-            _alert_cfg["autoscan_quiet_start"]         = quiet_start.strip()
-            _alert_cfg["autoscan_quiet_end"]           = quiet_end.strip()
-            _save_alerts_config_and_clear(_alert_cfg)
+    # C-fix-15 (2026-05-02): the duplicate "⏰ Auto-Scan" expander that
+    # used to live here was REMOVED. It auto-saved on every individual
+    # widget change (toggle / selectbox / text input each triggered a
+    # full _save_alerts_config_and_clear), forcing users to do a save
+    # round-trip between every edit. The canonical autoscan UI lives
+    # in Settings → Dev Tools → "Auto-Scan Scheduler" (further down
+    # the same tab), wrapped in `st.form("autoscan_form")` so all
+    # changes batch into a single 💾 Save Scheduler Config click.
+    # Having both surfaces in the same tab was both redundant and
+    # confusing — users couldn't tell why one save round-tripped per
+    # change while the other batched.
+    #
+    # Keys preserved by the form-based UI: autoscan_enabled,
+    # autoscan_interval_minutes, autoscan_quiet_hours_enabled,
+    # autoscan_quiet_start, autoscan_quiet_end. No state migration
+    # needed — the config schema is identical.
 
     with st.expander("🎭 Demo / Sandbox mode", expanded=False):
         _demo_val = st.toggle(
