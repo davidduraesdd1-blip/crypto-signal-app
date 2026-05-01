@@ -200,19 +200,31 @@ def glossary_popover(user_level: str = "beginner") -> None:
     (or any environment that strips the attribute), fall back to a plain
     expander so the glossary still renders rather than crashing the
     sidebar.
+
+    C-fix-07 (2026-05-01): the trigger label was
+    `📖 Glossary — 30 terms ({depth_name})` which wrapped to four lines
+    inside the 150px sidebar rail. Shortened to `📖 Glossary`; the
+    "30 terms · {depth_name}" detail moves to a help tooltip on the
+    popover trigger and to a caption inside the popover body. Pair
+    with the .stPopover nowrap CSS in ui/overrides.py to keep it
+    tight.
     """
     label_depth = {"beginner": "Plain English", "intermediate": "Key Metrics", "advanced": "Technical Detail"}
     depth_name = label_depth.get(user_level, "Plain English")
-    label = f"📖 Glossary — 30 terms ({depth_name})"
+    label = "📖 Glossary"
+    help_txt = f"30 crypto & DeFi terms · {depth_name}"
 
     if hasattr(st, "popover"):
-        _container_cm = st.popover(label)
+        _container_cm = st.popover(label, help=help_txt)
     else:
         _container_cm = st.expander(label, expanded=False)
 
     with _container_cm:
         st.markdown("### Crypto & DeFi Glossary")
-        st.caption(f"Showing explanations at **{user_level}** level. Change your level in the sidebar to see deeper explanations.")
+        st.caption(
+            f"30 terms · {depth_name}. Change your level in the sidebar "
+            f"to see deeper explanations."
+        )
         for term, depths in GLOSSARY.items():
             explanation = depths.get(user_level, depths["beginner"])
             st.markdown(f"**{term}** — {explanation}")

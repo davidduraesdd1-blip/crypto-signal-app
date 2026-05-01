@@ -258,3 +258,88 @@ def test_multi_timeframe_strip_first_click_writes_session_state(fake_streamlit):
                   if b["label"] == "4h" and b["key"].startswith("_tfs_tf_"))
     btn_4h["on_click"](*btn_4h["args"])
     assert fake_streamlit.session_state["tf"] == "4h"
+
+
+# ── C-fix-04: canonical 8-cell strip + disabled-cell behaviour ──────────
+
+def test_canonical_timeframes_is_eight_cells_in_mockup_order():
+    """C-fix-04 (2026-05-01): the canonical timeframe set must be the 8
+    cells specified in docs/mockups/sibling-family-crypto-signal-SIGNALS.html
+    in display order. Any reorder risks breaking visual parity."""
+    from ui.sidebar import CANONICAL_TIMEFRAMES
+    assert CANONICAL_TIMEFRAMES == (
+        "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w",
+    )
+
+
+def test_multi_timeframe_strip_default_renders_eight_cells(fake_streamlit):
+    """C-fix-04: with no `timeframes` argument, the strip falls back to
+    the canonical 8-cell set (matches the Signals mockup spec)."""
+    from ui.sidebar import multi_timeframe_strip
+    multi_timeframe_strip(active="1d", key="tf")
+    labels = [b["label"] for b in fake_streamlit.button_calls
+              if b["key"].startswith("_tfs_tf_")]
+    assert labels == ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+
+
+def test_multi_timeframe_strip_disabled_cells_render_disabled(fake_streamlit):
+    """C-fix-04: cells in `timeframes` but not in `enabled_timeframes`
+    render with disabled=True so the user can see the full spec but
+    can't click into a timeframe the engine isn't scanning."""
+    from ui.sidebar import multi_timeframe_strip, CANONICAL_TIMEFRAMES
+    multi_timeframe_strip(
+        list(CANONICAL_TIMEFRAMES),
+        active="1d",
+        key="tf",
+        enabled_timeframes=["1h", "4h", "1d", "1w"],
+    )
+    by_label = {b["label"]: b for b in fake_streamlit.button_calls
+                if b["key"].startswith("_tfs_tf_")}
+    # Engine-scanned cells are enabled
+    for tf in ("1h", "4h", "1d", "1w"):
+        assert by_label[tf]["kwargs"].get("disabled") is False, (
+            f"{tf} is in enabled_timeframes but rendered disabled"
+        )
+    # Cells outside the enabled set are disabled
+    for tf in ("1m", "5m", "15m", "30m"):
+        assert by_label[tf]["kwargs"].get("disabled") is True, (
+            f"{tf} is NOT in enabled_timeframes — must render disabled"
+        )
+
+
+def test_multi_timeframe_strip_disabled_click_is_noop(fake_streamlit):
+    """C-fix-04: even if Streamlit's disabled attribute fails (browser
+    bug, accessibility tooling), the on_click handler must guard against
+    a disabled-cell click writing a non-scannable timeframe to session
+    state."""
+    from ui.sidebar import multi_timeframe_strip, CANONICAL_TIMEFRAMES
+    fake_streamlit.session_state["tf"] = "1d"
+    multi_timeframe_strip(
+        list(CANONICAL_TIMEFRAMES),
+        active="1d",
+        key="tf",
+        enabled_timeframes=["1h", "4h", "1d", "1w"],
+    )
+    btn_1m = next(b for b in fake_streamlit.button_calls
+                  if b["label"] == "1m" and b["key"].startswith("_tfs_tf_"))
+    btn_1m["on_click"](*btn_1m["args"])
+    # Click was a no-op — session state still on 1d
+    assert fake_streamlit.session_state["tf"] == "1d"
+
+
+def test_multi_timeframe_strip_active_outside_enabled_falls_back(fake_streamlit):
+    """C-fix-04: if the caller passes `active="1m"` but the engine isn't
+    scanning 1m, the strip must fall back to a real enabled timeframe
+    (preferring 1d) so downstream data fetches don't pull empty results."""
+    from ui.sidebar import multi_timeframe_strip, CANONICAL_TIMEFRAMES
+    out = multi_timeframe_strip(
+        list(CANONICAL_TIMEFRAMES),
+        active="1m",  # not in enabled set
+        key="tf",
+        enabled_timeframes=["1h", "4h", "1d", "1w"],
+    )
+    # The function returns whatever's in session_state, but the
+    # rendered active cell must be 1d (preferred fallback).
+    by_label = {b["label"]: b for b in fake_streamlit.button_calls
+                if b["key"].startswith("_tfs_tf_")}
+    assert by_label["1d"]["kwargs"].get("type") == "primary"

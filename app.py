@@ -685,13 +685,32 @@ def _sg_cached_multi_exchange_funding(pair: str) -> dict:
 def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 400):
     """OHLCV — 5-min TTL per CLAUDE.md §12 (intraday).
 
-    Wraps model.robust_fetch_ohlcv so dashboard / signals / backtester
-    pages don't refetch identical (exchange, pair, tf, limit) tuples on
-    every Streamlit rerun. Returns whatever robust_fetch_ohlcv returns
-    (DataFrame or empty list); errors fall through to None.
+    Returns ccxt-format raw list-of-lists:
+        [[ts_ms, open, high, low, close, volume], ...]
+
+    C-fix-05 (2026-05-01): the previous implementation called
+    model.robust_fetch_ohlcv(exchange_id, ...) passing a string, but
+    that function expects a CCXT exchange instance — it calls
+    `ex.fetch_ohlcv(...)` directly, which raises AttributeError on
+    a str arg. The exception was swallowed and the helper returned
+    None for every call, so Signals + Backtester period-changes (30d,
+    1Y) and the historical-equity overlay all silently rendered as
+    dashes / empty.
+
+    The fix uses model.fetch_chart_ohlcv(pair, timeframe, limit), which
+    is the right tool for this job:
+      - returns ccxt-format list-of-lists (matches both consumers)
+      - has a 6-exchange fallback chain (Kraken → OKX → Gate.io →
+        Bybit → MEXC → CoinGecko) per crypto_model_core.py:526
+      - doesn't need an exchange instance — the chain handles unreachable
+        primaries internally
+
+    `exchange_id` is preserved as the first positional arg so both
+    cache keys stay distinct from the old (broken) entries and the
+    call sites don't have to change their signature.
     """
     try:
-        return model.robust_fetch_ohlcv(exchange_id, pair, timeframe, limit=limit)
+        return model.fetch_chart_ohlcv(pair, timeframe, limit=limit)
     except Exception as _e:
         logger.debug("[App] cached OHLCV %s %s %s failed: %s",
                      exchange_id, pair, timeframe, _e)
@@ -1424,8 +1443,26 @@ if _ds_current_label not in _ds_nav_flat_labels:
     _ds_current_label = _ds_nav_flat_labels[0] if _ds_nav_flat_labels else ""
     st.session_state["_ds_current_nav_label"] = _ds_current_label
 
-_ds_new_label_selected = None
-_ds_new_key_selected = None
+# C-fix-03 (2026-05-01): nav buttons use the on_click=callback pattern
+# instead of the legacy `if st.sidebar.button(...): write_state()` shape.
+#
+# Why this matters: with the legacy pattern, the buttons render with
+# `type=("primary" if _is_active else "secondary")` based on the
+# pre-click `_ds_current_nav_label`. The click is processed AFTER the
+# buttons have already emitted their type, so the highlight reflects
+# OLD state for one render. Two clicks were required to see the
+# highlight catch up — the exact two-render lag H5 fixed in the
+# (unused) ui.sidebar.render_sidebar function. app.py's inlined nav
+# never received the same fix and continued to exhibit the bug.
+#
+# Streamlit invokes on_click callbacks BEFORE the script body re-runs,
+# so by the time the buttons render this turn, `_ds_current_nav_label`
+# is already the new value and the active highlight tracks correctly
+# on the first click.
+def _ds_select_nav(label: str, key: str) -> None:
+    st.session_state["_ds_current_nav_label"] = label
+    st.session_state["_ds_current_nav_key"] = key
+
 for _grp_name, _grp_items in _ds_nav_current:
     # Section header — visual styling lives entirely in ui/overrides.py
     # under .ds-nav-group-header. Keeping inline style here would beat the
@@ -1436,27 +1473,18 @@ for _grp_name, _grp_items in _ds_nav_current:
     )
     for _k, _lbl, _page_key in _grp_items:
         _is_active = (_lbl == _ds_current_label)
-        if st.sidebar.button(
+        st.sidebar.button(
             _lbl,
             key=f"ds_nav_btn_{_k}",
             use_container_width=True,
             type=("primary" if _is_active else "secondary"),
-        ):
-            _ds_new_label_selected = _lbl
-            _ds_new_key_selected = _k
-            # Side-effect routing for items that share a target page —
-            # e.g. "Alerts" should land on the Alerts tab inside Settings.
-            # C6 (2026-04-30): the legacy `_settings_tab="🔔 Alerts"`
-            # side-effect — which deep-linked the sidebar Alerts entry
-            # to Settings → Alerts tab — is removed. Alerts now has
-            # its own first-class page (page_alerts), so the nav
-            # router maps `alerts` → "Alerts" page key directly via
-            # _DS_NAV. No tab override needed.
+            on_click=_ds_select_nav,
+            args=(_lbl, _k),
+        )
 
-if _ds_new_label_selected:
-    st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
-    st.session_state["_ds_current_nav_key"] = _ds_new_key_selected
-    _ds_current_label = _ds_new_label_selected
+# Re-read after callbacks have fired (they ran before this body re-rendered,
+# but `_ds_current_label` was captured above before the buttons rendered).
+_ds_current_label = st.session_state.get("_ds_current_nav_label", _ds_current_label)
 
 page = _ds_nav_label_to_page.get(_ds_current_label, "Dashboard")
 
@@ -3921,29 +3949,53 @@ def page_backtest():
             except Exception:
                 return "—"
 
-        # 5-col KPI strip
-        _ds_bt_kpis([
-            ("Total return",
-             _pct(_bt_total, 1),
-             f"vs BTC {_pct(_bt_btc_total, 1)}" if _bt_btc_total is not None else "over backtest window",
-             "success" if (_bt_total is not None and float(_bt_total) > 0) else ("danger" if _bt_total is not None and float(_bt_total) < 0 else "")),
-            ("CAGR",
-             _pct(_bt_cagr, 1),
-             f"vs BTC {_pct(_bt_btc_cagr, 1)}" if _bt_btc_cagr is not None else "annualised",
-             ""),
-            ("Sharpe",
-             f"{float(_bt_sharpe):.2f}" if _bt_sharpe is not None else "—",
-             "risk-free 4.5%",
-             "accent" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else ""),
-            ("Max drawdown",
-             _pct(_bt_dd, 1),
-             f"BTC {_pct(_bt_btc_dd, 1)}" if _bt_btc_dd is not None else "peak → trough",
-             "danger" if (_bt_dd is not None and float(_bt_dd) != 0) else ""),
-            ("Win rate",
-             _pct(_bt_wr, 0, signed=False) if _bt_wr is not None else "—",
-             f"n = {int(_bt_n)} trades" if _bt_n else "no runs yet",
-             ""),
-        ])
+        # C-fix-06 (2026-05-01): render a CTA card when there's nothing
+        # to summarise. The labels-without-values state ("TOTAL RETURN: —",
+        # "CAGR: —", "SHARPE: —" ...) was actively misleading on cold-
+        # start — users couldn't tell whether the backtest had run and
+        # produced zeros, or hadn't run at all. A guided CTA tells them
+        # exactly what to do, with the same visual weight as the strip.
+        _bt_has_any_data = any(v is not None for v in (
+            _bt_total, _bt_cagr, _bt_sharpe, _bt_dd, _bt_wr,
+        ))
+        if not _bt_has_any_data:
+            st.markdown(
+                '<div class="ds-card" style="text-align:center;padding:28px 20px;">'
+                '<div style="font-size:14px;font-weight:600;color:var(--text-primary);'
+                'margin-bottom:6px;">No backtest results yet</div>'
+                '<div style="font-size:12.5px;color:var(--text-muted);'
+                'max-width:520px;margin:0 auto 14px;">'
+                'Configure parameters below and run a backtest to populate the '
+                'KPI strip with total return, CAGR, Sharpe, max drawdown and '
+                'win rate.'
+                '</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # 5-col KPI strip
+            _ds_bt_kpis([
+                ("Total return",
+                 _pct(_bt_total, 1),
+                 f"vs BTC {_pct(_bt_btc_total, 1)}" if _bt_btc_total is not None else "over backtest window",
+                 "success" if (_bt_total is not None and float(_bt_total) > 0) else ("danger" if _bt_total is not None and float(_bt_total) < 0 else "")),
+                ("CAGR",
+                 _pct(_bt_cagr, 1),
+                 f"vs BTC {_pct(_bt_btc_cagr, 1)}" if _bt_btc_cagr is not None else "annualised",
+                 ""),
+                ("Sharpe",
+                 f"{float(_bt_sharpe):.2f}" if _bt_sharpe is not None else "—",
+                 "risk-free 4.5%",
+                 "accent" if (_bt_sharpe is not None and float(_bt_sharpe) >= 1.5) else ""),
+                ("Max drawdown",
+                 _pct(_bt_dd, 1),
+                 f"BTC {_pct(_bt_btc_dd, 1)}" if _bt_btc_dd is not None else "peak → trough",
+                 "danger" if (_bt_dd is not None and float(_bt_dd) != 0) else ""),
+                ("Win rate",
+                 _pct(_bt_wr, 0, signed=False) if _bt_wr is not None else "—",
+                 f"n = {int(_bt_n)} trades" if _bt_n else "no runs yet",
+                 ""),
+            ])
 
         # 2-col: equity curve + Optuna top-5
         _bt_col_l, _bt_col_r = st.columns([2, 1])
@@ -6817,18 +6869,31 @@ def page_signals():
     )
 
     # Multi-timeframe strip — visible selector backed by
-    # st.session_state["selected_timeframe"]. Wires into model.TIMEFRAMES
-    # (1h/4h/1d/1w). Per-timeframe signals dict is computed below from
+    # st.session_state["selected_timeframe"].
+    #
+    # C-fix-04 (2026-05-01): always render the canonical 8-cell set
+    # (1m/5m/15m/30m/1h/4h/1d/1w) per the Signals mockup spec. The
+    # engine may scan only a subset (e.g. model.TIMEFRAMES =
+    # ["1h","4h","1d","1w"]) — those un-scanned cells render disabled
+    # with a tooltip pointing to Settings → Trading → Timeframes so the
+    # user sees the full spec without being able to click into an empty
+    # timeframe. Per-timeframe signals dict is computed below from
     # whatever per-tf data the latest scan_result carries; cells without
     # data render bare label only. The active timeframe drives the
     # composite_score_card and indicator selection further down.
-    _signals_tfs = list(getattr(model, "TIMEFRAMES", ["1h", "4h", "1d", "1w"]))
+    from ui.sidebar import CANONICAL_TIMEFRAMES as _DS_CANON_TFS
+    _signals_tfs_render = list(_DS_CANON_TFS)
+    _signals_tfs_enabled = list(getattr(model, "TIMEFRAMES", ["1h", "4h", "1d", "1w"]))
     _selected_tf = st.session_state.get("selected_timeframe")
-    if _selected_tf not in _signals_tfs:
-        _selected_tf = "1d" if "1d" in _signals_tfs else _signals_tfs[0]
+    if _selected_tf not in _signals_tfs_enabled:
+        _selected_tf = "1d" if "1d" in _signals_tfs_enabled else _signals_tfs_enabled[0]
         st.session_state["selected_timeframe"] = _selected_tf
-    _selected_tf = _ds_tf_strip(_signals_tfs, active=_selected_tf,
-                                 key="selected_timeframe")
+    _selected_tf = _ds_tf_strip(
+        _signals_tfs_render,
+        active=_selected_tf,
+        key="selected_timeframe",
+        enabled_timeframes=_signals_tfs_enabled,
+    )
 
     # Maintain back-compat: keep `signals_active_coin` in sync with
     # the new `selected_pair` so any unmigrated readers below still
@@ -7098,6 +7163,34 @@ def page_signals():
                 _fund = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
             except Exception:
                 pass
+
+            # C-fix-06 (2026-05-01): fall back to direct compute from the
+            # 1d OHLCV we already fetched above (C-fix-05 now actually
+            # returns real data here). Without this, Vol/ATR render as
+            # "—" on cold-start until the first scan completes — but the
+            # data needed to populate them is already in `_ohlcv_d`.
+            # ccxt row format: [ts_ms, open, high, low, close, volume]
+            if _vol is None and _ohlcv_d:
+                try:
+                    _last = _ohlcv_d[-1]
+                    if len(_last) >= 6:
+                        _vol = float(_last[4]) * float(_last[5])  # close * base-vol
+                except Exception:
+                    pass
+            if _atr is None and _ohlcv_d and len(_ohlcv_d) >= 15:
+                try:
+                    _trs: list[float] = []
+                    for _i in range(len(_ohlcv_d) - 14, len(_ohlcv_d)):
+                        _row = _ohlcv_d[_i]
+                        _prev = _ohlcv_d[_i - 1]
+                        if len(_row) < 5 or len(_prev) < 5:
+                            continue
+                        _h, _l, _pc = float(_row[2]), float(_row[3]), float(_prev[4])
+                        _trs.append(max(_h - _l, abs(_h - _pc), abs(_l - _pc)))
+                    if _trs:
+                        _atr = sum(_trs) / len(_trs)
+                except Exception:
+                    pass
             # P1 follow-up — cryptorank token unlock surfacing (8h cache).
             # Shows the next unlock signal as the 5th info-strip cell so
             # users see imminent supply pressure inline with vol/ATR/beta/

@@ -42,19 +42,34 @@ def inject_streamlit_overrides() -> None:
       background: var(--bg-1) !important;
     }
 
-    /* Brand block */
+    /* Brand block — C-fix-02 (2026-05-01): wordmark "Signal.app" was
+       wrapping to two lines ("Signal.a / pp") inside the 150px rail
+       because neither .ds-rail-brand nor .ds-brand-wm had white-space:
+       nowrap. Streamlit's outer flex container shrinks the wordmark
+       below its intrinsic width and the dot+span flex gap forces the
+       break. Drop font-size from 15px to 14px and pin both the row
+       and the wordmark to nowrap. */
     .ds-rail-brand {
       display: flex; align-items: center; gap: 10px;
       padding: 6px 10px 20px;
-      font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+      font-weight: 600; font-size: 14px; letter-spacing: -0.01em;
       color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
     }
     .ds-brand-dot {
       width: 22px; height: 22px; border-radius: 6px;
       display: grid; place-items: center;
       font-weight: 700; font-size: 12px;
+      flex-shrink: 0;
     }
-    .ds-brand-wm { color: var(--text-primary); }
+    .ds-brand-wm {
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
 
     /* Nav group header — C1 (2026-04-29): bolded + primary text color
        + 12px size + 0.12em letter-spacing for stronger visual
@@ -134,6 +149,20 @@ def inject_streamlit_overrides() -> None:
       text-align: left !important;
       justify-content: flex-start !important;
       box-shadow: none;
+      /* C-fix-07 (2026-05-01): the Glossary label wrapped to 4 lines
+         inside the 150px rail. Pin the trigger to nowrap + ellipsis. */
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    /* Push nowrap into Streamlit's inner <p> / stMarkdownContainer too
+       — without this the inner element re-introduces wrapping inside a
+       button that's nominally nowrap (same trick as topbar buttons). */
+    [data-testid="stSidebar"] [data-testid="stPopover"] button > * {
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 100% !important;
     }
     [data-testid="stSidebar"] [data-testid="stPopover"] button:hover {
       background: var(--bg-2);
@@ -254,6 +283,19 @@ def inject_streamlit_overrides() -> None:
       background: var(--accent-soft) !important;
       color: var(--text-primary) !important;
       font-weight: 600 !important;
+    }
+    /* C-fix-04 (2026-05-01): disabled-cell styling. Streamlit applies
+       its own muted/half-opacity treatment to `disabled` buttons but
+       it's not visually distinct enough at our compact size — bump the
+       muted color, force not-allowed cursor, and keep the cell
+       borderline visible so the 8-cell rhythm is preserved. */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button:disabled {
+      color: var(--text-muted) !important;
+      background: var(--bg-2) !important;
+      border-color: var(--border) !important;
+      opacity: 0.55 !important;
+      cursor: not-allowed !important;
     }
 
     /* ── Pair-dropdown popover content (C3) ─────────────────────────────
@@ -536,48 +578,85 @@ def inject_streamlit_overrides() -> None:
     }
 
     /* Topbar row container — matches mockup .topbar (bg-0 + border-bottom +
-       16px gap + center alignment). Scoped via the data-topbar="1" hook on
-       the breadcrumb cell so it only restyles the topbar's stHorizontalBlock. */
-    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) {
+       16px gap + center alignment). C-fix-01 (2026-05-01): scoped via the
+       container's `data-stkey="ds_topbar_row"` hook (set in render_top_bar
+       via `st.container(key="ds_topbar_row")`). The previous selector used
+       `:has(.ds-crumbs[data-topbar="1"])` which the audit confirmed was
+       failing in production (Streamlit's outer wrappers + specificity drift
+       let default `section.main [data-testid="stButton"] > button` win).
+       data-stkey is unambiguous and survives Streamlit DOM changes. */
+    [data-stkey="ds_topbar_row"] [data-testid="stHorizontalBlock"] {
       background: var(--bg-0);
       border-bottom: 1px solid var(--border);
       padding: 4px 0 10px 0;
       margin-bottom: 18px;
       align-items: center;
+      min-height: 0 !important;
+    }
+    /* Container itself: collapse padding to mockup-tight values so the
+       whole topbar fits in ~56px (matches --topbar-h). */
+    [data-stkey="ds_topbar_row"] {
+      padding: 0 !important;
+      margin: -8px 0 8px 0 !important;
+    }
+    /* Verticalblock wrappers around each column — Streamlit injects
+       these and they pad each cell which inflates row height. */
+    [data-stkey="ds_topbar_row"] [data-testid="stVerticalBlock"] {
+      gap: 0 !important;
+    }
+    [data-stkey="ds_topbar_row"] [data-testid="stElementContainer"] {
+      margin: 0 !important;
     }
 
     /* Topbar buttons (Beginner / Intermediate / Advanced / ↻ Refresh / ☾ Theme).
-       Scoped via the data-topbar="1" hook on the breadcrumb cell so the rule
-       only affects buttons in the same stHorizontalBlock. Without nowrap +
-       compact padding, "Intermediate" wraps to 2-3 lines in the 1/11-width
-       column. */
-    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) [data-testid="stButton"] > button {
-      white-space: nowrap;
-      padding: 4px 8px;
-      font-size: 12.5px;
-      min-width: 0;
-      line-height: 1.4;
-      overflow: hidden;
-      text-overflow: ellipsis;
+       Aggressive `!important` overrides because the default
+       `section.main [data-testid="stButton"] > button` rule (specificity 0,2,2)
+       was beating the previous topbar-scoped rule. With `!important` the
+       order of declaration wins, so these compact-pill values apply. */
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button {
+      white-space: nowrap !important;
+      padding: 4px 10px !important;
+      font-size: 12.5px !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      height: auto !important;
+      line-height: 1.4 !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      background: var(--bg-1) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 6px !important;
+      color: var(--text-secondary) !important;
+      font-weight: 500 !important;
+      box-shadow: none !important;
+      transition: background 120ms, border-color 120ms, color 120ms !important;
+    }
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button:hover {
+      background: var(--bg-2) !important;
+      border-color: var(--border-strong) !important;
+      color: var(--text-primary) !important;
+    }
+    /* Active level pill — uses Streamlit's kind="primary" attribute. */
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      border-color: var(--accent-soft) !important;
+      font-weight: 600 !important;
     }
     /* H1 fix (2026-04-28): Streamlit wraps button labels in inner <p> /
        <div data-testid="stMarkdownContainer"> elements that re-introduce
-       white-space: pre-wrap. The button-level nowrap above isn't enough
-       on viewports between 769-1200px where the column width is narrow
-       enough to force a wrap inside the inner element. Push nowrap +
-       overflow:ellipsis down to every descendant so the label stays on
-       one line and truncates cleanly when there isn't room. */
-    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
-      [data-testid="stButton"] > button > * {
+       white-space: pre-wrap. Push nowrap + overflow:ellipsis down to every
+       descendant so the label stays on one line and truncates cleanly. */
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button > * {
       white-space: nowrap !important;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 100% !important;
     }
     /* Tighten the vertical block element wrapping each button so the row
        feels like a topbar, not a stack of inputs. */
-    [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"]) [data-testid="stButton"] {
-      margin: 0;
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] {
+      margin: 0 !important;
     }
 
     /* Inputs */
@@ -1020,18 +1099,16 @@ def inject_streamlit_overrides() -> None:
        stay on one line. The full-width breakpoint at <=768px hides
        level pills entirely (see mobile section below). */
     @media (max-width: 1200px) {
-      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
-        [data-testid="stButton"] > button {
-        font-size: 11.5px;
-        padding: 3px 6px;
-        letter-spacing: 0;
+      [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button {
+        font-size: 11.5px !important;
+        padding: 3px 6px !important;
+        letter-spacing: 0 !important;
       }
     }
     @media (max-width: 1024px) {
-      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
-        [data-testid="stButton"] > button {
-        font-size: 11px;
-        padding: 3px 4px;
+      [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button {
+        font-size: 11px !important;
+        padding: 3px 4px !important;
       }
     }
 
@@ -1049,11 +1126,11 @@ def inject_streamlit_overrides() -> None:
       .ds-signal-big { font-size: 32px; }
       /* Hide the level pills in the topbar on mobile (mockup behaviour).
          The level can still be changed via Settings. Refresh + Theme stay. */
-      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+      [data-stkey="ds_topbar_row"] [data-testid="stHorizontalBlock"]
         > [data-testid="column"]:nth-child(2),
-      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+      [data-stkey="ds_topbar_row"] [data-testid="stHorizontalBlock"]
         > [data-testid="column"]:nth-child(3),
-      [data-testid="stHorizontalBlock"]:has(.ds-crumbs[data-topbar="1"])
+      [data-stkey="ds_topbar_row"] [data-testid="stHorizontalBlock"]
         > [data-testid="column"]:nth-child(4) {
         display: none !important;
       }
