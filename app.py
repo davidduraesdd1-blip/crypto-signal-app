@@ -2434,6 +2434,24 @@ def page_dashboard():
             # collapsing the dict to `{None: <last row>}` and dropping
             # every row on every customize-save.
             def _build_wl_row(_wp: str) -> dict:
+                # C-fix-16 (2026-05-02): the WebSocket primary feed
+                # (OKX SWAP tickers) silently drops pairs that don't have
+                # a perpetual market — ZBCN, XDC, FLR, SHX show "—" for
+                # price even though their sparkline closes ARE fetched
+                # from the REST OHLCV chain. Use the last sparkline close
+                # as a price fallback so every watchlist pair shows SOME
+                # current-ish price instead of a dash. The closes are
+                # 1h-bar daily-fetched data so the price is at most 1
+                # hour stale — acceptable for a watchlist row, and the
+                # sparkline visual already implicitly tells the user
+                # this is recent-history data.
+                #
+                # The proper fix (full REST live-price fallback chain
+                # CMC → CoinGecko → Kraken → OKX REST) is queued as a
+                # separate follow-up because it's MEDIUM effort and
+                # touches the websocket_feeds.py + data_feeds.py
+                # boundary. This is the band-aid that closes the visible
+                # gap NOW without that scope.
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
@@ -2443,9 +2461,20 @@ def page_dashboard():
                     logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
                     _closes = []
                 _pts = _spark_points_from_closes(_closes)
+                # Change-pct fallback (existing, C-fix-09): derive 24h %
+                # from the first vs last sparkline close.
                 if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
                     try:
                         _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
+                    except Exception:
+                        pass
+                # C-fix-16: price fallback — if WebSocket has nothing
+                # AND we have at least one sparkline close, use the
+                # most-recent close. Mirror the existing change_pct
+                # fallback pattern.
+                if _price is None and _closes:
+                    try:
+                        _price = float(_closes[-1])
                     except Exception:
                         pass
                 _row = {

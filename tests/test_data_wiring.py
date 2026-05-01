@@ -334,7 +334,8 @@ def test_watchlist_rows_carry_pair_key_for_lookup():
         "_build_wl_row helper missing — without it the row construction "
         "is duplicated and the 'pair' key was easy to forget."
     )
-    body = src[idx : idx + 2000]
+    # 4000 chars covers the helper body + comments after C-fix-16.
+    body = src[idx : idx + 4000]
     assert '"pair": _wp' in body, (
         "Watchlist row no longer carries the full pair string under "
         "the 'pair' key. Customize-save filter will collapse to "
@@ -533,6 +534,26 @@ def test_no_duplicate_autoscan_expander_in_sidebar_tools():
         "Legacy autoscan-setup call returned to "
         "_render_relocated_sidebar_widgets — it auto-saves per change. "
         "The form-based UI is canonical."
+    )
+
+
+def test_watchlist_row_falls_back_to_sparkline_close_for_price():
+    """C-fix-16 (2026-05-02): the WebSocket live-price feed (OKX SWAP
+    tickers) silently drops pairs without active perpetual markets.
+    On prod, ZBCN / XDC / FLR / SHX show "—" for price while their
+    sparkline closes ARE fetched. The fallback uses the last sparkline
+    close as a near-current price so the watchlist never shows a dash
+    when REST data is available."""
+    src = _app_source()
+    idx = src.find("def _build_wl_row")
+    assert idx > 0, "_build_wl_row helper missing"
+    body = src[idx : idx + 3500]
+    # Positive: price fallback from sparkline close.
+    assert "_price = float(_closes[-1])" in body, (
+        "Watchlist row no longer falls back to the last sparkline close "
+        "when WebSocket has no live price. Pairs without OKX SWAP "
+        "markets (ZBCN, XDC, FLR, SHX) will show '—' for price even "
+        "though their sparkline data IS fetched from REST."
     )
 
 
