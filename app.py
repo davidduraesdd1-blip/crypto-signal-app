@@ -795,6 +795,14 @@ def _get_scheduler() -> BackgroundScheduler:
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
+        # C-fix-12 (2026-05-02): bootstrap the autoscan job from saved
+        # config on first scheduler init. Without this, autoscan was
+        # only registered when the user opened Settings → Dev Tools,
+        # so fresh sessions had no scheduled scans at all.
+        try:
+            _bootstrap_autoscan_from_config()
+        except Exception as _e_boot:
+            logger.debug("[App] autoscan bootstrap failed: %s", _e_boot)
         # P1: Startup catch-up — delayed 90 seconds so the initial Streamlit render
         # completes and all @st.cache_data caches warm up before the feedback thread
         # acquires _exchange_cache_lock for load_markets(). Running immediately caused
@@ -843,6 +851,31 @@ def _setup_calibration_job():
             replace_existing=True,
             next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
         )
+
+
+def _bootstrap_autoscan_from_config() -> None:
+    """C-fix-12 (2026-05-02): start the autoscan job at app boot if the
+    saved config has it enabled. Pre-fix the job was only registered
+    when the user navigated to Settings → Dev Tools — meaning a fresh
+    session that never opens Settings would have NO automatic scans
+    despite §12 spec, defeating the autoscan entirely. This is now
+    called once during scheduler init so the job lives as long as the
+    Streamlit process. Safe to call repeatedly: _setup_autoscan uses
+    replace_existing=True."""
+    try:
+        _cfg = _cached_alerts_config() or {}
+    except Exception as _e:
+        logger.debug("[Bootstrap] alerts_config read for autoscan failed: %s", _e)
+        _cfg = {}
+    # Match the same defaults the Settings UI uses — §12 compliant.
+    _enabled = bool(_cfg.get("autoscan_enabled", True))
+    _interval = int(_cfg.get("autoscan_interval_minutes", 15) or 15)
+    if _enabled:
+        try:
+            _setup_autoscan(_interval)
+            logger.info("[Bootstrap] Autoscan registered: every %d min", _interval)
+        except Exception as _e:
+            logger.debug("[Bootstrap] autoscan registration failed: %s", _e)
 
 
 def _setup_autoscan(interval_minutes: int):
@@ -966,6 +999,19 @@ def init_state():
             st.session_state[k] = v
 
 init_state()
+
+
+# C-fix-12 (2026-05-02): initialise the BackgroundScheduler at app boot
+# so the autoscan job registers from saved config (defaults: enabled,
+# 15 min interval per §12). Pre-fix _get_scheduler() was only called
+# from _setup_autoscan / _render_relocated_sidebar_widgets, neither of
+# which fires during a normal Home-page render — meaning the autoscan
+# never ran at all unless the user manually opened Settings → Dev Tools.
+# _get_scheduler() is idempotent (singleton guarded by `if _scheduler is None`).
+try:
+    _get_scheduler()
+except Exception as _e_sched_boot:
+    logger.debug("[App] scheduler boot failed: %s", _e_sched_boot)
 
 
 # ──────────────────────────────────────────────
@@ -1659,7 +1705,9 @@ def _render_relocated_sidebar_widgets() -> None:
         _alert_cfg = _legacy_alerts_cfg.copy()
         autoscan_on = st.toggle(
             "Enable Auto-Scan",
-            value=_alert_cfg.get("autoscan_enabled", False),
+            # C-fix-12 (2026-05-02): default True to match CLAUDE.md §12
+            # spec ("Full scan / recalc — 15 min auto").
+            value=_alert_cfg.get("autoscan_enabled", True),
             key="autoscan_toggle",
         )
         interval_options = {
@@ -1671,7 +1719,8 @@ def _render_relocated_sidebar_widgets() -> None:
             options=list(interval_options.keys()),
             index=list(interval_options.values()).index(
                 min(interval_options.values(),
-                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 60)))
+                    # C-fix-12: default 15 min per §12 (was 60).
+                    key=lambda v: abs(v - _alert_cfg.get("autoscan_interval_minutes", 15)))
             ),
             key="autoscan_interval",
             disabled=not autoscan_on,
@@ -3408,12 +3457,71 @@ def page_config():
             icon="⏰",
         )
         _sched_cfg = _cached_alerts_config()
+
+        # C-fix-12 (2026-05-02): visible §12-compliance summary before the
+        # form. The user explicitly asked "when does the app run an
+        # autoscan on a regular schedule?" — this banner answers that
+        # by surfacing the spec, the configured value, and (when active)
+        # the next-scheduled-run countdown + last-scan age in one place.
+        _c12_spec_min = 15
+        _c12_cur_enabled = bool(_sched_cfg.get("autoscan_enabled", True))
+        _c12_cur_interval = int(_sched_cfg.get("autoscan_interval_minutes", _c12_spec_min) or _c12_spec_min)
+        _c12_compliant = _c12_cur_enabled and _c12_cur_interval == _c12_spec_min
+        # Last scan age (from session OR DB) so users can see whether the
+        # scheduler has actually fired recently.
+        _c12_last_scan_label = "—"
+        try:
+            _ts_obj = st.session_state.get("scan_timestamp")
+            if _ts_obj is None:
+                _db_st = _read_scan_status() or {}
+                _ts_obj = _db_st.get("timestamp")
+            if isinstance(_ts_obj, str):
+                try:
+                    _ts_obj = datetime.fromisoformat(_ts_obj)
+                except Exception:
+                    _ts_obj = None
+            if isinstance(_ts_obj, datetime):
+                _aware_ts = _ts_obj if _ts_obj.tzinfo else _ts_obj.replace(tzinfo=timezone.utc)
+                _age_s = (datetime.now(timezone.utc) - _aware_ts).total_seconds()
+                if _age_s < 60:
+                    _c12_last_scan_label = f"{int(_age_s)}s ago"
+                elif _age_s < 3600:
+                    _c12_last_scan_label = f"{int(_age_s // 60)}m ago"
+                else:
+                    _c12_last_scan_label = f"{int(_age_s // 3600)}h ago"
+        except Exception:
+            pass
+
+        if _c12_compliant:
+            st.success(
+                f"✅ **§12 compliant** — auto-scan enabled, every "
+                f"**{_c12_cur_interval} min** (spec: {_c12_spec_min} min full-scan cycle). "
+                f"Last scan: {_c12_last_scan_label}."
+            )
+        elif not _c12_cur_enabled:
+            st.warning(
+                f"⚠️ Auto-scan is **disabled** — CLAUDE.md §12 specifies a "
+                f"{_c12_spec_min}-min full-scan cycle. Enable below for the "
+                f"app to refresh signals automatically. Last scan: {_c12_last_scan_label}."
+            )
+        else:
+            st.info(
+                f"ℹ️ Auto-scan runs every **{_c12_cur_interval} min** — CLAUDE.md "
+                f"§12 specifies a {_c12_spec_min}-min cycle. Tighten below to "
+                f"match spec, or keep your current cadence. Last scan: {_c12_last_scan_label}."
+            )
+
         with st.form("autoscan_form"):
             _sc1, _sc2 = st.columns(2)
             with _sc1:
                 _sched_on = st.toggle(
                     "Enable Auto-Scan",
-                    value=_sched_cfg.get("autoscan_enabled", False),
+                    # C-fix-12: default to True so fresh installs match
+                    # CLAUDE.md §12 "Full scan / recalc — 15 min auto".
+                    # Existing users with explicit `autoscan_enabled: false`
+                    # in their saved config keep their setting (.get with
+                    # default applies only when the key is absent).
+                    value=_sched_cfg.get("autoscan_enabled", True),
                 )
                 _sched_interval_opts = {
                     "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
@@ -3424,7 +3532,8 @@ def page_config():
                     options=list(_sched_interval_opts.keys()),
                     index=list(_sched_interval_opts.values()).index(
                         min(_sched_interval_opts.values(),
-                            key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 60)))
+                            # C-fix-12: default 15 min per §12 (was 60 min).
+                            key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 15)))
                     ),
                     disabled=not _sched_on,
                 )

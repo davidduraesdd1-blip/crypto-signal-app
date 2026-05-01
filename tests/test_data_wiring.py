@@ -422,6 +422,84 @@ def test_first_session_scan_uses_15_min_staleness_threshold():
     )
 
 
+# ── C-fix-12: autoscan §12 alignment + bootstrap + Settings visibility ──
+
+def test_autoscan_default_enabled_and_15_min_per_section_12():
+    """C-fix-12 (2026-05-02): the default for autoscan_enabled must be
+    True and autoscan_interval_minutes must be 15, matching CLAUDE.md
+    §12 'Full scan / recalc — 15 min auto'."""
+    src = _app_source()
+    # Enabled-default must be True (was False).
+    assert (
+        '"autoscan_enabled", True' in src
+    ), (
+        "autoscan_enabled default is no longer True. CLAUDE.md §12 "
+        "specifies the autoscan should be on by default."
+    )
+    # Interval-default must be 15 (was 60).
+    assert (
+        '"autoscan_interval_minutes", 15' in src
+    ), (
+        "autoscan_interval_minutes default is no longer 15. CLAUDE.md "
+        "§12 specifies a 15-min full-scan cycle."
+    )
+
+
+def test_autoscan_bootstrap_helper_exists():
+    """C-fix-12: a _bootstrap_autoscan_from_config() helper must exist
+    and be called at app boot. Pre-fix the autoscan job was only
+    registered when the user opened Settings → Dev Tools, so a fresh
+    session that never visited Settings had no scheduled scans at all."""
+    src = _app_source()
+    assert "def _bootstrap_autoscan_from_config" in src, (
+        "_bootstrap_autoscan_from_config helper missing — autoscan "
+        "won't register on cold start."
+    )
+    # And it must be called from _get_scheduler so the bootstrap runs
+    # whenever the scheduler initialises.
+    sched_idx = src.find("def _get_scheduler")
+    assert sched_idx > 0
+    sched_body = src[sched_idx : sched_idx + 4000]
+    assert "_bootstrap_autoscan_from_config()" in sched_body, (
+        "_get_scheduler no longer calls _bootstrap_autoscan_from_config. "
+        "Autoscan won't register on cold start."
+    )
+
+
+def test_scheduler_initialised_at_app_boot():
+    """C-fix-12: the scheduler must be init'd at app boot (after
+    init_state()) so the bootstrap actually fires. Otherwise
+    _get_scheduler is only called lazily from Settings → Dev Tools."""
+    src = _app_source()
+    # Find the init_state() call line; the boot _get_scheduler() call
+    # must come AFTER it.
+    init_idx = src.find("init_state()")
+    boot_call_idx = src.find("_get_scheduler()", init_idx)
+    assert init_idx > 0 and boot_call_idx > 0, (
+        "Cannot find boot-level _get_scheduler() call after init_state."
+    )
+    # And it must come BEFORE the page router so the scheduler is up
+    # before any page-render code reads scan_status.
+    router_idx = src.find('if page == "Dashboard":')
+    assert boot_call_idx < router_idx, (
+        "Boot _get_scheduler() call moved AFTER the page router. The "
+        "scheduler must init before pages render so the autoscan is "
+        "registered + the bootstrap has fired."
+    )
+
+
+def test_settings_page_surfaces_section_12_compliance_banner():
+    """C-fix-12: the Settings → Dev Tools → Auto-Scan Scheduler section
+    must show a visible banner indicating whether the configured
+    cadence matches CLAUDE.md §12 ('§12 compliant' for the green path)."""
+    src = _app_source()
+    assert "§12 compliant" in src or "§12-compliant" in src or "section_12" in src.lower(), (
+        "Settings page no longer surfaces the §12 compliance banner. "
+        "Users have no visibility into whether their autoscan cadence "
+        "matches the spec."
+    )
+
+
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
 
 def test_refresh_handler_clears_new_trends_cache():
