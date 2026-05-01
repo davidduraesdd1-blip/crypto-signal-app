@@ -1143,8 +1143,12 @@ def signal_pill(direction: str) -> str:
     P1-31: Shape encoding — every badge prepends a direction shape (▲/▼/■)
     so color-blind users get a redundant cue beyond color alone.
     """
-    # TODO P1-34: html.escape inputs — direction is user-derivable
-    # UI-06: guard against None direction to prevent TypeError in `key in direction`
+    # P1-34 (closed 2026-04-30): direction reaches this code from
+    # scan-result dicts, which can carry API-derived strings. Escape
+    # before interpolation so a malformed/poisoned direction value
+    # can't inject HTML when the fallback branch fires below.
+    # UI-06: guard against None direction to prevent TypeError in `key in direction`.
+    import html as _html_pill
     direction = direction or ""
     for key, (shape, bg, fg, glow) in _PILL_CFG.items():
         if key in direction:
@@ -1153,12 +1157,12 @@ def signal_pill(direction: str) -> str:
                 f'padding:4px 13px;border-radius:999px;'
                 f'font-size:11px;font-weight:800;letter-spacing:0.5px;'
                 f'display:inline-block;box-shadow:{glow};'
-                f'text-transform:uppercase">{shape} {key}</span>'
+                f'text-transform:uppercase">{shape} {_html_pill.escape(str(key))}</span>'
             )
     return (
         f'<span style="background:var(--bg-2);color:var(--text-secondary);'
         f'padding:4px 13px;border-radius:999px;font-size:11px;'
-        f'font-weight:700;display:inline-block">■ {direction}</span>'
+        f'font-weight:700;display:inline-block">■ {_html_pill.escape(str(direction))}</span>'
     )
 
 
