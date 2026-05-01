@@ -118,13 +118,21 @@ def render_sidebar_brand(
     *,
     app: str = "crypto-signal-app",
     brand_name: str = "Signal",
-    brand_tld: str = ".app",
+    brand_tld: str = "",
     brand_glyph: str = "◈",
     version: str = "",
 ) -> None:
     """Render just the mockup brand block at the top of the sidebar.
     Use this when the caller wants to keep its existing nav but still get
-    the new branded rail. Each sibling app passes its own name/tld/glyph."""
+    the new branded rail. Each sibling app passes its own name/tld/glyph.
+
+    C-fix-13 (2026-05-02): brand_tld now defaults to "" rather than ".app".
+    The 10-character "Signal.app" repeatedly ellipsised inside the 150px
+    rail across user zoom/DPI configurations even at 13px Inter
+    (C-fix-02 → C-fix-02b). The 6-char "Signal" fits comfortably with
+    plenty of headroom. Callers that explicitly want a TLD suffix can
+    still pass `brand_tld=".app"` (or anything else) — the parameter
+    stays in place for §6 future rebrand support."""
     if st is None:
         return
     accent = ACCENTS.get(app, ACCENTS["crypto-signal-app"])  # type: ignore[index]
@@ -150,7 +158,7 @@ def render_sidebar(
     app: str = "crypto-signal-app",
     active: str = "home",
     brand_name: str = "Signal",
-    brand_tld: str = ".app",
+    brand_tld: str = "",
     brand_glyph: str = "◈",
     user_level: Literal["beginner", "intermediate", "advanced"] = "beginner",
 ) -> str:
@@ -165,7 +173,10 @@ def render_sidebar(
 
     accent = ACCENTS[app]  # type: ignore[index]
 
-    # The brand card — matches the mockup "◈ Signal.app" wordmark
+    # The brand card — matches the mockup "◈ Signal" wordmark.
+    # C-fix-13 (2026-05-02): the legacy ".app" TLD is omitted by default
+    # because at the 150px rail width it ellipsised on prod across
+    # multiple user zoom / DPI configurations.
     st.sidebar.markdown(
         f'<div class="ds-rail-brand">'
         f'<div class="ds-brand-dot" style="background:{accent["accent"]};color:{accent["accent_ink"]};">{brand_glyph}</div>'
