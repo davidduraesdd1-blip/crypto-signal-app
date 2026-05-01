@@ -2770,17 +2770,18 @@ def page_config():
             logger.error("[Config] reset failed: %s", e)
             st.error("Could not reset config — check file permissions and try again.")
 
-    # ── Auto-jump to Alerts tab when navigated from sidebar
-    _cfg_initial_tab = 0
-    _st_tab_override = st.session_state.pop("_settings_tab", None)
     # C6 (Phase C plan §C6.4-5, 2026-04-30): "🔔 Alerts" removed from
     # Settings tabs — alerts now have a first-class page (page_alerts).
     # Tab vars renumbered: _cfg_t3 used to be Alerts (now Dev Tools);
     # _cfg_t4 used to be Dev Tools (now Execution); the legacy fifth
     # var is gone.
+    # Audit Issue #2 (2026-05-01): the legacy `_settings_tab` deep-link
+    # session_state key — set by the sidebar nav handler when "alerts"
+    # was clicked — was removed in C6 (the alerts entry now routes to
+    # page_alerts directly). No code writes that key anymore, so the
+    # earlier `pop("_settings_tab", None)` always returned None. Dead
+    # read + dead conditional removed below.
     _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🛠️ Dev Tools", "⚙️ Execution"]
-    if _st_tab_override and _st_tab_override in _cfg_tab_names:
-        _cfg_initial_tab = _cfg_tab_names.index(_st_tab_override)
 
     _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4 = st.tabs(_cfg_tab_names)
 
