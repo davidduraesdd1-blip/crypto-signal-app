@@ -685,13 +685,32 @@ def _sg_cached_multi_exchange_funding(pair: str) -> dict:
 def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 400):
     """OHLCV — 5-min TTL per CLAUDE.md §12 (intraday).
 
-    Wraps model.robust_fetch_ohlcv so dashboard / signals / backtester
-    pages don't refetch identical (exchange, pair, tf, limit) tuples on
-    every Streamlit rerun. Returns whatever robust_fetch_ohlcv returns
-    (DataFrame or empty list); errors fall through to None.
+    Returns ccxt-format raw list-of-lists:
+        [[ts_ms, open, high, low, close, volume], ...]
+
+    C-fix-05 (2026-05-01): the previous implementation called
+    model.robust_fetch_ohlcv(exchange_id, ...) passing a string, but
+    that function expects a CCXT exchange instance — it calls
+    `ex.fetch_ohlcv(...)` directly, which raises AttributeError on
+    a str arg. The exception was swallowed and the helper returned
+    None for every call, so Signals + Backtester period-changes (30d,
+    1Y) and the historical-equity overlay all silently rendered as
+    dashes / empty.
+
+    The fix uses model.fetch_chart_ohlcv(pair, timeframe, limit), which
+    is the right tool for this job:
+      - returns ccxt-format list-of-lists (matches both consumers)
+      - has a 6-exchange fallback chain (Kraken → OKX → Gate.io →
+        Bybit → MEXC → CoinGecko) per crypto_model_core.py:526
+      - doesn't need an exchange instance — the chain handles unreachable
+        primaries internally
+
+    `exchange_id` is preserved as the first positional arg so both
+    cache keys stay distinct from the old (broken) entries and the
+    call sites don't have to change their signature.
     """
     try:
-        return model.robust_fetch_ohlcv(exchange_id, pair, timeframe, limit=limit)
+        return model.fetch_chart_ohlcv(pair, timeframe, limit=limit)
     except Exception as _e:
         logger.debug("[App] cached OHLCV %s %s %s failed: %s",
                      exchange_id, pair, timeframe, _e)
