@@ -159,34 +159,48 @@ def test_app_py_inlined_nav_uses_on_click_callback():
 
 
 def test_brand_wordmark_uses_nowrap_inside_150px_rail():
-    """C-fix-02 (2026-05-01): the rail brand "Signal.app" wordmark was
-    wrapping mid-word ("Signal.a / pp") inside the 150px rail. Both
-    .ds-rail-brand and .ds-brand-wm must declare white-space:nowrap so
-    Streamlit's outer flex container can't shrink the wordmark below
-    its intrinsic width."""
+    """C-fix-02 (2026-05-01) + C-fix-02b (2026-05-02): the rail brand
+    "Signal.app" wordmark was wrapping mid-word ("Signal.a / pp")
+    inside the 150px rail. Both .ds-rail-brand and .ds-brand-wm must
+    declare white-space:nowrap so Streamlit's outer flex container
+    can't shrink the wordmark below its intrinsic width.
+
+    The C-fix-02b follow-up additionally drops font-size to 13px so
+    "Signal.app" actually fits the available ~74px without ellipsing."""
     from pathlib import Path
     css_src = (
         Path(__file__).resolve().parents[1] / "ui" / "overrides.py"
     ).read_text(encoding="utf-8")
-    # Both rules must declare nowrap
     assert ".ds-rail-brand" in css_src
     assert ".ds-brand-wm" in css_src
-    # Tally: nowrap appears at least twice in the brand block context.
-    # We look for the substring within ~6 lines after each rule starts.
-    def _block_after(rule: str, lines: int = 8) -> str:
-        idx = css_src.find(rule)
+    # Anchor each block at the actual selector body — the `{` opens the
+    # rule. This skips the comment block above the rule, which can
+    # legitimately mention nowrap-related concepts in prose.
+    def _rule_body(selector: str) -> str:
+        idx = css_src.find(selector + " {")
+        if idx < 0:
+            idx = css_src.find(selector + "{")
         if idx < 0:
             return ""
-        return css_src[idx : idx + 600]
-    rail_block = _block_after(".ds-rail-brand")
-    wm_block = _block_after(".ds-brand-wm")
-    assert "white-space: nowrap" in rail_block, (
-        ".ds-rail-brand must declare white-space:nowrap so the wordmark "
-        "can't break inside the 150px rail."
+        # Read forward until the matching `}` — bounded scan, the rule
+        # bodies here are < 400 chars.
+        end = css_src.find("}", idx)
+        return css_src[idx : end + 1] if end > idx else ""
+    rail_body = _rule_body(".ds-rail-brand")
+    wm_body = _rule_body(".ds-brand-wm")
+    assert rail_body and "white-space: nowrap" in rail_body, (
+        ".ds-rail-brand body must declare white-space:nowrap so the "
+        "wordmark can't break inside the 150px rail."
     )
-    assert "white-space: nowrap" in wm_block, (
-        ".ds-brand-wm must declare white-space:nowrap so the wordmark "
-        "stays on a single line at 14px Inter inside the 150px rail."
+    assert wm_body and "white-space: nowrap" in wm_body, (
+        ".ds-brand-wm body must declare white-space:nowrap so the "
+        "wordmark stays on a single line inside the 150px rail."
+    )
+    # C-fix-02b assertion: font-size must be ≤ 13px so "Signal.app" fits.
+    assert "font-size: 13px" in rail_body, (
+        ".ds-rail-brand font-size is no longer 13px. C-fix-02b dropped "
+        "this from 14px because at 14px Inter, 'Signal.app' (~75-78px) "
+        "ellipsised inside the ~74px available rail width."
     )
 
 
