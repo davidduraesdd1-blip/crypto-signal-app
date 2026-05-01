@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sibling Family Mockup — Crypto Signal App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ─────────────────────────────────────────────────────────────────────
+   EDIT THESE VARIABLES TO TUNE THE DESIGN.
+   Everything below in this file pulls from these tokens.
+   Change a token here, the whole mockup updates.
+   ─────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* PER-APP ACCENT — swap this one line to morph to another sibling */
+  --accent:            #22d36f;   /* crypto-signal: signal-green     */
+  /* --accent:         #1d4ed8;   /* flare-defi:    flare-blue       */
+  /* --accent:         #d4a54c;   /* rwa-infinity:  rwa-amber        */
+  --accent-soft:       rgba(34, 211, 111, 0.12);
+  --accent-ink:        #0a0a0f;   /* text when laid on accent */
+
+  /* GRAY LADDER — shared across all sibling apps */
+  --gray-0:  #0a0a0f;
+  --gray-1:  #121218;
+  --gray-2:  #1a1a22;
+  --gray-3:  #2a2a34;
+  --gray-4:  #3d3d4a;
+  --gray-5:  #5d5d6e;
+  --gray-6:  #8a8a9d;
+  --gray-7:  #c2c2d1;
+  --gray-8:  #e8e8f0;
+  --gray-9:  #f8f8fc;
+
+  /* SEMANTIC */
+  --success: #22c55e;
+  --danger:  #ef4444;
+  --warning: #f59e0b;
+  --info:    #3b82f6;
+
+  /* TYPOGRAPHY */
+  --font-ui:   'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* LAYOUT */
+  --rail-w:  150px;
+  --topbar-h: 56px;
+  --card-radius: 12px;
+  --card-pad: 16px;
+  --gap: 16px;
+
+  /* DARK MODE TOKENS (default) */
+  --bg-0: var(--gray-0);
+  --bg-1: var(--gray-1);
+  --bg-2: var(--gray-2);
+  --bg-3: var(--gray-3);
+  --text-primary:   var(--gray-8);
+  --text-secondary: var(--gray-6);
+  --text-muted:     var(--gray-5);
+  --border:         var(--gray-3);
+  --border-strong:  var(--gray-4);
+}
+
+html[data-theme="light"] {
+  --bg-0: #fafafb;
+  --bg-1: #ffffff;
+  --bg-2: #f5f5f7;
+  --bg-3: #e8e9ed;
+  --text-primary:   #0f1014;
+  --text-secondary: #545660;
+  --text-muted:     #8b8d96;
+  --border:         #e8e9ed;
+  --border-strong:  #d1d3d9;
+  --accent-soft:    rgba(34, 211, 111, 0.14);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Base reset + type
+   ─────────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; min-width: 0; }
+html, body { margin: 0; padding: 0; overflow-x: hidden; max-width: 100vw; }
+body {
+  background: var(--bg-0);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   App shell: left rail + top bar + main
+   ─────────────────────────────────────────────────────────────────── */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-areas:
+    "rail topbar"
+    "rail main";
+  min-height: 100vh;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+.rail {
+  grid-area: rail;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  display: flex; flex-direction: column; gap: 4px;
+  position: sticky; top: 0; height: 100vh;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px 20px;
+  font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+}
+.brand-dot {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--accent);
+  display: grid; place-items: center;
+  color: var(--accent-ink); font-weight: 700; font-size: 12px;
+}
+.nav-group { margin: 18px 0 6px; padding: 0 10px;
+  color: var(--text-primary); font-size: 12px; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  color: var(--text-secondary); font-size: 13.5px; font-weight: 500;
+  cursor: pointer; text-decoration: none;
+  transition: background 120ms, color 120ms;
+}
+.nav-item:hover { background: var(--bg-2); color: var(--text-primary); }
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+.nav-item .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: 0; }
+.nav-item.active .dot { opacity: 1; }
+.nav-icon { width: 16px; height: 16px; opacity: 0.8; }
+
+.topbar {
+  grid-area: topbar;
+  background: var(--bg-0);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 24px;
+  position: sticky; top: 0; z-index: 10;
+}
+.crumbs { color: var(--text-muted); font-size: 13px; }
+.crumbs b { color: var(--text-primary); font-weight: 500; }
+.topbar-spacer { flex: 1; }
+.level-group, .theme-btn, .refresh-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+.level-group { padding: 2px; gap: 0; }
+.level-group button {
+  all: unset; cursor: pointer; padding: 4px 10px; border-radius: 6px; font-size: 12.5px;
+  color: var(--text-muted); font-weight: 500;
+}
+.level-group button.on {
+  background: var(--accent-soft); color: var(--text-primary);
+}
+.refresh-btn:hover, .theme-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+
+.main {
+  grid-area: main;
+  padding: 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Card grid
+   ─────────────────────────────────────────────────────────────────── */
+
+.grid { display: grid; gap: var(--gap); }
+.grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  padding: var(--card-pad);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+html[data-theme="light"] .card { box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 2px 8px rgba(0,0,0,0.04); border-color: transparent; }
+
+.card-hd {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.card-title { font-size: 12px; color: var(--text-muted); font-weight: 500;
+  letter-spacing: 0.04em; text-transform: uppercase; }
+.card-sub { font-size: 11.5px; color: var(--text-muted); }
+
+/* Hero signal card */
+.signal-hero {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px;
+}
+.signal-lhs { display: flex; flex-direction: column; gap: 4px; }
+.signal-ticker { font-size: 14px; color: var(--text-secondary); font-weight: 500; }
+.signal-big { font-size: 44px; font-weight: 600; font-family: var(--font-mono);
+  line-height: 1; letter-spacing: -0.02em; }
+.signal-change { font-size: 13px; font-family: var(--font-mono); }
+.signal-change.up { color: var(--success); }
+.signal-change.down { color: var(--danger); }
+.signal-rhs { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.signal-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 999px;
+  font-weight: 600; font-size: 13px;
+  font-variant: small-caps; letter-spacing: 0.05em;
+}
+.signal-badge.buy  { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.signal-badge.hold { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.signal-badge.sell { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+.regime { font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.regime .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+/* KPI tile */
+.kpi { display: flex; flex-direction: column; gap: 4px; }
+.kpi-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.kpi-value { font-size: 22px; font-weight: 600; font-family: var(--font-mono); line-height: 1.1; }
+.kpi-delta { font-size: 12px; font-family: var(--font-mono); }
+.kpi-delta.up { color: var(--success); }
+.kpi-delta.down { color: var(--danger); }
+
+/* Watchlist row */
+.watchlist { display: flex; flex-direction: column; }
+.row {
+  display: grid; grid-template-columns: 1.2fr 1fr 1fr 90px;
+  gap: 12px; align-items: center;
+  padding: 10px 4px; border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.row:last-child { border-bottom: none; }
+.row .t { font-weight: 600; }
+.row .p { font-family: var(--font-mono); color: var(--text-secondary); }
+.row .d { font-family: var(--font-mono); }
+.row .d.up { color: var(--success); }
+.row .d.down { color: var(--danger); }
+.spark { height: 22px; }
+
+/* Data source badge row */
+.ds-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ds {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; padding: 3px 8px; border-radius: 999px;
+  background: var(--bg-2); color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.ds .tick { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+.ds.warn .tick { background: var(--warning); }
+.ds.down .tick { background: var(--danger); }
+
+/* Page header */
+.page-hd {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  margin-bottom: 20px;
+}
+.page-hd h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.page-hd .sub { color: var(--text-muted); font-size: 13.5px; margin-top: 4px; max-width: min(640px, 100%); min-width: 0; overflow-wrap: break-word; word-break: break-word; }
+
+/* Macro strip */
+.strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; }
+.strip > div { padding: 12px 14px; border-right: 1px solid var(--border); }
+.strip > div:last-child { border-right: none; }
+.strip .lbl { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.strip .val { font-size: 17px; font-family: var(--font-mono); font-weight: 600; margin-top: 2px; }
+.strip .sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; font-family: var(--font-mono); }
+
+/* ─────────────────────────────────────────────────────────────────────
+   Mobile breakpoints
+   ─────────────────────────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
+  .strip { grid-template-columns: repeat(3, 1fr); }
+  .strip > div:nth-child(3n) { border-right: none; }
+}
+@media (max-width: 768px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--topbar-h) 1fr 56px;
+    grid-template-areas: "topbar" "main" "rail";
+  }
+  .rail {
+    position: fixed; bottom: 0; top: auto; height: 56px; width: 100%;
+    flex-direction: row; justify-content: space-around; padding: 6px 4px;
+    border-top: 1px solid var(--border); border-right: none;
+  }
+  .brand, .nav-group { display: none; }
+  .nav-item { flex-direction: column; gap: 2px; padding: 4px 10px; font-size: 10.5px; }
+  .nav-item .dot { position: absolute; top: 4px; }
+  .main { padding: 16px 16px 80px; }
+  .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  .grid.cols-2 { grid-template-columns: 1fr; }
+  .strip { grid-template-columns: repeat(2, 1fr); }
+  .signal-big { font-size: 32px; }
+  .topbar { padding: 0 12px; gap: 8px; }
+  .level-group { display: none; }
+  .crumbs { font-size: 12px; }
+  /* Stack hero card vertically on mobile so BUY/HOLD badge + regime line
+     don't get clipped off the right edge of a 390px viewport. */
+  .signal-hero { flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; }
+  .signal-rhs { align-items: flex-start; flex-direction: row; gap: 12px; flex-wrap: wrap; }
+  .refresh-btn, .theme-btn { padding: 6px 8px; font-size: 12px; }
+  .main { overflow-x: hidden; max-width: 100%; min-width: 0; box-sizing: border-box; }
+  .card { max-width: 100%; min-width: 0; overflow: hidden; box-sizing: border-box; }
+  .grid { max-width: 100%; }
+  .grid > * { min-width: 0; max-width: 100%; }
+  .page-hd, .page-hd .sub, .ds-row, .ds { max-width: 100%; }
+  .ds-row { flex-wrap: wrap; }
+  .strip { max-width: 100%; min-width: 0; }
+  .strip > div { min-width: 0; }
+  .row { min-width: 0; }
+  .row .t, .row .p, .row .d { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Toolbar floating (viewport preview)
+   ─────────────────────────────────────────────────────────────────── */
+.dev-bar {
+  position: fixed; bottom: 16px; right: 16px; z-index: 1000;
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 6px; display: flex; gap: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  font-size: 12px;
+}
+.dev-bar button {
+  all: unset; cursor: pointer; padding: 6px 10px; border-radius: 6px;
+  color: var(--text-secondary);
+}
+.dev-bar button:hover { background: var(--bg-2); color: var(--text-primary); }
+.dev-bar button.on { background: var(--accent-soft); color: var(--text-primary); }
+.dev-bar .sep { width: 1px; background: var(--border); margin: 4px 0; }
+
+/* Mobile preview frame */
+body.preview-mobile .app {
+  max-width: 390px;
+  margin: 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  min-height: 844px;
+  height: auto;
+  grid-template-columns: 1fr;
+  grid-template-rows: var(--topbar-h) 1fr 56px;
+  grid-template-areas: "topbar" "main" "rail";
+}
+body.preview-mobile .rail {
+  position: relative; bottom: auto; top: auto; height: 56px; width: 100%;
+  flex-direction: row; justify-content: space-around; padding: 6px 4px;
+  border-top: 1px solid var(--border); border-right: none;
+}
+body.preview-mobile .brand, body.preview-mobile .nav-group { display: none; }
+body.preview-mobile .nav-item { flex-direction: column; gap: 2px; padding: 4px 10px; font-size: 10.5px; }
+body.preview-mobile .grid.cols-3, body.preview-mobile .grid.cols-4 { grid-template-columns: 1fr; }
+body.preview-mobile .strip { grid-template-columns: repeat(2, 1fr); }
+body.preview-mobile .signal-big { font-size: 32px; }
+body.preview-mobile .main { padding: 16px 16px 80px; }
+body.preview-mobile .level-group { display: none; }
+body.preview-mobile .signal-hero { flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; }
+body.preview-mobile .signal-rhs { align-items: flex-start; flex-direction: row; gap: 12px; flex-wrap: wrap; }
+body.preview-mobile .refresh-btn, body.preview-mobile .theme-btn { padding: 6px 8px; font-size: 12px; }
+/* Clickable hero ticker — each hero card swaps to any of the 33 pairs */
+.signal-ticker-btn {
+  all: unset; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 6px; border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 14px; color: var(--text-secondary); font-weight: 500;
+  transition: all 120ms;
+}
+.signal-ticker-btn:hover { background: var(--bg-2); border-color: var(--border); color: var(--text-primary); }
+.signal-ticker-btn .chev { font-size: 10px; color: var(--text-muted); font-weight: 500; }
+.signal-ticker-btn:hover .chev { color: var(--text-primary); }
+/* Watchlist customize affordance */
+.wl-customize {
+  all: unset; cursor: pointer;
+  font-family: var(--font-ui); font-size: 11.5px; color: var(--text-muted);
+  padding: 3px 8px; border-radius: 5px; border: 1px solid var(--border);
+  transition: all 120ms;
+}
+.wl-customize:hover { color: var(--text-primary); border-color: var(--border-strong); background: var(--bg-2); }
+</style>
+</head>
+
+<body data-theme="dark">
+
+<div class="app">
+
+  <!-- ───── LEFT RAIL ───── -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="brand-dot">◈</div>
+      <div>Signal<span style="color: var(--text-muted);">.app</span></div>
+    </div>
+
+    <div class="nav-group">Markets</div>
+    <a class="nav-item active"><span class="dot"></span><span>Home</span></a>
+    <a class="nav-item"><span class="dot"></span><span>Signals</span></a>
+    <a class="nav-item"><span class="dot"></span><span>Regimes</span></a>
+
+    <div class="nav-group">Research</div>
+    <a class="nav-item"><span class="dot"></span><span>Backtester</span></a>
+    <a class="nav-item"><span class="dot"></span><span>On-chain</span></a>
+
+    <div class="nav-group">Account</div>
+    <a class="nav-item"><span class="dot"></span><span>Alerts</span></a>
+    <a class="nav-item"><span class="dot"></span><span>AI Assistant</span></a>
+    <a class="nav-item"><span class="dot"></span><span>Settings</span></a>
+  </aside>
+
+  <!-- ───── TOP BAR ───── -->
+  <header class="topbar">
+    <div class="crumbs">Markets / <b>Home</b></div>
+    <div class="topbar-spacer"></div>
+
+    <div class="level-group">
+      <button>Beginner</button>
+      <button class="on">Intermediate</button>
+      <button>Advanced</button>
+    </div>
+
+    <button class="refresh-btn">↻ Refresh</button>
+    <button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+  </header>
+
+  <!-- ───── MAIN ───── -->
+  <main class="main">
+
+    <div class="page-hd">
+      <div>
+        <h1>Market home</h1>
+        <div class="sub">Composite signals + regime state across the top-cap set.</div>
+      </div>
+      <div class="ds-row">
+        <span class="ds"><span class="tick"></span> OKX · live</span>
+        <span class="ds"><span class="tick"></span> Glassnode · live</span>
+        <span class="ds warn"><span class="tick"></span> Google Trends · cached</span>
+      </div>
+    </div>
+
+    <!-- Hero signals -->
+    <div class="grid cols-3" style="margin-bottom: 24px;">
+      <div class="card signal-hero">
+        <div class="signal-lhs">
+          <button class="signal-ticker-btn" title="Click to swap pair">BTC / USD <span class="chev">▾</span></button>
+          <div class="signal-big">104,280</div>
+          <div class="signal-change up">+ 2.14% · 24h</div>
+        </div>
+        <div class="signal-rhs">
+          <span class="signal-badge buy">▲ Buy</span>
+          <div class="regime"><span class="dot"></span> Regime: bull · 82% conf</div>
+        </div>
+      </div>
+      <div class="card signal-hero">
+        <div class="signal-lhs">
+          <button class="signal-ticker-btn" title="Click to swap pair">ETH / USD <span class="chev">▾</span></button>
+          <div class="signal-big">3,844</div>
+          <div class="signal-change up">+ 1.08% · 24h</div>
+        </div>
+        <div class="signal-rhs">
+          <span class="signal-badge hold">■ Hold</span>
+          <div class="regime"><span class="dot"></span> Regime: transition · 61%</div>
+        </div>
+      </div>
+      <div class="card signal-hero">
+        <div class="signal-lhs">
+          <button class="signal-ticker-btn" title="Click to swap pair">XRP / USD <span class="chev">▾</span></button>
+          <div class="signal-big">2.84</div>
+          <div class="signal-change up">+ 0.96% · 24h</div>
+        </div>
+        <div class="signal-rhs">
+          <span class="signal-badge buy">▲ Buy</span>
+          <div class="regime"><span class="dot"></span> Regime: accumulation · 68%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Macro strip -->
+    <div class="card strip" style="margin-bottom: 24px; padding: 0;">
+      <div>
+        <div class="lbl">BTC Dominance</div>
+        <div class="val">58.9%</div>
+        <div class="sub">+ 0.4 ppts · 7d</div>
+      </div>
+      <div>
+        <div class="lbl">Fear &amp; Greed</div>
+        <div class="val">72</div>
+        <div class="sub" style="color: var(--warning);">Greed</div>
+      </div>
+      <div>
+        <div class="lbl">DXY</div>
+        <div class="val">104.21</div>
+        <div class="sub">− 0.6% · 30d</div>
+      </div>
+      <div>
+        <div class="lbl">Funding (BTC)</div>
+        <div class="val">+ 0.012%</div>
+        <div class="sub">8h avg</div>
+      </div>
+      <div>
+        <div class="lbl">Regime (macro)</div>
+        <div class="val" style="color: var(--accent);">Risk-on</div>
+        <div class="sub">confidence 76%</div>
+      </div>
+    </div>
+
+    <!-- Two-column: watchlist + backtest -->
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">Watchlist · top-cap</div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <div class="card-sub">scan refreshed 2m ago</div>
+            <button class="wl-customize" title="Add or remove pairs from your watchlist">Customize ▾</button>
+          </div>
+        </div>
+        <div class="watchlist">
+          <div class="row">
+            <div class="t">BTC</div>
+            <div class="p">$104,280</div>
+            <div class="d up">+2.14%</div>
+            <svg class="spark" viewBox="0 0 80 22" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#22c55e" stroke-width="1.5" points="0,16 8,15 16,17 24,13 32,14 40,11 48,10 56,7 64,8 72,5 80,3"/>
+            </svg>
+          </div>
+          <div class="row">
+            <div class="t">ETH</div>
+            <div class="p">$3,844</div>
+            <div class="d up">+1.08%</div>
+            <svg class="spark" viewBox="0 0 80 22" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#22c55e" stroke-width="1.5" points="0,14 8,13 16,11 24,12 32,10 40,8 48,9 56,11 64,8 72,7 80,6"/>
+            </svg>
+          </div>
+          <div class="row">
+            <div class="t">SOL</div>
+            <div class="p">$192.40</div>
+            <div class="d down">−0.72%</div>
+            <svg class="spark" viewBox="0 0 80 22" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#ef4444" stroke-width="1.5" points="0,6 8,8 16,9 24,10 32,11 40,13 48,14 56,13 64,15 72,16 80,17"/>
+            </svg>
+          </div>
+          <div class="row">
+            <div class="t">AVAX</div>
+            <div class="p">$41.80</div>
+            <div class="d up">+3.20%</div>
+            <svg class="spark" viewBox="0 0 80 22" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#22c55e" stroke-width="1.5" points="0,18 8,17 16,14 24,15 32,12 40,11 48,8 56,6 64,4 72,3 80,2"/>
+            </svg>
+          </div>
+          <div class="row">
+            <div class="t">LINK</div>
+            <div class="p">$22.04</div>
+            <div class="d up">+0.91%</div>
+            <svg class="spark" viewBox="0 0 80 22" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#22c55e" stroke-width="1.5" points="0,12 8,14 16,11 24,13 32,10 40,11 48,9 56,8 64,9 72,7 80,6"/>
+            </svg>
+          </div>
+          <div class="row">
+            <div class="t">NEAR</div>
+            <div class="p">$5.82</div>
+            <div class="d down">−1.44%</div>
+            <svg class="spark" viewBox="0 0 80 22" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#ef4444" stroke-width="1.5" points="0,8 8,9 16,10 24,9 32,11 40,12 48,13 56,14 64,13 72,15 80,16"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">Composite backtest · last 90d</div>
+          <div class="card-sub">BTC basket · 5.2 Sharpe</div>
+        </div>
+        <div class="grid cols-2" style="gap: 12px; margin-top: 8px;">
+          <div class="kpi">
+            <div class="kpi-label">Return (90d)</div>
+            <div class="kpi-value" style="color: var(--success);">+ 28.4%</div>
+            <div class="kpi-delta up">vs BTC +14.1%</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Max drawdown</div>
+            <div class="kpi-value">−8.2%</div>
+            <div class="kpi-delta">vs BTC −16.7%</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Sharpe</div>
+            <div class="kpi-value">5.2</div>
+            <div class="kpi-delta up">exc 3.1 (BTC)</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Win rate</div>
+            <div class="kpi-value">63%</div>
+            <div class="kpi-delta">n=148 trades</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ───── Dev bar: theme + viewport toggles ───── -->
+<div class="dev-bar">
+  <button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button>
+  <button id="btn-light" onclick="setTheme('light')">Light</button>
+  <div class="sep"></div>
+  <button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button>
+  <button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button>
+</div>
+
+<script>
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('btn-dark').classList.toggle('on', theme === 'dark');
+  document.getElementById('btn-light').classList.toggle('on', theme === 'light');
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  setTheme(cur === 'dark' ? 'light' : 'dark');
+}
+function setViewport(v) {
+  document.body.classList.toggle('preview-mobile', v === 'mobile');
+  document.getElementById('btn-desktop').classList.toggle('on', v === 'desktop');
+  document.getElementById('btn-mobile').classList.toggle('on', v === 'mobile');
+}
+</script>
+
+</body>
+</html>

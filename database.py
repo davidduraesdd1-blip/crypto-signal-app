@@ -373,6 +373,31 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_agent_pair ON agent_log(pair);
                 CREATE INDEX IF NOT EXISTS idx_agent_ts   ON agent_log(logged_at);
 
+                -- Regime history (C8 — Phase C plan §C8, 2026-04-30).
+                -- Powers the Regimes page state-bar timeline (last 90d
+                -- segmented bull/bear/accum/dist/transition bands).
+                -- Composite primary key (pair, timestamp) prevents
+                -- duplicate inserts when scans re-fire faster than the
+                -- HMM cache TTL.
+                CREATE TABLE IF NOT EXISTS regime_history (
+                    pair       TEXT NOT NULL,
+                    timestamp  TEXT NOT NULL,
+                    state      TEXT NOT NULL,
+                    confidence REAL,
+                    PRIMARY KEY (pair, timestamp)
+                );
+                CREATE INDEX IF NOT EXISTS idx_regime_history_pair_ts
+                    ON regime_history(pair, timestamp DESC);
+
+                -- C6 (Phase C plan §C6.3, 2026-04-30): the existing
+                -- alerts_log table above (line 330) is reused for the
+                -- new AI Assistant → Alerts → History view. Two
+                -- columns added via ALTER TABLE migration (see _add_col
+                -- below): `type` and `message`. The legacy columns
+                -- (sent_at / channel / pair / status / direction /
+                -- confidence / error_msg) stay so any existing
+                -- consumers (other apps, log readers) keep working.
+
                 -- Arbitrage opportunities (spot spread + funding-rate carry)
                 CREATE TABLE IF NOT EXISTS arb_opportunities (
                     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -396,7 +421,8 @@ def init_db():
             # Required for databases created before Phase 2 (F1 + F4 columns).
             # ALTER TABLE IF NOT EXISTS column is not valid SQLite syntax; use PRAGMA check.
             _ALLOWED_MIGRATE_TABLES = {"feedback_log", "backtest_trades", "paper_trades",
-                                       "positions", "execution_log", "daily_signals"}
+                                       "positions", "execution_log", "daily_signals",
+                                       "alerts_log"}  # C6 (2026-04-30) extension
             def _add_col(tbl, col, col_def):
                 if tbl not in _ALLOWED_MIGRATE_TABLES:
                     raise ValueError(f"[DB] _add_col: table '{tbl}' not in migration whitelist")
@@ -431,6 +457,16 @@ def init_db():
 
             # T3-11: slippage tracking column in execution_log
             _add_col('execution_log', 'slippage_pct', 'REAL')
+
+            # C6 (Phase C plan §C6.3, 2026-04-30): extend alerts_log to
+            # power the new AI Assistant → Alerts → History page.
+            # `type` stores the alert taxonomy ("email_signal",
+            # "watchlist", "agent_decision", etc.) for History filtering.
+            # `message` stores the human-readable body so History rows
+            # render without re-parsing the legacy `direction +
+            # confidence` shape.
+            _add_col('alerts_log', 'type',    'TEXT')
+            _add_col('alerts_log', 'message', 'TEXT')
 
             # IC + WFE metrics table  (#36)
             conn.execute("""
@@ -1132,6 +1168,27 @@ def append_to_master(results: list):
             raise
         finally:
             conn.close()
+    # C8 (Phase C plan §C8.2, 2026-04-30): record one regime_history
+    # row per pair per scan. Wraps each call in its own try/except —
+    # one bad pair must not fail the whole batch (or this whole
+    # function — the daily_signals write above is the source of truth
+    # for scan results).
+    for r in results:
+        _pair = r.get("pair")
+        _state = r.get("regime") or r.get("regime_label")
+        if not _pair or not _state:
+            continue
+        try:
+            record_regime_state(
+                pair=_pair,
+                state=_state,
+                confidence=r.get("regime_confidence") or r.get("regime_conf_pct"),
+                timestamp=ts,  # share the master scan timestamp so
+                               # all pairs from a given scan align in
+                               # regime_history's PK ordering.
+            )
+        except Exception as _e_rh:
+            logger.debug("[DB] regime_history hook %s failed: %s", _pair, _e_rh)
 
 
 def get_signals_df(limit: int = 500) -> pd.DataFrame:
@@ -1715,6 +1772,328 @@ def get_agent_log_df(limit: int = 200) -> "pd.DataFrame":
     finally:
         conn.close()
     return df.drop(columns=["id"], errors="ignore")
+
+
+def log_alert_fire(
+    *,
+    type: str,
+    message: str,
+    status: str,
+    asset: str = "",
+    channel: str = "email",
+) -> None:
+    """C6 (Phase C plan §C6.3): record one alert dispatch in alerts_log.
+
+    Args:
+        type:    alert type — "high_conf_signal", "watchlist", "agent_decision",
+                 "scan_error", etc. Free-form; History page uses it as a filter.
+        message: human-readable message body.
+        status:  one of {"sent", "failed", "suppressed"}. CHECK constraint
+                 in the schema enforces these values; passing anything else
+                 raises sqlite3.IntegrityError so the caller catches the bug
+                 immediately rather than silently writing a garbage row.
+        asset:   optional pair / ticker the alert is about ("BTC/USDT" etc.).
+        channel: one of {"email", "webhook", "slack", "tradingview", ...}.
+                 Defaults to "email" since that's the primary fire path today.
+
+    Defensive: never raises on insert failure (caller is on the email-send
+    hot path; we don't want a logging hiccup to break the actual send).
+    """
+    if status not in ("sent", "failed", "suppressed"):
+        # Fail loud in dev / silent in prod — same trade-off as the
+        # rest of the DB helpers. Bad status would corrupt filtering.
+        logger.warning("[DB] log_alert_fire: invalid status %r — coerced to 'failed'", status)
+        status = "failed"
+    sent_at = datetime.now(timezone.utc).isoformat()
+    # The on-disk alerts_log schema uses `sent_at` (legacy) for the
+    # timestamp + `pair` for the asset; C6 added `type` + `message`
+    # via migration. We map the spec-shaped kwargs to the actual
+    # column names so the legacy reader code still works.
+    with _write_lock:
+        conn = None
+        try:
+            conn = _get_conn()
+            conn.execute(
+                """INSERT INTO alerts_log
+                       (sent_at, type, pair, message, status, channel)
+                   VALUES (?,?,?,?,?,?)""",
+                (sent_at, type, asset, message, status, channel),
+            )
+            conn.commit()
+        except Exception as _e:
+            logger.debug("[DB] log_alert_fire failed: %s", _e)
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def record_regime_state(
+    pair: str,
+    state: str,
+    confidence: float | None = None,
+    timestamp: str | None = None,
+) -> None:
+    """C8 (Phase C plan §C8.2, 2026-04-30): UPSERT one row into
+    regime_history. Called from append_to_master(...) per scan-result
+    pair so the Regimes page state bar has real segmentation data.
+
+    State is normalised to lowercase; the canonical taxonomy is
+    {bull, bear, accumulation, distribution, transition}. Synonyms
+    ('accum', 'dist', 'trans', 'ranging', 'neutral') are mapped at
+    insert time so the segment-builder downstream can rely on the
+    canonical set.
+
+    Defensive: never raises — caller is on the scan hot path.
+    """
+    if not pair or not state:
+        return
+    _state_norm = str(state).strip().lower()
+    _alias = {
+        "accum":   "accumulation",
+        "dist":    "distribution",
+        "trans":   "transition",
+        "ranging": "transition",
+        "neutral": "transition",
+    }
+    state_canonical = _alias.get(_state_norm, _state_norm)
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+    with _write_lock:
+        conn = None
+        try:
+            conn = _get_conn()
+            # SQLite UPSERT — the (pair, timestamp) PK prevents dup
+            # rows when multiple scans land in the same second.
+            conn.execute(
+                """INSERT INTO regime_history (pair, timestamp, state, confidence)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(pair, timestamp) DO UPDATE SET
+                     state = excluded.state,
+                     confidence = excluded.confidence""",
+                (pair, timestamp, state_canonical,
+                 float(confidence) if confidence is not None else None),
+            )
+            conn.commit()
+        except Exception as _e:
+            logger.debug("[DB] record_regime_state %s failed: %s", pair, _e)
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def regime_history_count(pair: str, days: int = 90) -> int:
+    """C8 diagnostic helper (2026-04-30): number of regime_history
+    rows recorded for `pair` in the last `days`. Used by page_regimes
+    to surface a "N snapshots over Y range" line so users can verify
+    their scans are actually landing in the DB even when all
+    snapshots happen to share the same state (which renders as a
+    single-segment bar visually identical to the empty-state
+    placeholder)."""
+    if days <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM regime_history WHERE pair = ? AND timestamp >= ?",
+            (pair, cutoff),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as _e:
+        logger.debug("[DB] regime_history_count %s failed: %s", pair, _e)
+        return 0
+    finally:
+        conn.close()
+
+
+def regime_history_segments(
+    pair: str,
+    days: int = 90,
+) -> list[tuple[str, float]]:
+    """C8 (Phase C plan §C8.3): return segmented `[(state, pct), ...]`
+    list for the regime_state_bar widget — last `days` worth of
+    history, contiguous same-state runs collapsed into one segment
+    sized by duration.
+
+    Returns an empty list if no rows are recorded yet (caller falls
+    back to a single-segment placeholder of the current state).
+    """
+    if days <= 0:
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+    conn = _get_conn()
+    rows: list[tuple[str, str]] = []
+    try:
+        cur = conn.execute(
+            """SELECT timestamp, state FROM regime_history
+                 WHERE pair = ? AND timestamp >= ?
+                 ORDER BY timestamp ASC""",
+            (pair, cutoff),
+        )
+        rows = list(cur.fetchall())
+    except Exception as _e:
+        logger.debug("[DB] regime_history_segments %s failed: %s", pair, _e)
+        return []
+    finally:
+        conn.close()
+
+    if not rows:
+        return []
+
+    # Collapse contiguous same-state runs into segment durations.
+    # Each row is a snapshot at scan time; we treat the duration
+    # between consecutive snapshots as belonging to the EARLIER
+    # snapshot's state. Last snapshot extends to "now".
+    from datetime import datetime as _dt
+    def _parse(ts: str) -> _dt:
+        try:
+            return _dt.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return datetime.now(timezone.utc)
+
+    parsed = [(_parse(ts), state) for ts, state in rows]
+    end = datetime.now(timezone.utc)
+    durations: dict[str, float] = {}
+    total_secs = 0.0
+    for i, (ts, state) in enumerate(parsed):
+        next_ts = parsed[i + 1][0] if i + 1 < len(parsed) else end
+        secs = max(0.0, (next_ts - ts).total_seconds())
+        durations[state] = durations.get(state, 0.0) + secs
+        total_secs += secs
+
+    if total_secs <= 0:
+        return []
+
+    # Order segments by canonical state list so the bar reads
+    # left-to-right as bear → transition → accumulation → bull →
+    # distribution. States not in the canonical order tail at end.
+    canonical_order = ["bear", "transition", "accumulation",
+                       "bull", "distribution"]
+    segments: list[tuple[str, float]] = []
+    for s in canonical_order:
+        if s in durations:
+            segments.append((s, round(durations[s] / total_secs * 100.0, 2)))
+    for s, secs in durations.items():
+        if s not in canonical_order:
+            segments.append((s, round(secs / total_secs * 100.0, 2)))
+    return segments
+
+
+def recent_alerts(
+    limit: int = 100,
+    *,
+    alert_type: str | None = None,
+    status: str | None = None,
+    channel: str | None = None,
+    asset: str | None = None,
+) -> list[dict]:
+    """C6 (Phase C plan §C6.3): return recent alert rows for the
+    History view, optionally filtered.
+
+    Each row dict matches the column shape of alerts_log plus a
+    `time_str` convenience field for table rendering.
+    """
+    # On-disk columns: sent_at (timestamp), type, pair (asset),
+    # message, status, channel — see log_alert_fire for the mapping.
+    where = []
+    params: list = []
+    if alert_type:
+        where.append("type = ?")
+        params.append(alert_type)
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if channel:
+        where.append("channel = ?")
+        params.append(channel)
+    if asset:
+        where.append("pair = ?")
+        params.append(asset)
+    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = (
+        f"SELECT sent_at, type, pair, message, status, channel "
+        f"FROM alerts_log {where_clause} "
+        f"ORDER BY sent_at DESC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    conn = _get_conn()
+    rows: list[dict] = []
+    try:
+        cur = conn.execute(sql, tuple(params))
+        for r in cur.fetchall():
+            ts, type_, asset_, msg, st_, ch = r
+            rows.append({
+                "timestamp": ts,
+                "time_str":  (ts or "")[:19].replace("T", " "),
+                "type":      type_ or "",
+                "asset":     asset_ or "",
+                "message":   msg or "",
+                "status":    st_ or "",
+                "channel":   ch or "",
+            })
+    except Exception as _e:
+        logger.debug("[DB] recent_alerts query failed: %s", _e)
+    finally:
+        conn.close()
+    return rows
+
+
+def recent_agent_decisions(limit: int = 10) -> list[dict]:
+    """C5 (Phase C plan §C5.3): return the most-recent agent decisions
+    in the spec-shaped form for the AI Assistant page's Recent
+    Decisions log.
+
+    The spec proposed a fresh `agent_decisions` table; this codebase
+    already has `agent_log` (added pre-redesign) which records the
+    exact same fields under slightly different names. Rather than
+    duplicate the schema + the per-cycle insert path, this helper
+    queries `agent_log` and maps the columns to the spec shape:
+
+        timestamp, pair, decision, confidence, rationale,
+        status, cycle_id (optional)
+
+    Mapping:
+        logged_at        → timestamp
+        pair             → pair
+        claude_decision  → decision (approve/reject/skip/null)
+        confidence       → confidence
+        claude_rationale → rationale
+        action_taken     → status (executed/dry_run/skipped/error)
+
+    Returns a list of dicts (not a DataFrame) so the caller can render
+    the rows directly without pandas-shape assumptions.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT logged_at, pair, claude_decision, confidence,
+                      claude_rationale, action_taken, execution_result, notes
+                 FROM agent_log
+                 ORDER BY logged_at DESC
+                 LIMIT ?""",
+            (int(limit),),
+        )
+        rows = []
+        for r in cur.fetchall():
+            (logged_at, pair, decision, confidence, rationale,
+             action_taken, execution_result, notes) = r
+            rows.append({
+                "timestamp":   logged_at,
+                "pair":        pair,
+                "decision":    (decision or "").lower() or None,
+                "confidence":  float(confidence) if confidence is not None else None,
+                "rationale":   rationale or "",
+                "status":      action_taken or "",
+                "execution":   execution_result or "",
+                "notes":       notes or "",
+            })
+        return rows
+    except Exception:
+        return []
+    finally:
+        conn.close()
 
 
 # ──────────────────────────────────────────────

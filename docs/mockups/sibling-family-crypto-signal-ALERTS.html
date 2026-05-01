@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Crypto Signal · Alerts · Configure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--accent:#22d36f;--accent-soft:rgba(34,211,111,0.12);--accent-ink:#0a0a0f;--gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;--gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;--font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;--rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;--bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);--text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);--border:var(--gray-3);--border-strong:var(--gray-4);}
+html[data-theme="light"]{--bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;--text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;--border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);}
+*,*::before,*::after{box-sizing:border-box;min-width:0;}html,body{margin:0;padding:0;overflow-x:hidden;max-width:100vw;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11";}
+.mono,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+
+.app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;max-width:100vw;overflow-x:hidden;}
+.rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;}
+.brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
+.nav-group{margin:18px 0 6px;padding:0 10px;color:var(--text-primary);font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-secondary);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none;}
+.nav-item:hover{background:var(--bg-2);color:var(--text-primary);}.nav-item.active{background:var(--accent-soft);color:var(--text-primary);}
+
+.topbar{grid-area:topbar;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;padding:0 24px;position:sticky;top:0;z-index:10;}
+.crumbs{color:var(--text-muted);font-size:13px;}.crumbs b{color:var(--text-primary);font-weight:500;}
+.topbar-spacer{flex:1;}
+.level-group,.theme-btn,.refresh-btn{display:inline-flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text-secondary);cursor:pointer;}
+.level-group{padding:2px;gap:0;}
+.level-group button{all:unset;cursor:pointer;padding:4px 10px;border-radius:6px;font-size:12.5px;color:var(--text-muted);font-weight:500;}
+.level-group button.on{background:var(--accent-soft);color:var(--text-primary);}
+
+.main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
+.page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:16px;}
+.page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;max-width:min(640px,100%);min-width:0;overflow-wrap:break-word;}
+
+.grid{display:grid;gap:var(--gap);max-width:100%;}
+.grid>*{min-width:0;max-width:100%;}
+.grid.cols-2{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+.card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
+html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
+.card-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;}
+.card-title{font-size:13px;color:var(--text-primary);font-weight:600;}
+.card-sub{font-size:12px;color:var(--text-muted);}
+
+/* Segmented control */
+.seg-ctrl{display:inline-flex;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:3px;margin-bottom:18px;gap:0;}
+.seg-ctrl button{all:unset;cursor:pointer;padding:8px 18px;border-radius:5px;font-size:13px;color:var(--text-muted);font-weight:500;font-family:var(--font-ui);transition:all 120ms;}
+.seg-ctrl button:hover{color:var(--text-primary);}
+.seg-ctrl button.on{background:var(--accent-soft);color:var(--text-primary);font-weight:600;}
+
+/* Form fields */
+.form-row{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.form-row label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.form-row input[type="text"],.form-row input[type="email"],.form-row input[type="password"],.form-row input[type="number"]{all:unset;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;color:var(--text-primary);font-family:var(--font-ui);transition:border-color 120ms;}
+.form-row input[type="text"]:focus,.form-row input[type="email"]:focus,.form-row input[type="password"]:focus,.form-row input[type="number"]:focus{border-color:var(--accent);}
+.form-row .help{font-size:11.5px;color:var(--text-muted);}
+
+/* Toggle */
+.toggle{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:14px;}
+.toggle .lbl{flex:1;font-size:13.5px;font-weight:500;}
+.toggle .lbl-sub{display:block;font-size:11.5px;color:var(--text-muted);font-weight:400;margin-top:2px;}
+.toggle-switch{display:inline-flex;align-items:center;width:42px;height:24px;background:var(--bg-3);border-radius:999px;position:relative;cursor:pointer;transition:background 120ms;}
+.toggle-switch.on{background:var(--accent);}
+.toggle-switch::after{content:"";width:18px;height:18px;background:white;border-radius:50%;position:absolute;top:3px;left:3px;transition:left 120ms;}
+.toggle-switch.on::after{left:21px;}
+
+/* Slider */
+.slider-row{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}
+.slider-row .head{display:flex;justify-content:space-between;align-items:baseline;}
+.slider-row .head label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.slider-row .head .val{font-family:var(--font-mono);font-size:14px;font-weight:600;color:var(--accent);}
+.slider-track{height:6px;background:var(--bg-3);border-radius:999px;position:relative;}
+.slider-fill{position:absolute;top:0;left:0;height:100%;background:var(--accent);border-radius:999px;}
+.slider-thumb{position:absolute;top:50%;width:14px;height:14px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 3px var(--accent-soft);}
+
+/* Buttons */
+.btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+.btn{all:unset;cursor:pointer;background:var(--accent);color:var(--accent-ink);padding:9px 18px;border-radius:8px;font-weight:600;font-size:13px;transition:filter 120ms;}
+.btn:hover{filter:brightness(1.1);}
+.btn-secondary{background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);}
+.btn-secondary:hover{border-color:var(--border-strong);background:var(--bg-3);filter:none;}
+
+/* Alert types — checkbox grid */
+.alert-types{display:grid;gap:10px;}
+.alert-type{display:flex;align-items:flex-start;gap:12px;padding:14px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all 120ms;}
+.alert-type:hover{border-color:var(--border-strong);}
+.alert-type.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 6%,var(--bg-1));}
+.alert-type .check{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--border-strong);display:grid;place-items:center;flex-shrink:0;margin-top:1px;background:var(--bg-1);}
+.alert-type.on .check{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:12px;}
+.alert-type .body{flex:1;min-width:0;}
+.alert-type .name{font-size:13px;font-weight:500;color:var(--text-primary);}
+.alert-type .desc{font-size:11.5px;color:var(--text-muted);margin-top:3px;line-height:1.45;}
+
+/* Channel badges */
+.channel-row{display:flex;flex-direction:column;gap:10px;}
+.channel{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-2);}
+.channel.active{border-color:var(--accent);}
+.channel .ic{width:32px;height:32px;border-radius:8px;background:var(--bg-1);display:grid;place-items:center;font-size:16px;flex-shrink:0;}
+.channel .body{flex:1;min-width:0;}
+.channel .name{font-size:13px;font-weight:500;color:var(--text-primary);}
+.channel .status{font-size:11.5px;color:var(--text-muted);margin-top:2px;}
+.channel .status.on{color:var(--success);}
+.channel .action{font-size:12px;color:var(--text-secondary);cursor:pointer;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-1);}
+.channel .action:hover{border-color:var(--border-strong);color:var(--text-primary);}
+
+/* Mobile */
+@media(max-width:1024px){.grid.cols-2{grid-template-columns:1fr;}}
+@media(max-width:768px){
+  .app{grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+  .rail{position:fixed;bottom:0;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+  .brand,.nav-group{display:none;}
+  .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+  .main{padding:16px 16px 80px;}
+  .level-group{display:none;}
+  .refresh-btn,.theme-btn{padding:6px 8px;font-size:12px;}
+}
+
+/* Dev bar */
+.dev-bar{position:fixed;bottom:16px;right:16px;z-index:1000;background:var(--bg-1);border:1px solid var(--border-strong);border-radius:10px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:12px;}
+.dev-bar button{all:unset;cursor:pointer;padding:6px 10px;border-radius:6px;color:var(--text-secondary);}
+.dev-bar button:hover{background:var(--bg-2);color:var(--text-primary);}
+.dev-bar button.on{background:var(--accent-soft);color:var(--text-primary);}
+.dev-bar .sep{width:1px;background:var(--border);margin:4px 0;}
+body.preview-mobile .app{max-width:390px;margin:0 auto;border:1px solid var(--border-strong);border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-height:844px;grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+body.preview-mobile .rail{position:relative;bottom:auto;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+body.preview-mobile .brand,body.preview-mobile .nav-group{display:none;}
+body.preview-mobile .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+body.preview-mobile .main{padding:16px 16px 80px;}
+body.preview-mobile .grid.cols-2{grid-template-columns:1fr;}
+body.preview-mobile .level-group{display:none;}
+body.preview-mobile .refresh-btn,body.preview-mobile .theme-btn{padding:6px 8px;font-size:12px;}
+</style>
+</head>
+<body data-theme="dark">
+<div class="app">
+
+  <aside class="rail">
+    <div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
+    <div class="nav-group">Markets</div>
+    <a class="nav-item">Home</a>
+    <a class="nav-item">Signals</a>
+    <a class="nav-item">Regimes</a>
+    <div class="nav-group">Research</div>
+    <a class="nav-item">Backtester</a>
+    <a class="nav-item">On-chain</a>
+    <div class="nav-group">Account</div>
+    <a class="nav-item active">Alerts</a>
+    <a class="nav-item">AI Assistant</a>
+    <a class="nav-item">Settings</a>
+  </aside>
+
+  <header class="topbar">
+    <div class="crumbs">Account / <b>Alerts</b> / <b style="color:var(--text-muted);">Configure</b></div>
+    <div class="topbar-spacer"></div>
+    <div class="level-group">
+      <button>Beginner</button>
+      <button class="on">Intermediate</button>
+      <button>Advanced</button>
+    </div>
+    <button class="refresh-btn">↻ Refresh</button>
+    <button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+  </header>
+
+  <main class="main">
+
+    <div class="page-hd">
+      <div>
+        <h1>Alerts</h1>
+        <div class="sub">Get notified when signals change, regimes shift, on-chain divergences fire, or funding spikes break threshold. Sent via the channels you've connected.</div>
+      </div>
+    </div>
+
+    <div class="seg-ctrl">
+      <button class="on">Configure</button>
+      <button>History</button>
+    </div>
+
+    <!-- 2-column main content -->
+    <div class="grid cols-2" style="margin-bottom:20px;">
+
+      <!-- Email notifications -->
+      <div class="card">
+        <div class="card-hd">
+          <div>
+            <div class="card-title">Email notifications</div>
+            <div class="card-sub">SMTP-based, sent immediately when an event fires</div>
+          </div>
+        </div>
+
+        <div class="toggle">
+          <div class="lbl">
+            Enable email alerts
+            <span class="lbl-sub">master switch · turn off without losing config</span>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+
+        <div class="form-row">
+          <label>Recipient</label>
+          <input type="email" value="david.duraes.dd1@gmail.com" />
+          <div class="help">Comma-separated for multiple recipients</div>
+        </div>
+
+        <div class="form-row">
+          <label>Sender (SMTP)</label>
+          <input type="email" value="alerts@cryptosignal.app" />
+        </div>
+
+        <div class="form-row">
+          <label>SMTP Password</label>
+          <input type="password" placeholder="never pre-filled · leave blank to keep stored value" />
+          <div class="help">Stored encrypted in .streamlit/secrets.toml</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head">
+            <label>High-confidence threshold</label>
+            <span class="val">75%</span>
+          </div>
+          <div class="slider-track">
+            <div class="slider-fill" style="width:75%;"></div>
+            <div class="slider-thumb" style="left:75%;"></div>
+          </div>
+          <div class="help" style="font-size:11.5px;color:var(--text-muted);">Alerts fire when composite signal confidence ≥ this threshold</div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn">💾 Save Config</button>
+          <button class="btn btn-secondary">📧 Send Test Email</button>
+        </div>
+      </div>
+
+      <!-- Alert types -->
+      <div class="card">
+        <div class="card-hd">
+          <div>
+            <div class="card-title">Alert types</div>
+            <div class="card-sub">choose which events trigger an alert</div>
+          </div>
+        </div>
+
+        <div class="alert-types">
+          <div class="alert-type on">
+            <div class="check">✓</div>
+            <div class="body">
+              <div class="name">▲ Buy / ▼ Sell crossings</div>
+              <div class="desc">Composite signal crosses BUY (≥ 70) or SELL (≤ 30) threshold for any tracked pair on the configured timeframes.</div>
+            </div>
+          </div>
+          <div class="alert-type on">
+            <div class="check">✓</div>
+            <div class="body">
+              <div class="name">◈ Regime transitions</div>
+              <div class="desc">HMM regime state changes (Bull → Transition → Accumulation → Distribution → Bear). Per-pair, with confidence threshold.</div>
+            </div>
+          </div>
+          <div class="alert-type on">
+            <div class="check">✓</div>
+            <div class="body">
+              <div class="name">⬡ On-chain divergences</div>
+              <div class="desc">MVRV-Z, SOPR, or exchange reserve flow flips direction relative to spot price for ≥ 2 consecutive days.</div>
+            </div>
+          </div>
+          <div class="alert-type">
+            <div class="check"></div>
+            <div class="body">
+              <div class="name">⚡ Funding rate spikes</div>
+              <div class="desc">Perpetual funding ≥ +0.05% or ≤ −0.05% for 8h. Often signals over-leveraged positioning before a flush.</div>
+            </div>
+          </div>
+          <div class="alert-type">
+            <div class="check"></div>
+            <div class="body">
+              <div class="name">🔓 Token unlock proximity</div>
+              <div class="desc">CryptoRank-tracked unlocks within 7 days for any pair in the watchlist. Flags forward sell-pressure events.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Delivery channels -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-hd">
+        <div>
+          <div class="card-title">Delivery channels</div>
+          <div class="card-sub">where alerts get sent · email is required, others optional</div>
+        </div>
+      </div>
+
+      <div class="channel-row">
+        <div class="channel active">
+          <div class="ic">📧</div>
+          <div class="body">
+            <div class="name">Email</div>
+            <div class="status on">● Connected · david.duraes.dd1@gmail.com</div>
+          </div>
+          <button class="action">Edit</button>
+        </div>
+        <div class="channel">
+          <div class="ic">💬</div>
+          <div class="body">
+            <div class="name">Slack webhook</div>
+            <div class="status">Not connected · paste a webhook URL to enable</div>
+          </div>
+          <button class="action">Connect</button>
+        </div>
+        <div class="channel">
+          <div class="ic">📨</div>
+          <div class="body">
+            <div class="name">Telegram bot</div>
+            <div class="status">Not connected · @YourBotName + chat ID</div>
+          </div>
+          <button class="action">Connect</button>
+        </div>
+        <div class="channel">
+          <div class="ic">🔔</div>
+          <div class="body">
+            <div class="name">Browser push</div>
+            <div class="status">Not connected · works only when app tab is open</div>
+          </div>
+          <button class="action">Connect</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="dev-bar">
+  <button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button>
+  <button id="btn-light" onclick="setTheme('light')">Light</button>
+  <div class="sep"></div>
+  <button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button>
+  <button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button>
+</div>
+
+<script>
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.getElementById('btn-dark').classList.toggle('on',t==='dark');document.getElementById('btn-light').classList.toggle('on',t==='light');}
+function toggleTheme(){setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function setViewport(v){document.body.classList.toggle('preview-mobile',v==='mobile');document.getElementById('btn-desktop').classList.toggle('on',v==='desktop');document.getElementById('btn-mobile').classList.toggle('on',v==='mobile');}
+</script>
+
+</body>
+</html>

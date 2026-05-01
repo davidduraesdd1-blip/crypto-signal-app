@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Crypto Signal · Regimes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--accent:#22d36f;--accent-soft:rgba(34,211,111,0.12);--accent-ink:#0a0a0f;--gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;--gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;--font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;--rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;--bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);--text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);--border:var(--gray-3);--border-strong:var(--gray-4);}
+html[data-theme="light"]{--bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;--text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;--border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);}
+*,*::before,*::after{box-sizing:border-box;min-width:0;}html,body{margin:0;padding:0;overflow-x:hidden;max-width:100vw;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+.mono,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+.app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;max-width:100vw;overflow-x:hidden;}
+.rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;}
+.brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
+.nav-group{margin:18px 0 6px;padding:0 10px;color:var(--text-primary);font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-secondary);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none;}
+.nav-item:hover{background:var(--bg-2);color:var(--text-primary);}.nav-item.active{background:var(--accent-soft);color:var(--text-primary);}
+.topbar{grid-area:topbar;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;padding:0 24px;position:sticky;top:0;z-index:10;}
+.crumbs{color:var(--text-muted);font-size:13px;}.crumbs b{color:var(--text-primary);font-weight:500;}.topbar-spacer{flex:1;}
+.level-group,.theme-btn,.refresh-btn{display:inline-flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text-secondary);cursor:pointer;}
+.level-group{padding:2px;gap:0;}.level-group button{all:unset;cursor:pointer;padding:4px 10px;border-radius:6px;font-size:12.5px;color:var(--text-muted);font-weight:500;}.level-group button.on{background:var(--accent-soft);color:var(--text-primary);}
+.main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
+.page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:16px;}
+.page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;max-width:min(640px,100%);min-width:0;overflow-wrap:break-word;word-break:break-word;}
+.grid{display:grid;gap:var(--gap);}.grid.cols-4{grid-template-columns:repeat(4,1fr);}.grid.cols-3{grid-template-columns:repeat(3,1fr);}.grid.cols-2{grid-template-columns:1fr 1fr;}
+.card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
+html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
+.card-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;}
+.card-title{font-size:12px;color:var(--text-muted);font-weight:500;letter-spacing:0.04em;text-transform:uppercase;}
+.rgm{padding:16px;display:flex;flex-direction:column;gap:6px;position:relative;border-left:3px solid transparent;cursor:pointer;transition:background 120ms,outline-color 120ms;}
+.rgm:hover{background:var(--bg-2);}
+.rgm.selected{background:var(--bg-2);outline:1px solid var(--accent);outline-offset:-1px;}
+.rgm.selected::after{content:"▶ shown below";position:absolute;top:10px;right:12px;font-size:9.5px;color:var(--accent);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;}
+.rgm.bull{border-left-color:var(--success);}.rgm.bear{border-left-color:var(--danger);}.rgm.trans{border-left-color:var(--warning);}.rgm.accum{border-left-color:var(--info);}.rgm.dist{border-left-color:var(--warning);}
+.rgm .t{font-family:var(--font-mono);font-size:14px;font-weight:600;}
+.rgm .state{font-size:12.5px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;}
+.rgm.bull .state{color:var(--success);}.rgm.bear .state{color:var(--danger);}.rgm.trans .state{color:var(--warning);}.rgm.accum .state{color:var(--info);}.rgm.dist .state{color:var(--warning);}
+.rgm .conf{font-size:11.5px;color:var(--text-muted);font-family:var(--font-mono);}
+.rgm .since{font-size:11px;color:var(--text-muted);margin-top:4px;}
+.tl-card{padding:20px;}
+.tl-title{font-size:13px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:14px;}
+.tl{display:flex;flex-direction:column;gap:0;}
+.tl-row{display:grid;grid-template-columns:110px 1fr;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border);}
+.tl-row:last-child{border-bottom:none;}.tl-dt{font-family:var(--font-mono);color:var(--text-muted);font-size:12px;}
+.tl-body{font-size:13px;}.tl-body .h{font-weight:500;}.tl-body .d{color:var(--text-muted);font-size:12px;margin-top:2px;}
+.state-bar{display:flex;height:34px;border-radius:8px;overflow:hidden;margin-top:8px;}
+.seg{display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:600;}
+.macro-row{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.macro-row:last-child{border-bottom:none;}.macro-row .n{font-weight:500;}.macro-row .v{font-family:var(--font-mono);}.macro-row .d{font-family:var(--font-mono);font-size:12px;}.macro-row .d.up{color:var(--success);}.macro-row .d.down{color:var(--danger);}
+.macro-row .s{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-muted);}
+.macro-row .s.bull::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--success);}
+.macro-row .s.bear::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--danger);}
+.macro-row .s.neut::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--warning);}
+@media(max-width:1024px){.grid.cols-4,.grid.cols-3{grid-template-columns:repeat(2,1fr);}.grid.cols-2{grid-template-columns:1fr;}}
+@media(max-width:768px){.app{grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}.rail{position:fixed;bottom:0;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}.brand,.nav-group{display:none;}.nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}.main{padding:16px 16px 80px;}.grid.cols-4,.grid.cols-3,.grid.cols-2{grid-template-columns:1fr;}.level-group{display:none;}.macro-row{grid-template-columns:1.4fr 1fr 1fr;gap:8px;font-size:11px;}.macro-row .s{display:none;}.macro-row .n{font-size:11.5px;}.macro-row .v{font-size:11.5px;}.macro-row .d{font-size:10.5px;}.refresh-btn,.theme-btn{padding:6px 8px;font-size:12px;}html,body{overflow-x:hidden;}.app{width:100%;max-width:100vw;}.main{min-width:0;max-width:100%;overflow-x:hidden;}.card{max-width:100%;min-width:0;box-sizing:border-box;overflow:hidden;}.macro-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);gap:6px;font-size:11px;}.macro-row .n,.macro-row .v,.macro-row .d{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.macro-row .d{font-size:10px;}.state-bar{width:100%;max-width:100%;min-width:0;}.seg{flex-shrink:1;min-width:0;overflow:hidden;font-size:9.5px;padding:0 2px;}.tl-card{min-width:0;max-width:100%;}.tl-card>div{min-width:0;}.rgm{min-width:0;max-width:100%;}.rgm.selected::after{font-size:8.5px;top:8px;right:8px;}.grid{max-width:100%;}.grid>*{min-width:0;}}
+.dev-bar{position:fixed;bottom:16px;right:16px;z-index:1000;background:var(--bg-1);border:1px solid var(--border-strong);border-radius:10px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:12px;}
+.dev-bar button{all:unset;cursor:pointer;padding:6px 10px;border-radius:6px;color:var(--text-secondary);}.dev-bar button:hover{background:var(--bg-2);color:var(--text-primary);}.dev-bar button.on{background:var(--accent-soft);color:var(--text-primary);}.dev-bar .sep{width:1px;background:var(--border);margin:4px 0;}
+body.preview-mobile .app{max-width:390px;margin:0 auto;border:1px solid var(--border-strong);border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-height:844px;grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+body.preview-mobile .rail{position:relative;bottom:auto;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+body.preview-mobile .brand,body.preview-mobile .nav-group{display:none;}body.preview-mobile .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+body.preview-mobile .grid.cols-4,body.preview-mobile .grid.cols-3,body.preview-mobile .grid.cols-2{grid-template-columns:1fr;}body.preview-mobile .main{padding:16px 16px 80px;}body.preview-mobile .level-group{display:none;}body.preview-mobile .macro-row{grid-template-columns:1.4fr 1fr 1fr;gap:8px;font-size:11px;}body.preview-mobile .macro-row .s{display:none;}body.preview-mobile .macro-row .n{font-size:11.5px;}body.preview-mobile .macro-row .v{font-size:11.5px;}body.preview-mobile .macro-row .d{font-size:10.5px;}body.preview-mobile .refresh-btn,body.preview-mobile .theme-btn{padding:6px 8px;font-size:12px;}body.preview-mobile .seg{flex-shrink:1;min-width:0;overflow:hidden;font-size:9.5px;padding:0 2px;}body.preview-mobile .state-bar{width:100%;max-width:100%;min-width:0;}body.preview-mobile .tl-card,body.preview-mobile .rgm{min-width:0;max-width:100%;}body.preview-mobile .main{min-width:0;max-width:100%;overflow-x:hidden;}body.preview-mobile .card{max-width:100%;min-width:0;box-sizing:border-box;overflow:hidden;}body.preview-mobile .macro-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);gap:6px;font-size:11px;}body.preview-mobile .macro-row .n,body.preview-mobile .macro-row .v,body.preview-mobile .macro-row .d{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}body.preview-mobile .grid{max-width:100%;}body.preview-mobile .grid>*{min-width:0;}
+.rgm-section-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+.rgm-section-title{font-size:12px;color:var(--text-muted);font-weight:500;letter-spacing:0.04em;text-transform:uppercase;}
+.rgm-more{all:unset;cursor:pointer;font-family:var(--font-ui);font-size:12.5px;color:var(--text-secondary);border:1px solid var(--border);padding:5px 12px;border-radius:8px;background:var(--bg-1);transition:all 120ms;}
+.rgm-more:hover{color:var(--text-primary);border-color:var(--border-strong);background:var(--bg-2);}
+</style></head>
+<body data-theme="dark">
+<div class="app">
+<aside class="rail">
+<div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
+<div class="nav-group">Markets</div><a class="nav-item">Home</a><a class="nav-item">Signals</a><a class="nav-item active">Regimes</a>
+<div class="nav-group">Research</div><a class="nav-item">Backtester</a><a class="nav-item">On-chain</a>
+<div class="nav-group">Account</div><a class="nav-item">Alerts</a><a class="nav-item">AI Assistant</a><a class="nav-item">Settings</a>
+</aside>
+<header class="topbar">
+<div class="crumbs">Markets / <b>Regimes</b></div><div class="topbar-spacer"></div>
+<div class="level-group"><button>Beginner</button><button class="on">Intermediate</button><button>Advanced</button></div>
+<button class="refresh-btn">↻ Refresh</button><button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+</header>
+<main class="main">
+<div class="page-hd"><div><h1>Regimes</h1><div class="sub">HMM-inferred market regime per asset + macro overlay. Regime-specific signal weights auto-adjust.</div></div></div>
+<div class="rgm-section-hd">
+  <div class="rgm-section-title">Regime states · showing 8 of 33 pairs · click any to drill in</div>
+  <button class="rgm-more">More ▾ <span style="opacity:0.6;font-size:11px;margin-left:2px;">+25</span></button>
+</div>
+<div class="grid cols-4" style="margin-bottom:20px;">
+<div class="card rgm bull selected"><div class="t">BTC</div><div class="state">Bull</div><div class="conf">confidence 82%</div><div class="since">since Apr 12 · 12d stable</div></div>
+<div class="card rgm trans"><div class="t">ETH</div><div class="state">Transition</div><div class="conf">confidence 61%</div><div class="since">since Apr 20 · 4d</div></div>
+<div class="card rgm accum"><div class="t">XRP</div><div class="state">Accumulation</div><div class="conf">confidence 68%</div><div class="since">since Apr 08 · 16d</div></div>
+<div class="card rgm dist"><div class="t">SOL</div><div class="state">Distribution</div><div class="conf">confidence 74%</div><div class="since">since Apr 16 · 8d</div></div>
+<div class="card rgm bull"><div class="t">AVAX</div><div class="state">Bull</div><div class="conf">confidence 78%</div><div class="since">since Apr 10 · 14d</div></div>
+<div class="card rgm accum"><div class="t">LINK</div><div class="state">Accumulation</div><div class="conf">confidence 64%</div><div class="since">since Apr 14 · 10d</div></div>
+<div class="card rgm bear"><div class="t">NEAR</div><div class="state">Bear</div><div class="conf">confidence 72%</div><div class="since">since Apr 06 · 18d</div></div>
+<div class="card rgm trans"><div class="t">DOT</div><div class="state">Transition</div><div class="conf">confidence 58%</div><div class="since">since Apr 21 · 3d</div></div>
+</div>
+<div class="grid cols-2" style="margin-bottom:20px;">
+<div class="card tl-card">
+<div class="tl-title">BTC regime state · last 90d</div>
+<div class="state-bar">
+<div class="seg" style="background:#ef4444;width:12%;">Bear</div>
+<div class="seg" style="background:#f59e0b;width:8%;">Trans</div>
+<div class="seg" style="background:#3b82f6;width:18%;">Accum</div>
+<div class="seg" style="background:#22c55e;width:44%;">Bull</div>
+<div class="seg" style="background:#f59e0b;width:6%;">Trans</div>
+<div class="seg" style="background:#22c55e;width:12%;">Bull</div>
+</div>
+<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:6px;"><span>Jan 24</span><span>Feb 12</span><span>Mar 02</span><span>Mar 20</span><span>Apr 08</span><span>Apr 23</span></div>
+<div style="margin-top:20px;font-size:12px;color:var(--text-muted);line-height:1.5;">HMM 4-state model over composite score + on-chain + macro features. State transitions shown on the bar. Current state: Bull since Apr 12, confidence 82%.</div>
+</div>
+<div class="card">
+<div class="card-hd"><div class="card-title">Macro regime · overlay</div><div style="color:var(--accent);font-weight:600;">Risk-on · 76%</div></div>
+<div style="margin-top:8px;">
+<div class="macro-row"><span class="n">BTC Dominance</span><span class="v">58.9%</span><span class="d up">+0.4 ppts · 7d</span><span class="s bull">bullish</span></div>
+<div class="macro-row"><span class="n">DXY</span><span class="v">104.21</span><span class="d down">−0.6% · 30d</span><span class="s bull">risk-on</span></div>
+<div class="macro-row"><span class="n">VIX</span><span class="v">14.2</span><span class="d down">−8% · 30d</span><span class="s bull">risk-on</span></div>
+<div class="macro-row"><span class="n">10Y yield</span><span class="v">4.18%</span><span class="d down">−8bps · 7d</span><span class="s bull">tailwind</span></div>
+<div class="macro-row"><span class="n">Fear &amp; Greed</span><span class="v">72</span><span class="d up">+6 · 7d</span><span class="s neut">greed</span></div>
+<div class="macro-row"><span class="n">HY spreads</span><span class="v">312 bps</span><span class="d down">−18 bps · 30d</span><span class="s bull">tightening</span></div>
+</div>
+</div>
+</div>
+<div class="card">
+<div class="card-hd"><div class="card-title">Signal weights by regime</div><div style="color:var(--text-muted);font-size:12px;">auto-adjusted by HMM state</div></div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px;">
+<div><div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--success);">Bull</div><div style="font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--text-secondary);">Tech: 0.30<br>Macro: 0.15<br>Sent: 0.20<br>On-chain: 0.35</div></div>
+<div><div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--info);">Accumulation</div><div style="font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--text-secondary);">Tech: 0.20<br>Macro: 0.15<br>Sent: 0.15<br>On-chain: 0.50</div></div>
+<div><div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--warning);">Distribution</div><div style="font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--text-secondary);">Tech: 0.35<br>Macro: 0.25<br>Sent: 0.25<br>On-chain: 0.15</div></div>
+<div><div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--danger);">Bear</div><div style="font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--text-secondary);">Tech: 0.40<br>Macro: 0.35<br>Sent: 0.15<br>On-chain: 0.10</div></div>
+</div>
+</div>
+</main></div>
+<div class="dev-bar"><button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button><button id="btn-light" onclick="setTheme('light')">Light</button><div class="sep"></div><button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button><button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button></div>
+<script>function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.getElementById('btn-dark').classList.toggle('on',t==='dark');document.getElementById('btn-light').classList.toggle('on',t==='light');}function toggleTheme(){setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}function setViewport(v){document.body.classList.toggle('preview-mobile',v==='mobile');document.getElementById('btn-desktop').classList.toggle('on',v==='desktop');document.getElementById('btn-mobile').classList.toggle('on',v==='mobile');}</script>
+</body></html>

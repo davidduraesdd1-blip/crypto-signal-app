@@ -19,7 +19,7 @@ Every page should:
 from __future__ import annotations
 
 import html as _html
-from typing import Iterable, Literal, Sequence
+from typing import Callable, Iterable, Literal, Sequence
 
 try:
     import streamlit as st
@@ -70,30 +70,45 @@ NavItem = tuple[str, str, str]  # (key, label, icon)
 # PAGE_KEY_TO_APP below — preserves existing logic, only relabels.
 DEFAULT_NAV: dict[str, list[NavItem]] = {
     "Markets": [
-        ("home",     "Home",       "◉"),
-        ("signals",  "Signals",    "▲"),
-        ("regimes",  "Regimes",    "◈"),
+        ("home",     "Home",         "◉"),
+        ("signals",  "Signals",      "▲"),
+        ("regimes",  "Regimes",      "◈"),
     ],
     "Research": [
         ("backtester", "Backtester", "∿"),
         ("onchain",    "On-chain",   "⬡"),
     ],
     "Account": [
-        ("alerts",   "Alerts",     "◐"),
-        ("settings", "Settings",   "⚙"),
+        ("alerts",       "Alerts",       "◐"),
+        # C1 (2026-04-29): AI Assistant promoted from a sub-link inside
+        # Settings to a first-class nav item — matches the full-mockup-
+        # match spec and exposes the agent surface (page_agent at the
+        # `Agent` page-router key) without burying it in Settings.
+        # Key is `ai_assistant` (not `agent`) per Phase C plan §C1; that
+        # leaves `agent` available as a session_state namespace for the
+        # autonomous agent runtime without colliding with the nav key.
+        ("ai_assistant", "AI Assistant", "💬"),
+        ("settings",     "Settings",     "⚙"),
     ],
 }
 
 # Maps the mockup-friendly key → existing app.py page key. Keeps all the
 # existing page_* functions intact — only the presentation changes.
+#
+# C1 (2026-04-29): the legacy aliases for signals/regimes/onchain
+# all routed to "Dashboard" (a Tabs container that no longer exists
+# post-redesign), so clicking those nav items navigated to the wrong
+# page. Each now maps to its real page-router key — see app.py
+# `if page == "..." :` block at line 9923+.
 PAGE_KEY_TO_APP: dict[str, str] = {
-    "home":       "Dashboard",
-    "signals":    "Dashboard",        # Signals tab inside Dashboard
-    "regimes":    "Dashboard",        # Regime section inside Dashboard
-    "backtester": "Backtest Viewer",
-    "onchain":    "Dashboard",        # On-chain subsection inside Dashboard
-    "alerts":     "Config Editor",    # Alerts tab in Settings
-    "settings":   "Config Editor",
+    "home":         "Dashboard",
+    "signals":      "Signals",
+    "regimes":      "Regimes",
+    "backtester":   "Backtest Viewer",
+    "onchain":      "On-chain",
+    "alerts":       "Alerts",           # C6 (2026-04-30): page_alerts
+    "ai_assistant": "Agent",
+    "settings":     "Config Editor",
 }
 
 
@@ -334,11 +349,23 @@ def render_top_bar(
     if show_refresh:
         with cols[4]:
             if on_refresh is not None:
+                # C8-fix (2026-04-30): Beginner level uses one combined
+                # "Update" button that refreshes caches AND kicks off a
+                # scan (the cache-clear + scan-trigger split is a power-
+                # user distinction). Int/Adv keep the cheap "Refresh"
+                # behaviour and the explicit "Run Scan" button on Home.
+                _ref_lbl = "↻ Update" if user_level == "beginner" else "↻ Refresh"
+                _ref_help = (
+                    "Refresh all data and run a fresh scan in the background"
+                    if user_level == "beginner"
+                    else "Clear all caches and reload data from all sources "
+                         "(does not re-run the scan pipeline)"
+                )
                 st.button(
-                    "↻ Refresh",
+                    _ref_lbl,
                     key="ds_topbar_refresh",
                     use_container_width=True,
-                    help="Clear all caches and reload data from all sources",
+                    help=_ref_help,
                     on_click=_on_topbar_refresh,
                 )
                 # Persistent caption directly under the button so users
@@ -775,6 +802,420 @@ def regime_card_html(
         f'{since_html}'
         f'</div>'
     )
+
+
+# ── Segmented control (C2 — Phase C plan §C2) ────────────────────────
+# Mockup target: docs/mockups/sibling-family-crypto-signal-BACKTESTER.html
+#   .seg-ctrl       — primary variant ([Backtest][Arbitrage] at top of
+#                     Backtester page)
+#   .seg-ctrl-sm    — small variant ([Summary][Trade History][Advanced]
+#                     sub-view switcher)
+#
+# Critical: uses on_click callback (NOT `if button(): write_state();
+# rerun()`). The inline pattern triggers the same two-click highlight
+# bug we fixed in render_sidebar (see H5 fix in commit 075bec9). With
+# on_click, Streamlit invokes the callback BEFORE the script body
+# re-runs, so the segment paints with the new active state on the
+# very first render.
+
+# Sentinel marker class so overrides.py can scope CSS to this widget
+# without touching every st.columns row in the app.
+_SEG_CTRL_MARKER_CLS = "ds-seg-ctrl"
+_SEG_CTRL_SM_MARKER_CLS = "ds-seg-ctrl ds-seg-ctrl-sm"
+
+
+def segmented_control(
+    items: Sequence[tuple[str, str]],
+    *,
+    active: str,
+    key: str,
+    on_select: Callable[[str], None] | None = None,
+    variant: Literal["primary", "small"] = "primary",
+) -> str:
+    """Mockup-style segmented control with first-click highlight.
+
+    Args:
+        items:   `[(value, label), ...]` — value is the canonical id,
+                 label is the visible text.
+        active:  the currently-selected value (the segment painted as
+                 "on"). Caller is responsible for sourcing this from
+                 session_state if persistence across reruns is wanted.
+        key:     session_state key the click handler writes to. The
+                 callback writes BEFORE the next script re-run so the
+                 first-click paint already shows the new active segment.
+        on_select: optional callback fired with the new value after
+                 session_state is updated. Use for side-effects like
+                 cache invalidation; do NOT use to write more state
+                 (that's what `key` is for).
+        variant: 'primary' (Backtester top-of-page) or 'small' (sub-
+                 view switcher). Drives which CSS class is emitted on
+                 the marker div.
+
+    Returns:
+        The currently-selected value AFTER any click handler has run
+        (i.e. session_state[key] if set, else `active`).
+    """
+    if st is None:
+        return active
+
+    # Validate the active value early — easier to spot caller bugs.
+    # Use an ORDERED fallback (first item) so the regression test for
+    # invalid `active` is deterministic; Python set iteration order is
+    # implementation-dependent and can flip across pytest workers.
+    valid_values = [v for v, _ in items]
+    if active not in valid_values:
+        # Fall back to first item; never raise (this is a UI primitive).
+        active = valid_values[0] if valid_values else active
+
+    def _on_segment_click(value: str) -> None:
+        st.session_state[key] = value
+        if on_select is not None:
+            try:
+                on_select(value)
+            except Exception:  # pragma: no cover — defensive only
+                # Component must never crash a page just because a
+                # caller's on_select callback raised.
+                pass
+
+    # Marker div — CSS in overrides.py uses :has() to scope the seg-
+    # ctrl styling to the stHorizontalBlock that immediately follows
+    # this marker.
+    marker_cls = (_SEG_CTRL_SM_MARKER_CLS if variant == "small"
+                  else _SEG_CTRL_MARKER_CLS)
+    st.markdown(
+        f'<div class="{marker_cls}" data-seg-key="{_html.escape(str(key))}"></div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(len(items))
+    for col, (value, label) in zip(cols, items):
+        with col:
+            st.button(
+                str(label),
+                key=f"_segctrl_{key}_{value}",
+                use_container_width=True,
+                type=("primary" if value == active else "secondary"),
+                on_click=_on_segment_click,
+                args=(value,),
+            )
+
+    return st.session_state.get(key, active)
+
+
+# ── Pair-selection affordances (C3 — Phase C plan §C3) ───────────────
+# Four primitives shared across Home / Signals / Regimes / On-chain to
+# give every page a consistent way to swap pairs:
+#
+#   pair_dropdown            "More ▾ +N" — opens a searchable list
+#   ticker_pill_button       per-card swap (Home heroes + On-chain)
+#   watchlist_customize_btn  add/remove panel for the Home watchlist
+#   multi_timeframe_strip    1m/5m/.../1w strip on Signals
+#
+# All four use on_click=callback for first-paint state updates (same
+# pattern as segmented_control, render_sidebar nav, topbar refresh).
+
+def pair_dropdown(
+    pairs: Sequence[str],
+    *,
+    active: str,
+    key: str,
+    label: str | None = None,
+    on_select: Callable[[str], None] | None = None,
+) -> str:
+    """Quick-access pill row (5 fastest pairs) + "More ▾ +N" popover.
+
+    Args:
+        pairs:   full universe of selectable pairs (e.g. all 33 entries
+                 of `model.PAIRS`). The first 5 are surfaced as direct
+                 pill buttons; the rest live behind the "More ▾"
+                 popover.
+        active:  currently-selected pair (whatever value lives in
+                 `st.session_state[key]`).
+        key:     session_state key the click handler writes to.
+        label:   optional override for the popover trigger label.
+                 Defaults to "More ▾ +N" where N is len(pairs)-5.
+        on_select: optional callback fired with the new value AFTER
+                 session_state is updated.
+
+    Returns:
+        The currently-selected pair after any click handler has run.
+
+    Persistence: clicks write `session_state[key] = chosen_pair` BEFORE
+    the next script re-run via on_click. First-click correctness is
+    therefore guaranteed (no two-click highlight bug).
+    """
+    if st is None:
+        return active
+
+    if not pairs:
+        return active
+
+    # Accept either bare tickers ("BTC") or full pairs ("BTC/USDT") —
+    # the popover label uses whatever the caller provided.
+    quick = list(pairs[:5])
+    rest = list(pairs[5:])
+
+    if active not in pairs:
+        active = quick[0] if quick else (rest[0] if rest else active)
+
+    def _on_pick(value: str) -> None:
+        st.session_state[key] = value
+        if on_select is not None:
+            try:
+                on_select(value)
+            except Exception:  # pragma: no cover
+                pass
+
+    # Render row: 5 quick pills + popover trigger. Width ratios keep
+    # the row compact even when the More label is long.
+    cols = st.columns(len(quick) + (1 if rest else 0))
+    for i, p in enumerate(quick):
+        with cols[i]:
+            st.button(
+                str(p),
+                key=f"_pdpd_quick_{key}_{p}",
+                use_container_width=True,
+                type=("primary" if p == active else "secondary"),
+                on_click=_on_pick,
+                args=(p,),
+            )
+
+    if rest:
+        more_label = label or f"More ▾  +{len(rest)}"
+        with cols[-1]:
+            with st.popover(more_label, use_container_width=True):
+                # Search filter for long universes — invisible if <=8.
+                search = ""
+                if len(rest) > 8:
+                    search = st.text_input(
+                        "Search",
+                        key=f"_pdpd_search_{key}",
+                        placeholder="filter…",
+                        label_visibility="collapsed",
+                    )
+                filt = rest
+                if search:
+                    s = search.lower()
+                    filt = [p for p in rest if s in str(p).lower()]
+                # Render a button per filtered pair — clicking writes
+                # session_state immediately; popover dismisses on rerun.
+                for p in filt:
+                    st.button(
+                        str(p),
+                        key=f"_pdpd_more_{key}_{p}",
+                        use_container_width=True,
+                        type=("primary" if p == active else "secondary"),
+                        on_click=_on_pick,
+                        args=(p,),
+                    )
+
+    return st.session_state.get(key, active)
+
+
+def ticker_pill_button(
+    ticker: str,
+    *,
+    pairs: Sequence[str],
+    key: str,
+    on_swap: Callable[[str], None] | None = None,
+    label_override: str | None = None,
+) -> str:
+    """Per-card ticker that opens a pair-swap popover on click.
+
+    Used on Home hero cards (3 independent slots) and On-chain detail
+    cards (3 independent slots). Each instance is bound to its own
+    `key` so the slot-1 swap doesn't affect slot-2.
+
+    Args:
+        ticker:  the currently-displayed ticker (e.g. "BTC", "BTC/USDT").
+        pairs:   universe of pairs the slot can be swapped to.
+        key:     session_state key — also used to namespace the popover
+                 widget so multiple instances don't collide.
+        on_swap: optional callback fired with the new ticker after
+                 session_state is updated.
+        label_override: alternative label to render inside the popover
+                 trigger. Defaults to `ticker`.
+
+    Returns:
+        The currently-selected ticker after any click handler has run.
+    """
+    if st is None:
+        return ticker
+
+    if ticker not in pairs and pairs:
+        # Caller may have passed a stale value; fall back to the first
+        # pair so the popover doesn't render with no active row.
+        ticker = pairs[0]
+
+    def _on_pick(value: str) -> None:
+        st.session_state[key] = value
+        if on_swap is not None:
+            try:
+                on_swap(value)
+            except Exception:  # pragma: no cover
+                pass
+
+    trigger = label_override or f"{ticker}  ▾"
+    with st.popover(trigger, use_container_width=False):
+        st.caption("Swap this card to a different pair")
+        for p in pairs:
+            st.button(
+                str(p),
+                key=f"_tpb_{key}_{p}",
+                use_container_width=True,
+                type=("primary" if p == ticker else "secondary"),
+                on_click=_on_pick,
+                args=(p,),
+            )
+
+    return st.session_state.get(key, ticker)
+
+
+def watchlist_customize_btn(
+    *,
+    available: Sequence[str],
+    current: Sequence[str],
+    key: str,
+    on_save: Callable[[Sequence[str]], None] | None = None,
+    label: str = "Customize  ▾",
+) -> Sequence[str]:
+    """Open a popover with checkboxes to add/remove pairs from the
+    watchlist. Selection persists in `st.session_state[key]`.
+
+    Args:
+        available: full universe of pairs the user can choose from.
+        current:   currently-watched pairs (sourced from session_state
+                   if persistence has already been seeded).
+        key:       session_state key for the chosen list.
+        on_save:   optional callback fired with the new list after
+                   session_state is updated.
+        label:     popover trigger label.
+
+    Returns:
+        The currently-watched list after any save.
+    """
+    if st is None:
+        return current
+
+    # Seed session_state on first render so the popover's checkboxes
+    # know what to display as already-checked.
+    if key not in st.session_state:
+        st.session_state[key] = list(current)
+
+    with st.popover(label, use_container_width=False):
+        st.caption("Tick the pairs you want to watch")
+        # Render two columns of checkboxes for compactness on long
+        # universes. The state is kept in scratch keys until the user
+        # presses Save — that way mid-edit toggles don't churn the
+        # downstream watchlist render.
+        scratch_key = f"_wclb_scratch_{key}"
+        if scratch_key not in st.session_state:
+            st.session_state[scratch_key] = list(st.session_state[key])
+
+        cols = st.columns(2)
+        for i, p in enumerate(available):
+            with cols[i % 2]:
+                checked = p in st.session_state[scratch_key]
+                new_val = st.checkbox(
+                    str(p),
+                    value=checked,
+                    key=f"_wclb_cb_{key}_{p}",
+                )
+                if new_val and p not in st.session_state[scratch_key]:
+                    st.session_state[scratch_key].append(p)
+                elif not new_val and p in st.session_state[scratch_key]:
+                    st.session_state[scratch_key].remove(p)
+
+        def _on_save_click():
+            new_list = list(st.session_state[scratch_key])
+            st.session_state[key] = new_list
+            if on_save is not None:
+                try:
+                    on_save(new_list)
+                except Exception:  # pragma: no cover
+                    pass
+
+        st.button(
+            "💾 Save watchlist",
+            key=f"_wclb_save_{key}",
+            use_container_width=True,
+            type="primary",
+            on_click=_on_save_click,
+        )
+
+    return st.session_state.get(key, list(current))
+
+
+def multi_timeframe_strip(
+    timeframes: Sequence[str],
+    *,
+    active: str,
+    key: str,
+    signals: dict[str, tuple[str, float]] | None = None,
+    on_select: Callable[[str], None] | None = None,
+) -> str:
+    """Multi-cell timeframe selector for the Signals page.
+
+    Each cell shows the timeframe label plus an optional per-timeframe
+    signal letter (BUY/HOLD/SELL) and confidence score from `signals`.
+    The active cell is rendered as the primary chip.
+
+    Args:
+        timeframes: ordered list of timeframes to render (e.g.
+                    ["1h", "4h", "1d", "1w"] or the full 8-cell
+                    ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]).
+        active:     currently-selected timeframe.
+        key:        session_state key for persistence.
+        signals:    optional `{tf: (signal_letter, score)}` map. Cells
+                    without an entry just show the timeframe label.
+        on_select:  optional callback fired with the clicked timeframe.
+
+    Returns:
+        The currently-selected timeframe after any click handler.
+    """
+    if st is None:
+        return active
+
+    if not timeframes:
+        return active
+    if active not in timeframes:
+        active = timeframes[0]
+
+    def _on_pick(tf: str) -> None:
+        st.session_state[key] = tf
+        if on_select is not None:
+            try:
+                on_select(tf)
+            except Exception:  # pragma: no cover
+                pass
+
+    # Marker so overrides.py can scope the strip's CSS without
+    # touching every other st.columns row.
+    st.markdown(
+        f'<div class="ds-tf-strip" data-tf-key="{_html.escape(str(key))}"></div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(len(timeframes))
+    for col, tf in zip(cols, timeframes):
+        sig = (signals or {}).get(tf)
+        if sig is not None:
+            letter, score = sig
+            label = f"{tf}\n{_html.escape(str(letter))} · {score:.0f}"
+        else:
+            label = tf
+        with col:
+            st.button(
+                label,
+                key=f"_tfs_{key}_{tf}",
+                use_container_width=True,
+                type=("primary" if tf == active else "secondary"),
+                on_click=_on_pick,
+                args=(tf,),
+                help=f"Switch to {tf} timeframe",
+            )
+
+    return st.session_state.get(key, active)
 
 
 # ── SIGNALS page (sibling-family-crypto-signal-SIGNALS.html) helpers ──

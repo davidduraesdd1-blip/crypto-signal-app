@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Crypto Signal · AI Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--accent:#22d36f;--accent-soft:rgba(34,211,111,0.12);--accent-ink:#0a0a0f;--gray-0:#0a0a0f;--gray-1:#121218;--gray-2:#1a1a22;--gray-3:#2a2a34;--gray-4:#3d3d4a;--gray-5:#5d5d6e;--gray-6:#8a8a9d;--gray-7:#c2c2d1;--gray-8:#e8e8f0;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--info:#3b82f6;--font-ui:'Inter',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,monospace;--rail-w:150px;--topbar-h:56px;--card-radius:12px;--card-pad:16px;--gap:16px;--bg-0:var(--gray-0);--bg-1:var(--gray-1);--bg-2:var(--gray-2);--bg-3:var(--gray-3);--text-primary:var(--gray-8);--text-secondary:var(--gray-6);--text-muted:var(--gray-5);--border:var(--gray-3);--border-strong:var(--gray-4);}
+html[data-theme="light"]{--bg-0:#fafafb;--bg-1:#ffffff;--bg-2:#f5f5f7;--bg-3:#e8e9ed;--text-primary:#0f1014;--text-secondary:#545660;--text-muted:#8b8d96;--border:#e8e9ed;--border-strong:#d1d3d9;--accent-soft:rgba(34,211,111,0.14);}
+*,*::before,*::after{box-sizing:border-box;min-width:0;}html,body{margin:0;padding:0;overflow-x:hidden;max-width:100vw;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11";}
+.mono,.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+
+.app{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--topbar-h) 1fr;grid-template-areas:"rail topbar" "rail main";min-height:100vh;max-width:100vw;overflow-x:hidden;}
+.rail{grid-area:rail;background:var(--bg-1);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px;font-weight:600;font-size:15px;}
+.brand-dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink);font-weight:700;font-size:12px;}
+.nav-group{margin:18px 0 6px;padding:0 10px;color:var(--text-primary);font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-secondary);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none;}
+.nav-item:hover{background:var(--bg-2);color:var(--text-primary);}.nav-item.active{background:var(--accent-soft);color:var(--text-primary);}
+
+.topbar{grid-area:topbar;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 24px;position:sticky;top:0;z-index:10;}
+.crumbs{color:var(--text-muted);font-size:13px;}.crumbs b{color:var(--text-primary);font-weight:500;}
+.topbar-spacer{flex:1;}
+.level-group,.theme-btn,.refresh-btn{display:inline-flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text-secondary);cursor:pointer;}
+.level-group{padding:2px;gap:0;}
+.level-group button{all:unset;cursor:pointer;padding:4px 10px;border-radius:6px;font-size:12.5px;color:var(--text-muted);font-weight:500;}
+.level-group button.on{background:var(--accent-soft);color:var(--text-primary);}
+.agent-pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:5px 10px;border-radius:999px;background:color-mix(in srgb,var(--success) 16%,transparent);color:var(--success);font-weight:600;}
+.agent-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--success);}
+
+.main{grid-area:main;padding:24px;overflow-y:auto;overflow-x:hidden;min-width:0;max-width:100%;box-sizing:border-box;}
+.page-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:16px;}
+.page-hd h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;}
+.page-hd .sub{color:var(--text-muted);font-size:13.5px;margin-top:4px;max-width:min(640px,100%);min-width:0;overflow-wrap:break-word;}
+
+.grid{display:grid;gap:var(--gap);max-width:100%;}
+.grid>*{min-width:0;max-width:100%;}
+.grid.cols-4{grid-template-columns:repeat(4,minmax(0,1fr));}
+.grid.cols-2{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+.card{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;}
+html[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,0.03),0 2px 8px rgba(0,0,0,0.04);border-color:transparent;}
+.card-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;}
+.card-title{font-size:13px;color:var(--text-primary);font-weight:600;}
+.card-sub{font-size:12px;color:var(--text-muted);}
+
+/* Live status row */
+.status-row{display:grid;grid-template-columns:minmax(0,1.4fr) auto auto;gap:12px;align-items:center;padding:18px 20px;background:var(--bg-1);border:1px solid var(--border);border-radius:var(--card-radius);margin-bottom:18px;}
+.status-badge{display:inline-flex;align-items:center;gap:10px;font-size:14px;font-weight:600;padding:10px 16px;border-radius:8px;background:color-mix(in srgb,var(--success) 14%,transparent);color:var(--success);}
+.status-badge .dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 4px color-mix(in srgb,var(--success) 30%,transparent);animation:pulse 2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.6;}}
+.status-badge.stopped{background:color-mix(in srgb,var(--info) 14%,transparent);color:var(--info);}
+.status-badge.stopped .dot{background:var(--info);box-shadow:0 0 0 4px color-mix(in srgb,var(--info) 30%,transparent);animation:none;}
+.btn{all:unset;cursor:pointer;background:var(--accent);color:var(--accent-ink);padding:10px 20px;border-radius:8px;font-weight:600;font-size:13.5px;}
+.btn:hover{filter:brightness(1.1);}
+.btn-secondary{background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);}
+.btn-secondary:hover{filter:none;border-color:var(--border-strong);background:var(--bg-3);}
+.btn[disabled],.btn-secondary[disabled]{opacity:0.4;cursor:not-allowed;}
+.btn-danger{background:var(--danger);color:white;}
+
+/* Metric tile */
+.metric{display:flex;flex-direction:column;gap:4px;}
+.metric-lbl{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;}
+.metric-val{font-size:22px;font-weight:600;font-family:var(--font-mono);line-height:1.1;margin-top:2px;}
+.metric-sub{font-size:11.5px;color:var(--text-muted);font-family:var(--font-mono);margin-top:2px;}
+
+/* In-progress indicator */
+.in-progress{padding:12px 16px;background:color-mix(in srgb,var(--info) 10%,transparent);border:1px solid color-mix(in srgb,var(--info) 30%,var(--border));border-radius:8px;font-size:13px;color:var(--info);margin-bottom:18px;display:flex;align-items:center;gap:10px;}
+.in-progress::before{content:"";width:14px;height:14px;border:2px solid var(--info);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* Section divider header */
+.sec-hd{display:flex;justify-content:space-between;align-items:baseline;margin:24px 0 12px;flex-wrap:wrap;gap:8px;}
+.sec-hd h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em;}
+.sec-hd .sub{font-size:12px;color:var(--text-muted);}
+
+/* Form fields (matches Alerts) */
+.form-row{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.form-row label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.form-row input{all:unset;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;color:var(--text-primary);font-family:var(--font-mono);transition:border-color 120ms;}
+.form-row input:focus{border-color:var(--accent);}
+.form-row .help{font-size:11px;color:var(--text-muted);}
+
+.toggle{display:flex;align-items:center;gap:12px;padding:10px 0;}
+.toggle .lbl{flex:1;font-size:13.5px;font-weight:500;}
+.toggle .lbl-sub{display:block;font-size:11.5px;color:var(--text-muted);font-weight:400;margin-top:2px;}
+.toggle-switch{display:inline-flex;align-items:center;width:42px;height:24px;background:var(--bg-3);border-radius:999px;position:relative;cursor:pointer;}
+.toggle-switch.on{background:var(--accent);}
+.toggle-switch::after{content:"";width:18px;height:18px;background:white;border-radius:50%;position:absolute;top:3px;left:3px;transition:left 120ms;}
+.toggle-switch.on::after{left:21px;}
+
+.slider-row{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}
+.slider-row .head{display:flex;justify-content:space-between;align-items:baseline;}
+.slider-row .head label{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500;}
+.slider-row .head .val{font-family:var(--font-mono);font-size:14px;font-weight:600;color:var(--accent);}
+.slider-track{height:6px;background:var(--bg-3);border-radius:999px;position:relative;}
+.slider-fill{position:absolute;top:0;left:0;height:100%;background:var(--accent);border-radius:999px;}
+.slider-thumb{position:absolute;top:50%;width:14px;height:14px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 3px var(--accent-soft);}
+
+/* Active limits expander */
+.expander{background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-top:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text-secondary);}
+.expander:hover{background:var(--bg-2);color:var(--text-primary);}
+.expander .chev{font-size:11px;color:var(--text-muted);}
+
+/* Emergency stop card */
+.emg-card{background:color-mix(in srgb,var(--danger) 6%,var(--bg-1));border:1px solid color-mix(in srgb,var(--danger) 30%,var(--border));border-left:3px solid var(--danger);}
+.emg-status{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:8px;}
+.emg-status .lbl{font-size:13.5px;font-weight:500;color:var(--text-primary);display:flex;align-items:center;gap:8px;}
+.emg-status .lbl .ind{font-size:18px;}
+
+/* Pipeline architecture code block */
+.code-block{background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:var(--font-mono);font-size:11.5px;line-height:1.7;color:var(--text-secondary);white-space:pre;overflow-x:auto;}
+.code-block .k{color:var(--accent);font-weight:600;}
+.code-block .c{color:var(--text-muted);}
+
+/* Mobile */
+@media(max-width:1024px){
+  .grid.cols-4{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .grid.cols-2{grid-template-columns:1fr;}
+  .status-row{grid-template-columns:1fr;text-align:center;}
+}
+@media(max-width:768px){
+  .app{grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+  .rail{position:fixed;bottom:0;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+  .brand,.nav-group{display:none;}
+  .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+  .main{padding:16px 16px 80px;}
+  .level-group,.agent-pill{display:none;}
+  .grid.cols-4{grid-template-columns:1fr;}
+  .refresh-btn,.theme-btn{padding:6px 8px;font-size:12px;}
+}
+
+/* Dev bar */
+.dev-bar{position:fixed;bottom:16px;right:16px;z-index:1000;background:var(--bg-1);border:1px solid var(--border-strong);border-radius:10px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:12px;}
+.dev-bar button{all:unset;cursor:pointer;padding:6px 10px;border-radius:6px;color:var(--text-secondary);}
+.dev-bar button:hover{background:var(--bg-2);color:var(--text-primary);}
+.dev-bar button.on{background:var(--accent-soft);color:var(--text-primary);}
+.dev-bar .sep{width:1px;background:var(--border);margin:4px 0;}
+body.preview-mobile .app{max-width:390px;margin:0 auto;border:1px solid var(--border-strong);border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-height:844px;grid-template-columns:1fr;grid-template-rows:var(--topbar-h) 1fr 56px;grid-template-areas:"topbar" "main" "rail";}
+body.preview-mobile .rail{position:relative;bottom:auto;top:auto;height:56px;width:100%;flex-direction:row;justify-content:space-around;padding:6px 4px;border-top:1px solid var(--border);border-right:none;}
+body.preview-mobile .brand,body.preview-mobile .nav-group{display:none;}
+body.preview-mobile .nav-item{flex-direction:column;gap:2px;padding:4px 10px;font-size:10.5px;}
+body.preview-mobile .main{padding:16px 16px 80px;}
+body.preview-mobile .grid.cols-4,body.preview-mobile .grid.cols-2{grid-template-columns:1fr;}
+body.preview-mobile .level-group,body.preview-mobile .agent-pill{display:none;}
+body.preview-mobile .status-row{grid-template-columns:1fr;}
+body.preview-mobile .refresh-btn,body.preview-mobile .theme-btn{padding:6px 8px;font-size:12px;}
+/* Recent Decisions log */
+.dec-log{display:flex;flex-direction:column;}
+.dec-log .h{display:grid;grid-template-columns:100px 100px 120px 80px minmax(0,1fr) 100px;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:10.5px;text-transform:uppercase;letter-spacing:0.05em;}
+.dec-log .r{display:grid;grid-template-columns:100px 100px 120px 80px minmax(0,1fr) 100px;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border);align-items:center;font-size:12.5px;}
+.dec-log .r:last-child{border-bottom:none;}
+.dec-log .ts{font-family:var(--font-mono);color:var(--text-muted);font-size:11.5px;white-space:nowrap;}
+.dec-log .pair{font-family:var(--font-mono);font-weight:600;white-space:nowrap;}
+.dec-log .dec{display:inline-flex;align-items:center;gap:5px;font-weight:600;font-size:12px;white-space:nowrap;}
+.dec-log .dec.approve{color:var(--success);}
+.dec-log .dec.reject{color:var(--danger);}
+.dec-log .dec.skip{color:var(--text-muted);}
+.dec-log .conf{font-family:var(--font-mono);text-align:right;font-weight:500;}
+.dec-log .reason{color:var(--text-secondary);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dec-log .stat{font-size:10.5px;text-transform:uppercase;font-weight:600;letter-spacing:0.05em;padding:3px 8px;border-radius:999px;text-align:center;justify-self:start;white-space:nowrap;}
+.dec-log .stat.exec{background:color-mix(in srgb,var(--success) 16%,transparent);color:var(--success);}
+.dec-log .stat.dry{background:color-mix(in srgb,var(--info) 16%,transparent);color:var(--info);}
+.dec-log .stat.pend{background:color-mix(in srgb,var(--warning) 16%,transparent);color:var(--warning);}
+.dec-log .stat.over{background:var(--bg-2);color:var(--text-muted);border:1px solid var(--border);}
+.dec-filter{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:6px 12px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;font-size:12.5px;color:var(--text-secondary);font-family:var(--font-ui);transition:all 120ms;}
+.dec-filter:hover{border-color:var(--border-strong);color:var(--text-primary);background:var(--bg-2);}
+.dec-filter .chev{font-size:10px;color:var(--text-muted);margin-left:2px;}
+@media(max-width:1024px){
+  .dec-log .h,.dec-log .r{grid-template-columns:90px 90px minmax(0,1fr) 90px;}
+  .dec-log .h span:nth-child(4),.dec-log .h span:nth-child(6),.dec-log .r .conf,.dec-log .r .stat{display:none;}
+}
+@media(max-width:768px){
+  .dec-log .h,.dec-log .r{grid-template-columns:80px 100px minmax(0,1fr);font-size:11.5px;}
+  .dec-log .h span:nth-child(2),.dec-log .h span:nth-child(4),.dec-log .h span:nth-child(6),.dec-log .r .pair,.dec-log .r .conf,.dec-log .r .stat{display:none;}
+}
+</style>
+</head>
+<body data-theme="dark">
+<div class="app">
+
+  <aside class="rail">
+    <div class="brand"><div class="brand-dot">◈</div><div>Signal<span style="color:var(--text-muted);">.app</span></div></div>
+    <div class="nav-group">Markets</div>
+    <a class="nav-item">Home</a>
+    <a class="nav-item">Signals</a>
+    <a class="nav-item">Regimes</a>
+    <div class="nav-group">Research</div>
+    <a class="nav-item">Backtester</a>
+    <a class="nav-item">On-chain</a>
+    <div class="nav-group">Account</div>
+    <a class="nav-item">Alerts</a>
+    <a class="nav-item active">AI Assistant</a>
+    <a class="nav-item">Settings</a>
+  </aside>
+
+  <header class="topbar">
+    <div class="crumbs">Account / <b>AI Assistant</b></div>
+    <div class="topbar-spacer"></div>
+    <span class="agent-pill" title="Agent status — visible on every page"><span class="dot"></span>Agent · Running</span>
+    <div class="level-group">
+      <button>Beginner</button>
+      <button class="on">Intermediate</button>
+      <button>Advanced</button>
+    </div>
+    <button class="refresh-btn">↻ Refresh</button>
+    <button class="theme-btn" onclick="toggleTheme()">☾ Theme</button>
+  </header>
+
+  <main class="main">
+
+    <div class="page-hd">
+      <div>
+        <h1>AI Assistant</h1>
+        <div class="sub">LangGraph + Claude Sonnet 4.6 autonomous agent. Hard Python risk gates wrap every Claude decision — Claude may only approve or reject, never place orders directly.</div>
+      </div>
+    </div>
+
+    <!-- Live status row -->
+    <div class="status-row">
+      <div class="status-badge"><span class="dot"></span>RUNNING · cycle 47 of session</div>
+      <button class="btn btn-secondary" disabled>▶ Start</button>
+      <button class="btn btn-secondary">■ Stop</button>
+    </div>
+
+    <!-- 4-metric strip -->
+    <div class="grid cols-4" style="margin-bottom:18px;">
+      <div class="card metric"><div class="metric-lbl">Total Cycles</div><div class="metric-val">8,924</div><div class="metric-sub">since 2026-04-12</div></div>
+      <div class="card metric"><div class="metric-lbl">Last Cycle</div><div class="metric-val">42s ago</div><div class="metric-sub">interval 60s</div></div>
+      <div class="card metric"><div class="metric-lbl">Last Pair</div><div class="metric-val" style="font-size:18px;">SOL/USDT</div><div class="metric-sub">timeframe 1h</div></div>
+      <div class="card metric"><div class="metric-lbl">Last Decision</div><div class="metric-val" style="color:var(--success);font-size:18px;">🟢 Approve</div><div class="metric-sub">size 2.4% · conf 81%</div></div>
+    </div>
+
+    <!-- Engine + restart row -->
+    <div class="grid cols-2" style="margin-bottom:18px;">
+      <div class="card metric"><div class="metric-lbl">Engine</div><div class="metric-val" style="font-size:15px;">LangGraph state machine</div><div class="metric-sub">graph: 7 nodes · 12 edges · sequential fallback ready</div></div>
+      <div class="card metric"><div class="metric-lbl">Crash Restarts</div><div class="metric-val">0</div><div class="metric-sub">supervisor active · uptime 17d 6h</div></div>
+    </div>
+
+    <!-- In-progress indicator -->
+    <div class="in-progress">Processing AVAX/USDT — cycle running for 14s · waiting on Layer 4 (on-chain) Glassnode call</div>
+
+    <!-- Configuration section -->
+    <div class="sec-hd">
+      <h2>Agent Configuration</h2>
+      <div class="sub">saved to alerts_config.json · takes effect on next cycle</div>
+    </div>
+
+    <div class="grid cols-2" style="margin-bottom:18px;">
+
+      <!-- Left column of config -->
+      <div class="card">
+        <div class="card-hd">
+          <div>
+            <div class="card-title">Cycle behavior</div>
+            <div class="card-sub">how often and when the agent acts</div>
+          </div>
+        </div>
+
+        <div class="toggle" style="border-bottom:1px solid var(--border);margin-bottom:12px;">
+          <div class="lbl">
+            Dry Run mode
+            <span class="lbl-sub">log decisions only · no real orders placed</span>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+
+        <div class="form-row">
+          <label>Cycle Interval (seconds)</label>
+          <input type="text" value="60" />
+          <div class="help">30 to 3600 · default 60s</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head">
+            <label>Min Confidence to Act</label>
+            <span class="val">75%</span>
+          </div>
+          <div class="slider-track">
+            <div class="slider-fill" style="width:50%;"></div>
+            <div class="slider-thumb" style="left:50%;"></div>
+          </div>
+          <div class="help" style="font-size:11px;color:var(--text-muted);">Composite confidence floor before agent considers acting · 50–99%</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head">
+            <label>Max Trade Size (% of portfolio)</label>
+            <span class="val">10%</span>
+          </div>
+          <div class="slider-track">
+            <div class="slider-fill" style="width:20%;"></div>
+            <div class="slider-thumb" style="left:20%;"></div>
+          </div>
+          <div class="help" style="font-size:11px;color:var(--text-muted);">Hard cap on any single trade as % of total portfolio equity</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head">
+            <label>Cooldown After Loss (seconds)</label>
+            <span class="val">1,800</span>
+          </div>
+          <div class="slider-track">
+            <div class="slider-fill" style="width:30%;"></div>
+            <div class="slider-thumb" style="left:30%;"></div>
+          </div>
+          <div class="help" style="font-size:11px;color:var(--text-muted);">Pause before next trade after a losing cycle · 0 to 86,400s</div>
+        </div>
+      </div>
+
+      <!-- Right column of config -->
+      <div class="card">
+        <div class="card-hd">
+          <div>
+            <div class="card-title">Risk limits</div>
+            <div class="card-sub">portfolio-level guardrails</div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>Portfolio Size (USD)</label>
+          <input type="text" value="100,000" />
+          <div class="help">total equity tracked for sizing decisions</div>
+        </div>
+
+        <div class="form-row">
+          <label>Max Concurrent Positions</label>
+          <input type="text" value="6" />
+          <div class="help">1 to 10 · agent will skip new entries when at cap</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head">
+            <label>Daily Loss Limit (%)</label>
+            <span class="val">5%</span>
+          </div>
+          <div class="slider-track">
+            <div class="slider-fill" style="width:10%;"></div>
+            <div class="slider-thumb" style="left:10%;"></div>
+          </div>
+          <div class="help" style="font-size:11px;color:var(--text-muted);">Agent halts new entries when daily P&amp;L drops below this</div>
+        </div>
+
+        <div class="slider-row">
+          <div class="head">
+            <label>Max Drawdown from Peak (%)</label>
+            <span class="val">15%</span>
+          </div>
+          <div class="slider-track">
+            <div class="slider-fill" style="width:25%;"></div>
+            <div class="slider-thumb" style="left:25%;"></div>
+          </div>
+          <div class="help" style="font-size:11px;color:var(--text-muted);">Halts all entries if portfolio drawdown exceeds this from peak</div>
+        </div>
+
+        <button class="btn" style="margin-top:8px;">💾 Save Agent Config</button>
+
+        <div class="expander" style="margin-top:12px;">
+          <span><b style="color:var(--text-primary);">Active Limits</b> — current effective values (with custom-override badges)</span>
+          <span class="chev">▾</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Emergency Controls -->
+    <div class="sec-hd">
+      <h2>Emergency Controls</h2>
+      <div class="sub">overrides all other config · instant effect</div>
+    </div>
+
+    <div class="card emg-card" style="margin-bottom:18px;">
+      <div class="card-hd">
+        <div>
+          <div class="card-title" style="color:var(--danger);">🚨 Emergency Stop</div>
+          <div class="card-sub">halts all new entries immediately · existing positions stay open · clear to resume</div>
+        </div>
+      </div>
+      <div class="emg-status">
+        <div class="lbl"><span class="ind">⚪</span>No emergency stop · agent operating normally</div>
+        <button class="btn btn-danger">🚨 Activate Emergency Stop</button>
+      </div>
+    </div>
+
+    <!-- Recent Decisions log -->
+    <div class="sec-hd" style="margin-top:8px;">
+      <h2>Recent Decisions</h2>
+      <div class="sub">last 10 cycles · click any row for full Claude rationale + signal snapshot</div>
+    </div>
+
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-hd" style="margin-bottom:14px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="dec-filter">Decision: <b style="color:var(--text-primary);">All</b> <span class="chev">▾</span></button>
+          <button class="dec-filter">Pair: <b style="color:var(--text-primary);">All</b> <span class="chev">▾</span></button>
+          <button class="dec-filter">Status: <b style="color:var(--text-primary);">All</b> <span class="chev">▾</span></button>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-muted);">showing 10 of 8,924 · scroll for older</div>
+      </div>
+      <div class="dec-log">
+        <div class="h">
+          <span>Time UTC</span>
+          <span>Pair</span>
+          <span>Decision</span>
+          <span>Confidence</span>
+          <span>Rationale</span>
+          <span>Status</span>
+        </div>
+        <div class="r">
+          <span class="ts">14:32:14</span>
+          <span class="pair">BTC/USDT</span>
+          <span><span class="dec approve">🟢 Approve</span></span>
+          <span class="conf">84%</span>
+          <span class="reason">Bull regime + 4-layer alignment (tech 82 · macro 74 · sent 71 · on-chain 86)</span>
+          <span><span class="stat exec">Executed</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:31:08</span>
+          <span class="pair">ETH/USDT</span>
+          <span><span class="dec skip">⚪ Skip</span></span>
+          <span class="conf">61%</span>
+          <span class="reason">Confidence below 75% threshold · transition regime, waiting for confirm</span>
+          <span><span class="stat dry">Dry-run</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:30:02</span>
+          <span class="pair">XRP/USDT</span>
+          <span><span class="dec approve">🟢 Approve</span></span>
+          <span class="conf">81%</span>
+          <span class="reason">Accumulation regime + on-chain layer 86 + funding favorable (+ 0.022%)</span>
+          <span><span class="stat exec">Executed</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:28:56</span>
+          <span class="pair">SOL/USDT</span>
+          <span><span class="dec reject">🔴 Reject</span></span>
+          <span class="conf">73%</span>
+          <span class="reason">Post-gate: proposed size 11.2% &gt; max_trade_size 10% cap</span>
+          <span><span class="stat pend">Pending</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:27:48</span>
+          <span class="pair">AVAX/USDT</span>
+          <span><span class="dec approve">🟢 Approve</span></span>
+          <span class="conf">78%</span>
+          <span class="reason">Bull regime + 4h alignment + low correlation to BTC (β 0.62)</span>
+          <span><span class="stat exec">Executed</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:26:42</span>
+          <span class="pair">LINK/USDT</span>
+          <span><span class="dec skip">⚪ Skip</span></span>
+          <span class="conf">64%</span>
+          <span class="reason">Below confidence threshold · accumulation early, waiting for layer 4 to confirm</span>
+          <span><span class="stat dry">Dry-run</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:25:34</span>
+          <span class="pair">NEAR/USDT</span>
+          <span><span class="dec reject">🔴 Reject</span></span>
+          <span class="conf">79%</span>
+          <span class="reason">Pre-gate: cooldown active (14:18 −1.4% loss · 1,800s pause)</span>
+          <span><span class="stat pend">Pending</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:24:28</span>
+          <span class="pair">DOT/USDT</span>
+          <span><span class="dec skip">⚪ Skip</span></span>
+          <span class="conf">58%</span>
+          <span class="reason">Transition regime · 3d young, waiting for HMM state stabilization</span>
+          <span><span class="stat dry">Dry-run</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:23:16</span>
+          <span class="pair">DOGE/USDT</span>
+          <span><span class="dec reject">🔴 Reject</span></span>
+          <span class="conf">76%</span>
+          <span class="reason">Pre-gate: drawdown 8.2% approaching 15% cap · manual review queued</span>
+          <span><span class="stat over">Override</span></span>
+        </div>
+        <div class="r">
+          <span class="ts">14:22:08</span>
+          <span class="pair">BNB/USDT</span>
+          <span><span class="dec approve">🟢 Approve</span></span>
+          <span class="conf">82%</span>
+          <span class="reason">Bull regime + on-chain accumulation tier + 30d momentum break + funding favorable</span>
+          <span><span class="stat exec">Executed</span></span>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:11.5px;color:var(--text-muted);line-height:1.5;">
+        <b style="color:var(--text-secondary);">Status legend:</b> <b style="color:var(--success);">Executed</b> = real order placed · <b style="color:var(--info);">Dry-run</b> = logged only (Dry Run mode on) · <b style="color:var(--warning);">Pending</b> = awaiting next cycle · <b style="color:var(--text-muted);">Override</b> = manual user action required.
+      </div>
+    </div>
+
+    <!-- Pipeline architecture -->
+    <div class="sec-hd">
+      <h2>Pipeline Architecture</h2>
+      <div class="sub">hard risk gates prevent Claude from ever executing without validation</div>
+    </div>
+
+    <div class="card" style="margin-bottom:24px;">
+      <div class="code-block"><span class="c">┌─ supervisor.start ───────────────────────────────────────┐</span>
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[1] Tick</span>     · scheduler fires every <span class="k">interval_seconds</span>
+<span class="c">│</span>            · pulls next pair from rotation queue
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[2] Gather</span>   · composite_signal.compute_composite_signal(pair)
+<span class="c">│</span>            · 4-layer score (tech / macro / sentiment / on-chain)
+<span class="c">│</span>            · regime state from HMM
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[3] Pre-gate</span> · python risk checks BEFORE Claude sees anything:
+<span class="c">│</span>            · current drawdown vs max_drawdown
+<span class="c">│</span>            · daily P&amp;L vs daily_loss_limit
+<span class="c">│</span>            · concurrent positions vs max_concurrent
+<span class="c">│</span>            · cooldown still active?
+<span class="c">│</span>            · emergency_stop flag set?
+<span class="c">│</span>            · → if any fail: <span class="k">SKIP</span> · log reason · loop
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[4] Claude</span>   · LangGraph node calls Sonnet 4.6
+<span class="c">│</span>            · receives signal + regime + position state
+<span class="c">│</span>            · returns structured: APPROVE | REJECT | SKIP
+<span class="c">│</span>            · APPROVE includes proposed size + stop + tp
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[5] Post-gate</span> · python validates Claude's APPROVE:
+<span class="c">│</span>            · proposed size ≤ max_trade_size_pct?
+<span class="c">│</span>            · proposed entry within slippage tolerance?
+<span class="c">│</span>            · pair in TIER1 ∪ TIER2 ∪ allowlist?
+<span class="c">│</span>            · → if any fail: <span class="k">REJECT</span> · log · loop
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[6] Execute</span>  · only reached if (3), (4)=APPROVE, (5) all pass
+<span class="c">│</span>            · place order (or log-only in dry-run)
+<span class="c">│</span>            · update position state · cooldown timer
+<span class="c">│</span>
+<span class="c">│</span>  <span class="k">[7] Loop</span>     · sleep until next tick
+<span class="c">│</span>
+<span class="c">└──────────────────────────────────────────────────────────┘</span>
+
+<span class="c"># Crash safety: supervisor restarts process on uncaught exception</span>
+<span class="c"># State: position state and config persist to alerts_config.json</span>
+<span class="c"># Audit: every cycle decision written to agent_log.jsonl with rationale</span></div>
+    </div>
+
+  </main>
+</div>
+
+<div class="dev-bar">
+  <button id="btn-dark" class="on" onclick="setTheme('dark')">Dark</button>
+  <button id="btn-light" onclick="setTheme('light')">Light</button>
+  <div class="sep"></div>
+  <button id="btn-desktop" class="on" onclick="setViewport('desktop')">Desktop</button>
+  <button id="btn-mobile" onclick="setViewport('mobile')">Mobile</button>
+</div>
+
+<script>
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.getElementById('btn-dark').classList.toggle('on',t==='dark');document.getElementById('btn-light').classList.toggle('on',t==='light');}
+function toggleTheme(){setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function setViewport(v){document.body.classList.toggle('preview-mobile',v==='mobile');document.getElementById('btn-desktop').classList.toggle('on',v==='desktop');document.getElementById('btn-mobile').classList.toggle('on',v==='mobile');}
+</script>
+
+</body>
+</html>

@@ -24,12 +24,18 @@ def inject_streamlit_overrides() -> None:
       max-width: none;
     }
 
-    /* Sidebar canvas */
+    /* Sidebar canvas — C1-fix (2026-04-29): explicit `width` in addition
+       to min/max so Streamlit's outer wrapper can't impose its own
+       default width (~336px). Without `width:`, the min-width rule
+       lets the sidebar grow back when Streamlit's flex container
+       computes its preferred size. */
     [data-testid="stSidebar"] {
       background: var(--bg-1) !important;
       border-right: 1px solid var(--border) !important;
+      width: var(--rail-w) !important;
       min-width: var(--rail-w) !important;
-      max-width: calc(var(--rail-w) + 24px) !important;
+      max-width: var(--rail-w) !important;
+      flex: 0 0 var(--rail-w) !important;
     }
     [data-testid="stSidebar"] > div:first-child {
       padding: 16px 12px !important;
@@ -50,11 +56,14 @@ def inject_streamlit_overrides() -> None:
     }
     .ds-brand-wm { color: var(--text-primary); }
 
-    /* Nav group header */
+    /* Nav group header — C1 (2026-04-29): bolded + primary text color
+       + 12px size + 0.12em letter-spacing for stronger visual
+       hierarchy between section labels and the nav items below them.
+       Matches the Phase C plan §C1 spec exactly (margin 18/6). */
     .ds-nav-group {
-      margin: 14px 0 4px; padding: 0 10px;
-      color: var(--text-muted); font-size: 11px; font-weight: 500;
-      letter-spacing: 0.08em; text-transform: uppercase;
+      margin: 18px 0 6px; padding: 0 10px;
+      color: var(--text-primary); font-size: 12px; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase;
     }
 
     /* Sidebar nav buttons — compact left-aligned items so the whole rail
@@ -132,16 +141,19 @@ def inject_streamlit_overrides() -> None:
     }
 
     /* Section headers — visually distinct from the nav items below them.
-       Uppercase, bolder, slightly larger text-secondary color, with a thin
-       divider above each section so the boundary is unambiguous. */
+       C1-fix (2026-04-29): bumped to 12px / 0.12em / text-primary per
+       full-mockup-match spec — was 11.5px / 0.14em / text-secondary
+       which read as nearly-invisible. The .ds-nav-group rule (line 57)
+       was edited in C1 but is dead code; the live class is this one
+       (.ds-nav-group-header) used by app.py's _DS_NAV renderer. */
     .ds-nav-group-header {
-      font-size: 11.5px !important;
+      font-size: 12px !important;
       font-weight: 700 !important;
-      color: var(--text-secondary) !important;
-      margin: 10px 0 2px 0 !important;
+      color: var(--text-primary) !important;
+      margin: 18px 0 6px 0 !important;
       padding: 6px 10px 4px 10px !important;
       text-transform: uppercase !important;
-      letter-spacing: 0.14em !important;
+      letter-spacing: 0.12em !important;
       border-top: 1px solid var(--border) !important;
     }
     /* No top border on the very first section header — it sits right
@@ -149,6 +161,231 @@ def inject_streamlit_overrides() -> None:
     [data-testid="stSidebar"] .ds-nav-group-header:first-of-type {
       border-top: none !important;
       margin-top: 4px !important;
+    }
+
+    /* ── Segmented control (C2 — Phase C plan §C2) ──────────────────────
+       Mockup target: docs/mockups/sibling-family-crypto-signal-BACKTESTER.html
+         .seg-ctrl     primary  — [Backtest][Arbitrage]
+         .seg-ctrl-sm  small    — [Summary][Trade History][Advanced]
+       The Python helper renders an empty marker <div class="ds-seg-ctrl">
+       just before an st.columns row of buttons. We use :has() on the
+       marker's stElementContainer to scope all the seg-ctrl rules to
+       the stHorizontalBlock that immediately follows it. */
+
+    /* Container — the row of buttons styled as an inline-flex pill */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] {
+      display: inline-flex !important;
+      width: auto !important;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 18px;
+      gap: 0 !important;
+      flex-wrap: nowrap !important;
+    }
+    /* Each column shrinks to its content so the segments pack tightly */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+      width: auto !important;
+      min-width: 0 !important;
+      flex: 0 0 auto !important;
+    }
+    /* Each segment button — flat, hover lift, primary = filled chip */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button {
+      background: transparent !important;
+      border: none !important;
+      box-shadow: none !important;
+      color: var(--text-muted) !important;
+      font-weight: 500 !important;
+      font-size: 13px !important;
+      padding: 8px 18px !important;
+      border-radius: 5px !important;
+      transition: all 120ms;
+      min-height: 0 !important;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button:hover {
+      background: var(--bg-2) !important;
+      color: var(--text-primary) !important;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      font-weight: 600 !important;
+    }
+
+    /* Small variant — tighter padding + smaller font */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl-sm)
+      + [data-testid="stHorizontalBlock"] {
+      padding: 2px;
+      margin-bottom: 14px;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-seg-ctrl-sm)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button {
+      padding: 6px 14px !important;
+      font-size: 12.5px !important;
+    }
+
+    /* ── Multi-timeframe strip (C3 — Phase C plan §C3) ──────────────────
+       8-cell row on the Signals page (1m/5m/15m/30m/1h/4h/1d/1w). The
+       Python helper renders an empty marker <div class="ds-tf-strip">
+       just before an st.columns row of buttons. Same scoping pattern as
+       segmented_control. */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] {
+      gap: 4px !important;
+      margin-bottom: 14px;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button {
+      padding: 8px 6px !important;
+      font-size: 11.5px !important;
+      line-height: 1.2 !important;
+      white-space: pre-line !important;  /* honour the \n in label */
+      min-height: 44px !important;       /* §8 mobile tap-target floor */
+      border-radius: 6px !important;
+    }
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      font-weight: 600 !important;
+    }
+
+    /* ── Pair-dropdown popover content (C3) ─────────────────────────────
+       The popover's trigger button is styled by the default sidebar
+       popover rule; here we just tighten the inner button list so the
+       "More ▾" panel reads as a list-of-options rather than a stack
+       of full-width chip-buttons. */
+    [data-testid="stPopover"] [data-testid="stVerticalBlock"] [data-testid="stButton"] > button {
+      padding: 6px 10px !important;
+      font-size: 13px !important;
+      min-height: 32px !important;
+    }
+
+    /* ── AI Assistant page (Open-item #2 — Phase C polish) ───────────
+       Brings page_agent visuals close to docs/mockups/sibling-family-
+       crypto-signal-AI-ASSISTANT.html. The Python helpers below render
+       <div class="ds-agent-*"> markup wrapped around the existing
+       Streamlit form/buttons; this CSS supplies the mockup styling. */
+
+    /* Status row — RUNNING/STOPPED badge inside a single card with the
+       Start/Stop buttons sitting on the right. */
+    .ds-agent-status-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 18px 20px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--card-radius);
+      margin-bottom: 18px;
+    }
+    .ds-agent-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--success) 14%, transparent);
+      color: var(--success);
+    }
+    .ds-agent-status-badge.stopped {
+      background: color-mix(in srgb, var(--info) 14%, transparent);
+      color: var(--info);
+    }
+    .ds-agent-status-badge.warning {
+      background: color-mix(in srgb, var(--warning) 14%, transparent);
+      color: var(--warning);
+    }
+    .ds-agent-status-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent);
+      animation: dsAgentPulse 2s ease-in-out infinite;
+    }
+    .ds-agent-status-badge.stopped .dot,
+    .ds-agent-status-badge.warning .dot {
+      animation: none;
+    }
+    @keyframes dsAgentPulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.55; }
+    }
+
+    /* Metric cards (the 4-card strip + the 2-card engine/restarts row).
+       Mockup `.card.metric` shape. */
+    .ds-agent-metric-grid {
+      display: grid;
+      gap: var(--gap);
+      margin-bottom: 18px;
+      max-width: 100%;
+    }
+    .ds-agent-metric-grid.cols-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .ds-agent-metric-grid.cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .ds-agent-metric-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--card-radius);
+      padding: 14px 16px;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .ds-agent-metric-lbl {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .ds-agent-metric-val {
+      font-size: 22px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      line-height: 1.1;
+      color: var(--text-primary);
+    }
+    .ds-agent-metric-sub {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* In-progress banner — yellow stripe with the cycle status text. */
+    .ds-agent-in-progress {
+      background: color-mix(in srgb, var(--warning) 10%, var(--bg-1));
+      border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+      border-left-width: 4px;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--text-primary);
+      margin: 14px 0 18px;
+    }
+
+    /* Mobile: collapse to a single column */
+    @media (max-width: 768px) {
+      .ds-agent-metric-grid.cols-4,
+      .ds-agent-metric-grid.cols-2 {
+        grid-template-columns: 1fr;
+      }
+      .ds-agent-status-row {
+        grid-template-columns: 1fr;
+      }
     }
 
     /* Top bar */
@@ -360,18 +597,66 @@ def inject_streamlit_overrides() -> None:
     }
     [data-testid="stExpander"] summary { color: var(--text-primary); }
 
-    /* Tabs */
+    /* Tabs — C7 (Phase C plan §C7.2, 2026-04-30): underline pattern
+       matching docs/mockups/sibling-family-crypto-signal-SETTINGS.html
+       lines 44-48 (.tabs / .tabs button.on). Active tab gets the
+       accent-coloured 2px underline + 600 weight; gap and font-size
+       bumped to mockup values. */
     [data-testid="stTabs"] [data-baseweb="tab-list"] {
-      gap: 4px; border-bottom: 1px solid var(--border);
+      gap: 28px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
     }
     [data-testid="stTabs"] button[role="tab"] {
-      background: transparent; color: var(--text-muted);
-      border-radius: 6px 6px 0 0; padding: 8px 14px;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 0;
+      padding: 12px 0;
+      font-size: 13.5px;
       font-weight: 500;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: all 120ms;
+    }
+    [data-testid="stTabs"] button[role="tab"]:hover {
+      color: var(--text-primary);
     }
     [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
       color: var(--text-primary);
-      border-bottom: 2px solid var(--accent);
+      border-bottom-color: var(--accent);
+      font-weight: 600;
+    }
+    /* Mobile gap reduction per mockup line 112 (@media max-width: 768px) */
+    @media (max-width: 768px) {
+      [data-testid="stTabs"] [data-baseweb="tab-list"] { gap: 16px; }
+    }
+
+    /* Beginner Quick Setup panel (C7 §C7.1) — boosted-contrast input
+       fields per docs/mockups/sibling-family-crypto-signal-SETTINGS.html
+       line 92 (.beg-panel .form-row input). The panel is rendered in
+       app.py inside `with st.container(key="ds_beg_panel"):`; Streamlit
+       1.42+ exposes the container's `key` as `data-stkey` on the DOM
+       node, giving us a stable scope for these rules. */
+    [data-stkey="ds_beg_panel"] [data-testid="stNumberInput"] input,
+    [data-stkey="ds_beg_panel"] [data-testid="stTextInput"] input {
+      background: var(--bg-0) !important;
+      border: 1px solid var(--border-strong) !important;
+      font-family: var(--font-mono) !important;
+      font-size: 15px !important;
+      font-weight: 500 !important;
+      padding: 10px 14px !important;
+      border-radius: 6px;
+    }
+    [data-stkey="ds_beg_panel"] [data-testid="stNumberInput"] input:focus,
+    [data-stkey="ds_beg_panel"] [data-testid="stTextInput"] input:focus {
+      border-color: var(--accent) !important;
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    [data-stkey="ds_beg_panel"] label p {
+      font-size: 11px !important;
+      color: var(--text-secondary) !important;
+      font-weight: 600 !important;
+      letter-spacing: 0.02em;
     }
 
     /* Dataframes */

@@ -100,7 +100,7 @@ class Tokens:
     font_display: str = "'Source Serif 4', Georgia, serif"
 
     # Sibling defaults
-    rail_w: str = "240px"
+    rail_w: str = "150px"
     topbar_h: str = "56px"
     card_radius: str = "12px"
     card_pad: str = "16px"
@@ -199,6 +199,43 @@ def _build_css(app: AppId, fam: str, accent: dict, scale: dict, theme: str) -> s
     }}
     .stApp {{ background: var(--bg-0); }}
 
+    /* C1 (2026-04-29): universal + mobile overflow defenses. Phase B
+       mockup ports added several full-width grids (hero cards, KPI
+       strips, controls rows) that overflow horizontally on narrow
+       viewports. Without these rules, mobile users see a horizontal
+       scrollbar on every page and the topbar pills sit off-screen.
+       Layered defenses, least-aggressive first:
+         1. universal box-sizing + min-width:0 — kills the default
+            min-content sizing that lets long tokens force overflow
+         2. clip horizontal overflow at the html/body/.stApp level
+         3. cap main block-container width to viewport
+         4. on mobile, let horizontal blocks wrap when content overflows
+         5. bound any direct child of stHorizontalBlock to its column */
+    *, *::before, *::after {{
+      box-sizing: border-box;
+      min-width: 0;
+    }}
+    html, body {{
+      overflow-x: hidden;
+      max-width: 100vw;
+    }}
+    .stApp,
+    section.main > div.block-container {{
+      max-width: 100vw;
+      overflow-x: hidden;
+    }}
+    @media (max-width: 768px) {{
+      [data-testid="stHorizontalBlock"] {{
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+      }}
+      [data-testid="stHorizontalBlock"] > [data-testid="column"] {{
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex-basis: auto !important;
+      }}
+    }}
+
     /* Tabular nums for everything that looks like a number */
     .num, [data-testid="stMetricValue"] {{
       font-family: var(--font-mono);
@@ -208,12 +245,21 @@ def _build_css(app: AppId, fam: str, accent: dict, scale: dict, theme: str) -> s
     /* Serif headings for advisor family */
     {'h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.015em; }' if is_advisor else ''}
 
-    /* Card primitive */
+    /* Card primitive — C1 reconcile (2026-04-29): added overflow
+       defenses so a single oversized child (long ticker label, wide
+       Plotly figure, etc.) can't push its parent column past the
+       viewport. Combined with the universal min-width:0 above, this
+       stops the chain that produces horizontal scrollbars on narrow
+       viewports. */
     .ds-card {{
       background: var(--bg-1);
       border: 1px solid var(--border);
       border-radius: var(--card-radius);
       padding: var(--card-pad);
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      overflow: hidden;
     }}
     {('/* Light-mode card shadow — mockup parity */ .ds-card { box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 2px 8px rgba(0,0,0,0.04); border-color: transparent; }' if theme == "light" else '')}
     """

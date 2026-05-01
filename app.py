@@ -483,6 +483,91 @@ def _sg_cached_composite_per_pair(pair: str) -> dict:
         return {}
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=48)
+def _sg_cached_composite_per_pair_tf(pair: str, tf_view_payload: tuple) -> dict:
+    """Open-item #3 (2026-04-30): per-timeframe composite. Same shape
+    as `_sg_cached_composite_per_pair(pair)` but accepts a TF-specific
+    `ta_data` overlay so the composite + 4-layer scores recompute
+    when the user picks a different timeframe on the Signals page.
+
+    Args:
+        pair:            e.g. "BTC/USDT"
+        tf_view_payload: a tuple of `(rsi, adx, supertrend, macd_div,
+                         vwap, ichimoku, ...)` extracted from
+                         `_result["timeframes"][tf]`. Tuple (not dict)
+                         so it's hashable and Streamlit can cache it.
+
+    Cache: 5min TTL (same as the non-TF helper) and 48 entries
+    (4 timeframes × 12 pairs).
+
+    The Macro / Sentiment / On-chain layer inputs are identical to
+    the non-TF helper since those are not per-TF concepts. Only TA
+    layer changes per timeframe.
+    """
+    try:
+        from composite_signal import compute_composite_signal as _cs
+    except Exception:
+        return {}
+
+    # Reconstruct ta_data dict from the hashable tuple payload.
+    # The tuple shape mirrors what's in _result["timeframes"][tf]:
+    #   (rsi, adx, macd_div, vwap, ichimoku, supertrend, sr_status,
+    #    regime, strategy_bias, agent_vote, consensus, funding,
+    #    open_interest, onchain, options_iv, ob_depth, cvd, tvl)
+    # Most of these aren't read by score_ta_layer but it's
+    # forward-compat to pass them through.
+    keys = ("rsi", "adx", "macd_div", "vwap", "ichimoku",
+            "supertrend", "sr_status", "regime", "strategy_bias",
+            "agent_vote", "consensus", "funding", "open_interest",
+            "onchain", "options_iv", "ob_depth", "cvd", "tvl")
+    ta_data: dict = {}
+    for k, v in zip(keys, tf_view_payload):
+        if v not in (None, "N/A", ""):
+            ta_data[k] = v
+    # score_ta_layer reads `rsi` directly; it accepts numeric or
+    # string. The other fields populate sub-signals.
+
+    # Same global / per-pair fetchers as the non-TF helper.
+    try:
+        _macro_enr = data_feeds.get_macro_enrichment() or {}
+    except Exception:
+        _macro_enr = {}
+    macro_data = {
+        "dxy":                _macro_enr.get("dxy"),
+        "vix":                _macro_enr.get("vix"),
+        "yield_spread_2y10y": _macro_enr.get("yield_spread_pp"),
+        "cpi_yoy":            None,
+    }
+    try:
+        onchain_data = data_feeds.get_onchain_metrics(pair) or {}
+    except Exception:
+        onchain_data = {}
+    try:
+        fg_value = (_sg_cached_fear_greed() or {}).get("value")
+    except Exception:
+        fg_value = None
+    try:
+        _fr = _sg_cached_funding_rate("BTC/USDT") or {}
+        btc_fund_pct = _fr.get("funding_rate_pct") or _fr.get("rate_pct")
+    except Exception:
+        btc_fund_pct = None
+
+    try:
+        return _cs(
+            macro_data=macro_data,
+            onchain_data=onchain_data,
+            fg_value=fg_value,
+            put_call_ratio=None,
+            ta_data=ta_data,
+            fg_30d_avg=None,
+            btc_funding_rate_pct=btc_fund_pct,
+        ) or {}
+    except Exception as _e:
+        logger.debug("[App] compute_composite_signal_tf %s/%s failed: %s",
+                     pair, tf_view_payload[:2], _e)
+        return {}
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=24)
 def _cached_google_trends_score(keyword: str) -> dict:
     """Streamlit-level cache for Google Trends — 24 hr TTL.
@@ -1105,6 +1190,119 @@ def _toggle_theme() -> None:
         logger.debug("[App] Plotly template re-register failed: %s", _e_plt)
 
 # ── Refresh-All-Data handler (shared by topbar ↻ Refresh button) ─────────────
+# C5 (Phase C plan §C5.5, 2026-04-30): agent status pill — visible in
+# the topbar's status_pills slot on every page that wants it. Lets a
+# user tell at a glance whether the autonomous agent is running, even
+# when they're not on the AI Assistant page. Returns a list shaped
+# for render_top_bar's `status_pills` parameter (each pill: dict with
+# `tone`, `icon`, `label`).
+def _render_alerts_configure() -> None:
+    """C6 (Phase C plan §C6, 2026-04-30): Email-alerts configuration
+    block — was nested inside `page_config` as `_render_alerts_tab`,
+    lifted here so the new `page_alerts()` route can reuse it without
+    importing through page_config. Body kept identical to the legacy
+    nested helper so behaviour matches one-for-one."""
+    _at_cfg = _cached_alerts_config()
+
+    with st.expander("📧 Email Alerts",
+                     expanded=_at_cfg.get("email_enabled", False)):
+        _at_em = _at_cfg.copy()
+        em_on = st.toggle(
+            "Enable Email",
+            value=_at_em.get("email_enabled", False),
+            key="cfg_em_on_v2",
+        )
+        em_to = st.text_input(
+            "Recipient",
+            value=_at_em.get("email_to", ""),
+            placeholder="you@example.com",
+            key="cfg_em_to_v2",
+            disabled=not em_on,
+        )
+        em_from = st.text_input(
+            "Sender (Gmail)",
+            value=_at_em.get("email_from", ""),
+            placeholder="yourbot@gmail.com",
+            key="cfg_em_from_v2",
+            disabled=not em_on,
+        )
+        # Audit R2f: never pre-fill a password into text_input — DOM
+        # leak every rerun. Blank on load; empty submit = keep stored.
+        _em_pass_has_value = bool(_at_em.get("email_pass"))
+        em_pass = st.text_input(
+            "App Password",
+            value="",
+            type="password",
+            key="cfg_em_pass_v2",
+            disabled=not em_on,
+            placeholder="●●●● (saved)" if _em_pass_has_value else "",
+            help="Leave blank to keep the stored app password.",
+        )
+        em_min = st.slider(
+            "Alert threshold (%)",
+            50, 95,
+            int(_at_em.get("email_min_confidence", 70)),
+            step=5,
+            key="cfg_em_thresh_v2",
+            disabled=not em_on,
+        )
+        cse, cte = st.columns(2)
+        with cse:
+            if st.button("Save Email", key="cfg_em_save_v2",
+                         width="stretch"):
+                _new_em_pass = em_pass if em_pass else _at_em.get("email_pass", "")
+                _at_em.update({
+                    "email_enabled": em_on,
+                    "email_to": em_to.strip(),
+                    "email_from": em_from.strip(),
+                    "email_pass": _new_em_pass,
+                    "email_min_confidence": em_min,
+                })
+                _save_alerts_config_and_clear(_at_em)
+                st.success("Saved!")
+        with cte:
+            if st.button("Test", key="cfg_em_test_v2",
+                         width="stretch", disabled=not em_on):
+                _test_em_pass = em_pass if em_pass else _at_em.get("email_pass", "")
+                ok, err = _alerts.send_email_alert(
+                    em_from.strip(), _test_em_pass, em_to.strip(),
+                    "Crypto Signal Model — Test Alert",
+                    "✓ Email alert test successful.",
+                )
+                if ok:
+                    st.success("Email sent!")
+                else:
+                    st.error(err or "Test failed — check your Gmail "
+                             "App Password and email settings.")
+        st.caption(
+            "Use a Gmail App Password (Settings → Security → 2FA → "
+            "App passwords)"
+        )
+
+
+def _agent_topbar_pills() -> list[dict]:
+    """Return the topbar-pill list reflecting the autonomous agent's
+    runtime state. Empty list when agent.py couldn't import or the
+    supervisor's status raises (defensive — the topbar must NEVER
+    crash a page on a transient agent backend hiccup)."""
+    if _agent is None:
+        return []
+    try:
+        s = _agent.supervisor.status() or {}
+    except Exception as _e:
+        logger.debug("[topbar] agent status() failed: %s", _e)
+        return []
+    if s.get("running"):
+        return [{
+            "tone":  "success",
+            "icon":  "●",
+            "label": f"Agent · running · cycle {int(s.get('cycles_total') or 0)}",
+        }]
+    if s.get("kill_requested"):
+        return [{"tone": "warning", "icon": "■", "label": "Agent · stopping"}]
+    return [{"tone": "info", "icon": "○", "label": "Agent · stopped"}]
+
+
 # 2026-04-24 redesign: the visible refresh trigger now lives in the topbar
 # (see render_top_bar). The sidebar "Refresh All Data" button has been
 # removed so the topbar ↻ chip is the single control surface. Both the
@@ -1112,7 +1310,17 @@ def _toggle_theme() -> None:
 def _refresh_all_data() -> None:
     """Clear every layer of caches: st.cache_data, our @st.cache_data-wrapped
     helpers, the data_feeds module-level dicts, and the cycle_indicators
-    in-memory caches. Caller is responsible for st.rerun()."""
+    in-memory caches. Caller is responsible for st.rerun().
+
+    C8-fix (2026-04-30): level-aware. At Beginner level the topbar
+    Refresh chip is relabelled to "↻ Update" and ALSO triggers a
+    background scan after the cache clear — beginners shouldn't have
+    to learn the distinction between "refresh = cache clear" and
+    "scan = recompute signals". For Intermediate/Advanced the chip
+    stays as "↻ Refresh" and only clears caches (the explicit
+    "▶ Run Scan" button on Home stays the scan trigger). Guarded
+    against re-entry: if a scan is already running, no second start.
+    """
     try:
         st.cache_data.clear()
     except Exception:
@@ -1139,6 +1347,23 @@ def _refresh_all_data() -> None:
     except Exception as _ci_clr_err:
         logger.debug("[App] cycle_indicators cache clear failed: %s", _ci_clr_err)
 
+    # C8-fix (2026-04-30): Beginner-level refresh ALSO kicks off a
+    # scan. Re-entry guard: only fires if no scan is currently
+    # running. Int/Adv users keep the explicit two-button distinction.
+    try:
+        _ref_lv = st.session_state.get("user_level", "beginner")
+        if _ref_lv == "beginner":
+            _already_scanning = st.session_state.get("scan_running", False)
+            try:
+                with _scan_lock:
+                    _already_scanning = _already_scanning or _scan_state.get("running", False)
+            except Exception:
+                pass
+            if not _already_scanning:
+                _start_scan()
+    except Exception as _e_auto_scan:
+        logger.debug("[App] beginner auto-scan after refresh failed: %s", _e_auto_scan)
+
 st.sidebar.markdown("---")
 
 # ── 2026-05 redesign: grouped sidebar nav (Markets / Research / Account) ─────
@@ -1163,10 +1388,22 @@ _DS_NAV: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("onchain",    "On-chain",   "On-chain"),
     ]),
     ("Account", [
-        ("alerts",   "Alerts",     "Config Editor"),
-        ("settings", "Settings",   "Config Editor"),
-        ("agent",    "AI Agent",   "Agent"),
-        ("opps",     "Arbitrage",  "Arbitrage"),
+        # C6 (2026-04-30): Alerts is now a first-class page — was
+        # previously routed to Config Editor → Alerts tab.
+        ("alerts",       "Alerts",       "Alerts"),
+        # C1 reconcile (2026-04-29): nav key is `ai_assistant` per Phase C
+        # plan §C1 (not `agent` — that name is reserved for the
+        # autonomous-agent runtime namespace). Page-router target stays
+        # "Agent" since page_agent() is the existing entry point.
+        ("ai_assistant", "AI Assistant", "Agent"),
+        ("settings",     "Settings",     "Config Editor"),
+        # C4 (2026-04-29): "Arbitrage" was promoted into a primary
+        # segmented control on the Backtester page. The standalone nav
+        # entry is removed so users land on Arbitrage via Backtester →
+        # Arbitrage segment. The legacy `page == "Arbitrage"` route is
+        # kept alive in the dispatcher (page_arbitrage stub sets
+        # bt_view=arbitrage and renders Backtester) so any inbound
+        # deep links / programmatic jumps still work.
     ]),
 ]
 _ds_nav_current = _DS_NAV
@@ -1209,8 +1446,12 @@ for _grp_name, _grp_items in _ds_nav_current:
             _ds_new_key_selected = _k
             # Side-effect routing for items that share a target page —
             # e.g. "Alerts" should land on the Alerts tab inside Settings.
-            if _k == "alerts":
-                st.session_state["_settings_tab"] = "🔔 Alerts"
+            # C6 (2026-04-30): the legacy `_settings_tab="🔔 Alerts"`
+            # side-effect — which deep-linked the sidebar Alerts entry
+            # to Settings → Alerts tab — is removed. Alerts now has
+            # its own first-class page (page_alerts), so the nav
+            # router maps `alerts` → "Alerts" page key directly via
+            # _DS_NAV. No tab override needed.
 
 if _ds_new_label_selected:
     st.session_state["_ds_current_nav_label"] = _ds_new_label_selected
@@ -1405,20 +1646,18 @@ def _render_relocated_sidebar_widgets() -> None:
     with st.expander("🛠️ Build Info", expanded=False):
         st.caption(f"v{model.VERSION} · {str(model.TA_EXCHANGE).upper()} · {len(model.PAIRS)} pairs")
 
+    # Open-item #4 (2026-04-30): legacy 5-tab Dashboard view toggle
+    # removed. The legacy tab body was deleted in C10 — leaving the
+    # toggle behind would just be an inert switch that did nothing.
+    # The animated price-ticker toggle stays since that block still
+    # has implementation behind it.
     with st.expander("🧪 Legacy views (advanced)", expanded=False):
         st.caption(
             "The 2026-05 redesign moved per-coin detail, regime detail, and "
             "backtest detail to dedicated pages (Signals / Regimes / Backtester). "
-            "If you want the old Home dashboard's 5-tab structure back "
-            "(Today / All Coins / Coin Detail / Market Intel / Analysis), "
-            "toggle it on here."
+            "The legacy 5-tab Dashboard view was retired in Phase C; the "
+            "animated price-ticker strip below is the only remaining toggle."
         )
-        _legacy_on = st.toggle(
-            "Show legacy 5-tab Dashboard view on Home",
-            value=st.session_state.get("show_legacy_scan_view", False),
-            key="show_legacy_scan_view_toggle",
-        )
-        st.session_state["show_legacy_scan_view"] = _legacy_on
         _legacy_ticker_on = st.toggle(
             "Show animated price-ticker strip on Home",
             value=st.session_state.get("show_legacy_price_ticker", False),
@@ -1704,7 +1943,7 @@ def page_dashboard():
             macro_strip as _ds_macro_strip,
         )
         _ds_level = st.session_state.get("user_level", "beginner")
-        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
@@ -1938,10 +2177,45 @@ def page_dashboard():
                 "regime_confidence": _ds_regime_conf(r),
             }
 
+        # C3 §C3.4: per-card swap — each hero slot is independently
+        # bound to a ticker_pill_button. Defaults to BTC/ETH/XRP for
+        # backwards compat; swaps persist across reruns.
+        try:
+            from ui import ticker_pill_button as _ds_ticker_pill
+            _hero_universe_pairs = list(model.PAIRS or [])
+            _hero_slot_keys = [
+                ("home_hero_slot_1", "BTC/USDT"),
+                ("home_hero_slot_2", "ETH/USDT"),
+                ("home_hero_slot_3", "XRP/USDT"),
+            ]
+            for _k, _default in _hero_slot_keys:
+                if st.session_state.get(_k) not in _hero_universe_pairs:
+                    st.session_state[_k] = _default
+            _hero_picker_cols = st.columns(3)
+            for _i, (_k, _default) in enumerate(_hero_slot_keys):
+                with _hero_picker_cols[_i]:
+                    _ds_ticker_pill(
+                        st.session_state[_k],
+                        pairs=_hero_universe_pairs,
+                        key=_k,
+                        label_override=f"Hero {_i+1}: {st.session_state[_k]}  ▾",
+                    )
+        except Exception as _hero_pick_err:
+            logger.debug("[Home] hero ticker-pill row failed: %s", _hero_pick_err)
+            # Fall through to the static layout below.
+
+        _hero_pair_1 = st.session_state.get("home_hero_slot_1", "BTC/USDT")
+        _hero_pair_2 = st.session_state.get("home_hero_slot_2", "ETH/USDT")
+        _hero_pair_3 = st.session_state.get("home_hero_slot_3", "XRP/USDT")
+
+        def _hero_label(p: str) -> str:
+            t = p.split("/")[0].split("-")[0]
+            return f"{t} / USD"
+
         _ds_hero_row([
-            _ds_build_hero("BTC/USDT", "BTC / USD"),
-            _ds_build_hero("ETH/USDT", "ETH / USD"),
-            _ds_build_hero("XRP/USDT", "XRP / USD"),
+            _ds_build_hero(_hero_pair_1, _hero_label(_hero_pair_1)),
+            _ds_build_hero(_hero_pair_2, _hero_label(_hero_pair_2)),
+            _ds_build_hero(_hero_pair_3, _hero_label(_hero_pair_3)),
         ])
 
         # Macro strip — rendered AFTER hero cards to match the mockup order.
@@ -2097,6 +2371,33 @@ def page_dashboard():
 
             _ds_col1, _ds_col2 = st.columns(2)
             with _ds_col1:
+                # C3 §C3.4: watchlist customize button — opens an
+                # add/remove panel, persisted to
+                # st.session_state["watchlist_pairs"]. The watchlist
+                # card render below uses the customised list when
+                # present; otherwise falls through to the legacy top-
+                # cap scan (`_ds_wl_rows`) as the default seed.
+                try:
+                    from ui import watchlist_customize_btn as _ds_wl_custom
+                    _wl_universe_pairs = list(model.PAIRS or [])
+                    _wl_default_pairs = [r.get("pair") for r in (_ds_wl_rows or [])
+                                         if r.get("pair")]
+                    _wl_pairs = _ds_wl_custom(
+                        available=_wl_universe_pairs,
+                        current=_wl_default_pairs,
+                        key="watchlist_pairs",
+                    )
+                    # Filter the rows to those present in the user's
+                    # customised list (preserve order from the user's
+                    # selection so reordering via toggle is honoured).
+                    if _wl_pairs and _ds_wl_rows:
+                        _row_by_pair = {r.get("pair"): r for r in _ds_wl_rows
+                                        if r.get("pair")}
+                        _ds_wl_rows = [_row_by_pair[p] for p in _wl_pairs
+                                       if p in _row_by_pair]
+                except Exception as _wl_custom_err:
+                    logger.debug("[Home] watchlist customize failed: %s",
+                                 _wl_custom_err)
                 _ds_watchlist(
                     title="Watchlist · top-cap",
                     subtitle=f"scan refreshed {_scan_ts_label}",
@@ -2125,2825 +2426,36 @@ def page_dashboard():
     # explicitly want the legacy view can flip
     #   st.session_state["show_legacy_scan_view"] = True
     # from Settings → Dev Tools.
+    # Open-item #4 (2026-04-30): the `if not show_legacy_scan_view:`
+    # guard around the scan CTA was a holdover from the C10 deletion —
+    # the legacy tab body it was guarding is gone, so the conditional
+    # is always true. Unwrapped here so the scan CTA renders
+    # unconditionally. The session-state key is no longer read; the
+    # Settings → Dev Tools toggle that wrote it is also removed.
     _ds_lvl_hide = st.session_state.get("user_level", "beginner")
-    if not st.session_state.get("show_legacy_scan_view", False):
-        # Compact scan CTA so users can still trigger a fresh scan from Home.
-        with _scan_lock:
-            _ds_sb_running = _scan_state["running"]
-        _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
-        _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
-        if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
-            st.session_state["scan_results"] = []
-            st.session_state["scan_error"] = None
-            _start_scan()
-        return  # skip the legacy scan/tabs section — see flag above
-
-    # Lightweight divider between the mockup cards above and the scan controls
-    # below. Renders as a thin 24px top-margin line instead of an h2.
-    st.markdown(
-        '<div style="height:1px;background:var(--border);margin:24px 0 16px 0;"></div>',
-        unsafe_allow_html=True,
-    )
-    # Animated live price ticker strip — SUPPRESSED in 2026-05 redesign.
-    # Hero signal cards above now show BTC/ETH/XRP big and prominent, which
-    # made the scrolling ticker visually redundant. Opt back in by flipping
-    # st.session_state["show_legacy_price_ticker"] = True from Settings.
-    if st.session_state.get("show_legacy_price_ticker", False):
-        try:
-            _ticker_prices = []
-            _all_ws = _live_prices
-            for _pair in model.PAIRS:
-                _tick = _all_ws.get(_pair)
-                if _tick:
-                    _ticker_prices.append({
-                        "symbol":     _pair.replace("/USDT", ""),
-                        "price":      _tick.get("price", 0),
-                        "change_pct": _tick.get("change_24h_pct", 0),
-                    })
-            if _ticker_prices:
-                st.markdown(_ui.price_ticker_strip_html(_ticker_prices), unsafe_allow_html=True)
-        except Exception as _ticker_err:
-            logger.debug("[App] price ticker strip render failed: %s", _ticker_err)
-
-    # FNG chip + scan controls
-    col_btn, col_fng, col_ts = st.columns([2, 2, 4])
-    with col_btn:
-        with _scan_lock:
-            _scan_running_now = _scan_state["running"]
-        # BUG-R28: use .get() for all session_state accesses — prevents KeyError if
-        # init_state() is ever bypassed (e.g. session reset mid-run).
-        scan_disabled = st.session_state.get("scan_running", False) or _scan_running_now
-        _btn_label = "⏳ Analyzing... (this takes ~15-30s)" if scan_disabled else "🔍 Analyze All Coins Now"
-        if st.button(_btn_label, key="dashboard_btn_analyze_all", disabled=scan_disabled, type="primary", width="stretch"):
-            st.session_state["scan_results"] = []
-            st.session_state["scan_error"] = None
-            _start_scan()
-    with col_fng:
-        if st.session_state.get("scan_results"):
-            r0 = st.session_state["scan_results"][0]
-            fv, fc = r0.get("fng_value", 50), r0.get("fng_category", "Neutral")
-            if fv <= 20:
-                _fng_emoji = "😱"
-            elif fv <= 40:
-                _fng_emoji = "😟"
-            elif fv <= 60:
-                _fng_emoji = "😐"
-            elif fv <= 80:
-                _fng_emoji = "🤩"
-            else:
-                _fng_emoji = "🤑"
-            _fng_color = "#ef4444" if fv < 40 else "#22c55e" if fv > 60 else "#f59e0b"  # APP-05: fear=red, greed=green
-            st.markdown(
-                f'<span style="color:rgba(255,255,255,0.4);font-size:11px;'
-                f'text-transform:uppercase;letter-spacing:0.8px">Market Mood</span><br/>'
-                f'<span style="font-size:20px">{_fng_emoji}</span> '
-                f'<span style="color:{_fng_color};font-weight:700;font-size:16px">'
-                f'{fv}</span> '
-                f'<span style="color:rgba(255,255,255,0.55);font-size:13px">{fc}</span>',
-                unsafe_allow_html=True,
-            )
-    with col_ts:
-        if st.session_state.get("scan_timestamp"):
-            st.caption(f"Last scan: {st.session_state['scan_timestamp']}")
-
-    # ── Fear & Greed trend — SUPPRESSED in 2026-05 redesign.
-    # The mockup's macro strip (rendered above by _ds_macro_strip) already
-    # shows the current Fear & Greed value alongside BTC dominance, DXY,
-    # funding, and macro regime. The 3-card legacy widget duplicated that.
-    # Opt back in via st.session_state["show_legacy_fng_trend"] = True.
-    if st.session_state.get("show_legacy_fng_trend", False):
-        _ui.render_fear_greed_trend_sg(user_level=st.session_state.get("user_level", "beginner"))
-
-    # Progress bar while scanning — check in-memory state first (PERF-30), fall back to SQLite
+    # Compact scan CTA so users can still trigger a fresh scan from Home.
     with _scan_lock:
-        _scan_running_now2 = _scan_state["running"]
-    _mem_running = _SCAN_STATUS.get("running", False)
-    if _mem_running or _scan_running_now2:
-        status = {}  # PERF-30: skip SQLite read when in-memory already shows running
-    else:
-        status = _read_scan_status()
-    is_scanning = st.session_state.get("scan_running", False) or _scan_running_now2 or _mem_running or status.get("running", False)
-
-    # PERF-FRAGMENT: _scan_progress is defined at module level (above page_dashboard) so its
-    # fragment session-state key ($$ID-...-None) stays registered across rerenders, preventing
-    # the KeyError that occurred when the fragment was defined inside this conditional block.
-    _scan_progress()  # always called — early-returns immediately when not scanning
-    if is_scanning:
-        return  # Don't render the results section while scan is in progress
-
-    # On page load, always try to restore results from cache file if session is empty
-    if not st.session_state.get("scan_results"):
-        cached = _read_scan_results()
-        status = _read_scan_status()
-        if cached:
-            st.session_state["scan_results"] = cached
-            st.session_state["scan_timestamp"] = status.get("timestamp")
-
-    # Show scan error if one occurred
-    if st.session_state.get("scan_error"):
-        logger.warning("[Scan] error shown to user: %s", st.session_state["scan_error"])
-        st.error("Scan encountered an error — market data may be temporarily unavailable. Try running another scan or refreshing the page.")
-
-    # Demo mode (#67) — inject synthetic results so no real API needed
-    if st.session_state.get("demo_mode"):
-        results = [
-            {"pair": "BTC/USDT", "direction": "STRONG BUY", "confidence_avg_pct": 82, "high_conf": True,
-             "entry": 65000, "stop_loss": 61000, "exit": 72000, "tp1": 72000, "position_size_pct": 10,
-             "price_usd": 65000, "fng_value": 72, "fng_category": "Greed", "strategy_bias": "Trend",
-             "timeframes": {"1h": {"rsi": 58, "confidence": 82, "direction": "STRONG BUY", "regime": "Trending: Bull"}},
-             "trending": True, "consensus": 0.83},
-            {"pair": "ETH/USDT", "direction": "BUY", "confidence_avg_pct": 71, "high_conf": True,
-             "entry": 3200, "stop_loss": 2950, "exit": 3600, "tp1": 3600, "position_size_pct": 8,
-             "price_usd": 3200, "fng_value": 72, "fng_category": "Greed", "strategy_bias": "Momentum",
-             "timeframes": {"1h": {"rsi": 54, "confidence": 71, "direction": "BUY", "regime": "Trending: Bull"}},
-             "trending": False, "consensus": 0.67},
-            {"pair": "SOL/USDT", "direction": "SELL", "confidence_avg_pct": 63, "high_conf": False,
-             "entry": 145, "stop_loss": 158, "exit": 128, "tp1": 128, "position_size_pct": 5,
-             "price_usd": 145, "fng_value": 72, "fng_category": "Greed", "strategy_bias": "Reversion",
-             "timeframes": {"1h": {"rsi": 68, "confidence": 63, "direction": "SELL", "regime": "Ranging"}},
-             "trending": False, "consensus": 0.50},
-        ]
-    else:
-        results = st.session_state.get("scan_results", [])
-    if not results:
-        # 2026-05 redesign: the legacy beginner_welcome_html block
-        # (3-column "Run the Scan / Read the Results / Do Your Research"
-        # onboarding + oversized risk warning) duplicated content already
-        # present in the new page_header + hero cards + welcome banner above.
-        # Replaced by a single-line info caption.
-        if st.session_state.get("show_legacy_beginner_welcome", False) and \
-           st.session_state.get("user_level", "beginner") == "beginner" and \
-           not st.session_state.get("scan_run"):
-            st.markdown(_ui.beginner_welcome_html(), unsafe_allow_html=True)
-        else:
-            st.info("No scan results yet — click **🔍 Analyze All Coins Now** above to run a full market scan (~15-30s).")
-        return  # A4: guard — always return on empty results, prevents results[0] IndexError
-
-    # PERF-A8: Inject live WebSocket prices into scan results before rendering.
-    # Scan results may be minutes old; WS prices are real-time → always show the
-    # freshest price without re-running the scan.
-    if _live_prices:
-        for _r in results:
-            _ws_tick = _live_prices.get(_r.get("pair", ""))
-            if _ws_tick and _ws_tick.get("price"):
-                _r["price_usd"] = _ws_tick["price"]
-
-    if st.session_state.get("scan_timestamp"):
-        st.success(f"Scan complete — {len(results)} pairs | {st.session_state['scan_timestamp']}")
-
-    # ── Market stat bar (top strip with live market stats) ───────────────────
-    _stat_bar_data = {}
-    if results:
-        _fv = results[0].get("fng_value", 50)
-        _fc = results[0].get("fng_category", "Neutral")
-        _stat_bar_data["Fear & Greed"] = f"{_fv} — {_fc}"
-        _avg_c_raw = sum(r.get("confidence_avg_pct") or 0 for r in results) / len(results)
-        _avg_c = round(_avg_c_raw if _avg_c_raw == _avg_c_raw else 0.0, 1)  # APP-21: NaN guard
-        _stat_bar_data["Avg Confidence"] = f"{_avg_c}%"
-        _buy_n  = sum(1 for r in results if "BUY"  in r.get("direction", ""))
-        _sell_n = sum(1 for r in results if "SELL" in r.get("direction", ""))
-        _stat_bar_data["Signals"] = f"▲{_buy_n} / ▼{_sell_n}"
-        _hc_n = sum(1 for r in results if r.get("high_conf"))
-        _stat_bar_data["High-Conf"] = f"⚡ {_hc_n}"
-        for _top_pair in ["BTC/USDT", "ETH/USDT"]:
-            _tick = _ws.get_price(_top_pair)
-            if _tick:
-                _sym = _top_pair.replace("/USDT", "")
-                _stat_bar_data[_sym] = f"${_tick['price']:,.2f}"
-        _ts = st.session_state.get("scan_timestamp", "—")
-        _stat_bar_data["Last Scan"] = _ts.split(" ")[1] if _ts and " " in str(_ts) else str(_ts)
-    if _stat_bar_data:
-        _ui.market_stat_bar(_stat_bar_data)
-
-    # Drawdown circuit breaker banner (check once from first result)
-    cb = results[0].get('circuit_breaker', {}) if results else {}
-    if cb.get('triggered'):
-        st.error(
-            f"🛑 **Safety Stop Active** — The portfolio has dropped "
-            f"{cb.get('drawdown_pct', 0):.1f}% from its peak "  # APP-26: .get() avoids KeyError on schema mismatch
-            f"(threshold: {cb.get('threshold_pct', 0):.0f}%). To protect your account, all new trade signals are paused. "
-            f"Consider reviewing your positions before resuming. Peak equity was ${cb.get('peak_equity', 0):,.0f}."
-        )
-
-    # F6/F7: Concept drift warning banner — shown when recent win rate decays vs historical baseline
-    _drift = model.get_drift_status() or {}  # APP-25: guard None return when no feedback data
-    if _drift.get('drift_detected'):
-        st.warning(
-            f"⚠️ **Model Accuracy Alert** — The model's recent win rate "
-            f"({_drift.get('win_rate_30d', 0):.0%} last 30 days) "  # APP-27: .get() avoids KeyError
-            f"has dropped below its historical baseline ({_drift.get('win_rate_90d', 0):.0%} over 90 days). "
-            f"Signals may be less reliable than usual. The model is auto-retuning. Use extra caution."
-        )
-
-    # ── #26 Pi Cycle Top Kill-Switch banner ──────────────────────────────────
-    # Check if any result carries the active flag (all results share the same pi_cycle state)
-    _pi_active_any = any(r.get("pi_cycle_active", False) for r in results)
-    if _pi_active_any:
-        # Guard: gap_pct may be None if fallback path was taken in fetch_pi_cycle_top()
-        _pi_gap = results[0].get("pi_cycle_gap_pct") if results else None
-        _pi_gap = float(_pi_gap) if _pi_gap is not None else 0.0
-        st.error(
-            "🔴 **Pi Cycle Top Active** — The 111-day moving average has crossed above "
-            "the 350-day MA × 2. This indicator has signalled every Bitcoin cycle top "
-            f"within 3 days (2013, 2017, 2021). Gap: {_pi_gap:+.2f}%. "
-            "All BUY signals are capped at 30% confidence. Consider reducing exposure or taking profits."
-        )
-    elif any(r.get("pi_cycle_signal") == "CAUTION" for r in results):
-        _pi_gap = results[0].get("pi_cycle_gap_pct") if results else None
-        _pi_gap = float(_pi_gap) if _pi_gap is not None else 0.0
-        st.warning(
-            f"⚠️ **Pi Cycle Top Approaching** — Gap between 111DMA and 350DMA×2 is only "
-            f"{abs(_pi_gap):.1f}%. Historically this precedes cycle tops — use caution with new BUY entries."
-        )
-
-    # High-confidence alert banner (advanced/intermediate — beginners see hero cards instead)
-    hc = [r for r in results if r.get("high_conf")]
-    _user_lv = st.session_state.get("user_level", "beginner")
-    if hc and _user_lv != "beginner":
-        pairs_str = ", ".join(r["pair"] for r in hc)
-        st.success(f"⚡ Top Picks this scan — the model's highest-confidence opportunities: **{pairs_str}**")
-    # Pre-compute shared variables used across multiple tabs
-    sorted_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
-    _exec_status = _exec.get_status()
-    _exec_cfg    = _exec.get_exec_config()
-
-    # ─── Phase 4A-4: Family-Office Unified Summary PDF ─────────────────────
-    _fo_c1, _fo_c2 = st.columns([3, 2])
-    with _fo_c1:
-        st.markdown("**Family-Office Unified Summary**")
-        st.caption("One-click PDF aggregating DeFi + SuperGrok + RWA state")
-    with _fo_c2:
-        try:
-            from utils_family_office_report import render_pdf as _fo_render
-            _fo_bytes = _fo_render()
-            import datetime as _dtfo
-            st.download_button(
-                "⬇ Download Family-Office PDF",
-                data=_fo_bytes,
-                file_name=f"family_office_summary_{_dtfo.datetime.now(_dtfo.timezone.utc).strftime('%Y%m%d_%H%M')}.pdf",
-                mime="application/pdf",
-                width='stretch',
-                help="Aggregates state across all 3 apps.",
-                key="btn_family_office_pdf",
-            )
-        except Exception:
-            st.caption("Family-office report temporarily unavailable.")
-
-
-    # ─── Phase 2B: One-Click Execute Top Signals ─────────────────────────────
-    # Build a dry-run plan from the current scan_results and offer a single
-    # button to execute the top-N high-confidence signals through OKX.
-    _ote_total = len(results)
-    _ote_hc    = sum(1 for r in results if r.get("high_conf"))
-    if _ote_total > 0:
-        _ote_c1, _ote_c2, _ote_c3, _ote_c4 = st.columns([2, 2, 2, 3])
-        with _ote_c1:
-            _ote_size = st.number_input(
-                "Portfolio size ($)",
-                min_value=100.0, max_value=1_000_000.0,
-                value=float(model.PORTFOLIO_SIZE_USD),
-                step=100.0, key="ote_size",
-                help="Total capital to allocate across signals.",
-            )
-        with _ote_c2:
-            _ote_min_conf = st.slider(
-                "Min confidence (%)",
-                min_value=50, max_value=95, value=70, step=5,
-                key="ote_min_conf",
-                help="Only include signals at or above this confidence.",
-            )
-        with _ote_c3:
-            _ote_include_neutrals = st.toggle(
-                "Include NEUTRAL",
-                value=False, key="ote_include_neutrals",
-                help="By default NEUTRAL signals are skipped.",
-            )
-        with _ote_c4:
-            _ote_mode_color = "#00d4aa" if not _exec_cfg["live_trading"] else "#f59e0b"
-            _ote_mode_label = "Paper mode" if not _exec_cfg["live_trading"] else "LIVE OKX"
-            st.markdown(
-                f"<div style='color:#94a3b8; font-size:0.82rem; padding-top:22px;'>"
-                f"Scan: <span style='color:#e2e8f0; font-weight:700;'>{_ote_total}</span> signals "
-                f"(<span style='color:#00d4aa;'>{_ote_hc}</span> high-confidence) · "
-                f"<span style='color:{_ote_mode_color}; font-weight:700;'>● {_ote_mode_label}</span></div>",
-                unsafe_allow_html=True,
-            )
-
-        @st.dialog("Signal Execution — Dry Run Preview", width="large")
-        def _ote_dialog(_results, _size, _min_c, _inc_neut):
-            _plan = _exec.build_signal_plan(
-                results=_results, portfolio_size_usd=float(_size),
-                min_confidence_pct=float(_min_c), include_neutrals=bool(_inc_neut),
-            )
-            _mode_color = "#00d4aa" if not _plan["live_trading"] else "#f59e0b"
-            _mode_label = "Paper mode (simulated fills)" if not _plan["live_trading"] else "LIVE — OKX USDT-M perpetuals"
-            st.markdown(
-                f"<div style='color:{_mode_color}; font-weight:700; font-size:0.9rem; margin-bottom:8px;'>"
-                f"● {_mode_label}</div>",
-                unsafe_allow_html=True,
-            )
-            _tier_c = {"auto": "#22c55e", "step_through": "#f59e0b", "requires_approval": "#ef4444"}.get(_plan["authorization_tier"], "#64748b")
-            _tier_l = {"auto": "AUTO", "step_through": "STEP-THROUGH", "requires_approval": "REQUIRES APPROVAL"}.get(_plan["authorization_tier"], "unknown")
-            _mc1, _mc2, _mc3 = st.columns(3)
-            with _mc1: st.metric("Total notional", f"${_plan['total_notional_usd']:,.0f}")
-            with _mc2: st.metric("Included legs", f"{_plan['included_count']} / {len(_plan['legs'])}")
-            with _mc3:
-                st.markdown(
-                    f"<div style='color:#94a3b8; font-size:0.7rem; letter-spacing:1.3px; "
-                    f"text-transform:uppercase;'>Tier</div>"
-                    f"<div style='color:{_tier_c}; font-weight:700; font-size:0.88rem;'>{_tier_l}</div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-
-            import pandas as _pdx
-            _rows = []
-            for lg in _plan["legs"]:
-                _rows.append({
-                    "": "✓" if lg["included"] else "—",
-                    "Pair": lg["pair"],
-                    "Direction": lg["direction"],
-                    "Conf %": f"{lg['confidence']:.0f}%",
-                    "Size ($)": f"${lg['size_usd']:,.0f}" if lg["included"] else "—",
-                    "Status": "Included" if lg["included"] else lg.get("skip_reason", ""),
-                })
-            st.dataframe(_pdx.DataFrame(_rows), width='stretch', hide_index=True)
-
-            if _plan["authorization_tier"] == "requires_approval":
-                st.error(f"Total notional ${_plan['total_notional_usd']:,.0f} exceeds $250,000 auto-cap — OOB approval required.")
-            elif _plan["included_count"] == 0:
-                st.warning("No signals met the criteria. Lower confidence threshold or include NEUTRAL.")
-            else:
-                _exec_label = (
-                    "▶ Execute in paper mode" if not _plan["live_trading"]
-                    else "▶ Execute LIVE on OKX"
-                )
-                if _plan["live_trading"] and not _plan["keys_configured"]:
-                    # Audit R5f: don't leak env-var names to the UI — point
-                    # the user to Settings where they can enter keys.
-                    st.error("Live trading needs your OKX API keys. Open Settings → Exchange Keys to add them.")
-                elif st.button(
-                    _exec_label, type="primary", width='stretch', key="ote_exec_go",
-                    disabled=bool(st.session_state.get("_ote_executing", False)),
-                ):
-                    st.session_state["_ote_executing"] = True
-                    try:
-                        with st.spinner(f"Placing {_plan['included_count']} orders…"):
-                            _plan = _exec.execute_signal_plan(_plan)
-                    finally:
-                        st.session_state["_ote_executing"] = False
-                    _ok_color = "#22c55e" if _plan.get("failed_count", 0) == 0 else "#f59e0b"
-                    st.markdown(
-                        f"<div style='background:rgba(15,23,42,0.5); border:1px solid rgba(148,163,184,0.15); "
-                        f"border-left:3px solid {_ok_color}; border-radius:8px; padding:14px; margin-top:10px; "
-                        f"font-size:0.9rem; color:#e2e8f0;'>"
-                        f"<b>Execution complete.</b> Success: {_plan.get('success_count', 0)} · "
-                        f"Failed: {_plan.get('failed_count', 0)} · Blocked: {_plan.get('blocked_count', 0)}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                    for lg in _plan["legs"]:
-                        if lg.get("exec_status") == "failed":
-                            st.error(f"{lg['pair']}: {lg.get('exec_message','')}")
-
-        # Button enabled only when there are actual high-confidence signals to
-        # execute — audit ab9c7cdc caught that empty results + empty min-confidence
-        # filter could open a dialog with no legs.
-        _ote_qualifying = sum(
-            1 for r in results
-            if r.get("high_conf") and (r.get("confidence_avg_pct") or 0) >= _ote_min_conf
-            and (_ote_include_neutrals or "NEUTRAL" not in str(r.get("direction") or ""))
-        )
-        _ote_in_progress = bool(st.session_state.get("_ote_executing", False))
-        _ote_disabled = (_ote_qualifying == 0) or _ote_in_progress
-        _ote_help = (
-            "No signals meet the current filter. Lower the confidence threshold "
-            "or include NEUTRAL signals."
-            if _ote_qualifying == 0 else
-            "Executing — please wait…" if _ote_in_progress else
-            "Build a dry-run plan and review before placing any orders."
-        )
-        if st.button(
-            "▶ Execute Top Signals",
-            type="primary", width='stretch', key="ote_open_btn",
-            help=_ote_help, disabled=_ote_disabled,
-        ):
-            _ote_dialog(results, _ote_size, _ote_min_conf, _ote_include_neutrals)
-
-    # ─── 5-TAB DASHBOARD STRUCTURE ───────────────────────────────────────────
-    _dash_tab1, _dash_tab2, _dash_tab3, _dash_tab4, _dash_tab5 = st.tabs([
-        "🎯 Today",
-        "📊 All Coins",
-        "🔍 Coin Detail",
-        "🌐 Market Intel",
-        "🔬 Analysis",
-    ])
-
-    with _dash_tab1:
-        # ── Item 9: 3-step micro-tutorial (beginner first visit) ─────────────────
-        _ui.render_micro_tutorial()
-
-        # ── Item 17: Data freshness dot ───────────────────────────────────────────
-        _scan_ts_str = st.session_state.get("scan_timestamp")
-        _scan_ts_unix: float | None = None
-        if _scan_ts_str:
-            try:
-                import datetime as _dt
-                _scan_ts_unix = _dt.datetime.fromisoformat(str(_scan_ts_str)).timestamp()
-            except Exception as _ts_parse_err:
-                logging.debug("[UI] scan timestamp parse failed: %s", _ts_parse_err)
-        st.markdown(
-            _ui.freshness_dot_html(_scan_ts_unix, max_age_sec=900, label="Scan data"),
-            unsafe_allow_html=True,
-        )
-
-        # ── Items 1 & 2: Today's Top Picks Hero Panel (beginner first, always) ───
-        st.markdown(
-            _ui.top_picks_hero_html(results, ws_prices=_live_prices),
-            unsafe_allow_html=True,
-        )
-
-        # ── Item 11: How This Model Works trust card (collapsible) ───────────────
-        if _user_lv in ("beginner", "intermediate"):
-            with st.expander("🔬 How does this model work?", expanded=False):
-                _bt_df  = _cached_backtest_df()
-                _wr_raw = 0.0
-                if not _bt_df.empty and "result" in _bt_df.columns:
-                    _wins = (_bt_df["result"] == "WIN").sum()
-                    _wr_raw = _wins / max(len(_bt_df), 1) * 100
-                st.markdown(
-                    _ui.how_it_works_html(win_rate=_wr_raw, n_months=3, n_indicators=24),
-                    unsafe_allow_html=True,
-                )
-
-        st.markdown("---")
-
-        # ── F&G visual gauge + summary metrics ────────────────────────────────────
-        _fng_r0     = results[0] if results else {}   # A4: guard (belt-and-suspenders — return above should fire first)
-        _fng_val    = _fng_r0.get("fng_value", 50)
-        _fng_cat    = _fng_r0.get("fng_category", "Neutral")
-        _ac_raw  = sum(r.get("confidence_avg_pct") or 0 for r in results) / max(len(results), 1)
-        avg_conf = round(_ac_raw if _ac_raw == _ac_raw else 0.0, 1)  # APP-21: NaN guard
-        buy_count   = sum(1 for r in results if "BUY"  in r.get("direction", ""))
-        sell_count  = sum(1 for r in results if "SELL" in r.get("direction", ""))
-
-        _fng_col, _metrics_col = st.columns([2, 3])
-        with _fng_col:
-            st.markdown(_ui.fng_gauge_html(_fng_val, _fng_cat), unsafe_allow_html=True)
-        with _metrics_col:
-            mc = st.columns(4)
-            mc[0].metric("Coins Scanned", len(results), help=_ui.HELP_PAIRS_SCANNED)
-            mc[1].metric("Top Picks ⚡", len(hc),       help=_ui.HELP_HIGH_CONF)
-            mc[2].metric("Avg Strength", f"{avg_conf}%", help=_ui.HELP_AVG_CONF)
-            _signal_label = f"▲{buy_count} Buy · ▼{sell_count} Sell"
-            mc[3].metric("Signals", _signal_label,
-                         help=_ui.HELP_BUY_SIGNALS + " " + _ui.HELP_SELL_SIGNALS)
-
-        # ── Action CTA — best opportunity card (beginner-focused) ─────────────────
-        if hc:
-            _best = hc[0]
-            _ui.scan_action_cta(
-                pair      = _best["pair"],
-                direction = _best.get("direction", ""),
-                conf      = _best.get("confidence_avg_pct", 0),
-                entry     = _best.get("entry"),
-                stop      = _best.get("stop_loss"),
-                exit_     = _best.get("exit"),
-            )
-
-        # ── Market regime banner + Hurst / Squeeze context ────────────────────────
-        try:
-            _r0_tf_vals = list(results[0].get("timeframes", {}).values()) if results else []
-            _r0_tf = _r0_tf_vals[0] if _r0_tf_vals else {}
-            _regime_str = _r0_tf.get("regime", "Neutral: Unknown")
-            _regime_key = _regime_str.split(":")[0].strip().split(" ")[-1] if ":" in _regime_str else "Neutral"
-            # Map HMM regime strings to 4-state keys
-            _regime_map = {"Trending": "BULL", "Ranging": "RANGING", "Neutral": "RANGING", "Volatile": "CRISIS"}
-            _regime_4 = _regime_map.get(_regime_key, "RANGING")
-            _hurst_val = _r0_tf.get("hurst", None)
-            _squeeze_sig = _r0_tf.get("squeeze_signal", "NO_SQUEEZE")
-            st.markdown(
-                _ui.regime_banner_html(
-                    regime=_regime_4,
-                    hurst=float(_hurst_val) if _hurst_val is not None else None,
-                    squeeze_active=("SQUEEZE" in str(_squeeze_sig)),
-                ),
-                unsafe_allow_html=True,
-            )
-        except Exception as _e:
-            logging.debug("[Panel] regime_banner failed: %s", _e)
-
-        # ── Top Movers bento card (3 gainers / 3 losers from CoinGecko) ──────────
-        # PERF-20: route through cached wrapper (2-min TTL) instead of direct API call
-        try:
-            _movers = _cached_top_movers(top_n=3)
-            _gainers = _movers.get("gainers", [])
-            _losers  = _movers.get("losers", [])
-            if _gainers or _losers:
-                st.markdown(_ui.top_movers_card_html(_gainers, _losers), unsafe_allow_html=True)
-        except Exception as _e:
-            logging.debug("[Panel] top_movers failed: %s", _e)
-
-        st.markdown("---")
-
-
-    with _dash_tab4:
-        # ── Blood in the Streets · DCA Multiplier · Macro Overlay (Group 3) ──────
-        # F6 — data freshness badges for macro panels
-        _fb_cols = st.columns(3)
-        with _fb_cols[0]:
-            st.markdown(_freshness_badge("fred_macro",      3600, "FRED Macro"),     unsafe_allow_html=True)
-        with _fb_cols[1]:
-            st.markdown(_freshness_badge("yfinance_macro",  3600, "YF Macro"),       unsafe_allow_html=True)
-        with _fb_cols[2]:
-            st.markdown(_freshness_badge("coinalyze_funding", 300, "Funding Rates"), unsafe_allow_html=True)
-
-        try:
-            _fg_val3   = results[0].get("fng_value", 50) if results else 50
-            _btc_res   = next((r for r in results if r.get("pair") == "BTC/USDT"), {})
-            _btc_rsi3  = (_btc_res.get("timeframes", {}).get("1d", {}) or {}).get("rsi", None)
-            _bits3     = _cached_blood_in_streets(_fg_val3, _btc_rsi3)
-            _dca_m3    = _bits3["dca_multiplier"]
-            _macro3    = _cached_macro_signal_adjustment()
-            # Only render if signal is notable (not all-normal)
-            if _bits3["signal"] != "NORMAL" or _macro3["adjustment"] != 0.0:
-                _bc3    = {"BLOOD_IN_STREETS": "#ef4444", "EXTREME_FEAR": "#f59e0b", "NORMAL": "#6b7280"}.get(_bits3["signal"], "#6b7280")
-                _bg3    = {"BLOOD_IN_STREETS": "#0d0e14",  "EXTREME_FEAR": "#1e293b", "NORMAL": "#111827"}.get(_bits3["signal"], "#111827")
-                _dc3    = {0.0: "#ef4444", 0.5: "#f59e0b", 1.0: "#9ca3af", 2.0: "#10b981", 3.0: "#00d4aa"}.get(_dca_m3, "#9ca3af")
-                _dl3    = {0.0: "HOLD", 0.5: "0.5× reduce", 1.0: "1× base", 2.0: "2× accumulate", 3.0: "3× max accumulate"}.get(_dca_m3, f"{_dca_m3}×")
-                _rc3    = {"MACRO_HEADWIND": "#ef4444", "MILD_HEADWIND": "#f59e0b", "MACRO_NEUTRAL": "#6b7280", "MILD_TAILWIND": "#10b981", "MACRO_TAILWIND": "#00d4aa"}.get(_macro3["regime"], "#6b7280")
-                _sk3    = _cached_deribit_options_skew("BTC")
-                _skc3   = {"BEARISH": "#ef4444", "MILD_BEARISH": "#f59e0b", "NEUTRAL": "#6b7280", "MILD_BULLISH": "#10b981", "BULLISH": "#00d4aa"}.get(_sk3.get("signal", "—"), "#6b7280")
-                _b1, _b2, _b3, _b4 = st.columns(4)
-                with _b1:
-                    st.markdown(f"""
-    <div style="background:{_bg3};border:1px solid {_bc3};border-top:3px solid {_bc3};border-radius:10px;padding:16px">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Blood in Streets</div>
-      <div style="font-size:18px;font-weight:700;color:{_bc3}">{_bits3["signal"].replace("_", " ")}</div>
-      <div style="font-size:12px;color:#9ca3af;margin-top:4px">{_bits3["strength"]} · {_bits3["criteria_met"]}/3 criteria</div>
-      <div style="font-size:11px;color:#6b7280;margin-top:8px">{_bits3["description"]}</div>
-      <div style="margin-top:10px;font-size:11px;color:#6b7280">
-        {"✅" if _bits3["criteria"]["extreme_fear"] else "❌"} F&amp;G≤25 &nbsp;
-        {"✅" if _bits3["criteria"]["rsi_oversold"] else "❌"} RSI≤30 &nbsp;
-        {"✅" if _bits3["criteria"]["exchange_outflow"] else "❌"} Outflow
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-                with _b2:
-                    st.markdown(f"""
-    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_dc3};border-radius:10px;padding:16px">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">DCA Multiplier</div>
-      <div style="font-size:36px;font-weight:700;color:{_dc3}">{_dca_m3}×</div>
-      <div style="font-size:13px;color:#9ca3af;margin-top:4px">{_dl3}</div>
-      <div style="font-size:11px;color:#6b7280;margin-top:8px">F&amp;G: {_fg_val3}/100 · BTC RSI-1D: {f"{_btc_rsi3:.1f}" if _btc_rsi3 else "—"}</div>
-    </div>
-    """, unsafe_allow_html=True)
-                with _b3:
-                    st.markdown(f"""
-    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_rc3};border-radius:10px;padding:16px">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Macro Overlay</div>
-      <div style="font-size:18px;font-weight:700;color:{_rc3}">{_macro3["regime"].replace("_", " ")}</div>
-      <div style="font-size:12px;color:#9ca3af;margin-top:4px">Confidence adj: {_macro3["adjustment"]:+.0f} pts</div>
-      <div style="font-size:11px;color:#6b7280;margin-top:8px">DXY {_macro3["dxy"]:.1f} ({_macro3["dxy_signal"]}) · 10Y {_macro3["ten_yr"]:.2f}% ({_macro3["yr_signal"]})</div>
-    </div>
-    """, unsafe_allow_html=True)
-                with _b4:
-                    st.markdown(f"""
-    <div style="background:#111827;border:1px solid #1f2937;border-top:3px solid {_skc3};border-radius:10px;padding:16px">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Options Skew (Deribit)</div>
-      <div style="font-size:18px;font-weight:700;color:{_skc3}">{_sk3.get("signal", "—")}</div>
-      <div style="font-size:12px;color:#9ca3af;margin-top:4px">Skew: {f"{_sk3['skew']:+.1f}%" if "skew" in _sk3 else "—"}</div>
-      <div style="font-size:11px;color:#6b7280;margin-top:8px">
-        Put IV {f"{_sk3['put_iv']:.1f}%" if "put_iv" in _sk3 else "—"} · Call IV {f"{_sk3['call_iv']:.1f}%" if "call_iv" in _sk3 else "—"}
-      </div>
-      {f'<div style="font-size:10px;color:#475569;margin-top:4px">Expiry: {_sk3["expiry"]}</div>' if "expiry" in _sk3 else ""}
-    </div>
-    """, unsafe_allow_html=True)
-        except Exception as _sk3_err:
-            logger.debug("[App] options IV skew card render failed: %s", _sk3_err)
-
-        # ── S25: Macro Intelligence — always-visible scorecard ───────────────────
-        try:
-            _me = _cached_macro_enrichment()
-            _ui.render_macro_scorecard_panel(_me, _sg_level_val)
-        except Exception as _me_err:
-            logger.warning("[App] macro panel failed: %s", _me_err)
-            st.caption("Macro panel temporarily unavailable — try refreshing.")
-
-        # ── Market Cycle Position Gauge (CoinsKid-style 1-100 + 5 zones) ────────
-        # Wraps the full 4-layer composite + new cycle indicators (retail trends,
-        # stablecoin supply delta, breadth, voliquidity, dumb money) into one
-        # Beginner-friendly 1-100 gauge. Renders above the Market Environment banner.
-        try:
-            import agent as _sg_agent
-            _csig_sg = _sg_agent.get_composite_signal()
-        except Exception:
-            _csig_sg = None
-
-        try:
-            if _csig_sg:
-                from cycle_indicators import (
-                    compute_cycle_bundle as _ccb,
-                    render_cycle_gauge_html as _rcg,
-                )
-                _sg_bundle = _ccb(_csig_sg.get("score"))
-                _sg_cycle  = _sg_bundle.get("cycle_100") if _sg_bundle else None
-                if _sg_cycle:
-                    st.markdown(_rcg(_sg_cycle, _sg_level_val),
-                                unsafe_allow_html=True)
-                    # Attach to composite dict so downstream expanders can read it
-                    _csig_sg["cycle_100"]    = _sg_cycle
-                    _csig_sg["cycle_extras"] = {k: v for k, v in _sg_bundle.items()
-                                                if k != "cycle_100"}
-        except Exception as _cg_err:
-            logger.debug("[CycleGauge] render failed: %s", _cg_err)
-
-        # ── 4-Layer Composite Market Environment Signal ─────────────────────────
-        try:
-            if _csig_sg and _csig_sg.get("score", 0) != 0.0:
-                _sg_score  = _csig_sg.get("score", 0.0)
-                _sg_signal = _csig_sg.get("signal", "NEUTRAL").replace("_", " ")
-                _sg_layers = _csig_sg.get("layers", {})
-                _sg_risk   = _csig_sg.get("risk_off", False)
-
-                if _sg_score >= 0.3:   _sg_c, _sg_bg = "#22c55e", "rgba(34,197,94,0.07)"
-                elif _sg_score >= 0.1: _sg_c, _sg_bg = "#00d4aa", "rgba(0,212,170,0.07)"
-                elif _sg_score >= -0.1: _sg_c, _sg_bg = "#f59e0b", "rgba(245,158,11,0.07)"
-                elif _sg_score >= -0.3: _sg_c, _sg_bg = "#f59e0b", "rgba(249,115,22,0.07)"
-                else:                  _sg_c, _sg_bg = "#ef4444", "rgba(239,68,68,0.07)"
-
-                def _sgf(v): return f"+{v:.2f}" if v >= 0 else f"{v:.2f}"
-                _sg_shape  = "▲" if _sg_score >= 0.10 else ("▼" if _sg_score <= -0.10 else "■")
-                _sg_wts    = _csig_sg.get("weights_applied", {"technical": 0.20, "macro": 0.20, "sentiment": 0.25, "onchain": 0.35})
-                _ta_s   = _sg_layers.get("technical", {}).get("score", 0)
-                _mac_s  = _sg_layers.get("macro",     {}).get("score", 0)
-                _sent_s = _sg_layers.get("sentiment", {}).get("score", 0)
-                _oc_s   = _sg_layers.get("onchain",   {}).get("score", 0)
-                _sg_xai = [("Technical", _ta_s,   _sg_wts.get("technical", 0.20)),
-                           ("Macro",     _mac_s,  _sg_wts.get("macro",     0.20)),
-                           ("Sentiment", _sent_s, _sg_wts.get("sentiment", 0.25)),
-                           ("On-Chain",  _oc_s,   _sg_wts.get("onchain",   0.35))]
-                _sg_dir   = 1 if _sg_score > 0 else (-1 if _sg_score < 0 else 0)
-                _sg_agree = sum(1 for _, s, _ in _sg_xai if (s > 0.05) == (_sg_dir > 0) and _sg_dir != 0)
-                _sg_conf  = {4: "HIGH", 3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "LOW"}.get(_sg_agree, "MEDIUM")
-                _sg_conf_c = {"HIGH": "#22c55e", "MEDIUM": "#f59e0b", "LOW": "#ef4444"}[_sg_conf]
-
-                if _sg_level_val == "beginner":
-                    _sg_summary = _csig_sg.get("beginner_summary", "")
-                    st.html(
-                        f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
-                        f"border-left:4px solid {_sg_c};border-radius:8px;padding:10px 16px;margin:8px 0;'>"
-                        f"<span style='color:{_sg_c};font-weight:700;'>{_sg_shape} Market Environment</span>"
-                        f"<span style='color:#94a3b8;font-size:0.85rem;margin-left:12px;'>{_sg_summary}</span>"
-                        f"<span style='margin-left:16px;background:{_sg_conf_c}22;color:{_sg_conf_c};"
-                        f"font-size:0.85rem;font-weight:700;padding:2px 8px;border-radius:10px;"
-                        f"border:1px solid {_sg_conf_c}44;'>{_sg_conf} CONFIDENCE</span>"
-                        f"</div>"
-                    )
-                else:
-                    _gate_t = " · ⚠️ Risk Gate Active" if _sg_risk else ""
-                    st.html(
-                        f"<div style='background:{_sg_bg};border:1px solid {_sg_c}33;"
-                        f"border-left:4px solid {_sg_c};border-radius:8px;padding:8px 16px;margin:8px 0;"
-                        f"display:flex;align-items:center;gap:20px;flex-wrap:wrap;'>"
-                        f"<div><span style='color:#64748b;font-size:0.85rem;text-transform:uppercase;'>Composite Signal</span>"
-                        f"<div style='color:{_sg_c};font-weight:800;font-size:0.95rem;'>{_sg_shape} {_sg_signal}{_gate_t}</div>"
-                        f"<div style='color:#64748b;font-size:0.75rem;'>Score {_sgf(_sg_score)} &nbsp;·&nbsp; "
-                        f"<span style='color:{_sg_conf_c};font-weight:600;'>{_sg_conf} CONFIDENCE</span></div></div>"
-                        f"<div style='color:#475569;font-size:0.85rem;border-left:1px solid #1e293b;padding-left:16px;'>"
-                        f"<div>TA <span style='color:{'#22c55e' if _ta_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_ta_s)}</span>"
-                        f" · Macro <span style='color:{'#22c55e' if _mac_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_mac_s)}</span>"
-                        f" · Sentiment <span style='color:{'#22c55e' if _sent_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_sent_s)}</span>"
-                        f" · On-Chain <span style='color:{'#22c55e' if _oc_s>=0 else '#ef4444'};font-weight:600;'>{_sgf(_oc_s)}</span></div>"
-                        f"</div></div>"
-                    )
-
-                # XAI breakdown expander
-                with st.expander("🔍 Why this signal? — Signal driver breakdown", expanded=False):
-                    _xai_rows = ""
-                    for _xn, _xs, _xw in _sg_xai:
-                        _xwc = _xs * _xw
-                        _xbar_w = min(abs(_xwc) * 250, 100)
-                        _xbar_c = "#22c55e" if _xwc >= 0 else "#ef4444"
-                        _xai_rows += (
-                            f"<div style='display:flex;align-items:center;gap:10px;margin:5px 0;'>"
-                            f"<div style='width:90px;font-size:0.85rem;color:#cbd5e1;'>{_xn}</div>"
-                            f"<div style='width:40px;font-size:0.85rem;color:#64748b;text-align:right;'>{_xw*100:.0f}%</div>"
-                            f"<div style='flex:1;background:#1e293b;border-radius:3px;height:14px;overflow:hidden;'>"
-                            f"<div style='width:{_xbar_w:.0f}%;background:{_xbar_c};height:100%;border-radius:3px;'></div></div>"
-                            f"<div style='width:55px;font-size:0.85rem;font-weight:600;color:{_xbar_c};text-align:right;'>{_xwc*100:+.1f}%</div>"
-                            f"</div>"
-                        )
-                    _sg_note = ("Each bar shows how much that factor pushed the signal bullish (+) or bearish (−)."
-                                if _sg_level_val == "beginner"
-                                else f"Weighted contributions · regime: {_csig_sg.get('regime', 'N/A')} · weights are regime-adjusted.")
-                    st.html(f"<div style='padding:4px 0 8px;'>"
-                            f"<div style='font-size:0.85rem;color:#64748b;margin-bottom:8px;'>{_sg_note}</div>"
-                            f"{_xai_rows}</div>")
-        except Exception as _sg_cs_err:
-            logger.debug("[App] composite signal banner skipped: %s", _sg_cs_err)
-
-        st.markdown("---")
-
-        # ── Wyckoff Phase Summary (item 23) ─────────────────────────────────────────
-        _wyck_results = [(r.get("pair",""), r.get("wyckoff_phase","Unknown"), r.get("wyckoff_conf",0),
-                          r.get("wyckoff_desc",""), r.get("wyckoff_plain",""),
-                          r.get("wyckoff_spring",False), r.get("wyckoff_upthrust",False))
-                         for r in results if r.get("wyckoff_phase","Unknown") != "Unknown"]
-        if _wyck_results:
-            _user_level_wyck = st.session_state.get("user_level", "beginner")
-            _ui.section_header("Wyckoff Phase Analysis",
-                               "Richard Wyckoff's 4-phase market cycle: Accumulation → Markup → Distribution → Markdown. "
-                               "Identifies where institutional money is flowing.",
-                               icon="🔄")
-            _WYCK_COLOR = {
-                "Accumulation": "#00d4aa", "Markup": "#22c55e",
-                "Distribution": "#f59e0b", "Markdown": "#ef4444",
-            }
-            _WYCK_BG = {
-                "Accumulation": "rgba(0,212,170,0.08)", "Markup": "rgba(34,197,94,0.08)",
-                "Distribution": "rgba(245,158,11,0.08)", "Markdown": "rgba(239,68,68,0.08)",
-            }
-            _WYCK_ICON = {
-                "Accumulation": "🏦", "Markup": "📈",
-                "Distribution": "🏧", "Markdown": "📉",
-            }
-            if _user_level_wyck == "beginner":
-                # Show the top 3 cards with plain English
-                _wc = st.columns(min(3, len(_wyck_results)))
-                for _ci, (_wp, _wph, _wco, _wd, _wpl, _wsp, _wup) in enumerate(_wyck_results[:3]):
-                    with _wc[_ci]:
-                        _wcc = _WYCK_COLOR.get(_wph, "#64748b")
-                        _wcb = _WYCK_BG.get(_wph, "rgba(100,116,139,0.08)")
-                        _wico = _WYCK_ICON.get(_wph, "⬜")
-                        _extra = " 🔔 SPRING" if _wsp else (" 🔔 UPTHRUST" if _wup else "")
-                        st.markdown(
-                            f"<div style='background:{_wcb};border:1px solid {_wcc}33;"
-                            f"border-top:3px solid {_wcc};border-radius:10px;padding:14px'>"
-                            f"<div style='font-size:10px;color:#6b7280;text-transform:uppercase;"
-                            f"letter-spacing:0.8px'>{_wp.replace('/USDT','')}</div>"
-                            f"<div style='font-size:16px;font-weight:700;color:{_wcc};margin-top:2px'>"
-                            f"{_wico} {_wph}{_extra}</div>"
-                            f"<div style='font-size:11px;color:#9ca3af;margin-top:6px'>{_wpl}</div>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-            else:
-                # Table view for intermediate/advanced
-                _phase_counts: dict = {}
-                for _, _wph, _, _, _, _wsp, _wup in _wyck_results:
-                    _phase_counts[_wph] = _phase_counts.get(_wph, 0) + 1
-                _pc = st.columns(4)
-                for _pi, _ph in enumerate(["Accumulation", "Markup", "Distribution", "Markdown"]):
-                    with _pc[_pi]:
-                        _cnt = _phase_counts.get(_ph, 0)
-                        _wcc = _WYCK_COLOR.get(_ph, "#64748b")
-                        _wico = _WYCK_ICON.get(_ph, "⬜")
-                        st.markdown(
-                            f"<div style='text-align:center;background:{_WYCK_BG.get(_ph,'rgba(100,116,139,0.08)')};"
-                            f"border:1px solid {_wcc}33;border-radius:8px;padding:12px'>"
-                            f"<div style='font-size:12px;color:#6b7280'>{_wico} {_ph}</div>"
-                            f"<div style='font-size:28px;font-weight:700;color:{_wcc}'>{_cnt}</div>"
-                            f"<div style='font-size:10px;color:#475569'>pairs</div></div>",
-                            unsafe_allow_html=True,
-                        )
-                if _user_level_wyck == "advanced":
-                    # Detailed table
-                    _spring_pairs   = [_wp for _wp, _, _, _, _, _wsp, _ in _wyck_results if _wsp]
-                    _upthrust_pairs = [_wp for _wp, _, _, _, _, _, _wup in _wyck_results if _wup]
-                    if _spring_pairs:
-                        st.markdown(
-                            f"<div style='margin-top:8px;font-size:12px;color:#00d4aa'>"
-                            f"🔔 Springs: {', '.join(p.replace('/USDT','') for p in _spring_pairs)}</div>",
-                            unsafe_allow_html=True,
-                        )
-                    if _upthrust_pairs:
-                        st.markdown(
-                            f"<div style='font-size:12px;color:#f59e0b'>"
-                            f"🔔 Upthrusts: {', '.join(p.replace('/USDT','') for p in _upthrust_pairs)}</div>",
-                            unsafe_allow_html=True,
-                        )
-
-        # ── S24: Liquidation Pressure Monitor ────────────────────────────────────
-        with st.expander("💥 Liquidation Pressure Monitor — OI + Funding Rate Squeeze Risk", expanded=False):
-            st.caption(
-                "Estimates squeeze risk per pair by combining open interest (OKX, free) and "
-                "funding rates (Binance). High OI + extreme funding = more capital at risk of "
-                "cascade liquidation. Data is fetched on demand."
-            )
-            _liq_pairs = model.PAIRS[:12]
-            _liq_load  = st.button("🔄 Load Liquidation Data", key="btn_liq_load")
-            if _liq_load:
-                with st.spinner("Fetching OI + funding from OKX & Binance…", show_time=True):
-                    _liq_data = data_feeds.get_liquidation_pressure(_liq_pairs)
-                st.session_state["liq_data"] = _liq_data
-
-            _liq_data = st.session_state.get("liq_data")
-            if _liq_data:
-                _liq_rows = []
-                for d in _liq_data:
-                    _sq = d["squeeze_signal"]
-                    _sq_icon = {"HIGH_RISK": "🔴", "ELEVATED": "🟡", "NORMAL": "🟢"}.get(_sq, "⚪")
-                    _bias_icon = {"LONGS_HEAVY": "▲ Longs", "SHORTS_HEAVY": "▼ Shorts", "BALANCED": "■ Balanced"}.get(d["funding_bias"], "—")
-                    _liq_rows.append({
-                        "Pair":            d["pair"].replace("/USDT", ""),
-                        "OI (USD)":        f"${d['oi_usd']/1e6:.0f}M" if d["oi_usd"] > 0 else "—",
-                        "OI Level":        d["oi_signal"],
-                        "Funding %":       f"{d['funding_rate_pct']:+.4f}%",
-                        "Bias":            _bias_icon,
-                        "Squeeze Score":   f"{d['squeeze_score']:.4f}",
-                        "Squeeze Risk":    f"{_sq_icon} {_sq}",
-                    })
-                _liq_df = pd.DataFrame(_liq_rows)
-
-                def _color_sq(val: str) -> str:
-                    if "HIGH_RISK" in val: return "color:#ef4444;font-weight:bold"
-                    if "ELEVATED"  in val: return "color:#f59e0b"
-                    return "color:#22c55e"
-
-                st.dataframe(
-                    _liq_df.style.map(_color_sq, subset=["Squeeze Risk"]),
-                    width='stretch', hide_index=True,
-                )
-
-                # Bar chart of squeeze scores
-                _top = [d for d in _liq_data if d["squeeze_score"] > 0][:10]
-                if _top:
-                    _bar_pairs  = [d["pair"].replace("/USDT","") for d in _top]
-                    _bar_scores = [d["squeeze_score"] for d in _top]
-                    _bar_colors = ["#ef4444" if d["squeeze_signal"] == "HIGH_RISK" else
-                                   "#f59e0b" if d["squeeze_signal"] == "ELEVATED" else
-                                   "#22c55e" for d in _top]
-                    _liq_fig = go.Figure(go.Bar(
-                        x=_bar_pairs, y=_bar_scores,
-                        marker_color=_bar_colors,
-                        hovertemplate="%{x}: %{y:.4f}<extra></extra>",
-                    ))
-                    _liq_fig.update_layout(
-                        height=220, margin=dict(l=0, r=0, t=10, b=0),
-                        xaxis_title="", yaxis_title="Squeeze Score",
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(_liq_fig, width='stretch')
-                    st.caption(
-                        "Score = √(OI/1B) × |funding %| × 100. "
-                        "🔴 High Risk: large OI + extreme funding → cascade risk if price moves against dominant side."
-                    )
-
-                if st.session_state.get("user_level", "beginner") == "beginner":
-                    st.caption(
-                        "**What this means:** When lots of traders borrow money to bet in one direction "
-                        "(e.g., all betting price goes up), a sudden price drop can force them all to sell at once, "
-                        "causing a bigger crash — called a 'liquidation cascade.' This panel shows which coins are "
-                        "most at risk of that happening right now."
-                    )
-            else:
-                st.info("Press **Load Liquidation Data** to analyse squeeze risk across pairs.")
-
-        st.markdown("---")
-        # ── Autonomous Agent Status Panel ─────────────────────────────────────────
-        _agent_cfg = _cached_alerts_config()
-        if _agent_cfg.get("agent_enabled", False):
-            # Auto-start supervisor if enabled in config and not already running
-            try:
-                if _agent is not None and not _agent.supervisor.is_running():
-                    _agent.supervisor.start()
-            except Exception as _e:
-                logging.warning("[Agent] supervisor start failed: %s", _e)
-            st.markdown("---")
-            _ui.section_header("Autonomous Agent", "24/7 AI trading agent status", icon="🤖")
-            try:
-                _ag_st = _agent.supervisor.status() if _agent is not None else {}
-            except Exception:
-                _ag_st = {}
-            # ── agent status metrics ──────────────────────────────────────────────
-            import crypto_model_core as _cmc_ag
-            _ag_n_pairs   = len(_cmc_ag.PAIRS)
-            _ag_cur_pair  = _ag_st.get("current_pair", "") or ""   # pair in-flight right now
-            _ag_last_pair = _ag_st.get("last_pair", "")  or ""     # last completed pair
-
-            _ag_c1, _ag_c2, _ag_c3, _ag_c4 = st.columns(4)
-            _ag_c1.metric(
-                "Status",
-                "🟢 RUNNING" if _ag_st.get("running") else "🔴 STOPPED",
-                delta="LangGraph" if _ag_st.get("langgraph") else "Fallback pipeline",
-                delta_color="normal",
-            )
-            _ag_c2.metric(
-                "Pairs in Scope",
-                _ag_n_pairs,
-                delta="all pairs every cycle",
-                delta_color="normal",
-                help=f"Agent scans all {_ag_n_pairs} pairs in model.PAIRS every cycle — not just BTC. "
-                     f"Pairs: {', '.join(_cmc_ag.PAIRS)}",
-            )
-            _ag_c3.metric(
-                "Now Analyzing",
-                _ag_cur_pair.replace("/USDT", "") if _ag_cur_pair else "—",
-                delta="in-flight" if _ag_cur_pair else "between cycles",
-                delta_color="normal",
-                help="The pair the agent is currently running signal analysis on. Updates live.",
-            )
-            _ag_c4.metric(
-                "Total Pair Scans",
-                _ag_st.get("cycles_total", 0),
-                delta=f"restarts: {_ag_st.get('restart_count', 0)}",
-                delta_color="normal",
-                help="Total number of individual pair evaluations since the agent started.",
-            )
-            if (_ag_st.get("last_run_ts") or 0) > 0:
-                _last_ago = int(time.time() - _ag_st["last_run_ts"])
-                _last_decision = _ag_st.get("last_decision") or "—"
-                st.caption(
-                    f"Last completed: **{_ag_last_pair}** → {_last_decision} | {_last_ago}s ago "
-                    f"| Dry-run: {'ON' if _agent_cfg.get('agent_dry_run', True) else 'OFF'} "
-                    f"| Scanning all {_ag_n_pairs} pairs each cycle"
-                )
-            with st.expander(f"Recent Agent Decisions (all {_ag_n_pairs} pairs)", expanded=False):
-                try:
-                    _ag_log_df = _cached_agent_log_df(limit=50)
-                    if _ag_log_df.empty:
-                        st.caption("No decisions recorded yet.")
-                    else:
-                        _show_cols = [c for c in ["logged_at", "pair", "direction",
-                                                  "confidence", "claude_decision",
-                                                  "action_taken", "claude_rationale"]
-                                      if c in _ag_log_df.columns]
-                        # Sort by logged_at desc so newest pair decisions are at top
-                        _disp_df = _ag_log_df[_show_cols]
-                        if "logged_at" in _disp_df.columns:
-                            _disp_df = _disp_df.sort_values("logged_at", ascending=False)
-                        st.dataframe(_disp_df, width='stretch', hide_index=True)
-                        # Show unique pairs covered this session
-                        if "pair" in _ag_log_df.columns:
-                            _seen_pairs = sorted(_ag_log_df["pair"].dropna().unique().tolist())
-                            st.caption(f"Pairs with decisions logged: {', '.join(_seen_pairs)}")
-                except Exception as _ae:
-                    logger.warning("[Agent] log display error: %s", _ae)
-                    st.caption("Agent activity log temporarily unavailable.")
-        else:
-            # Config was disabled — stop the running supervisor if active
-            try:
-                if _agent is not None and _agent.supervisor.is_running():
-                    _agent.supervisor.stop()
-            except Exception as _e:
-                logging.warning("[Agent] supervisor stop failed: %s", _e)
-
-        # ── Connected Wallet Panel (#110 / #111) ──────────────────────────────────
-        _wh = st.session_state.get("wallet_holdings")
-        _zp = st.session_state.get("zerion_portfolio")
-        if _wh or _zp:
-            st.markdown("---")
-            _ui.section_header("Connected Wallet", "Read-only portfolio import", icon="🔗")
-            _portfolio = _zp or _wh  # prefer full Zerion portfolio when available
-            _wh_c1, _wh_c2, _wh_c3 = st.columns(3)
-            _wh_c1.metric("Total Value", f"${_portfolio.get('total_value_usd', 0):,.2f}")
-            _wh_c2.metric("Address", (_portfolio.get('address', '') or '')[:10] + "…")
-            _wh_c3.metric("Source", (_portfolio.get('source') or 'zerion').upper())
-
-            # 24h change (Zerion only)
-            if _zp and _zp.get("change_24h_pct") is not None:
-                _chg = _zp.get("change_24h_pct", 0.0)
-                st.metric("24h Change", f"{_chg:+.2f}%", delta=f"{_chg:+.2f}%")
-
-            # Top holdings
-            _tokens = _portfolio.get("tokens") or _portfolio.get("positions") or []
-            if _tokens:
-                with st.expander("Top Holdings", expanded=True):
-                    _top5 = sorted(_tokens, key=lambda x: x.get("value_usd") or 0, reverse=True)[:5]
-                    _tok_rows = []
-                    for _tok in _top5:
-                        try:
-                            _bal  = float(_tok.get("balance")  or 0)
-                            _val  = float(_tok.get("value_usd") or 0)
-                            _chg  = _tok.get("change_pct_1d")
-                            _chg_fmt = f"{float(_chg):+.2f}%" if _chg is not None else "—"
-                        except (TypeError, ValueError):
-                            _bal, _val, _chg_fmt = 0.0, 0.0, "—"
-                        _tok_rows.append({
-                            "Symbol":     _tok.get("symbol", ""),
-                            "Balance":    f"{_bal:,.4f}",
-                            "Value USD":  f"${_val:,.2f}",
-                            "24h %":      _chg_fmt,
-                            "Chain":      _tok.get("chain") or "Ethereum",
-                        })
-                    if _tok_rows:
-                        st.dataframe(pd.DataFrame(_tok_rows), width='stretch', hide_index=True)
-
-            # Chain breakdown (Zerion full portfolio)
-            if _zp and _zp.get("chains"):
-                with st.expander("Chain Breakdown", expanded=False):
-                    _chain_data = _zp["chains"]
-                    _chain_rows = [{"Chain": c, "Value USD": f"${v:,.2f}"} for c, v in _chain_data.items()]
-                    if _chain_rows:
-                        st.dataframe(pd.DataFrame(_chain_rows), width='stretch', hide_index=True)
-
-
-    with _dash_tab2:
-        # ── Signal Heatmap — pairs × timeframes (Item 8: card list for beginners) ──
-        if _user_lv in ("beginner", "intermediate"):
-            _ui.section_header(
-                "All Signals — Ranked by Strength",
-                "Coins sorted from strongest to weakest signal. ▲ = potential buy, ▼ = potential sell, ■ = wait/unclear.",
-                icon="🏆",
-            )
-            st.markdown(_ui.signal_rank_list_html(results), unsafe_allow_html=True)
-            st.markdown("---")
-        else:
-            _ui.section_header("Signal Heatmap",
-                               "Color grid of all coins across time periods. 🟢 Green = potential buy, 🔴 Red = potential sell, ⬜ Grey = no clear signal. Numbers = model confidence %.",
-                               icon="🗺️")
-            _tf_list  = model.TIMEFRAMES
-            _hm_pairs = [r["pair"] for r in results]
-            _hm_conf  = []
-            _hm_text  = []
-            _hm_dir   = []
-            for r in results:
-                _tfd      = r.get("timeframes", {})
-                _row_conf = []
-                _row_text = []
-                _row_dir  = []
-                for tf in _tf_list:
-                    _cell = _tfd.get(tf, {})
-                    _c    = float(_cell.get("confidence", 0) or 0)
-                    _d    = str(_cell.get("direction", "NO DATA") or "NO DATA")
-                    _row_conf.append(_c)
-                    _row_text.append(f"{int(_c)}%\n{_d[:3]}")
-                    _row_dir.append(_d)
-                _hm_conf.append(_row_conf)
-                _hm_text.append(_row_text)
-                _hm_dir.append(_row_dir)
-
-            def _dir_to_val(d: str) -> float:
-                d = d.upper()
-                if "STRONG BUY"  in d: return  1.0
-                if "BUY"         in d: return  0.5
-                if "STRONG SELL" in d: return -1.0
-                if "SELL"        in d: return -0.5
-                return 0.0
-
-            _hm_color = [[_dir_to_val(d) for d in row] for row in _hm_dir]
-            _hm_fig   = go.Figure(data=go.Heatmap(
-                z            = _hm_color,
-                x            = _tf_list,
-                y            = _hm_pairs,
-                text         = _hm_text,
-                texttemplate = "%{text}",
-                textfont     = {"size": 9},
-                colorscale   = [
-                    [0.0,  "#ef4444"],
-                    [0.25, "#fca5a5"],
-                    [0.5,  "#94a3b8"],
-                    [0.75, "#86efac"],
-                    [1.0,  "#00d4aa"],
-                ],
-                zmin=-1, zmax=1,
-                showscale=False,
-                hovertemplate="<b>%{y}</b> / %{x}<br>%{text}<extra></extra>",
-            ))
-            _hm_fig.update_layout(
-                height=max(250, 32 * len(_hm_pairs) + 60),
-                margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#f8fafc", size=9),
-                xaxis=dict(side="top", tickfont=dict(size=9)),
-                yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
-            )
-            st.plotly_chart(_hm_fig, width='stretch',
-                            config={"displayModeBar": False, "staticPlot": True})
-            st.markdown("---")
-
-        # ── Quick-View Card Grid — all coins at a glance (teen-friendly) ──────────
-        _ui.section_header(
-            "What To Do Right Now",
-            "Each card shows whether to BUY, SELL, or WAIT — score out of 10 shows how strong the signal is",
-            icon="🎯",
-        )
-        # PERF-28: use the single _live_prices fetched at the top of page_dashboard()
-        _all_ws_prices = _live_prices
-        # Sort: high-conf first, then by confidence descending for card grid
-        _grid_results = sorted(results, key=lambda r: (r.get("high_conf", False), r.get("confidence_avg_pct", 0)), reverse=True)
-        # Fetch liquidation pressure for cascade risk badges (uses cached OI + funding data)
-        _squeeze_data: dict = {}
-        try:
-            _sq_list = data_feeds.get_liquidation_pressure([r["pair"] for r in _grid_results[:15]])
-            _squeeze_data = {s["pair"]: s.get("squeeze_signal", "NORMAL") for s in _sq_list}
-        except Exception as _e:
-            logging.debug("[Panel] liquidation_pressure fetch failed: %s", _e)
-        st.markdown(
-            _ui.coin_cards_grid_html(_grid_results, ws_prices=_all_ws_prices,
-                                     squeeze_data=_squeeze_data),
-            unsafe_allow_html=True,
-        )
-
-        # Quick-glance summary table (advanced users)
-        with st.expander("📋 Full Summary Table", expanded=False):
-            summary_rows = []
-            for r in results:
-                _st = _all_ws_prices.get(r["pair"])
-                _live_str = (
-                    f"${_st['price']:,.4f} ({_st['change_24h_pct']:+.2f}%)" if _st else "—"
-                )
-                _tp1 = r.get("tp1")
-                summary_rows.append({
-                    "Coin": r["pair"],
-                    "Price": _live_str,
-                    "Signal": r.get("direction", "—"),
-                    "Strength": f"{r.get('confidence_avg_pct', 0)}%",
-                    "Entry Price": f"${r['entry']:,.4f}" if r.get("entry") else "—",
-                    "Take Profit": f"${_tp1:,.4f}" if _tp1 else "—",
-                    "Stop Loss": f"${r['stop_loss']:,.4f}" if r.get("stop_loss") else "—",
-                    "Top Pick":   "⚡ Yes" if r.get("high_conf") else "—",
-                })
-                _pair_key = r["pair"]
-                _cyc = st.session_state.get(f"tb_score_{_pair_key}")
-                summary_rows[-1]["Cycle Score"] = f"{_cyc}/100" if _cyc is not None else "—"
-            st.dataframe(pd.DataFrame(summary_rows).set_index("Coin"), width='stretch')
-        st.markdown("---")
-
-
-        # ── Scan Overview — Sparkline Mini-Grid (#60) ─────────────────────────────
-        _ui.section_header("Scan Overview", "Mini sparklines — 24h price trend for each pair at a glance. Green = up, Red = down.", icon="📈")
-        # #59 Mobile-responsive layout: 2-column grid on wide screens; note if only 1 result
-        _spk_n_results = len(sorted_results)
-        if _spk_n_results == 1:
-            st.caption("Single result — showing in single-column layout.")
-            _spk_n_cols = 1
-        else:
-            _spk_n_cols = min(_spk_n_results, 4)  # up to 4 columns; CSS grid handles responsive wrap
-        _spk_cols = st.columns(_spk_n_cols)
-        _spk_pairs_12 = [_sr["pair"] for _sr in sorted_results[:12]]
-        # PERF-27: fetch all sparklines in parallel (was sequential — N × round-trip latency)
-        try:
-            from concurrent.futures import ThreadPoolExecutor as _SpkTEx
-            def _fetch_spk(pair_):
-                try:
-                    return data_feeds.fetch_sparkline_closes(pair_, n=24)
-                except Exception:
-                    return []
-            with _SpkTEx(max_workers=min(len(_spk_pairs_12), 12)) as _spk_ex:
-                _spk_results = dict(zip(_spk_pairs_12, _spk_ex.map(_fetch_spk, _spk_pairs_12)))
-        except Exception:
-            _spk_results = {}
-        for _si, _sr in enumerate(sorted_results[:12]):  # max 12 cards in grid
-            _col_idx = _si % _spk_n_cols
-            with _spk_cols[_col_idx]:
-                _spk_closes = _spk_results.get(_sr["pair"], [])
-                _spk_html = _ui.scan_sparkline_card_html(
-                    pair      = _sr["pair"],
-                    direction = _sr.get("direction", "—"),
-                    conf      = _sr.get("confidence_avg_pct", 0),
-                    closes    = _spk_closes,
-                )
-                st.markdown(_spk_html, unsafe_allow_html=True)
-                st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
-        st.markdown("---")
-
-        # ── S1-S10 Advanced Analytics Panels ─────────────────────────────────────
-        _s_macro_regime = results[0].get("macro_regime", "MACRO_NEUTRAL") if results else "MACRO_NEUTRAL"
-        _s_altcoin      = results[0].get("altcoin_season", "MIXED") if results else "MIXED"
-
-        # S10 — Market Regime Banner (BULL / BEAR / SIDEWAYS from buy/sell majority + F&G)
-        try:
-            _ui.render_market_regime_banner(results, _fng_val, _s_macro_regime, _s_altcoin)
-        except Exception as _e:
-            logging.debug("[Panel S10] market_regime_banner failed: %s", _e)
-
-        # S1 — TTM Squeeze Momentum Panel
-        try:
-            _ui.render_ttm_squeeze_panel(_spk_results, results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S1] ttm_squeeze failed: %s", _e)
-
-        # S2 — Hurst Exponent Panel
-        try:
-            _ui.render_hurst_exponent_panel(_spk_results, results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S2] hurst_exponent failed: %s", _e)
-
-        # S3 — RSI / MACD Divergence Panel
-        try:
-            _ui.render_rsi_macd_divergence_panel(results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S3] rsi_macd_divergence failed: %s", _e)
-
-        # S4 — Funding Rate Arbitrage Panel
-        try:
-            _ui.render_funding_rate_arb_panel(results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S4] funding_rate_arb failed: %s", _e)
-
-        # S5 — Liquidation Heatmap Panel (real Binance events + OI cluster model)
-        try:
-            _liq_hm_data = data_feeds.build_liquidation_heatmap_data(
-                [r["pair"] for r in results[:12]], _live_prices
-            )
-            _ui.render_liquidation_overlay_panel(results, _sg_level_val, liq_data=_liq_hm_data)
-        except Exception as _e:
-            logging.debug("[Panel S5] liquidation_overlay failed: %s", _e)
-
-        # S6 — Social Momentum Panel
-        try:
-            _ui.render_social_momentum_panel(results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S6] social_momentum failed: %s", _e)
-
-        # S7 — GitHub Developer Activity Panel
-        try:
-            _ui.render_github_dev_activity_panel(_sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S7] github_dev_activity failed: %s", _e)
-
-        # S8 — Trader vs Investor Split Panel
-        try:
-            _ui.render_trader_investor_split(results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S8] trader_investor_split failed: %s", _e)
-
-        # S9 — Threshold Alerts Panel
-        try:
-            _ui.render_threshold_alerts_panel(results, _sg_level_val)
-        except Exception as _e:
-            logging.debug("[Panel S9] threshold_alerts failed: %s", _e)
-
-        st.markdown("---")
-        # ── Signal Heatmap (Phase 9) — all 29 pairs at a glance ──────────────────
-        if results:
-            st.markdown("---")
-            _ui.section_header("Signal Heatmap", "All pairs — color = signal strength (green=BUY, red=SELL, grey=HOLD)", icon="🗺️")
-
-            from crypto_model_core import SECTOR_MAP, PAIRS as _ALL_PAIRS
-
-            # Map pair → signal score for color coding
-            _sig_map = {}
-            for _r in results:
-                _p   = _r.get("pair", "")
-                _dir = _r.get("direction", "")
-                _sc  = _r.get("score", 0.0) or 0.0
-                _sig_map[_p] = (_dir, _sc)
-
-            # Build grid ordered by sector then pair name
-            _sector_order = ["store_of_value", "layer1", "payments", "defi", "exchange", "layer2", "infrastructure", "ai", "meme", "other"]
-            _by_sector: dict = {}
-            for _pp in _ALL_PAIRS:
-                _s = SECTOR_MAP.get(_pp, "other")
-                _by_sector.setdefault(_s, []).append(_pp)
-
-            _heat_html = "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;'>"
-            for _sec in _sector_order:
-                _sec_pairs = _by_sector.get(_sec, [])
-                if not _sec_pairs:
-                    continue
-                # Sector label
-                _heat_html += (
-                    f"<div style='width:100%;font-size:10px;text-transform:uppercase;"
-                    f"letter-spacing:0.8px;color:#6b7280;margin:8px 0 4px;font-weight:600;'>"
-                    f"{_sec.replace('_', ' ')}</div>"
-                )
-                _heat_html += "<div style='display:flex;flex-wrap:wrap;gap:6px;'>"
-                for _pp in _sec_pairs:
-                    _base = _pp.split("/")[0]
-                    _dir, _sc = _sig_map.get(_pp, ("HOLD", 0.0))
-                    if "BUY" in _dir:
-                        _bg   = f"rgba(0,212,170,{min(0.85, 0.25 + abs(_sc)/100)})"
-                        _border = "#00d4aa"
-                        _tc   = "#e2e8f0"
-                    elif "SELL" in _dir:
-                        _bg   = f"rgba(246,70,93,{min(0.85, 0.25 + abs(_sc)/100)})"
-                        _border = "#ef4444"
-                        _tc   = "#e2e8f0"
-                    else:
-                        _bg   = "rgba(107,114,128,0.15)"
-                        _border = "#374151"
-                        _tc   = "#6b7280"
-                    _sc_str = f"{_sc:+.0f}" if _sc != 0 else "—"
-                    _heat_html += (
-                        f"<div style='background:{_bg};border:1px solid {_border};"
-                        f"border-radius:8px;padding:6px 10px;min-width:64px;text-align:center;"
-                        f"cursor:default;'>"
-                        f"<div style='font-size:12px;font-weight:700;color:{_tc};'>{_base}</div>"
-                        f"<div style='font-size:10px;color:{_border};margin-top:2px;font-weight:600;'>"
-                        f"{_dir.replace('STRONG_', '').replace('_BIAS', '')} {_sc_str}</div>"
-                        f"</div>"
-                    )
-                _heat_html += "</div>"
-            _heat_html += "</div>"
-
-            st.markdown(_heat_html, unsafe_allow_html=True)
-            _buys  = sum(1 for d, _ in _sig_map.values() if "BUY"  in d)
-            _sells = sum(1 for d, _ in _sig_map.values() if "SELL" in d)
-            _holds = len(_sig_map) - _buys - _sells
-            st.caption(f"Signal summary: {_buys} BUY · {_sells} SELL · {_holds} HOLD · Score = composite signal strength (higher = stronger)")
-
-        # ── Global Market Context (folded in from Market Overview) ─────────────────
-        with st.expander("🌍 Global Market Context", expanded=False):
-            _gm  = _cached_global_market()
-            _gtr = _cached_trending_coins()
-
-            def _fmt_cap_d(v):
-                if v >= 1e12: return f"${v/1e12:.2f}T"
-                if v >= 1e9:  return f"${v/1e9:.1f}B"
-                return f"${v/1e6:.0f}M"
-
-            _tm   = _gm.get("total_market_cap_usd", 0)
-            _bd   = _gm.get("btc_dominance", 0.0)
-            _ed   = _gm.get("eth_dominance", 0.0)
-            _mchg = _gm.get("market_cap_change_24h", 0.0)
-            _vol  = _gm.get("total_volume_24h_usd", 0)
-            _alt  = _gm.get("altcoin_season_label", "—")
-            _gdc  = "#22c55e" if _mchg >= 0 else "#ef4444"
-            _ga   = "▲" if _mchg >= 0 else "▼"
-            _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
-            with _gc1:
-                st.metric("Total Market Cap", _fmt_cap_d(_tm),
-                          delta=f"{_ga} {abs(_mchg):.2f}% 24h", delta_color="normal")
-            with _gc2:
-                st.metric("BTC Dominance", f"{_bd:.1f}%")
-            with _gc3:
-                st.metric("ETH Dominance", f"{_ed:.1f}%")
-            with _gc4:
-                st.metric("24h Volume", _fmt_cap_d(_vol))
-            with _gc5:
-                st.metric("Market Regime", _alt.replace("_", " "))
-
-            if _gtr:
-                _chips = " ".join(
-                    f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
-                    f'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
-                    f'color:#00d4aa;font-size:12px;font-weight:600;margin:2px">{s}</span>'
-                    for s in _gtr[:10]
-                )
-                st.markdown(
-                    f'<div style="margin:4px 0 12px">'
-                    f'<span style="color:rgba(255,255,255,0.45);font-size:11px;'
-                    f'text-transform:uppercase;letter-spacing:0.8px;margin-right:10px">🔥 Trending</span>'
-                    + _chips + '</div>',
-                    unsafe_allow_html=True,
-                )
-
-
-
-    with _dash_tab3:
-        # ── Coin Selector Dropdown ─────────────────────────────────────────────────
-        _ui.section_header("Dive Deeper — Pick a Coin", "Choose a coin below to see the full breakdown: entry price, stop loss, AI prediction, news sentiment, and more", icon="🔬")
-
-        def _pair_label(r):
-            _d  = r.get("direction", "—")
-            _c  = r.get("confidence_avg_pct", 0)
-            _ic = direction_color(_d)
-            _hc = "  ⚡ TOP PICK" if r.get("high_conf") else ""
-            _tr = "  🔥" if r.get("trending") else ""
-            # Risk indicator for the dropdown label
-            _pos = r.get("position_size_pct") or 10
-            if _c >= 70 and _pos <= 15:
-                _risk = "🟢 Low Risk"
-            elif _c >= 55 and _pos <= 25:
-                _risk = "🟡 Med Risk"
-            else:
-                _risk = "🔴 Higher Risk"
-            return f"{_ic}  {r['pair']}  ·  {_c:.0f}% strength  ·  {_d}  ·  {_risk}{_hc}{_tr}"
-
-        _pair_labels  = [_pair_label(r) for r in sorted_results]
-        _label_to_r   = dict(zip(_pair_labels, sorted_results))
-
-        _selected_label = st.selectbox(
-            "Choose a coin to inspect",
-            options=_pair_labels,
-            index=0,
-            label_visibility="collapsed",
-            key="coin_selector",
-        )
-        r = _label_to_r[_selected_label]
-        # PERF-24: prefer full result from module-level store (avoids session_state serialization)
-        pair = r["pair"]
-        r = _SCAN_RESULTS_STORE.get(pair, r)  # fall back to session_state copy if store not populated
-
-        # ── Selected Coin Detail Panel ─────────────────────────────────────────────
-        pair        = r["pair"]
-        conf        = r.get("confidence_avg_pct", 0)
-        direction   = r.get("direction", "—")
-        bias        = r.get("strategy_bias", "—")
-        mtf         = r.get("mtf_alignment", 0)
-        price       = r.get("price_usd")
-        entry       = r.get("entry")
-        exit_       = r.get("exit")
-        stop        = r.get("stop_loss")
-        pos_pct     = r.get("position_size_pct")
-        is_hc       = r.get("high_conf", False)
-        is_trending = r.get("trending", False)
-
-        # ── DECISIVE TRADE ACTION CARD (always first — beginner to advanced) ─────
-        _d_up    = "BUY"  in direction.upper()
-        _d_down  = "SELL" in direction.upper()
-        _d_color = "#22c55e" if _d_up else ("#ef4444" if _d_down else "#f59e0b")
-        _d_shape = "▲" if _d_up else ("▼" if _d_down else "■")
-        _d_label = direction.replace("STRONG ", "STRONG ")  # preserve as-is
-        _tp1_act = r.get("tp1") or exit_
-        _conf_10 = max(1, min(10, round(conf / 10)))
-
-        # Per-timeframe signal breakdown (MTF table)
-        _tf_data    = r.get("timeframes", {})
-        _tf_order   = ["1h", "4h", "1d", "1w"]
-        _tf_labels  = {"1h": "1 Hour", "4h": "4 Hour", "1d": "Daily", "1w": "Weekly"}
-        _tf_rows_html = ""
-        _tf_agree_buy  = 0
-        _tf_agree_sell = 0
-        for _tf in _tf_order:
-            _tfc = _tf_data.get(_tf, {})
-            if not _tfc:
-                continue
-            _tfd  = str(_tfc.get("direction", "NO DATA"))
-            _tfpc = float(_tfc.get("confidence", 0) or 0)
-            _tf_is_buy  = "BUY"  in _tfd.upper()
-            _tf_is_sell = "SELL" in _tfd.upper()
-            if _tf_is_buy:  _tf_agree_buy  += 1
-            if _tf_is_sell: _tf_agree_sell += 1
-            _tf_color = "#22c55e" if _tf_is_buy else ("#ef4444" if _tf_is_sell else "#f59e0b")
-            _tf_shape = "▲" if _tf_is_buy else ("▼" if _tf_is_sell else "■")
-            _tf_bar_w = int(min(100, _tfpc))
-            _tf_rows_html += (
-                f"<tr>"
-                f"<td style='padding:3px 10px 3px 4px;color:#94a3b8;font-size:0.85rem;white-space:nowrap'>{_tf_labels.get(_tf,'')}</td>"
-                f"<td style='padding:3px 8px;color:{_tf_color};font-weight:700;font-size:0.85rem'>{_tf_shape} {_tfd}</td>"
-                f"<td style='padding:3px 8px;min-width:90px'>"
-                f"<div style='background:rgba(255,255,255,0.06);border-radius:4px;height:8px;overflow:hidden'>"
-                f"<div style='background:{_tf_color};width:{_tf_bar_w}%;height:100%;border-radius:4px'></div>"
-                f"</div></td>"
-                f"<td style='padding:3px 4px;color:{_tf_color};font-size:0.85rem'>{int(_tfpc)}%</td>"
-                f"</tr>"
-            )
-
-        _mtf_total = _tf_agree_buy + _tf_agree_sell
-        if _tf_agree_buy >= 3:
-            _mtf_verdict = "✅ STRONG ALIGNMENT — Multiple timeframes confirm BUY"
-            _mtf_vc = "#22c55e"
-        elif _tf_agree_sell >= 3:
-            _mtf_verdict = "✅ STRONG ALIGNMENT — Multiple timeframes confirm SELL"
-            _mtf_vc = "#ef4444"
-        elif _tf_agree_buy == 2:
-            _mtf_verdict = "⚡ PARTIAL BUY — 2 timeframes bullish, mixed overall"
-            _mtf_vc = "#86efac"
-        elif _tf_agree_sell == 2:
-            _mtf_verdict = "⚠️ PARTIAL SELL — 2 timeframes bearish, mixed overall"
-            _mtf_vc = "#f59e0b"
-        else:
-            _mtf_verdict = "⬛ MIXED — Timeframes disagree. Wait for clarity."
-            _mtf_vc = "#94a3b8"
-
-        # Cycle timing from session state (populated by top/bottom widget below)
-        _cycle_score = st.session_state.get(f"tb_score_{pair}", None)
-        if _cycle_score is not None:
-            if _cycle_score >= 80:    _cycle_text, _cycle_color = f"✅ EXCELLENT TIMING — Cycle Score {_cycle_score}/100 (Bottom Zone)", "#22c55e"
-            elif _cycle_score >= 65:  _cycle_text, _cycle_color = f"👍 GOOD TIMING — Cycle Score {_cycle_score}/100 (Buy Zone)", "#86efac"
-            elif _cycle_score >= 35:  _cycle_text, _cycle_color = f"⏳ NEUTRAL TIMING — Cycle Score {_cycle_score}/100 (Wait)", "#f59e0b"
-            elif _cycle_score >= 20:  _cycle_text, _cycle_color = f"⚠️ CAUTION — Cycle Score {_cycle_score}/100 (Top Zone)", "#f59e0b"
-            else:                     _cycle_text, _cycle_color = f"🛑 POOR TIMING — Cycle Score {_cycle_score}/100 (Extreme Top)", "#ef4444"
-            _cycle_row = (f"<tr><td style='padding:6px 10px 6px 4px;color:#64748b;font-size:0.85rem;font-weight:600'>CYCLE TIMING</td>"
-                          f"<td colspan='3' style='padding:6px 4px;color:{_cycle_color};font-size:0.85rem;font-weight:700'>{_cycle_text}</td></tr>")
-        else:
-            _cycle_row = ""
-
-        # P0 audit fix — Trade Action Card was using `f"…" if val else f"…"`
-        # ternaries spliced INSIDE a chain of implicit string concatenation.
-        # Python parses `A B C if cond else D E` as `(A B C) if cond else (D E)`,
-        # so when `entry`/`stop`/`tp1_act` were truthy the closing `</div>`
-        # following each cell was dropped, producing malformed HTML and breaking
-        # the 3-col grid layout. Build each cell's inner-value once, then drop
-        # it into a single uniform card template.
-        _entry_str = f"${entry:,.4f}" if entry else "—"
-        _stop_str  = f"${stop:,.4f}"  if stop  else "—"
-        _tp_str    = f"${_tp1_act:,.4f}" if _tp1_act else "—"
-        _grad_rgb = ('34,197,94' if _d_up
-                     else ('239,68,68' if _d_down else '245,158,11'))
-        st.markdown(
-            f"<div style='background:linear-gradient(135deg,rgba({_grad_rgb},0.08) 0%,rgba(0,0,0,0.2) 100%);"
-            f"border:1px solid {_d_color}44;border-left:5px solid {_d_color};"
-            f"border-radius:12px;padding:18px 22px;margin-bottom:16px'>"
-            f"<div style='display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap'>"
-            f"<div style='font-size:2.2rem;font-weight:900;color:{_d_color};line-height:1'>{_d_shape} {_d_label}</div>"
-            f"<div style='background:{_d_color}22;border:1px solid {_d_color}66;border-radius:20px;padding:4px 14px;"
-            f"color:{_d_color};font-size:0.85rem;font-weight:700'>{_conf_10}/10 strength · {conf:.0f}%</div>"
-            f"<div style='color:#64748b;font-size:0.85rem;margin-left:auto'>{pair} · {bias}</div>"
-            f"</div>"
-            f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>"
-            f"<div style='background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 14px'>"
-            f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Entry Zone</div>"
-            f"<div style='color:#e2e8f0;font-size:1rem;font-weight:700'>{_entry_str}</div>"
-            f"</div>"
-            f"<div style='background:rgba(239,68,68,0.06);border-radius:8px;padding:10px 14px'>"
-            f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Stop Loss</div>"
-            f"<div style='color:#ef4444;font-size:1rem;font-weight:700'>{_stop_str}</div>"
-            f"</div>"
-            f"<div style='background:rgba(34,197,94,0.06);border-radius:8px;padding:10px 14px'>"
-            f"<div style='color:#475569;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:2px'>Take Profit</div>"
-            f"<div style='color:#22c55e;font-size:1rem;font-weight:700'>{_tp_str}</div>"
-            f"</div>"
-            f"</div>"
-            f"<div style='font-size:0.75rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px'>Timeframe Breakdown</div>"
-            f"<table style='width:100%;border-collapse:collapse'>"
-            f"{_tf_rows_html}"
-            f"<tr><td colspan='4' style='padding:6px 4px;color:{_mtf_vc};font-size:0.85rem;font-weight:700;border-top:1px solid rgba(255,255,255,0.06)'>{_mtf_verdict}</td></tr>"
-            f"{_cycle_row}"
-            f"</table>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        _ui.signal_card_header(
-            pair=pair, direction=direction, conf=conf,
-            bias=bias, regime=r.get("regime", "—"), is_hc=is_hc,
-        )
-
-        # Signal strength visual dots + risk badge — beginner at-a-glance indicators
-        _str_dots  = _ui.signal_strength_stars(conf)
-        _risk_chip = _ui.risk_level_badge_html(conf, pos_pct)
-        st.markdown(
-            f'<div style="display:flex;align-items:center;gap:16px;margin:-6px 0 10px 0">'
-            f'{_str_dots}'
-            f'<span style="opacity:0.3">|</span>'
-            f'{_risk_chip}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Plain English summary — designed for users unfamiliar with trading terms
-        _plain_summary = _ui.signal_plain_english(
-            pair=pair, direction=direction, conf=conf, mtf=mtf,
-            regime=r.get("regime", ""), entry=entry, stop=stop, exit_=exit_,
-        )
-        _ui.plain_english_box(_plain_summary, direction)
-
-        if is_trending:
-            st.markdown(
-                '<span style="display:inline-block;padding:2px 10px;border-radius:20px;'
-                'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);'
-                'color:#00d4aa;font-size:11px;font-weight:600;margin-bottom:6px">'
-                '🔥 Trending on CoinGecko right now</span>',
-                unsafe_allow_html=True,
-            )
-
-        # #26 Pi Cycle Top warning on the coin detail card
-        _r_pi_flags = r.get("signal_flags", [])
-        if "PI_CYCLE_TOP_WARNING" in _r_pi_flags:
-            st.warning(
-                "⚠️ **PI_CYCLE_TOP_WARNING** — Confidence capped at 30% (cycle top indicator active). "
-                "Exercise extreme caution with new BUY entries."
-            )
-
-        # ── Row 1: Price · Entry · Stop Loss ──────────────────────────────────────
-        top_cols = st.columns(3)
-        _live_tick = _ws.get_price(pair)
-        if _live_tick and "price" in _live_tick and "change_24h_pct" in _live_tick:
-            top_cols[0].metric(
-                "Current Price ⬤ LIVE",
-                f"${_live_tick['price']:,.4f}",
-                delta=f"{_live_tick['change_24h_pct']:+.2f}% today",
-                help="Live price from OKX.",
-            )
-        else:
-            top_cols[0].metric("Current Price", f"${price:,.4f}" if price else "—")
-        _entry_label = "Buy At" if "BUY" in direction.upper() else ("Sell At" if "SELL" in direction.upper() else "Entry Price")
-        top_cols[1].metric(_entry_label, f"${entry:,.4f}" if entry else "—",
-                           help="The price to enter this trade. Try to get close to this level.")
-        top_cols[2].metric("Stop Loss — Exit If Wrong", f"${stop:,.4f}" if stop else "—",
-                           help="If price hits this level, exit the trade to limit your loss.")
-
-        # ── Row 2: Take Profit · Signal Strength · Trade Size ─────────────────────
-        bot_cols = st.columns(3)
-        _tp1_val = r.get("tp1") or exit_
-        bot_cols[0].metric("🎯 Cash-Out Price", f"${_tp1_val:,.4f}" if _tp1_val else "—",
-                           help="This is your TARGET — the price to sell at and take your profit. Think of it as the finish line.")
-        # Macro Trend Score — weighted average across all 4 timeframes (1H:10%, 4H:20%, 1D:35%, 1W:35%)
-        # Renamed from "Confidence Score" to "Macro Trend Score" to clarify it is the combined view.
-        _score_10 = max(1, min(10, round(conf / 10)))
-        bot_cols[1].metric("📈 Macro Trend Score", f"{_score_10}/10  ({conf:.0f}%)",
-                           help=(
-                               "The Macro Trend Score combines all timeframes into one number — "
-                               "think of it as the overall direction of the boat. "
-                               "Weights: 1H=10%, 4H=20%, Daily=35%, Weekly=35%. "
-                               "Above 65% = actionable signal. 7+/10 = strong conviction. "
-                               "5 or below = mixed — wait for clarity."
-                           ))
-        # #50 Fractional Kelly position sizing — display recommended size from Kelly formula
-        _kelly_pos_pct = pos_pct   # default to model-computed size
-        try:
-            import risk_metrics as _risk_mod
-            # Use cached backtest DF — avoids an expensive uncached DB read on every card render
-            _bt_kelly = _cached_backtest_df()
-            if not _bt_kelly.empty:
-                _bt_valid = _bt_kelly[_bt_kelly['pnl_pct'].notna()]
-                if len(_bt_valid) >= 20:
-                    _wins_k   = _bt_valid[_bt_valid['pnl_pct'] > 0]
-                    _losses_k = _bt_valid[_bt_valid['pnl_pct'] <= 0]
-                    if len(_wins_k) > 0 and len(_losses_k) > 0:
-                        _wr  = len(_wins_k) / len(_bt_valid)
-                        _aw  = float(_wins_k['pnl_pct'].mean()) / 100
-                        _al  = float(abs(_losses_k['pnl_pct'].mean())) / 100
-                        _kf  = _risk_mod.compute_kelly_fraction(_wr, _aw, _al, fraction=0.25)
-                        _kelly_pos_pct = _kf.get("recommended_position_pct", pos_pct)
-        except Exception as _kelly_ui_err:
-            logger.debug("[App] Kelly position size widget failed: %s", _kelly_ui_err)
-        bot_cols[2].metric(
-            "Suggested Trade Size",
-            f"{_kelly_pos_pct}% of funds" if _kelly_pos_pct else "—",
-            help=(
-                "Recommended position size as % of portfolio based on historical win rate. "
-                "Fractional Kelly (25%) reduces risk of ruin. "
-                "If you have $1,000 and it says 10%, use $100."
-            ),
-        )
-
-        # Item 7: "What Does This Mean For Me?" — beginner/intermediate contextual dollar summary
-        if _user_lv in ("beginner", "intermediate"):
-            try:
-                _portfolio_sz = float(_cached_alerts_config().get("portfolio_size", 1000))
-            except Exception:
-                _portfolio_sz = 1000.0
-            st.markdown(
-                _ui.wdtmfm_html(direction, entry, stop, exit_, conf, _portfolio_sz),
-                unsafe_allow_html=True,
-            )
-
-        # Gradient confidence bar (#62) — signal-aware color-coded bar
-        st.markdown(_ui.render_confidence_bar(conf, direction), unsafe_allow_html=True)
-
-        # ── #59 Key metrics row with beginner tooltips ─────────────────────────────
-        _km_tf1 = (list(r.get("timeframes", {}).values()) or [{}])[0]
-        try:
-            _km_rsi_raw = _km_tf1.get("rsi")
-            _km_rsi = float(_km_rsi_raw) if _km_rsi_raw is not None else None
-        except (TypeError, ValueError):
-            _km_rsi = None
-        try:
-            _km_adx_raw = _km_tf1.get("adx")
-            _km_adx = float(_km_adx_raw) if _km_adx_raw is not None else None
-        except (TypeError, ValueError):
-            _km_adx = None
-        try:
-            _km_fr_raw = r.get("funding_rate_pct") or (r.get("timeframes", {}).get("1h", {}) or {}).get("funding")
-            _km_fr = float(_km_fr_raw) if _km_fr_raw is not None else None
-        except (TypeError, ValueError):
-            _km_fr = None
-        _km_chg = (_ws.get_price(pair) or {}).get("change_24h_pct")
-        _km_c1, _km_c2, _km_c3, _km_c4 = st.columns(4)
-        _km_c1.metric(
-            "Current Price",
-            f"${price:,.4f}" if price else "—",
-            delta=f"{_km_chg:+.2f}% 24h" if _km_chg is not None else None,
-        )
-        _km_c2.metric(
-            "RSI (1h)",
-            f"{_km_rsi:.1f}" if _km_rsi is not None else "—",
-            help="RSI above 70 = overbought, below 30 = oversold. Best range: 40-60 for entries.",
-        )
-        _km_c3.metric(
-            "ADX (1h)",
-            f"{_km_adx:.1f}" if _km_adx is not None else "—",
-            help="Trend strength indicator. Above 25 = strong trend. Below 20 = choppy/ranging.",
-        )
-        _km_c4.metric(
-            "Funding Rate",
-            f"{_km_fr:+.4f}%" if _km_fr is not None else "—",
-            help="Positive = longs pay shorts (bullish market). Negative = shorts pay longs (bearish market). Extreme values warn of reversals.",
-        )
-
-        # AI agent agreement count — "X of 6 AI models agree" is more readable than a raw score
-        _consensus     = r.get("consensus", 0.0)
-        _agents_agree  = round(_consensus * 6)   # consensus = fraction of 6 agents with abs(vote)>70
-        _agree_color   = "#00d4aa" if _agents_agree >= 4 else ("#f59e0b" if _agents_agree >= 2 else "#ef4444")
-
-        # Signal accuracy badge — shows historical win rate for this pair/direction
-        try:
-            _acc_data = _cached_signal_win_rate(pair=pair, direction=direction, days=90)
-            _acc_badge = _ui.signal_accuracy_badge_html(
-                win_rate    = _acc_data.get("win_rate", 0.5),
-                sample_size = _acc_data.get("sample_size", 0),
-                signal_type = direction.replace("STRONG ", ""),
-            )
-        except Exception:
-            _acc_badge = ""
-
-        st.markdown(
-            f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;'
-            f'font-size:12px;color:rgba(168,180,200,0.6);margin:-4px 0 10px 0">'
-            f'<span>'
-            f'<span style="color:{_agree_color};font-weight:700">{_agents_agree} of 6</span>'
-            f' AI models agree on this signal'
-            f'</span>'
-            f'{_acc_badge}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ── Copy Signal Summary (E2) ────────────────────────────────────────────
-        try:
-            from datetime import datetime as _dt_sig, timezone as _tz_sig
-            _sig_ts = _dt_sig.now(_tz_sig.utc).strftime("%Y-%m-%d %H:%M UTC")
-            _sig_entry_str  = f"${entry:,.4f}"  if entry  else "—"
-            _sig_stop_str   = f"${stop:,.4f}"   if stop   else "—"
-            _sig_target_str = f"${exit_:,.4f}"  if exit_  else "—"
-            _sig_summary = (
-                f"[{pair}] {direction}  |  Confidence: {conf:.0f}%  |  "
-                f"Entry: {_sig_entry_str}  |  Stop: {_sig_stop_str}  |  "
-                f"Target: {_sig_target_str}  |  {_sig_ts}  — SuperGrok Signal Model"
-            )
-            with st.expander("📋 Copy Signal Summary", expanded=False):
-                st.code(_sig_summary, language=None)
-                st.caption("Click the copy icon (top-right of the box above) to copy this signal.")
-        except Exception:
-            pass
-
-        # ── Item 6 Tier 2: "Why this signal?" plain-English reasoning ─────────────
-        if _user_lv in ("beginner", "intermediate"):
-            _why_html = _ui.why_signal_html(
-                direction     = direction,
-                conf          = conf,
-                rsi           = _km_rsi,
-                adx           = _km_adx,
-                mtf           = mtf,
-                consensus     = r.get("consensus", 0.0),
-                regime        = r.get("regime", ""),
-                bias          = r.get("strategy_bias", ""),
-                funding_rate  = _km_fr,
-            )
-            if _why_html:
-                with st.expander("🔍 Why this signal? — Plain-English reasons", expanded=False):
-                    st.markdown(_why_html, unsafe_allow_html=True)
-
-        # ── Top/Bottom Score widget ────────────────────────────────────────────────
-        try:
-            from top_bottom_detector import compute_composite_top_bottom_score, render_top_bottom_widget as _rtbw
-
-            @st.cache_data(ttl=3600, show_spinner=False, max_entries=120)
-            def _sg_fetch_ohlcv_df(p: str, tf: str, limit: int = 180):
-                """Fetch OHLCV via exchange fallback chain → DataFrame.
-
-                max_entries=120 caps memory at ~37 pairs × 3 TFs = 111 slots max.
-                Uses the top-level `model` alias (crypto_model_core) — NOT a separate
-                `import model` which would fail (no model.py exists in this directory).
-                """
-                try:
-                    raw = model.fetch_chart_ohlcv(p, tf, limit=limit)
-                    if not raw:
-                        return None
-                    _df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
-                    _df[["open", "high", "low", "close", "volume"]] = (
-                        _df[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
-                    )
-                    return _df.dropna(subset=["close"]).reset_index(drop=True)
-                except Exception as _e:
-                    logging.warning("top_bottom ohlcv fetch %s %s: %s", p, tf, _e)
-                    return None
-
-            with st.spinner(f"Computing top/bottom score for {pair}..."):
-                _tb_df_d  = _sg_fetch_ohlcv_df(pair, "1d",  180)
-                _tb_df_4h = _sg_fetch_ohlcv_df(pair, "4h",  120)
-                _tb_df_1h = _sg_fetch_ohlcv_df(pair, "1h",  100)
-
-                # Macro + sentiment from existing scan result
-                _tb_macro = {}
-                _tb_sent  = {}
-                _tb_oc = r.get("onchain_data") or {}
-                if _tb_oc:
-                    _tb_macro["mvrv_z_score"]       = _tb_oc.get("mvrv_z")
-                    _tb_macro["sopr"]               = _tb_oc.get("sopr")
-                    _tb_macro["hash_ribbons_signal"] = _tb_oc.get("hash_ribbon_signal")
-                if r.get("pi_cycle_ratio"):
-                    _tb_macro["pi_cycle_ratio"] = r.get("pi_cycle_ratio")
-                _tb_fng = r.get("fng_value")
-                if _tb_fng is not None:
-                    _tb_sent["fear_greed_value"] = float(_tb_fng)
-                _tb_fr = r.get("funding_rate_pct")
-                if _tb_fr is not None:
-                    _tb_sent["funding_rate_annualized"] = float(_tb_fr) * 365 * 3  # 8h rate → annualized approx
-
-                _tb_result = None
-                if _tb_df_d is not None:
-                    _tb_result = compute_composite_top_bottom_score(
-                        df=_tb_df_d,
-                        macro_data=_tb_macro or None,
-                        sentiment_data=_tb_sent or None,
-                        df_1h=_tb_df_1h,
-                        df_4h=_tb_df_4h,
-                        symbol=pair.replace("/USDT", "").replace("/USD", ""),
-                    )
-
-            if _tb_result:
-                # Save score to session state so the Trade Action Card (above) can show cycle timing
-                st.session_state[f"tb_score_{pair}"] = _tb_result.get("score", 50)
-                st.markdown("---")
-                _ui.section_header("Top / Bottom Timing Score", "Where is this coin in its current cycle?", icon="📈")
-                _rtbw(_tb_result, user_level=_user_lv)
-                if _user_lv == "beginner":
-                    st.caption(
-                        "ⓘ This score uses 5 layers of analysis: On-Chain Macro · Sentiment · "
-                        "RSI/MACD Divergence · Market Structure (BOS/CHoCH, Order Blocks) · "
-                        "Volatility (Chandelier Exit, Squeeze). Score 80–100 = historical bottom zone."
-                    )
-        except ImportError:
-            pass
-        except Exception as _tb_exc:
-            logging.warning("Top/Bottom widget error for %s: %s", pair, _tb_exc)
-
-        # ── Advanced Details (collapsed by default) ────────────────────────────────
-        _adv_label = "📊 Technical Details" if _user_lv == "beginner" else "📊 More Details — Timeframes & Technicals"
-        with st.expander(_adv_label, expanded=False):
-            tp2       = r.get("tp2")
-            tp3       = r.get("tp3")
-            lev_rec   = r.get("leverage_rec") or {}
-            lev_label = lev_rec.get("label", "—")
-            lev_basis = lev_rec.get("basis", "")
-            mtf_conf  = r.get("mtf_confirmed", True)
-            rr        = r.get("rr_ratios") or {}
-
-            adv_cols = st.columns(4)
-            # Show em-dash when mtf_alignment is 0 and no valid timeframes had data
-            _mtf_display = "—" if mtf == 0 and not any(
-                td.get("direction") not in ("NO DATA", "N/A", "LOW VOL")
-                for td in r.get("timeframes", {}).values()
-            ) else f"{mtf}%"
-            adv_cols[0].metric("Timeframes Agreeing", _mtf_display, help=_ui.HELP_MTF_ALIGN)
-            adv_cols[1].metric("Target 2", f"${tp2:,.4f}" if tp2 else "—",
-                               delta=rr.get("tp2", ""), help="Second profit target — sell another 40% here.")
-            adv_cols[2].metric("Target 3", f"${tp3:,.4f}" if tp3 else "—",
-                               delta=rr.get("tp3", ""), help="Final ambitious target — hold last 20% here.")
-            adv_cols[3].metric(
-                "Leverage (Futures Only)",
-                lev_label,
-                delta="✓ All timeframes agree" if mtf_conf else "⚠️ Mixed signals",
-                delta_color="normal" if mtf_conf else "inverse",
-                help=(f"For futures trading only. Basis: {lev_basis}. " if lev_basis else "") +
-                     "Use 1× for spot trading. Never use leverage you don't understand.",
-            )
-
-            tf_data = r.get("timeframes", {})
-            if tf_data:
-                # ── Shape + color badge helper (CLAUDE.md §8: never color alone) ───────
-                _DIR_SHAPE = {
-                    "STRONG BUY":  "▲▲",
-                    "BUY":         "▲",
-                    "HOLD":        "■",
-                    "NEUTRAL":     "■",
-                    "SELL":        "▽",
-                    "STRONG SELL": "▼▼",
-                    "LOW VOL":     "◌",
-                    "NO DATA":     "—",
-                }
-                _DIR_COLOR = {
-                    "STRONG BUY":  "#22c55e",
-                    "BUY":         "#00d4aa",
-                    "HOLD":        "#94a3b8",
-                    "NEUTRAL":     "#94a3b8",
-                    "SELL":        "#f59e0b",
-                    "STRONG SELL": "#ef4444",
-                    "LOW VOL":     "#6b7280",
-                    "NO DATA":     "#6b7280",
-                }
-
-                # ── Alignment indicator — count bullish / bearish / hold timeframes ─────
-                _TF_ORDER  = ["1h", "4h", "1d", "1w"]
-                _TF_PLAIN  = {"1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W"}
-                _TF_FULL   = {"1h": "1 Hour", "4h": "4 Hours", "1d": "Daily", "1w": "Weekly"}
-                _bull_tfs, _bear_tfs, _hold_tfs = [], [], []
-                for _atf in _TF_ORDER:
-                    _adir = tf_data.get(_atf, {}).get("direction", "NO DATA")
-                    if "BUY" in _adir:    _bull_tfs.append(_TF_PLAIN[_atf])
-                    elif "SELL" in _adir: _bear_tfs.append(_TF_PLAIN[_atf])
-                    else:                 _hold_tfs.append(_TF_PLAIN[_atf])
-
-                _n_bull = len(_bull_tfs); _n_bear = len(_bear_tfs); _n_tot = len(tf_data)
-                if _n_bull >= 3:
-                    _align_color = "#22c55e"
-                    _align_text  = f"▲ {_n_bull} of {_n_tot} timeframes BULLISH ({', '.join(_bull_tfs)})"
-                elif _n_bear >= 3:
-                    _align_color = "#ef4444"
-                    _align_text  = f"▼ {_n_bear} of {_n_tot} timeframes BEARISH ({', '.join(_bear_tfs)})"
-                elif _n_bull > _n_bear:
-                    _align_color = "#00d4aa"
-                    _align_text  = f"▲ Leaning bullish — {_n_bull} buy, {_n_bear} sell" + (f" ({', '.join(_hold_tfs)} neutral)" if _hold_tfs else "")
-                elif _n_bear > _n_bull:
-                    _align_color = "#f59e0b"
-                    _align_text  = f"▽ Leaning bearish — {_n_bear} sell, {_n_bull} buy"
-                else:
-                    _align_color = "#94a3b8"
-                    _align_text  = f"■ Mixed signals — {_n_bull} buy, {_n_bear} sell, {len(_hold_tfs)} hold"
-
-                # ── Section header row ────────────────────────────────────────────────
-                _tf_head_col, _tf_info_col = st.columns([5, 1])
-                with _tf_head_col:
-                    st.markdown(
-                        f'<div style="margin:8px 0 2px 0">'
-                        f'<span style="font-weight:700;font-size:14px">⏱ Micro Trends — What Each Timeframe Says</span>'
-                        f'</div>'
-                        f'<div style="font-size:12px;color:{_align_color};font-weight:600;margin-bottom:6px">'
-                        f'{_align_text}'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                with _tf_info_col:
-                    _ui.tf_column_guide_popover()
-
-                # ── Beginner: simplified cards (shape + plain English only) ───────────
-                if _user_lv == "beginner":
-                    _beg_cols = st.columns(len(tf_data))
-                    for _ci, (_btf, _btd) in enumerate(tf_data.items()):
-                        _bdir  = _btd.get("direction", "NO DATA")
-                        _bconf = _btd.get("confidence", 0)
-                        _bshp  = _DIR_SHAPE.get(_bdir, "—")
-                        _bclr  = _DIR_COLOR.get(_bdir, "#94a3b8")
-                        _bno   = _bdir in ("NO DATA", "N/A", "LOW VOL")
-                        _brsi  = _btd.get("rsi", None)
-                        try:
-                            _brsi_str = f"RSI {float(_brsi):.0f}" if _brsi is not None else ""
-                        except (TypeError, ValueError):
-                            _brsi_str = ""
-                        _plain_action = {
-                            "STRONG BUY": "Strong signal to buy",
-                            "BUY": "Signal to buy",
-                            "HOLD": "Hold — no action",
-                            "NEUTRAL": "Hold — no action",
-                            "SELL": "Signal to sell",
-                            "STRONG SELL": "Strong signal to sell",
-                            "LOW VOL": "Low volume — skip",
-                            "NO DATA": "No data",
-                        }.get(_bdir, _bdir)
-                        with _beg_cols[_ci]:
-                            st.markdown(
-                                f'<div style="border:1px solid rgba(255,255,255,0.08);border-radius:10px;'
-                                f'padding:12px 10px;text-align:center;background:rgba(255,255,255,0.03)">'
-                                f'<div style="font-size:11px;color:#94a3b8;font-weight:600;'
-                                f'text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">'
-                                f'{_TF_FULL.get(_btf, _btf)}</div>'
-                                f'<div style="font-size:22px;font-weight:800;color:{_bclr};'
-                                f'letter-spacing:0.02em;margin-bottom:4px">{_bshp}</div>'
-                                f'<div style="font-size:12px;color:{_bclr};font-weight:700;'
-                                f'margin-bottom:4px">{_bdir.replace("_", " ")}</div>'
-                                f'<div style="font-size:11px;color:#64748b">'
-                                f'{"—" if _bno else f"{_bconf:.0f}% confidence"}'
-                                f'</div>'
-                                f'<div style="font-size:10px;color:#475569;margin-top:2px">'
-                                f'{_brsi_str}</div>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-                    # Plain-English alignment summary for beginners
-                    st.markdown(
-                        f'<div style="font-size:12px;color:#94a3b8;margin:8px 0 4px 0;'
-                        f'padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;'
-                        f'border-left:3px solid {_align_color}">'
-                        f'<b>What does this mean?</b> Each box shows one time period — '
-                        f'1 Hour is the shortest view (like today\'s weather), '
-                        f'Weekly is the longest view (like the season). '
-                        f'When most show ▲ BUY, the overall direction is bullish. '
-                        f'When they disagree, wait for clarity before acting.'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                else:
-                    # ── Intermediate + Advanced: full table with badges + confidence bars ─
-                    _tf_rows = []
-                    for tf in _TF_ORDER:
-                        if tf not in tf_data:
-                            continue
-                        td = tf_data[tf]
-                        _td_dir  = td.get("direction", "—")
-                        _no_data = _td_dir in ("NO DATA", "N/A")
-                        _td_conf = td.get("confidence", 0)
-                        _td_shp  = _DIR_SHAPE.get(_td_dir, "—")
-                        _rsi_raw = td.get("rsi", "—")
-                        try:
-                            _rsi_v = float(_rsi_raw)
-                            if _rsi_v >= 70:   _rsi_str = f"🔥 Overheated ({_rsi_v:.0f})"
-                            elif _rsi_v <= 30: _rsi_str = f"🧊 Very Cool ({_rsi_v:.0f})"
-                            elif _rsi_v >= 55: _rsi_str = f"Warm ({_rsi_v:.0f})"
-                            elif _rsi_v <= 45: _rsi_str = f"Cool ({_rsi_v:.0f})"
-                            else:              _rsi_str = f"Neutral ({_rsi_v:.0f})"
-                        except (ValueError, TypeError):
-                            _rsi_str = str(_rsi_raw)
-
-                        _adx_raw = td.get("adx")
-                        _adx_str = f"{_adx_raw:.1f}" if isinstance(_adx_raw, (int, float)) else "—"
-                        _row = {
-                            "Timeframe":       _TF_FULL.get(tf, tf),
-                            "Signal":          f"{_td_shp} {_td_dir}",
-                            "Confidence":      "—" if _no_data else f"{_td_conf:.0f}%",
-                            "Heat (RSI)":      _rsi_str,
-                            "Trend (ADX)":     _adx_str,
-                            "Direction":       td.get("supertrend", "—"),
-                            "Market Mode":     _ui.regime_label(td.get("regime", "")),
-                        }
-                        # Advanced: also show strategy bias
-                        if _user_lv == "advanced":
-                            _row["Strategy"] = _ui.bias_label(td.get("strategy_bias", ""))
-                            _row["Agents"]   = f"{td.get('agent_vote', 'N/A')}"
-                        _tf_rows.append(_row)
-
-                    if _tf_rows:
-                        _tf_df = pd.DataFrame(_tf_rows).set_index("Timeframe")
-                        st.dataframe(_tf_df, width='stretch')
-
-        # ── Liquidation Cascade Risk card (inside signal card) ───────────────────
-        try:
-            _casc = _cached_liquidation_cascade(pair)
-            if _casc and not _casc.get("error"):
-                st.markdown(
-                    _ui.cascade_risk_card_html(
-                        score      = _casc.get("score", 0),
-                        risk_level = _casc.get("risk_level", "LOW"),
-                        direction  = _casc.get("direction", "NEUTRAL"),
-                        components = _casc.get("components"),
-                    ),
-                    unsafe_allow_html=True,
-                )
-        except Exception as _casc_err:
-            logger.debug("[App] cascade risk card render failed: %s", _casc_err)
-
-        # ── News Sentiment ─────────────────────────────────────────────────────────
-        if _news_mod is not None:
-            try:
-                _news = _cached_news_sentiment(pair)
-                _nsig = _news.get("sentiment", "NEUTRAL")
-                _nscore = _news.get("score", 0.0)
-                _nsig_color = "🟢" if _nsig == "BULLISH" else "🔴" if _nsig == "BEARISH" else "⚪"
-                with st.expander(f"📰 News Sentiment — {_nsig_color} {_nsig}", expanded=False):
-                    _nc0, _nc1, _nc2, _nc3 = st.columns(4)
-                    _nc0.metric("Sentiment", f"{_nsig_color} {_nsig}")
-                    _nc1.metric("Score", f"{_nscore:+.2f}")
-                    _nc2.metric("Bullish Headlines", _news.get("bullish", 0))
-                    _nc3.metric("Bearish Headlines", _news.get("bearish", 0))
-                    _theme = _news.get("key_theme", "")
-                    if _theme:
-                        st.caption(f"Key theme: {_theme}")
-                    st.caption(f"Source: {_news.get('source','—')} · {_news.get('articles_analyzed',0)} articles analyzed")
-            except Exception as _ne:
-                logger.debug("[News] display error: %s", _ne)
-                st.caption("News sentiment temporarily unavailable — try refreshing in 30 seconds.")
-
-        # ── Whale Tracker ───────────────────────────────────────────────────────────
-        if _whale_mod is not None:
-            try:
-                _whale = _cached_whale_activity(pair, float(price or 0))
-                _wsig = _whale.get("signal", "NEUTRAL")
-                if _wsig != "NEUTRAL" or _whale.get("whale_count", 0) > 0:
-                    _wemoji = "🐋" if "ACCUMULATION" in _wsig else "🔴" if "DISTRIBUTION" in _wsig else "⚪"
-                    with st.expander(f"{_wemoji} Whale Activity — {_wsig}", expanded=False):
-                        _wc1, _wc2, _wc3, _wc4 = st.columns(4)
-                        _wc1.metric("Signal", _wsig.replace("_", " ").title())
-                        _wc2.metric("Whale Txns", _whale.get("whale_count", 0))
-                        _wc3.metric("Large Whales", _whale.get("large_whale_count", 0))
-                        _total_usd = _whale.get("total_usd", 0)
-                        _wc4.metric("Total Volume", f"${_total_usd/1e6:.1f}M" if _total_usd >= 1e6 else f"${_total_usd:,.0f}")
-            except Exception as _whale_widget_err:
-                logging.debug("[UI] Whale tracker widget render failed: %s", _whale_widget_err)
-
-        # ── ML Price Prediction ─────────────────────────────────────────────────────
-        # PERF-22: run get_enriched_df() in a background thread with 10s timeout so
-        # TA computation (RSI/MACD/BB/Ichimoku/SuperTrend etc.) doesn't block the main render thread.
-        if _ml_mod is not None:
-            try:
-                _ml_tf = model.TIMEFRAMES[0] if model.TIMEFRAMES else "1h"
-                import concurrent.futures as _cf22
-                with st.spinner("Calculating signals..."):
-                    # CRITICAL: Do NOT use 'with ThreadPoolExecutor as ex' here.
-                    # The context manager calls shutdown(wait=True) on exit, which
-                    # blocks until get_enriched_df() finishes even after TimeoutError
-                    # — causing the exact 60-second 503 health-check failures seen
-                    # when switching pairs. Use shutdown(wait=False) in finally instead.
-                    _ex22 = _cf22.ThreadPoolExecutor(max_workers=1)
-                    try:
-                        _ml_future = _ex22.submit(
-                            model.get_enriched_df,
-                            model.get_exchange_instance(model.TA_EXCHANGE),
-                            pair,
-                            _ml_tf,
-                        )
-                        try:
-                            _ml_df = _ml_future.result(timeout=10)
-                        except _cf22.TimeoutError:
-                            _ml_df = None
-                    finally:
-                        _ex22.shutdown(wait=False)
-                if _ml_df is not None and not _ml_df.empty:
-                    _ml = _ml_mod.get_ml_prediction(pair, _ml_tf, _ml_df)
-                    _ml_pred = _ml.get("prediction", "UNCERTAIN")
-                    _ml_prob = _ml.get("probability", 0.5)
-                    _ml_acc  = _ml.get("model_accuracy", 0.0)
-                    _ml_sig  = _ml.get("signal", "NEUTRAL")
-                    _ml_col  = "#00d4aa" if _ml_sig == "BUY" else "#ef4444" if _ml_sig == "SELL" else "#f59e0b"
-                    _ml_emoji = "📈" if _ml_sig == "BUY" else ("📉" if _ml_sig == "SELL" else "😐")
-                    _ml_plain = (
-                        "The AI thinks the price will go UP in the next few hours."
-                        if _ml_sig == "BUY" else
-                        "The AI thinks the price will go DOWN in the next few hours."
-                        if _ml_sig == "SELL" else
-                        "The AI isn't sure which way the price will go."
-                    )
-                    st.markdown(
-                        f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
-                        f'padding:12px 16px;margin:8px 0;border-left:3px solid {_ml_col};">'
-                        f'<div style="font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:4px;">'
-                        f'{_ml_emoji} AI Price Prediction — Next Few Hours</div>'
-                        f'<div style="font-size:12px;color:#94a3b8;">{_ml_plain}</div>'
-                        f'<div style="font-size:11px;color:rgba(168,180,200,0.5);margin-top:6px;">'
-                        f'Confidence: <span style="color:{_ml_col};font-weight:700;">{_ml_prob:.0%}</span>'
-                        f' &nbsp;·&nbsp; Model accuracy: {_ml_acc:.0%}'
-                        f' &nbsp;·&nbsp; <span style="color:{_ml_col};">{_ml_pred}</span></div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    # ── #48 HMM Regime — displayed alongside existing macro regime ────────
-                    try:
-                        if pair == "BTC/USDT" and not _ml_df.empty and "close" in _ml_df.columns:
-                            _hmm_prices = list(_ml_df["close"].dropna().tail(400))
-                            _hmm_res    = _ml_mod.fit_hmm_regime(_hmm_prices)
-                            _hmm_state  = _hmm_res.get("current_state", "UNKNOWN")
-                            _hmm_conf   = _hmm_res.get("confidence", 0.0)
-                            _hmm_probs  = _hmm_res.get("state_probabilities", [0.0, 0.0, 0.0])
-                            if _hmm_state != "UNKNOWN" and not _hmm_res.get("error"):
-                                _hmm_col = (
-                                    "#00d4aa" if _hmm_state == "Bull" else
-                                    "#ef4444" if _hmm_state == "Bear" else
-                                    "#f59e0b"
-                                )
-                                # Build state-probability mini-bar chart labels
-                                _labels = ["Bear", "Neutral", "Bull"]
-                                _bar_parts = ""
-                                for _lbl, _pb in zip(_labels, _hmm_probs):
-                                    _bw = int(round(_pb * 100))
-                                    _bc = "#00d4aa" if _lbl == "Bull" else "#ef4444" if _lbl == "Bear" else "#f59e0b"
-                                    _bar_parts += (
-                                        f'<div style="margin-bottom:3px">'
-                                        f'<div style="display:flex;align-items:center;gap:6px">'
-                                        f'<span style="font-size:10px;color:#9ca3af;width:44px">{_lbl}</span>'
-                                        f'<div style="flex:1;background:#1f2937;border-radius:3px;height:6px">'
-                                        f'<div style="background:{_bc};width:{_bw}%;height:6px;border-radius:3px"></div>'
-                                        f'</div>'
-                                        f'<span style="font-size:10px;color:#9ca3af;width:32px;text-align:right">{_pb:.0%}</span>'
-                                        f'</div></div>'
-                                    )
-                                st.markdown(
-                                    f'<div style="background:rgba(26,31,46,0.8);border-radius:10px;'
-                                    f'padding:12px 16px;margin:8px 0;border-left:3px solid {_hmm_col};">'
-                                    f'<div style="font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:6px;">'
-                                    f'🧬 HMM Regime — Current State: '
-                                    f'<span style="color:{_hmm_col}">{_hmm_state}</span>'
-                                    f' ({_hmm_conf:.0%} confidence)</div>'
-                                    f'{_bar_parts}'
-                                    f'</div>',
-                                    unsafe_allow_html=True,
-                                )
-                    except Exception as _hmm_inner_err:
-                        logger.debug("[App] HMM regime bar render failed: %s", _hmm_inner_err)
-            except Exception as _hmm_outer_err:
-                logger.debug("[App] HMM regime section failed: %s", _hmm_outer_err)
-
-        # ── #61 Signal Story — 1-2 plain English sentences below the signal card ──
-        if _llm is not None:
-            try:
-                _story_indicators = {}
-                _story_tf_data = r.get("timeframes", {})
-                _story_first_td = (list(_story_tf_data.values()) or [{}])[0]
-                _story_indicators["rsi"]             = _story_first_td.get("rsi")
-                _story_indicators["adx"]             = _story_first_td.get("adx")
-                _story_indicators["macd_div"]        = _story_first_td.get("macd_div")
-                _story_indicators["supertrend"]      = _story_first_td.get("supertrend")
-                _story_indicators["regime"]          = _story_first_td.get("regime", "")
-                _story_indicators["funding_rate_pct"] = (
-                    r.get("funding_rate_pct") or
-                    (r.get("timeframes", {}).get("1h", {}) or {}).get("funding", "")
-                )
-                _story_text = _llm.generate_signal_story(pair, direction, conf, _story_indicators)
-                if _story_text:
-                    _story_sig_col = (
-                        "#00d4aa" if "BUY" in direction.upper() else
-                        "#ef4444" if "SELL" in direction.upper() else
-                        "#f59e0b"
-                    )
-                    st.markdown(
-                        f'<div style="background:rgba(17,24,39,0.7);border-radius:8px;'
-                        f'padding:10px 14px;margin:4px 0 10px 0;border-left:2px solid {_story_sig_col};">'
-                        f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;'
-                        f'letter-spacing:0.6px;margin-bottom:4px">Signal Story</div>'
-                        f'<div style="font-size:13px;color:#cbd5e1;line-height:1.5">{_html.escape(str(_story_text))}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-            except Exception as _story_err:
-                logger.debug("[App] signal story render failed: %s", _story_err)
-
-        # APP-30: sanitise pair for widget keys — '/' in key crashes Streamlit's
-        # session-state serialiser (_check_serializable KeyError on FLR/USDT etc.)
-        _pk = pair.replace("/", "_")
-
-        # APP-31: reset advanced-order limit price default when selected coin changes
-        # Prevents stale price from prior coin showing in the iceberg limit-price input.
-        # Also eliminates orphaned $$ID- widget tracking keys (Streamlit 1.56 bug) that
-        # caused repeated KeyError crashes in _check_serializable when pair changed.
-        if st.session_state.get("_adv_last_pair") != pair:
-            for _stale in ("adv_ice_lim", "adv_twap_dir", "adv_ice_dir"):
-                st.session_state.pop(_stale, None)
-            st.session_state["_adv_last_pair"] = pair
-
-        # ── AI Analysis — st.dialog renders in modal overlay, outside page diff cycle ──
-        ai_key = f"ai_explanation_{pair}"
-
-        @st.dialog(f"AI Analysis — {pair}", width="large")
-        def _show_ai_dialog():
-            if _llm is None:
-                st.warning("LLM analysis module not available — check llm_analysis.py installation.")
-                return
-            cached = st.session_state.get(ai_key)
-            if cached:
-                st.info(cached)
-            else:
-                with st.spinner("Asking Claude...", show_time=True):
-                    explanation = _llm.get_signal_explanation(pair, r)
-                st.session_state[ai_key] = explanation
-                st.info(explanation)
-
-        if st.button("🤖 AI Analysis", key=f"btn_ai_{_pk}", width="stretch"):
-            _show_ai_dialog()
-
-        # ── Order Execution ────────────────────────────────────────────────────────
-        st.markdown("---")
-        _ui.risk_disclaimer_banner()
-        if not _exec_status.get("ccxt_available", False):
-            # P2 audit fix — was leaking a developer instruction
-            # ("run: pip install ccxt") to end users. Replaced with a
-            # plain-English status note per CLAUDE.md §8 error-message
-            # rules (no Python tracebacks / no dev commands shown to
-            # end users).
-            st.caption("Live trading is unavailable in this environment.")
-        else:
-            _mode_label = "🔴 LIVE" if _exec_cfg.get("live_trading", False) else "📄 Paper"
-            _cur_price  = (_ws.get_price(pair) or {}).get("price") or price
-            _exec_size  = (float(pos_pct or 10) / 100) * float(
-                getattr(model, "PORTFOLIO_SIZE_USD", 10000)
-            )
-            ex_c0, ex_c1, ex_c2, ex_c3 = st.columns([2, 2, 2, 2])
-            with ex_c0:
-                st.caption(f"Mode: {_mode_label}")
-                st.caption(f"Order size: ${_exec_size:,.0f}")
-            with ex_c1:
-                if st.button(f"▲ BUY {pair.split('/')[0]}", key=f"exec_buy_{_pk}",
-                             type="primary" if "BUY" in direction else "secondary",
-                             width="stretch"):
-                    _res = _exec.place_order(pair, "BUY", _exec_size, current_price=_cur_price)
-                    if _res["ok"]:
-                        st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} BUY placed — ID: {_res['order_id']}")
-                    else:
-                        logger.warning("[Execution] BUY order failed for %s: %s", pair, _res['error'])
-                        st.error("Order failed — check your API keys and connection, then try again.")
-            with ex_c2:
-                if st.button(f"▼ SELL {pair.split('/')[0]}", key=f"exec_sell_{_pk}",
-                             type="primary" if "SELL" in direction else "secondary",
-                             width="stretch"):
-                    _res = _exec.place_order(pair, "SELL", _exec_size, current_price=_cur_price)
-                    if _res["ok"]:
-                        st.success(f"{'PAPER' if _res['mode']=='paper' else 'LIVE'} SELL placed — ID: {_res['order_id']}")
-                    else:
-                        logger.warning("[Execution] SELL order failed for %s: %s", pair, _res['error'])
-                        st.error("Order failed — check your API keys and connection, then try again.")
-            with ex_c3:
-                _open_pos = _db.load_positions()
-                if pair in _open_pos:
-                    _pos_dir = _open_pos[pair].get("direction", "BUY")
-                    if st.button(f"✕ Close {pair.split('/')[0]}", key=f"exec_close_{_pk}",
-                                 width="stretch"):
-                        _res = _exec.close_position(pair, _pos_dir, _exec_size, current_price=_cur_price)
-                        if _res["ok"]:
-                            st.success(f"Position closed — ID: {_res['order_id']}")
-                        else:
-                            logger.warning("[Execution] Close position failed for %s: %s", pair, _res['error'])
-                            st.error("Close failed — check your API keys and connection, then try again.")
-                else:
-                    st.caption("No open position")
-
-            # ── Advanced Order Types (T3-9/T3-10) ────────────────────────────────
-            with st.expander("⚙ Advanced Orders", expanded=False):
-                _adv_c1, _adv_c2 = st.columns(2)
-                with _adv_c1:
-                    st.caption("**TWAP** — split into equal time slices")
-                    _twap_dir  = st.selectbox("Direction", ["BUY", "SELL"], key="adv_twap_dir")
-                    _twap_slices = st.number_input("Slices", 2, 20, 5, key="adv_twap_slices")
-                    _twap_interval = st.number_input("Interval (sec)", 10, 3600, 60, key="adv_twap_int")
-                    if st.button(f"▶ TWAP {pair.split('/')[0]}", key="adv_twap_btn", width="stretch"):
-                        _tr = _exec.place_twap_order(
-                            pair, _twap_dir, _exec_size,
-                            n_slices=int(_twap_slices),
-                            interval_seconds=int(_twap_interval),
-                            current_price=_cur_price,
-                            expected_price=r.get("entry"),
-                        )
-                        if _tr.get("ok"):  # APP-24: mirror iceberg pattern — check ok before accessing keys
-                            st.success(f"TWAP started — ID: {_tr['twap_id']} ({_twap_slices} slices)")
-                        else:
-                            logger.warning("[Execution] TWAP failed for %s: %s", pair, _tr.get('error'))
-                            st.error("TWAP order failed — check your API keys and connection, then try again.")
-                with _adv_c2:
-                    st.caption("**Iceberg** — hide order size in OB")
-                    _ice_dir  = st.selectbox("Direction", ["BUY", "SELL"], key="adv_ice_dir")
-                    _ice_vis  = st.slider("Visible %", 10, 50, 20, step=5, key="adv_ice_vis") / 100.0
-                    _ice_limit = st.number_input("Limit Price (0=market)", 0.0, 1e9,
-                                                 float(r.get("entry") or 0), step=0.01, format="%.4f",
-                                                 key="adv_ice_lim")
-                    if st.button(f"🧊 Iceberg {pair.split('/')[0]}", key="adv_ice_btn", width="stretch"):
-                        _ir = _exec.place_iceberg_order(
-                            pair, _ice_dir, _exec_size,
-                            visible_pct=_ice_vis,
-                            current_price=_cur_price,
-                            limit_price=_ice_limit if _ice_limit > 0 else None,
-                            expected_price=r.get("entry"),
-                        )
-                        if _ir["ok"]:
-                            st.success(f"Iceberg placed — ID: {_ir['order_id']}")
-                        else:
-                            logger.warning("[Execution] Iceberg failed for %s: %s", pair, _ir['error'])
-                            st.error("Iceberg order failed — check your API keys and connection, then try again.")
-
-        # ── Confidence History (Pro Mode only) ─────────────────────────────────
-        if not st.session_state.get("beginner_mode", True):
-            try:
-                _ch_history = _cached_confidence_history(pair, days=30)
-                if _ch_history:
-                    _ch_ts    = [h["timestamp"] for h in _ch_history]
-                    _ch_conf  = [h["confidence"] for h in _ch_history]
-                    _ch_sigs  = [h["signal"] for h in _ch_history]
-                    _ch_colors = [
-                        "#22c55e" if s == "BUY" else "#ef4444" if s == "SELL" else "#94a3b8"
-                        for s in _ch_sigs
-                    ]
-                    _ch_fig = go.Figure()
-                    _ch_fig.add_trace(go.Scatter(
-                        x=_ch_ts,
-                        y=_ch_conf,
-                        mode="lines+markers",
-                        name="Confidence %",
-                        line=dict(color="#a78bfa", width=1.5),
-                        marker=dict(color=_ch_colors, size=6),
-                        hovertemplate="%{x}<br>Confidence: %{y:.1f}%<extra></extra>",
-                    ))
-                    _ch_fig.update_layout(
-                        height=160,
-                        margin=dict(l=0, r=0, t=24, b=0),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        title=dict(
-                            text=f"Confidence History — {pair} (last 30 days)  "
-                                 '<span style="color:#22c55e">● BUY</span> '
-                                 '<span style="color:#ef4444">● SELL</span> '
-                                 '<span style="color:#94a3b8">● HOLD</span>',
-                            font=dict(size=11),
-                            x=0,
-                        ),
-                        yaxis=dict(
-                            range=[0, 100],
-                            ticksuffix="%",
-                            gridcolor="#222",
-                            tickfont=dict(size=9),
-                        ),
-                        xaxis=dict(gridcolor="#222", tickfont=dict(size=9)),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(_ch_fig, width='stretch', key=f"conf_hist_{_pk}")
-            except Exception as _conf_hist_err:
-                logger.debug("[App] confidence history chart failed: %s", _conf_hist_err)
-
-        st.markdown("---")
-
-        # ── Live Chart ──────────────────────────────────────────────────────────
-        _ui.section_header("Live Chart", "Candlestick chart with entry / target / stop overlays", icon="📈")
-        ch_c1, ch_c2, ch_c3 = st.columns([3, 2, 2])
-        with ch_c1:
-            # Merge scan results (first, so last-scanned pairs appear at top) with
-            # the full static universe — always chartable regardless of scan state.
-            _scan_pairs = [r["pair"] for r in sorted_results]
-            _extra_pairs = [
-                p for p in (
-                    model.PAIRS
-                    + ['WFLR/USDT', 'FXRP/USDT']   # chart-only pairs (not in scan)
-                )
-                if p not in _scan_pairs
-            ]
-            chart_pair_opts = _scan_pairs + sorted(_extra_pairs)
-            chart_pair = st.selectbox("Pair", chart_pair_opts, key="chart_pair_select")
-        with ch_c2:
-            _default_tf_idx = (
-                model.TIMEFRAMES.index("1h") if "1h" in model.TIMEFRAMES else 0
-            )
-            chart_tf = st.selectbox(
-                "Timeframe", model.TIMEFRAMES, index=_default_tf_idx, key="chart_tf_select"
-            )
-        with ch_c3:
-            st.write("")
-            load_chart = st.button(
-                "Load Chart", type="primary", width="stretch", key="btn_load_chart"
-            )
-
-        if load_chart:
-            try:
-                with st.spinner(f"Fetching {chart_pair} {chart_tf}...", show_time=True):
-                    ohlcv = model.fetch_chart_ohlcv(chart_pair, chart_tf, limit=250)
-                if ohlcv:
-                    r_sel = next((r for r in results if r["pair"] == chart_pair), {})
-                    st.session_state["chart_html"] = _chart.build_chart_html(
-                        ohlcv, chart_pair, chart_tf,
-                        entry=r_sel.get("entry"),
-                        stop=r_sel.get("stop_loss"),
-                        target=r_sel.get("exit"),
-                    )
-                    st.session_state["chart_pair_label"] = f"{chart_pair} · {chart_tf}"
-                else:
-                    st.warning(
-                        f"No chart data available for **{chart_pair}** on {chart_tf}. "
-                        "This pair may have very low liquidity on all exchanges. "
-                        "Try a different timeframe or pair."
-                    )
-            except Exception as e:
-                logging.warning("[chart] %s %s: %s", chart_pair, chart_tf, e)
-                st.warning(
-                    f"Chart data couldn't load for **{chart_pair}** right now — "
-                    "this is usually temporary. Try refreshing in 30 seconds."
-                )
-
-        _chart_html = st.session_state.get("chart_html")
-        if _chart_html:
-            _chart_label = st.session_state.get("chart_pair_label", "")
-            if _chart_label:
-                st.caption(
-                    f"Showing: **{_chart_label}** — teal = entry, blue = target, red = stop (from last scan)"
-                )
-            # Audit R10h: st.iframe is not a real Streamlit API. Use
-            # streamlit.components.v1.html which renders in a sandboxed iframe.
-            import streamlit.components.v1 as _components
-            _components.html(_chart_html, height=560)
-
-        st.markdown("---")
-
-        # Export buttons
-        if results:
-            col_csv, col_json, col_pdf = st.columns(3)
-            with col_csv:
-                st.download_button(
-                    "📥 Export CSV",
-                    data=_export_scan_results(results, "csv"),
-                    file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    width="stretch",
-                    key="dl_scan_csv",
-                )
-            with col_json:
-                st.download_button(
-                    "📥 Export JSON",
-                    data=_export_scan_results(results, "json"),
-                    file_name=f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json",
-                    width="stretch",
-                    key="dl_scan_json",
-                )
-            with col_pdf:
-                ts_str = st.session_state.get("scan_timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # Cache PDF — only regenerate when scan_timestamp changes (not on every auto-refresh tick)
-                if _pdf is None:
-                    # Pass 5: show clear message when pdf_export module isn't installed
-                    st.caption("PDF export requires the `reportlab` library — not installed.")
-                else:
-                  try:  # APP-08: catch generate_scan_pdf failure; never pass None to st.download_button
-                    if st.session_state.get("_scan_pdf_ts") != ts_str:
-                        st.session_state["_scan_pdf_bytes"] = _pdf.generate_scan_pdf(results, scan_timestamp=ts_str)
-                        st.session_state["_scan_pdf_ts"] = ts_str
-                    _pdf_data = st.session_state.get("_scan_pdf_bytes")
-                    if _pdf_data:
-                        st.download_button(
-                            "⬇ Download PDF",
-                            data=_pdf_data,
-                            file_name=f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                            mime="application/pdf",
-                            width="stretch",
-                            key="dl_scan_pdf",
-                        )
-                    else:
-                        st.caption("PDF unavailable")
-                  except Exception as _pdf_err:
-                    logger.warning("[App] PDF generation failed: %s", _pdf_err)
-                    st.caption("PDF generation failed — please try again.")
-
-
-    with _dash_tab5:
-        _analysis_lv = st.session_state.get("user_level", "beginner")
-        if _analysis_lv == "beginner":
-            st.markdown(
-                '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
-                'border-radius:12px;padding:28px 24px;text-align:center;margin:20px 0">'
-                '<div style="font-size:32px;margin-bottom:10px">\U0001f52c</div>'
-                '<div style="font-size:18px;font-weight:700;color:#e2e8f0;margin-bottom:8px">'
-                'Advanced Analysis Tools</div>'
-                '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:380px;margin:0 auto">'
-                'Correlation matrix, volatility rankings, and pair trade scanner are available at '
-                '<strong style="color:#a78bfa">Intermediate</strong> or '
-                '<strong style="color:#a78bfa">Advanced</strong> level.<br><br>'
-                'Switch your experience level in the sidebar to unlock these tools.</div>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            with st.expander("📊 Market Analysis Tools — Correlation · Volatility · Pair Trades", expanded=False):
-                st.caption(
-                    "Correlation: which assets move together (diversification guide). "
-                    "Vol Rankings: 7-day realized volatility. "
-                    "Pair Trading: cointegrated pairs with z-score signals."
-                )
-
-                # ── Correlation Matrix ──
-                _ui.section_header("Asset Correlation Matrix",
-                                   "Pairwise Pearson correlation of daily returns — Red = strong positive · Blue = negative",
-                                   icon="🔥")
-
-                col_lk, col_tf, col_run = st.columns([2, 2, 2])
-                with col_lk:
-                    lookback = st.slider("Lookback (days)", min_value=7, max_value=90,
-                                         value=30, step=7, key="corr_lookback")
-                with col_tf:
-                    corr_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="corr_tf")
-                with col_run:
-                    st.write("")
-                    run_corr = st.button("Compute Correlation", type="primary", width="stretch", key="run_corr")
-
-                if run_corr:
-                    with st.spinner("Fetching OHLCV data...", show_time=True):
-                        corr_matrix, err = model.compute_correlation_matrix(
-                            pairs=model.PAIRS, lookback_days=lookback, tf=corr_tf
-                        )
-                    if err:
-                        logger.warning("[app] correlation fetch error: %s", err)
-                        st.error("Correlation data unavailable — could not fetch price data. Try again in a moment.")
-                        st.session_state["corr_matrix_data"] = None
-                        st.session_state["corr_error"] = err
-                    else:
-                        # PERF: store DataFrame directly — was .to_dict() + pd.DataFrame() round-trip on every render
-                        st.session_state["corr_matrix_data"] = corr_matrix
-                        st.session_state["corr_error"] = None
-
-                cached = st.session_state.get("corr_matrix_data")
-                if cached is not None:
-                    corr_df = cached
-                    pairs_list = list(corr_df.columns)
-
-                    fig_corr = go.Figure(data=go.Heatmap(
-                        z=corr_df.values,
-                        x=corr_df.columns.tolist(),
-                        y=corr_df.index.tolist(),
-                        colorscale="RdBu_r",
-                        zmin=-1, zmax=1,
-                        text=[[f"{v:.2f}" for v in row] for row in corr_df.values],
-                        texttemplate="%{text}",
-                        hoverongaps=False,
-                    ))
-                    fig_corr.update_layout(
-                        height=450,
-                        margin=dict(l=0, r=0, t=10, b=0),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(fig_corr, width='stretch',
-                                    config={"displayModeBar": False, "staticPlot": True})
-
-                    # Highlight high-correlation pairs — PERF: NumPy upper-triangle mask (was O(N²) nested loop)
-                    st.markdown("**Highly correlated pairs** (|corr| > 0.75):")
-                    _corr_arr = corr_df.values
-                    _rows_idx, _cols_idx = np.where(
-                        (np.abs(np.triu(_corr_arr, k=1)) > 0.75)
-                    )
-                    high_corr_rows = []
-                    try:
-                        high_corr_rows = [
-                            {"Pair A": pairs_list[i], "Pair B": pairs_list[j], "Correlation": round(_corr_arr[i, j], 3)}
-                            for i, j in zip(_rows_idx, _cols_idx)
-                        ]
-                    except Exception as _corr_rows_err:
-                        logger.debug("[App] correlation high-pairs list failed: %s", _corr_rows_err)
-                    if high_corr_rows:
-                        st.dataframe(pd.DataFrame(high_corr_rows), width='stretch', hide_index=True)
-                    else:
-                        st.info("No pairs exceed the 0.75 correlation threshold for this period.")
-                elif st.session_state.get("corr_error"):
-                    st.error("Correlation data unavailable — could not fetch price data. Try again in a moment.")
-
-
-                st.markdown("---")
-
-                # ── Realized Volatility Rankings (Phase 11) ───────────────────────────────
-                _ui.section_header(
-                    "Realized Volatility Rankings",
-                    "7-day annualized realized volatility across all pairs — rank from calmest to most explosive",
-                    icon="📉",
-                )
-                st.caption("Load 7-day daily closes from the exchange to compute annualized realized vol. Updates on each run.")
-
-                if st.button("Compute Vol Rankings", key="run_vol_rank", type="primary"):
-                    import statistics as _stat
-                    with st.spinner("Fetching 7-day OHLCV data for all pairs…", show_time=True):
-                        _vol_rows = []
-                        _first_err = None
-                        _exchange = model.get_exchange_instance(model.TA_EXCHANGE)
-                        if _exchange:
-                            for _vp in model.PAIRS:
-                                try:
-                                    _df_ohlcv = model.robust_fetch_ohlcv(_exchange, _vp, "1d", limit=9)
-                                    if len(_df_ohlcv) >= 3:
-                                        _cls = [v for v in _df_ohlcv["close"].tolist() if v and v > 0]
-                                        _rets = [
-                                            (_cls[i] - _cls[i - 1]) / _cls[i - 1]
-                                            for i in range(1, len(_cls))
-                                            if _cls[i - 1] > 0
-                                        ]
-                                        if len(_rets) >= 2:
-                                            _daily_vol = _stat.stdev(_rets)
-                                            _ann_vol   = round(_daily_vol * (252 ** 0.5) * 100, 1)
-                                            _sector    = model.SECTOR_MAP.get(_vp, "other")
-                                            _vol_rows.append({
-                                                "Asset":    _vp.replace("/USDT", ""),
-                                                "Sector":   _sector.replace("_", " ").title(),
-                                                "Ann. Vol%": _ann_vol,
-                                                "7d Close": round(_cls[-1], 4),
-                                            })
-                                except Exception as _e:
-                                    if _first_err is None:
-                                        _first_err = str(_e)[:100]
-                        else:
-                            _first_err = "Exchange unavailable"
-                        st.session_state["vol_rank_data"] = _vol_rows
-                        st.session_state["vol_rank_err"]  = _first_err
-
-                _vol_data = st.session_state.get("vol_rank_data")
-                if _vol_data:
-                    _vol_df = pd.DataFrame(_vol_data).sort_values("Ann. Vol%", ascending=False).reset_index(drop=True)
-
-                    # Rank chips — color by volatility tier
-                    _chips_vol = ""
-                    _vmax = _vol_df["Ann. Vol%"].max() if not _vol_df.empty else 1
-                    for _, _vr in _vol_df.iterrows():
-                        _v = _vr["Ann. Vol%"]
-                        _pct = _v / max(_vmax, 1)
-                        _vc = "#ef4444" if _pct > 0.7 else ("#f59e0b" if _pct > 0.4 else "#00d4aa")
-                        _chips_vol += (
-                            f'<span style="display:inline-flex;flex-direction:column;align-items:center;'
-                            f'padding:5px 9px;border-radius:8px;background:{_vc}18;'
-                            f'border:1px solid {_vc}50;margin:2px;min-width:52px">'
-                            f'<span style="font-size:11px;font-weight:700;color:#e2e8f0">{_vr["Asset"]}</span>'
-                            f'<span style="font-size:10px;color:{_vc};font-weight:600">{_v:.0f}%</span>'
-                            f'</span>'
-                        )
-                    st.markdown(
-                        f'<div style="display:flex;flex-wrap:wrap;gap:2px;margin:8px 0">{_chips_vol}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.caption("🔴 High vol (>70th pct) · 🟡 Medium · 🟢 Low — annualized, based on 7-day daily returns")
-
-                    with st.expander("Full volatility table"):
-                        st.dataframe(
-                            _vol_df,
-                            width='stretch', hide_index=True,
-                            column_config={
-                                "Ann. Vol%": st.column_config.NumberColumn(format="%.1f%%"),
-                                "7d Close":  st.column_config.NumberColumn(format="$%.4f"),
-                            },
-                        )
-                elif _vol_data is not None and len(_vol_data) == 0:
-                    _vol_err = st.session_state.get("vol_rank_err")
-                    logger.warning("[App] volatility data failed: %s", _vol_err)
-                    st.warning("No volatility data returned — check exchange connectivity and try again.")
-
-
-                st.markdown("---")
-
-                # ── Pair Trade Scanner (Cointegration) ───────────────────────────────────
-                _ui.section_header(
-                    "Pair Trade Scanner",
-                    "Finds cryptocurrency pairs that move together — then signals when one is unusually cheap or expensive vs the other",
-                    icon="⚖️",
-                )
-                st.caption(
-                    "A pair trade buys the underpriced coin and sells the overpriced one, profiting when prices converge. "
-                    "Only pairs with a statistically significant relationship (p < 0.05) are shown."
-                )
-
-                _coint_col1, _coint_col2, _coint_col3 = st.columns([2, 2, 2])
-                with _coint_col1:
-                    _coint_tf = st.selectbox("Timeframe", ["1d", "4h", "1h"], index=0, key="coint_tf")
-                with _coint_col2:
-                    _coint_lb = st.slider("Lookback (bars)", min_value=60, max_value=200, value=100, step=10, key="coint_lb")
-                with _coint_col3:
-                    st.write("")
-                    _run_coint = st.button("Scan for Pair Trades", type="primary", width="stretch", key="run_coint")
-
-                if _run_coint:
-                    with st.spinner(f"Testing {len(model.PAIRS) * (len(model.PAIRS) - 1) // 2} pair combinations...", show_time=True):
-                        _coint_results, _coint_err = model.run_cointegration_scan(
-                            pairs=model.PAIRS, tf=_coint_tf, lookback=_coint_lb
-                        )
-                    if _coint_err:
-                        logger.warning("[App] cointegration scan error: %s", _coint_err)
-                        st.error("Scan encountered an issue — try again or reduce the number of pairs.")
-                        st.session_state["coint_results"] = None
-                    else:
-                        st.session_state["coint_results"] = _coint_results
-                        st.session_state["coint_err"] = None
-
-                _coint_data = st.session_state.get("coint_results")
-                if _coint_data is not None:
-                    if not _coint_data:
-                        st.info("No cointegrated pairs found — try a longer lookback or different timeframe.")
-                    else:
-                        # Signal color map
-                        _COINT_COLORS = {
-                            "LONG_SPREAD":  "#00d4aa",
-                            "SHORT_SPREAD": "#ef4444",
-                            "EXIT_SPREAD":  "#f59e0b",
-                            "NEUTRAL":      "#64748b",
-                        }
-
-                        # Summary banner
-                        _actionable = [r for r in _coint_data if r["signal"] not in ("NEUTRAL", "EXIT_SPREAD")]
-                        if _actionable:
-                            st.success(
-                                f"⚖️ **{len(_actionable)} actionable pair trade{'s' if len(_actionable) != 1 else ''}** found "
-                                f"out of {len(_coint_data)} cointegrated pairs."
-                            )
-
-                        # Render cards for top pairs
-                        for _cr in _coint_data[:12]:
-                            _sig_color = _COINT_COLORS.get(_cr["signal"], "#64748b")
-                            _z         = _cr["zscore"]
-                            _z_bar_pct = min(abs(_z) / 3.0 * 100, 100)
-
-                            # Plain English signal label
-                            _sig_labels = {
-                                "LONG_SPREAD":  "BUY SPREAD",
-                                "SHORT_SPREAD": "SELL SPREAD",
-                                "EXIT_SPREAD":  "CLOSE POSITION",
-                                "NEUTRAL":      "NEUTRAL",
-                            }
-                            _sig_label = _sig_labels.get(_cr["signal"], _cr["signal"])
-
-                            st.markdown(
-                                f"""
-                                <div style="
-                                    background:linear-gradient(rgba(14,18,30,0.8),rgba(14,18,30,0.8)) padding-box,
-                                               linear-gradient(135deg,{_sig_color}30,rgba(99,102,241,0.15)) border-box;
-                                    border:1px solid transparent;border-radius:12px;
-                                    padding:14px 18px;margin-bottom:8px;
-                                    backdrop-filter:blur(12px)">
-                                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-                                        <div>
-                                            <span style="font-size:15px;font-weight:800;color:#e2e8f0;
-                                                         font-family:'JetBrains Mono',monospace">
-                                                {_cr['pair_a'].replace('/USDT','')} / {_cr['pair_b'].replace('/USDT','')}
-                                            </span>
-                                            <span style="font-size:11px;color:rgba(168,180,200,0.5);margin-left:10px">
-                                                hedge ratio {_cr['hedge_ratio']:.4f} · p={_cr['pvalue']:.4f}
-                                            </span>
-                                        </div>
-                                        <span style="background:{_sig_color};color:#0d0e14;padding:4px 13px;
-                                                     border-radius:999px;font-size:11px;font-weight:800;
-                                                     letter-spacing:0.5px">{_sig_label}</span>
-                                    </div>
-                                    <div style="margin:10px 0 6px">
-                                        <div style="display:flex;justify-content:space-between;
-                                                    font-size:11px;color:rgba(168,180,200,0.5);margin-bottom:4px">
-                                            <span>Z-Score: <strong style="color:{_sig_color}">{_z:+.2f}</strong></span>
-                                            <span>±2σ threshold</span>
-                                        </div>
-                                        <div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;position:relative">
-                                            <div style="
-                                                position:absolute;
-                                                {'left:50%;' if _z >= 0 else f'right:{50}%;'}
-                                                width:{_z_bar_pct/2:.1f}%;
-                                                height:6px;border-radius:4px;
-                                                background:{_sig_color};
-                                                transition:width 0.4s ease"></div>
-                                            <div style="position:absolute;left:50%;top:-2px;
-                                                        width:1px;height:10px;background:rgba(255,255,255,0.25)"></div>
-                                        </div>
-                                    </div>
-                                    <div style="font-size:12px;color:#cbd5e1;line-height:1.5;
-                                                border-left:3px solid {_sig_color};padding-left:10px;margin-top:8px">
-                                        {_cr['signal_plain']}
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-
-                        if len(_coint_data) > 12:
-                            st.caption(f"Showing top 12 of {len(_coint_data)} cointegrated pairs ranked by |z-score|.")
-
-
-
-
+        _ds_sb_running = _scan_state["running"]
+    _ds_sb_disabled = st.session_state.get("scan_running", False) or _ds_sb_running
+    _ds_sb_label = "Analyzing…" if _ds_sb_disabled else "🔍 Run a fresh scan now"
+    if st.button(_ds_sb_label, key="ds_beginner_scan_btn", disabled=_ds_sb_disabled, width="stretch"):
+        st.session_state["scan_results"] = []
+        st.session_state["scan_error"] = None
+        _start_scan()
+
+    # ── _LEGACY_REMOVED_C10 (2026-04-30) ─────────────────────────────────
+    # The legacy 5-tab Dashboard stack (Today / All Coins / Coin Detail /
+    # Market Intel / Analysis) used to live here — ~2800 lines of
+    # `_dash_tab1..5 = st.tabs([...])` + 5 `with _dash_tabN:` blocks.
+    # Removed per Phase C plan §C10: every unique surface is now on a
+    # dedicated page (Signals / Regimes / On-chain / Backtester / AI
+    # Assistant) per the redesign mockups, so the tabs were duplicating
+    # navigation. The mockup-content sections above (hero cards + macro
+    # strip + regime mini-grid + watchlist + backtest preview) carry the
+    # entire Home surface now. The `show_legacy_scan_view` Dev-Tools
+    # toggle is also obsolete — kept in session_state only as a no-op
+    # for any external scripts that reference it. To recover the deleted
+    # block (e.g. for archaeology), git blame this sentinel line.
 def _progress_cb(done, total, pair_name):
     """Called from background thread — updates module-level dict (in-memory, no DB write per tick).
     PERF-30: only write to SQLite at scan completion; per-tick writes were O(N) DB round-trips."""
@@ -5128,7 +2640,7 @@ def page_config():
     # ── 2026-05 redesign: mockup-style top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Account", _cfg_title), user_level=_cfg_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(
             title=_cfg_title,
             subtitle="Changes are saved to config_overrides.json and applied on next scan.",
@@ -5144,53 +2656,60 @@ def page_config():
 
     # ── Item 14: Beginner simplified settings — 3 controls only ──────────────
     if _cfg_lv == "beginner":
-        st.markdown("### The 3 things that matter most")
-        _beg_overrides = {}
-        bc1, bc2 = st.columns(2)
-        with bc1:
-            _beg_port = st.number_input(
-                "💰 How much money are you trading with? (USD)",
-                min_value=100.0, max_value=10_000_000.0,
-                value=float(model.PORTFOLIO_SIZE_USD), step=100.0,
-                help="This sets the dollar amount used to calculate trade sizes and risk. Example: if you have $1,000 to trade, enter 1000.",
-            )
-            _beg_overrides["PORTFOLIO_SIZE_USD"] = _beg_port
-        with bc2:
-            _beg_risk = st.number_input(
-                "🛡️ Max risk per trade (%)",
-                min_value=0.1, max_value=5.0,
-                value=float(model.RISK_PER_TRADE_PCT), step=0.1,
-                help="The maximum % of your portfolio to risk on any single trade. 1-2% is a safe starting range. Higher = bigger possible gains AND bigger possible losses.",
-            )
-            _beg_overrides["RISK_PER_TRADE_PCT"] = _beg_risk
+        # C7 (Phase C plan §C7.1, 2026-04-30): wrap the panel in a
+        # keyed container so overrides.py can target its inputs with
+        # the mockup's `.beg-panel input` styling — bg-0 / border-
+        # strong / 15px / mono / 500 weight. Streamlit 1.42+ exposes
+        # the container's `key` as a `data-stkey` attribute on the
+        # rendered DOM node, which is a stable CSS hook.
+        with st.container(key="ds_beg_panel"):
+            st.markdown("### The 3 things that matter most")
+            _beg_overrides = {}
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                _beg_port = st.number_input(
+                    "💰 How much money are you trading with? (USD)",
+                    min_value=100.0, max_value=10_000_000.0,
+                    value=float(model.PORTFOLIO_SIZE_USD), step=100.0,
+                    help="This sets the dollar amount used to calculate trade sizes and risk. Example: if you have $1,000 to trade, enter 1000.",
+                )
+                _beg_overrides["PORTFOLIO_SIZE_USD"] = _beg_port
+            with bc2:
+                _beg_risk = st.number_input(
+                    "🛡️ Max risk per trade (%)",
+                    min_value=0.1, max_value=5.0,
+                    value=float(model.RISK_PER_TRADE_PCT), step=0.1,
+                    help="The maximum % of your portfolio to risk on any single trade. 1-2% is a safe starting range. Higher = bigger possible gains AND bigger possible losses.",
+                )
+                _beg_overrides["RISK_PER_TRADE_PCT"] = _beg_risk
 
-        # API key quick-entry (most-needed for beginners to get live data)
-        with st.expander("🔑 API Keys", expanded=False):
-            st.caption("Enter your exchange API keys to enable live price data and alerts. You can skip this for now — the app works without them using public data.")
-            _ak1, _ak2 = st.columns(2)
-            with _ak1:
-                _beg_ok_key = st.text_input("OKX API Key", type="password", key="beg_okx_key",
-                                             help="Get your free API key from okx.com → Account → API.")
-            with _ak2:
-                _beg_ok_sec = st.text_input("OKX Secret Key", type="password", key="beg_okx_sec")
+            # API key quick-entry (most-needed for beginners to get live data)
+            with st.expander("🔑 API Keys", expanded=False):
+                st.caption("Enter your exchange API keys to enable live price data and alerts. You can skip this for now — the app works without them using public data.")
+                _ak1, _ak2 = st.columns(2)
+                with _ak1:
+                    _beg_ok_key = st.text_input("OKX API Key", type="password", key="beg_okx_key",
+                                                 help="Get your free API key from okx.com → Account → API.")
+                with _ak2:
+                    _beg_ok_sec = st.text_input("OKX Secret Key", type="password", key="beg_okx_sec")
 
-        _beg_saved_col, _ = st.columns([1, 3])
-        with _beg_saved_col:
-            if st.button("💾 Save Settings", type="primary", width="stretch", key="beg_save_cfg"):
-                try:
-                    import json as _json, os as _os
-                    _ov_path = "config_overrides.json"
-                    _existing = {}
-                    if _os.path.exists(_ov_path):
-                        with open(_ov_path) as _f:
-                            _existing = _json.load(_f)
-                    _existing.update(_beg_overrides)
-                    with open(_ov_path, "w") as _f:
-                        _json.dump(_existing, _f, indent=2)
-                    st.success("✅ Settings saved! They'll apply on the next scan.")
-                except Exception as _e:
-                    logger.warning("[app] settings save error: %s", _e)
-                    st.error("Settings could not be saved — check file permissions and try again.")
+            _beg_saved_col, _ = st.columns([1, 3])
+            with _beg_saved_col:
+                if st.button("💾 Save Settings", type="primary", width="stretch", key="beg_save_cfg"):
+                    try:
+                        import json as _json, os as _os
+                        _ov_path = "config_overrides.json"
+                        _existing = {}
+                        if _os.path.exists(_ov_path):
+                            with open(_ov_path) as _f:
+                                _existing = _json.load(_f)
+                        _existing.update(_beg_overrides)
+                        with open(_ov_path, "w") as _f:
+                            _json.dump(_existing, _f, indent=2)
+                        st.success("✅ Settings saved! They'll apply on the next scan.")
+                    except Exception as _e:
+                        logger.warning("[app] settings save error: %s", _e)
+                        st.error("Settings could not be saved — check file permissions and try again.")
 
         # C5 fix (2026-04-28): the previous shape rendered an empty
         # "Advanced Settings" expander then `return`'d immediately, so
@@ -5254,11 +2773,16 @@ def page_config():
     # ── Auto-jump to Alerts tab when navigated from sidebar
     _cfg_initial_tab = 0
     _st_tab_override = st.session_state.pop("_settings_tab", None)
-    _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🔔 Alerts", "🛠️ Dev Tools", "⚙️ Execution"]
+    # C6 (Phase C plan §C6.4-5, 2026-04-30): "🔔 Alerts" removed from
+    # Settings tabs — alerts now have a first-class page (page_alerts).
+    # Tab vars renumbered: _cfg_t3 used to be Alerts (now Dev Tools);
+    # _cfg_t4 used to be Dev Tools (now Execution); the legacy fifth
+    # var is gone.
+    _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🛠️ Dev Tools", "⚙️ Execution"]
     if _st_tab_override and _st_tab_override in _cfg_tab_names:
         _cfg_initial_tab = _cfg_tab_names.index(_st_tab_override)
 
-    _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4, _cfg_t5 = st.tabs(_cfg_tab_names)
+    _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4 = st.tabs(_cfg_tab_names)
 
     # ── ALERTS TAB content definition (full config moved from sidebar)
     def _render_alerts_tab():
@@ -5629,11 +3153,8 @@ def page_config():
 
 
 
-    # ── Tab 3: Alerts (full config + notifications)
+    # ── Tab 3: Dev Tools (consolidated — Alerts moved to page_alerts in C6)
     with _cfg_t3:
-        _render_alerts_tab()
-        st.markdown('---')
-        st.markdown('#### Notifications & Scheduler')
         # ── Paid API Keys ──
         st.markdown("---")
         _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
@@ -5772,8 +3293,9 @@ def page_config():
 
 
 
-    # ── Tab 4: Dev Tools
-    with _cfg_t4:
+    # ── Tab 3 (cont.): the rest of the legacy Dev Tools content,
+    #    re-entering the same tab via Streamlit's tab-context API.
+    with _cfg_t3:
         # ── Sidebar legacy widgets (relocated from sidebar in 2026-04-25 redesign)
         _ui.section_header("Sidebar tools", "Auto-Scan, Demo / Sandbox, API Health, Wallet Import, API Keys, Build Info", icon="🧰")
         try:
@@ -5895,7 +3417,7 @@ def page_config():
 
 
     # ── Tab 5: Live Execution
-    with _cfg_t5:
+    with _cfg_t4:  # was _cfg_t5 before C6 dropped the Alerts tab
         # ── Live Execution Settings ────────────────────────────────────────────────
         st.markdown("---")
         _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
@@ -6002,124 +3524,66 @@ def page_config():
                     logger.warning("[Execution] OKX connection failed: %s", _conn['error'])
                     st.error("Connection failed — check your OKX API key, secret, and passphrase in Settings.")
 
-        # ── Autonomous Agent Settings ──────────────────────────────────────────────
+        # ── Autonomous Agent (link card — moved to AI Assistant page) ────────
+        # C5 (Phase C plan §C5.4, 2026-04-30): the autonomous agent's
+        # config + start/stop controls + status panel were duplicated
+        # here AND on the AI Assistant page (page_agent). Per the plan
+        # the AI Assistant page is now the canonical home; this slot
+        # is reduced to a small link card so users on Settings →
+        # Execution still see the agent exists but get redirected
+        # rather than presented with a competing config form.
         st.markdown("---")
         _ui.section_header(
             "Autonomous AI Agent",
-            "24/7 LangGraph + Claude reasoning loop — approve/reject trades without human interaction",
+            "Configuration + start/stop + decision log live on the AI Assistant page.",
             icon="🤖",
         )
-        st.caption(
-            "The agent runs independently in a background thread, scanning all pairs every "
-            "**interval_seconds** and asking Claude to approve or reject each signal. "
-            "Hard Python risk gates fire before AND after Claude — Claude never calls place_order directly. "
-            "**Dry-run mode** (recommended) logs all decisions without placing orders."
+        st.markdown(
+            '<div style="padding:14px 16px;border:1px solid var(--border);'
+            'border-radius:12px;background:var(--bg-1);">'
+            '<div style="font-weight:600;color:var(--text-primary);'
+            'margin-bottom:6px;">Where to find agent settings</div>'
+            '<div style="color:var(--text-muted);font-size:13.5px;'
+            'line-height:1.6;">All agent runtime controls — Dry-run, '
+            'cycle interval, min-confidence threshold, max concurrent '
+            'positions, daily-loss limit, portfolio size, max trade '
+            'size, max drawdown, cooldown after loss, emergency stop, '
+            'and the live decision log — are now on the '
+            '<b>AI Assistant</b> page (sidebar → Account → '
+            'AI Assistant). The agent and its execution settings '
+            'share runtime state, so consolidating them on one page '
+            'avoids the two-form-of-truth bug that used to ship '
+            'whenever this Settings → Execution form was edited '
+            'while the AI Assistant page was open in another tab.'
+            '</div></div>',
+            unsafe_allow_html=True,
         )
-        st.warning(
-            "⚠ Enabling live trading via the agent means real orders will be placed 24/7 "
-            "without your review. Start with Dry-run=ON and monitor the Agent Decisions log "
-            "in the Dashboard for at least a few days before disabling dry-run."
-        )
+        # Tiny "jump to AI Assistant" button — uses the same routing
+        # mechanism as the deprecated Arbitrage stub: write _nav_target
+        # and rerun, the sidebar router picks it up and lands on Agent.
+        if st.button("Open AI Assistant →", key="cfg_exec_open_agent",
+                     type="primary"):
+            st.session_state["_nav_target"] = "Agent"
+            st.session_state["_ds_current_nav_label"] = "AI Assistant"
+            st.rerun()
 
-        _ag_ui_cfg = _cached_alerts_config()
-        with st.form("agent_config_form"):
-            _ag_enabled = st.toggle(
-                "🤖 Enable Autonomous Agent",
-                value=bool(_ag_ui_cfg.get("agent_enabled", False)),
-                help="Start the 24/7 agent loop. Pairs are cycled every interval_seconds.",
-            )
-            _ag_dry = st.toggle(
-                "Dry-run (log only — no orders placed)",
-                value=bool(_ag_ui_cfg.get("agent_dry_run", True)),
-                help="When ON, agent logs approve/reject decisions but never calls place_order.",
-            )
-            if _ag_enabled and not _ag_dry:
-                st.error("DRY-RUN IS OFF — approved signals will place real/paper orders.")
-
-            _ag_col1, _ag_col2 = st.columns(2)
-            _ag_interval = _ag_col1.number_input(
-                "Interval (seconds per cycle)",
-                min_value=30, max_value=3600,
-                value=int(_ag_ui_cfg.get("agent_interval_seconds", 60)),
-                step=30,
-                help="Time between complete pair-scan cycles. Min 30s to respect API rate limits.",
-            )
-            _ag_min_conf = _ag_col2.slider(
-                "Min Confidence to Consider (%)",
-                min_value=60, max_value=95,
-                value=int(_ag_ui_cfg.get("agent_min_confidence", 80)),
-                step=5,
-                help="Signals below this threshold are skipped before calling Claude.",
-            )
-            _ag_col3, _ag_col4 = st.columns(2)
-            _ag_max_pos = _ag_col3.number_input(
-                "Max Concurrent Positions",
-                min_value=1, max_value=10,
-                value=int(_ag_ui_cfg.get("agent_max_concurrent_positions", 3)),
-                step=1,
-            )
-            _ag_loss_limit = _ag_col4.number_input(
-                "Daily Loss Limit (%)",
-                min_value=1.0, max_value=20.0,
-                value=float(_ag_ui_cfg.get("agent_daily_loss_limit_pct", 5.0)),
-                step=0.5,
-                help="Agent stops trading for the day when cumulative PnL hits this loss.",
-            )
-            _ag_portfolio = st.number_input(
-                "Portfolio Size (USD)",
-                min_value=100.0,
-                value=float(_ag_ui_cfg.get("agent_portfolio_size_usd", 10_000.0)),
-                step=500.0,
-                help="Used to calculate position sizes when balance cannot be fetched from OKX.",
-            )
-            if st.form_submit_button("💾 Save Agent Config", type="primary"):
-                _ag_ui_cfg.update({
-                    "agent_enabled":                  _ag_enabled,
-                    "agent_dry_run":                  _ag_dry,
-                    "agent_interval_seconds":         int(_ag_interval),
-                    "agent_min_confidence":           float(_ag_min_conf),
-                    "agent_max_concurrent_positions": int(_ag_max_pos),
-                    "agent_daily_loss_limit_pct":     float(_ag_loss_limit),
-                    "agent_portfolio_size_usd":       float(_ag_portfolio),
-                })
-                _save_alerts_config_and_clear(_ag_ui_cfg)
-                if _agent is not None:
-                    if _ag_enabled and not _agent.supervisor.is_running():
-                        _agent.supervisor.start()
-                    elif not _ag_enabled and _agent.supervisor.is_running():
-                        _agent.supervisor.stop()
-                st.success("Agent config saved. Refresh Dashboard to see status panel.")
-
-        # Agent runtime controls
-        if _agent is None:
-            st.error("agent.py failed to import — check logs.")
-        else:
-            _ag_c1, _ag_c2 = st.columns(2)
-            with _ag_c1:
-                if st.button("▶ Start Agent Now", key="agent_btn_start", width="stretch",
-                             disabled=_agent.supervisor.is_running()):
-                    _agent.supervisor.start()
-                    st.success("Agent started.")
-                    st.rerun()
-            with _ag_c2:
-                if st.button("⏹ Stop Agent", key="agent_btn_stop", width="stretch",
-                             disabled=not _agent.supervisor.is_running()):
-                    _agent.supervisor.stop()
-                    st.warning("Agent stop requested.")
-                    st.rerun()
-
-            # Live status summary
-            try:  # APP-10: status() may raise or return partial dict during agent init
-                _ag_live = _agent.supervisor.status() or {}
-            except Exception:
-                _ag_live = {}
-            st.markdown(
-                f"**Agent status:** {'🟢 Running' if _ag_live.get('running') else '🔴 Stopped'} "
-                f"| Cycles: {_ag_live.get('cycles_total', 0)} "
-                f"| Last decision: {_ag_live.get('last_decision') or '—'} "
-                f"| Restarts: {_ag_live.get('restart_count', 0)} "
-                f"| Engine: {'LangGraph' if _ag_live.get('langgraph') else 'Fallback pipeline'}"
-            )
+        # All legacy agent config form, runtime controls, and live
+        # status display were removed here in C5 (Phase C plan §C5.4).
+        # They lived from the now-deleted block of ~120 lines that
+        # duplicated the AI Assistant page's surfaces. Removed
+        # outright per the plan ("REMOVE the Autonomous Agent
+        # block ... replace with a small link card").
+        # The link card above is now the entire Settings → Execution
+        # agent surface; AI Assistant is the canonical home.
+        # ── _LEGACY_REMOVED_C5 (2026-04-30) ─────────────────────────────────
+        # The Settings → Execution Autonomous-Agent block previously
+        # rendered a duplicate of the AI Assistant page's config form,
+        # Start/Stop runtime controls, and live status summary. ~120
+        # lines deleted here per Phase C plan §C5.4: "REMOVE the
+        # Autonomous Agent block ... replace with a small link card".
+        # The link card above is the entire surface now; AI Assistant
+        # is the canonical home for all agent config + control.
+        # Search this sentinel in git blame to recover the deleted code.
 
 
         # ── Watchlist Alerts ───────────────────────────────────────────────────────
@@ -6242,13 +3706,24 @@ def _backtest_progress():
 # ──────────────────────────────────────────────
 def page_backtest():
     _bt_lv = st.session_state.get("user_level", "beginner")
-    _bt_title = "Backtester"
-    _bt_sub = "Composite signal backtested across the historical universe. Optuna-tuned hyperparams."
+    # C4 (2026-04-29): Backtester now hosts two views via primary
+    # segmented control — "backtest" (default) and "arbitrage" (was
+    # the standalone Arbitrage page; merged in per §C4).
+    _bt_view = st.session_state.get("bt_view", "backtest")
+    if _bt_view not in ("backtest", "arbitrage"):
+        _bt_view = "backtest"
+    _bt_title = "Arbitrage" if _bt_view == "arbitrage" else "Backtester"
+    _bt_sub = (
+        "Cross-exchange spot price spreads and funding-rate carry trades."
+        if _bt_view == "arbitrage"
+        else "Composite signal backtested across the historical universe. "
+             "Optuna-tuned hyperparams."
+    )
     # ── 2026-05 redesign: mockup-style top bar + page header (matches
     #    shared-docs/design-mockups/sibling-family-crypto-signal-BACKTESTER.html)
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Research", _bt_title), user_level=_bt_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(title=_bt_title, subtitle=_bt_sub)
     except Exception as _ds_bt_err:
         logger.debug("[App] backtest top bar failed: %s", _ds_bt_err)
@@ -6257,6 +3732,73 @@ def page_backtest():
             f'letter-spacing:-0.5px;margin-bottom:0">{_bt_title}</h1>',
             unsafe_allow_html=True,
         )
+
+    # C4: primary segmented control swaps Backtester ↔ Arbitrage. Both
+    # views share the page surface (topbar + page_header above) and
+    # the run-time URL — so deep-link `?bt_view=arbitrage` lands on
+    # Arbitrage without changing the page slot.
+    try:
+        from ui import segmented_control as _ds_seg
+        _bt_view = _ds_seg(
+            [("backtest", "Backtest"), ("arbitrage", "Arbitrage")],
+            active=_bt_view,
+            key="bt_view",
+            variant="primary",
+        )
+    except Exception as _e_seg_primary:
+        logger.debug("[Backtest] primary segmented control failed: %s",
+                     _e_seg_primary)
+
+    # If the user has flipped to the Arbitrage view, hand off to the
+    # extracted helper and skip the rest of the Backtester body.
+    if _bt_view == "arbitrage":
+        try:
+            _render_arbitrage_view()
+        except Exception as _e_arb_render:
+            logger.error("[Backtest] arbitrage view render failed: %s",
+                         _e_arb_render)
+            st.error("Arbitrage scanner failed to load — check logs.")
+        return
+
+    # ── C4: Universe selector — drives every backtest query below.
+    # Persists in st.session_state["bt_universe"]. Items match the
+    # spec: per-pair singles + Top 10 / Top 25 / All 33 / Custom.
+    try:
+        _bt_uni_universe = list(model.PAIRS or [])
+        _bt_uni_options = (
+            [f"{p} only" for p in _bt_uni_universe[:8]]
+            + ["Top 10 cap", "Top 25 cap", "All 33", "Custom multi-select"]
+        )
+        _bt_uni_default = st.session_state.get("bt_universe", "Top 10 cap")
+        if _bt_uni_default not in _bt_uni_options:
+            _bt_uni_default = "Top 10 cap"
+            st.session_state["bt_universe"] = _bt_uni_default
+        _bt_uni_l, _bt_uni_r = st.columns([3, 5])
+        with _bt_uni_l:
+            _bt_uni_picked = st.selectbox(
+                "Universe",
+                options=_bt_uni_options,
+                index=_bt_uni_options.index(_bt_uni_default),
+                key="bt_universe_select",
+                help="Filters every backtest metric, KPI, equity curve, "
+                     "Optuna result and trade row below to the chosen scope.",
+            )
+            if _bt_uni_picked != st.session_state.get("bt_universe"):
+                st.session_state["bt_universe"] = _bt_uni_picked
+        with _bt_uni_r:
+            if _bt_uni_picked == "Custom multi-select":
+                _bt_custom = st.multiselect(
+                    "Custom pairs",
+                    options=_bt_uni_universe,
+                    default=st.session_state.get(
+                        "bt_universe_custom",
+                        _bt_uni_universe[:5],
+                    ),
+                    key="bt_universe_custom",
+                    label_visibility="collapsed",
+                )
+    except Exception as _e_uni:
+        logger.debug("[Backtest] universe selector failed: %s", _e_uni)
 
     # ── Controls row (Universe / Period / Initial / Rebalance / Costs) + Run button
     try:
@@ -6268,7 +3810,17 @@ def page_backtest():
         )
         # Pull config-driven values where available; fall back to sensible defaults.
         _bt_cfg = _cached_alerts_config() or {}
-        _bt_universe = _bt_cfg.get("backtest_universe", "Top 10 cap")
+        # C4-fix (2026-04-30): the legacy controls-row pill was reading
+        # `backtest_universe` from alerts_config, while the new C4
+        # selectbox above writes to `st.session_state["bt_universe"]`.
+        # When the user picked "All 33" but alerts_config still said
+        # "Top 10 cap", the page showed two competing universes and
+        # users couldn't tell which one was active. Now the pill reads
+        # the session-state key first so both surfaces always agree.
+        _bt_universe = (
+            st.session_state.get("bt_universe")
+            or _bt_cfg.get("backtest_universe", "Top 10 cap")
+        )
         _bt_period = _bt_cfg.get("backtest_period", "2023-01-01 → today")
         _bt_initial = _bt_cfg.get("backtest_initial_usd", "$100,000")
         _bt_rebalance = _bt_cfg.get("backtest_rebalance", "Weekly")
@@ -6523,13 +4075,29 @@ def page_backtest():
     except Exception as _e_mockup:
         logger.debug("[Backtest] mockup sections failed: %s", _e_mockup)
 
-    _bt_t1, _bt_t2, _bt_t3 = st.tabs([
-        "📊 Summary",
-        "📋 Trade History",
-        "🔬 Advanced Backtests",
-    ])
+    # C4 §C4.2: secondary segmented control replaces the legacy
+    # `st.tabs([Summary, Trade History, Advanced])`. Per Q8 Option B —
+    # segmented controls give first-click highlight (no two-click lag)
+    # and let us conditionally skip the heavy Advanced render unless
+    # the user actually opens that view.
+    try:
+        from ui import segmented_control as _ds_seg2
+        _bt_subview = st.session_state.get("bt_subview", "summary")
+        if _bt_subview not in ("summary", "trades", "advanced"):
+            _bt_subview = "summary"
+        _bt_subview = _ds_seg2(
+            [("summary", "Summary"),
+             ("trades", "Trade History"),
+             ("advanced", "Advanced")],
+            active=_bt_subview,
+            key="bt_subview",
+            variant="small",
+        )
+    except Exception as _e_seg2:
+        logger.debug("[Backtest] secondary segmented control failed: %s", _e_seg2)
+        _bt_subview = "summary"
 
-    with _bt_t1:
+    if _bt_subview == "summary":
         if st.session_state.get("backtest_error"):
             logger.warning("[Backtest] error: %s", st.session_state["backtest_error"])
             st.error("Backtest could not complete — try running the scan first to generate signal history.")
@@ -6976,7 +4544,7 @@ def page_backtest():
                     st.warning(mc_r['error'])
 
 
-    with _bt_t2:
+    elif _bt_subview == "trades":
         tab_master, tab_paper, tab_feedback, tab_exec, tab_slip = st.tabs([
             "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log", "Slippage Analytics"
         ])
@@ -7364,7 +4932,7 @@ def page_backtest():
                     )
 
 
-    with _bt_t3:
+    elif _bt_subview == "advanced":
         if _bt_lv == 'beginner':
             st.markdown(
                 '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);'
@@ -8278,24 +5846,25 @@ def _start_backtest():
 # PAGE: ARBITRAGE
 # ──────────────────────────────────────────────
 def page_arbitrage():
+    """C4 (2026-04-29): Arbitrage is now a sub-view of the Backtester
+    page (per Phase C plan §C4). This function is kept alive as a
+    deprecation stub so any inbound deep links / programmatic jumps to
+    `page=="Arbitrage"` still land somewhere sensible — it sets the
+    Backtester view state to `arbitrage` and renders Backtester, which
+    detects the state and pivots to the Arbitrage view."""
+    st.session_state["bt_view"] = "arbitrage"
+    page_backtest()
+
+
+def _render_arbitrage_view():
+    """Arbitrage scanner content (formerly page_arbitrage). Called from
+    page_backtest when the primary segmented control is on Arbitrage.
+
+    Note: this helper does NOT render its own topbar / page_header —
+    those are owned by page_backtest now since Arbitrage shares the
+    Backtester page surface.
+    """
     _arb_lv = st.session_state.get("user_level", "beginner")
-    _arb_title = "Opportunities" if _arb_lv in ("beginner", "intermediate") else "Arbitrage Scanner"
-    _arb_sub = (
-        "Sometimes the same coin costs different amounts on different exchanges. "
-        "This scanner finds those gaps — you buy cheap on one exchange and sell higher on another."
-        if _arb_lv == "beginner"
-        else "Cross-exchange spot price spreads and funding-rate carry trades. "
-             "Net spread = gross spread − round-trip taker fees."
-    )
-    # ── 2026-05 redesign: top bar + page header ──
-    try:
-        from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Markets", _arb_title), user_level=_arb_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
-        _ds_page_header(title=_arb_title, subtitle=_arb_sub)
-    except Exception as _ds_arb_err:
-        logger.debug("[App] arbitrage top bar failed: %s", _ds_arb_err)
-        st.title(f"⚡ {_arb_title}")
-        st.caption(_arb_sub)
 
     # ── Controls ──
     col_btn, col_thresh, col_spacer = st.columns([1, 1, 4])
@@ -8685,6 +6254,125 @@ def page_arbitrage():
 # ──────────────────────────────────────────────
 # PAGE: AUTONOMOUS AGENT
 # ──────────────────────────────────────────────
+def page_alerts():
+    """C6 (Phase C plan §C6, 2026-04-30): Alerts is now a first-class
+    page (was a tab inside Settings → Config Editor). Two views via
+    primary segmented control:
+      - Configure: email-config form (lifted from the old Alerts tab
+        body — see _render_alerts_configure)
+      - History:   filter row + table from the new alerts_log DB
+    """
+    _al_lv = st.session_state.get("user_level", "beginner")
+    try:
+        from ui import (
+            render_top_bar as _ds_top_bar,
+            page_header as _ds_page_header,
+            segmented_control as _ds_seg,
+        )
+    except Exception as _e_imp:
+        logger.error("[Alerts] import failed: %s", _e_imp)
+        st.error("Alerts page failed to load — check logs.")
+        return
+
+    _ds_top_bar(
+        breadcrumb=("Account", "Alerts"),
+        user_level=_al_lv,
+        on_refresh=_refresh_all_data,
+        on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
+    )
+    _ds_page_header(
+        title="Alerts",
+        subtitle="Configure email + watchlist alerts and review the dispatch history.",
+    )
+
+    _al_view = st.session_state.get("alerts_view", "configure")
+    if _al_view not in ("configure", "history"):
+        _al_view = "configure"
+    _al_view = _ds_seg(
+        [("configure", "Configure"), ("history", "History")],
+        active=_al_view,
+        key="alerts_view",
+        variant="primary",
+    )
+
+    if _al_view == "configure":
+        _render_alerts_configure()
+        return
+
+    # ── History view ──────────────────────────────────────────────────
+    # C6 (Phase C plan §C6.3): filter row + alert log table backed by
+    # the new alerts_log DB table. Filters cascade as ANDs.
+    try:
+        from database import recent_alerts as _recent_alerts
+    except Exception as _e_ra:
+        logger.error("[Alerts] recent_alerts import failed: %s", _e_ra)
+        st.error("Alert history database helper unavailable — check logs.")
+        return
+
+    _f1, _f2, _f3, _f4 = st.columns(4)
+    with _f1:
+        _flt_type = st.selectbox(
+            "Type",
+            options=["(all)", "email_signal", "watchlist", "agent_decision",
+                     "scan_error"],
+            index=0,
+            key="alerts_hist_type",
+        )
+    with _f2:
+        _flt_status = st.selectbox(
+            "Status",
+            options=["(all)", "sent", "failed", "suppressed"],
+            index=0,
+            key="alerts_hist_status",
+        )
+    with _f3:
+        _flt_channel = st.selectbox(
+            "Channel",
+            options=["(all)", "email", "webhook", "slack", "tradingview"],
+            index=0,
+            key="alerts_hist_channel",
+        )
+    with _f4:
+        _flt_limit = st.selectbox(
+            "Show",
+            options=[25, 50, 100, 250, 500],
+            index=2,
+            key="alerts_hist_limit",
+        )
+
+    _flt_kwargs: dict = {}
+    if _flt_type != "(all)":
+        _flt_kwargs["alert_type"] = _flt_type
+    if _flt_status != "(all)":
+        _flt_kwargs["status"] = _flt_status
+    if _flt_channel != "(all)":
+        _flt_kwargs["channel"] = _flt_channel
+    rows = _recent_alerts(limit=int(_flt_limit), **_flt_kwargs)
+
+    if not rows:
+        st.info("No alerts have fired yet — once an email or webhook "
+                "dispatches, the row appears here.")
+        return
+
+    # Render a compact table. Status gets a colour tag for at-a-glance
+    # scan; everything else stays plain text.
+    _hist_rows = []
+    for r in rows:
+        _status_icon = {"sent": "🟢", "failed": "🔴",
+                        "suppressed": "⚪"}.get(r.get("status"), "")
+        _hist_rows.append({
+            "Time": r.get("time_str", ""),
+            "Type": r.get("type", ""),
+            "Asset": r.get("asset", "") or "—",
+            "Channel": r.get("channel", "") or "—",
+            "Status": f"{_status_icon} {r.get('status', '')}",
+            "Message": (r.get("message") or "")[:140],
+        })
+    st.dataframe(_hist_rows, width="stretch", hide_index=True)
+    st.caption(f"{len(rows)} of last {int(_flt_limit)} dispatches shown.")
+
+
 def page_agent():
     _ag_lv = st.session_state.get("user_level", "beginner")
     _ag_title = "AI Assistant" if _ag_lv in ("beginner", "intermediate") else "Autonomous Agent"
@@ -8699,7 +6387,7 @@ def page_agent():
     # ── 2026-05 redesign: top bar + page header ──
     try:
         from ui import render_top_bar as _ds_top_bar, page_header as _ds_page_header
-        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme)
+        _ds_top_bar(breadcrumb=("Account", _ag_title), user_level=_ag_lv, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
         _ds_page_header(title=_ag_title, subtitle=_ag_sub)
     except Exception as _ds_ag_err:
         logger.debug("[App] agent top bar failed: %s", _ds_ag_err)
@@ -8717,20 +6405,39 @@ def page_agent():
         status = {}
     is_running = status.get("running", False)
 
-    col_status, col_start, col_stop, col_spacer = st.columns([2, 1, 1, 3])
-    with col_status:
-        if is_running:
-            _run_label = "✅ AI is watching the market" if _ag_lv == "beginner" else "▲ RUNNING"
-            st.success(_run_label)
-        elif status.get("kill_requested", False):
-            st.warning("⏳ Stopping…" if _ag_lv == "beginner" else "■ STOPPING…")
-        else:
-            _stop_label = "⏸ AI is paused — click Start to activate" if _ag_lv == "beginner" else "▼ STOPPED"
-            # Audit R10g: a default-state "paused" display should not render
-            # as a full-width red error bar — that reads as a real failure
-            # to a first-time demo audience. st.info is the neutral colour.
-            st.info(_stop_label)
-    with col_start:
+    # Open-item #2 (2026-04-30): status row matches the
+    # docs/mockups/sibling-family-crypto-signal-AI-ASSISTANT.html
+    # `.status-row` shape — single card with badge + Start/Stop.
+    if is_running:
+        _badge_cls = ""
+        _badge_txt = (
+            "✅ AI is watching the market"
+            if _ag_lv == "beginner"
+            else f"RUNNING · cycle {int(status.get('cycles_total') or 0)}"
+        )
+    elif status.get("kill_requested", False):
+        _badge_cls = " warning"
+        _badge_txt = ("⏳ Stopping…" if _ag_lv == "beginner"
+                      else "STOPPING…")
+    else:
+        _badge_cls = " stopped"
+        _badge_txt = ("⏸ AI is paused — click Start to activate"
+                      if _ag_lv == "beginner" else "STOPPED")
+
+    # Render the badge + Start/Stop in a single grid via wrapper div.
+    # The Streamlit columns inside the wrapper provide the actual
+    # button widgets; CSS positions them right of the badge.
+    st.markdown(
+        f'<div class="ds-agent-status-row">'
+        f'<div class="ds-agent-status-badge{_badge_cls}">'
+        f'<span class="dot"></span>{_badge_txt}'
+        f'</div>'
+        f'<div></div><div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    _btn_cs, _btn_start, _btn_stop, _btn_spacer = st.columns([2, 1, 1, 3])
+    with _btn_start:
         if st.button("▶ Start", width="stretch", type="primary",
                      disabled=is_running, key="agent_start_btn"):
             _ac = _cached_alerts_config()
@@ -8738,7 +6445,7 @@ def page_agent():
             _save_alerts_config_and_clear(_ac)
             _agent.supervisor.start()
             st.rerun()
-    with col_stop:
+    with _btn_stop:
         if st.button("■ Stop", width="stretch",
                      disabled=not is_running, key="agent_stop_btn"):
             _ac = _cached_alerts_config()
@@ -8747,39 +6454,101 @@ def page_agent():
             _agent.supervisor.stop()
             st.rerun()
 
-    # ── Metrics ──
-    st.markdown("---")
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Total Cycles", status.get("cycles_total", 0))
-    with m2:
-        last_ts = status.get("last_run_ts")
-        if last_ts:
-            age_s = int(time.time() - last_ts)
-            age_str = f"{age_s // 60}m {age_s % 60}s ago" if age_s >= 60 else f"{age_s}s ago"
-        else:
-            age_str = "Never"
-        st.metric("Last Cycle", age_str)
-    with m3:
-        st.metric("Last Pair", status.get("last_pair") or "—")
-    with m4:
-        _dec_icon = {"approve": "🟢", "reject": "🔴", "skip": "⚪"}.get(
-            status.get("last_decision"), "⚪"
+    # ── Metrics — 4-card strip (mockup `.grid.cols-4`) ──
+    last_ts = status.get("last_run_ts")
+    if last_ts:
+        age_s = int(time.time() - last_ts)
+        age_str = (f"{age_s // 60}m {age_s % 60}s ago"
+                   if age_s >= 60 else f"{age_s}s ago")
+        last_sub = f"interval {int(status.get('interval_s') or 60)}s"
+    else:
+        age_str = "Never"
+        last_sub = "no cycle yet"
+    _dec_raw = status.get("last_decision") or ""
+    _dec_icon = {"approve": "🟢", "reject": "🔴",
+                 "skip": "⚪"}.get(_dec_raw.lower(), "⚪")
+    _dec_label = (_dec_raw.title() if _dec_raw else "—")
+    _last_pair = status.get("last_pair") or "—"
+    _last_tf = status.get("last_timeframe") or "1h"
+
+    def _metric_card(lbl: str, val: str, sub: str = "",
+                     val_color: str = "") -> str:
+        _style = f"color:{val_color};" if val_color else ""
+        return (
+            f'<div class="ds-agent-metric-card">'
+            f'<div class="ds-agent-metric-lbl">{_html.escape(lbl)}</div>'
+            f'<div class="ds-agent-metric-val" style="{_style}">{val}</div>'
+            f'<div class="ds-agent-metric-sub">{_html.escape(sub)}</div>'
+            f'</div>'
         )
-        st.metric("Last Decision", f"{_dec_icon} {status.get('last_decision') or '—'}")
 
-    m5, m6 = st.columns([1, 3])
-    with m5:
-        st.metric("Crash Restarts", status.get("restart_count", 0))
-    with m6:
-        _lg = "LangGraph state machine" if status.get("langgraph") else "Sequential pipeline (LangGraph not installed)"
-        st.metric("Engine", _lg)
+    _cycles = int(status.get("cycles_total") or 0)
+    _since = status.get("session_started_at") or ""
+    _since_short = (_since[:10] if _since else "this session")
+    st.markdown(
+        '<div class="ds-agent-metric-grid cols-4">'
+        + _metric_card("Total Cycles", f"{_cycles:,}", f"since {_since_short}")
+        + _metric_card("Last Cycle", age_str, last_sub)
+        + _metric_card(
+            "Last Pair",
+            f'<span style="font-size:18px;">{_html.escape(str(_last_pair))}</span>',
+            f"timeframe {_last_tf}",
+        )
+        + _metric_card(
+            "Last Decision",
+            f'<span style="font-size:18px;">{_dec_icon} {_dec_label}</span>',
+            f"size {status.get('last_size_pct', '—')}% · "
+            f"conf {status.get('last_confidence', '—')}%",
+            val_color=("var(--success)" if _dec_raw.lower() == "approve"
+                       else "var(--danger)" if _dec_raw.lower() == "reject"
+                       else "var(--text-secondary)"),
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
 
-    # Show in-progress indicator when a cycle is actively running
+    # ── 2-card row: Engine + Crash Restarts ──
+    _engine_label = (
+        "LangGraph state machine"
+        if status.get("langgraph")
+        else "Sequential pipeline (LangGraph not installed)"
+    )
+    _engine_sub = (
+        "graph: 7 nodes · 12 edges · sequential fallback ready"
+        if status.get("langgraph")
+        else "fallback active — LangGraph optional dep"
+    )
+    _restarts = int(status.get("restart_count") or 0)
+    _uptime_s = int(status.get("uptime_s") or 0)
+    if _uptime_s:
+        _udays = _uptime_s // 86400
+        _uhours = (_uptime_s % 86400) // 3600
+        _uptime_str = f"supervisor active · uptime {_udays}d {_uhours}h"
+    else:
+        _uptime_str = "supervisor idle"
+    st.markdown(
+        '<div class="ds-agent-metric-grid cols-2">'
+        + _metric_card(
+            "Engine",
+            f'<span style="font-size:15px;">{_html.escape(_engine_label)}</span>',
+            _engine_sub,
+        )
+        + _metric_card("Crash Restarts", f"{_restarts}", _uptime_str)
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # In-progress indicator — mockup-styled chip.
     _cur = status.get("current_pair", "")
     _elapsed = status.get("cycle_elapsed_s", 0)
     if is_running and _cur:
-        st.info(f"⏳ Processing {_cur} — cycle running for {_elapsed}s")
+        st.markdown(
+            f'<div class="ds-agent-in-progress">'
+            f'⏳ Processing {_html.escape(str(_cur))} — cycle running '
+            f'for {int(_elapsed)}s'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Config form ──
     st.markdown("---")
@@ -8993,7 +6762,8 @@ def page_signals():
         from ui import (
             render_top_bar as _ds_top_bar,
             page_header as _ds_page_header,
-            coin_picker as _ds_coin_picker,
+            pair_dropdown as _ds_pair_dropdown,
+            multi_timeframe_strip as _ds_tf_strip,
             signal_hero_detail_card as _ds_signal_hero,
             composite_score_card as _ds_composite,
             indicator_card as _ds_ind_card,
@@ -9010,46 +6780,61 @@ def page_signals():
         user_level=_ds_level,
         on_refresh=_refresh_all_data,
         on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
     )
 
-    # Coin picker — top of page. The chip-group HTML is rendered alongside
-    # a real Streamlit selectbox (label hidden) so clicks actually register.
-    _signals_coins = ["BTC", "ETH", "XRP", "SOL", "AVAX"]
-    _signals_pair_map = {
-        "BTC": "BTC/USDT", "ETH": "ETH/USDT", "XRP": "XRP/USDT",
-        "SOL": "SOL/USDT", "AVAX": "AVAX/USDT",
-    }
-    _signals_active = st.session_state.get("signals_active_coin", "BTC")
-    if _signals_active not in _signals_coins:
-        _signals_active = "BTC"
+    # C3 (Phase C plan §C3.1): pair_dropdown — 5 quick pills + "More ▾ +28"
+    # popover backed by the full model.PAIRS universe. Persists in
+    # st.session_state["selected_pair"] (per the plan's spec).
+    # Migrated from the legacy 5-button row that used the if-button-rerun
+    # pattern (which had the two-click highlight bug class).
+    _signals_universe = list(model.PAIRS) or ["BTC/USDT", "ETH/USDT"]
+    # Keep the pre-redesign session_state key alive for back-compat —
+    # any downstream code reading "signals_active_coin" still works.
+    _legacy_active = st.session_state.get("signals_active_coin")
+    _selected_pair = st.session_state.get("selected_pair")
+    if _selected_pair is None and _legacy_active:
+        _selected_pair = f"{_legacy_active}/USDT"
+        st.session_state["selected_pair"] = _selected_pair
+    if _selected_pair is None or _selected_pair not in _signals_universe:
+        _selected_pair = _signals_universe[0]
+        st.session_state["selected_pair"] = _selected_pair
 
-    _hd_l, _hd_r = st.columns([4, 2])
-    with _hd_l:
-        _ds_page_header(
-            title="Signal detail",
-            subtitle="Layer-by-layer composite signal breakdown for a single coin.",
-            data_sources=[
-                (str(model.TA_EXCHANGE).upper(), "live"),
-                ("Glassnode", "live"),
-                ("News sentiment", "cached"),
-            ],
-        )
-    with _hd_r:
-        # Real Streamlit-button row that mirrors the .ds-coin-pick mockup chip group.
-        _cp_cols = st.columns(len(_signals_coins))
-        for _i, _c in enumerate(_signals_coins):
-            with _cp_cols[_i]:
-                if st.button(
-                    _c,
-                    key=f"signals_coin_{_c}",
-                    use_container_width=True,
-                    type=("primary" if _c == _signals_active else "secondary"),
-                ):
-                    st.session_state["signals_active_coin"] = _c
-                    st.rerun()
+    _ds_page_header(
+        title="Signal detail",
+        subtitle="Layer-by-layer composite signal breakdown for a single coin.",
+        data_sources=[
+            (str(model.TA_EXCHANGE).upper(), "live"),
+            ("Glassnode", "live"),
+            ("News sentiment", "cached"),
+        ],
+    )
+    _selected_pair = _ds_pair_dropdown(
+        _signals_universe,
+        active=_selected_pair,
+        key="selected_pair",
+    )
 
-    _coin = _signals_active
-    _pair = _signals_pair_map.get(_coin, f"{_coin}/USDT")
+    # Multi-timeframe strip — visible selector backed by
+    # st.session_state["selected_timeframe"]. Wires into model.TIMEFRAMES
+    # (1h/4h/1d/1w). Per-timeframe signals dict is computed below from
+    # whatever per-tf data the latest scan_result carries; cells without
+    # data render bare label only. The active timeframe drives the
+    # composite_score_card and indicator selection further down.
+    _signals_tfs = list(getattr(model, "TIMEFRAMES", ["1h", "4h", "1d", "1w"]))
+    _selected_tf = st.session_state.get("selected_timeframe")
+    if _selected_tf not in _signals_tfs:
+        _selected_tf = "1d" if "1d" in _signals_tfs else _signals_tfs[0]
+        st.session_state["selected_timeframe"] = _selected_tf
+    _selected_tf = _ds_tf_strip(_signals_tfs, active=_selected_tf,
+                                 key="selected_timeframe")
+
+    # Maintain back-compat: keep `signals_active_coin` in sync with
+    # the new `selected_pair` so any unmigrated readers below still
+    # see the current selection.
+    _coin = _selected_pair.split("/")[0].split("-")[0]
+    _pair = _selected_pair
+    st.session_state["signals_active_coin"] = _coin
 
     # ── Pull data: latest scan result (or DB fallback) for the active pair ──
     _result = {}
@@ -9145,6 +6930,127 @@ def page_signals():
         ),
         unsafe_allow_html=True,
     )
+
+    # C9 (Phase C plan §C9, 2026-04-30): level-aware rationale block
+    # under the hero card. Beginner gets plain English; Intermediate
+    # gets the composite + 4-layer summary; Advanced gets the raw
+    # numbers (RSI, MACD, regime confidence). Per CLAUDE.md §7.
+    try:
+        _l_tech = _result.get("layer_technical") or _result.get("tech_score")
+        _l_macro = _result.get("layer_macro") or _result.get("macro_score")
+        _l_sent = _result.get("layer_sentiment") or _result.get("sentiment_score")
+        _l_onch = _result.get("layer_onchain") or _result.get("onchain_score")
+        _composite_score = _result.get("composite_score") or _conf
+        _rsi = _result.get("rsi_14") or _result.get("rsi")
+        _macd_line = _result.get("macd_line") or _result.get("macd")
+        _macd_sig = _result.get("macd_signal")
+        _adx = _result.get("adx_14") or _result.get("adx")
+
+        if _ds_level == "beginner":
+            # Plain English, no jargon. Ground the description in the
+            # current direction + regime + 24h change so it's specific
+            # to what the user sees.
+            if _signal_letter == "BUY":
+                _rat = (
+                    f"{_coin_full} is showing positive momentum — the model "
+                    f"sees more upside signals than downside. Regime: "
+                    f"{_regime_clean.title() or 'Transition'}."
+                )
+            elif _signal_letter == "SELL":
+                _rat = (
+                    f"{_coin_full} is showing weakness — the model is leaning "
+                    f"toward a defensive posture. Regime: "
+                    f"{_regime_clean.title() or 'Transition'}."
+                )
+            else:
+                _rat = (
+                    f"{_coin_full} is in a wait-and-see zone — no strong "
+                    f"directional edge right now. Regime: "
+                    f"{_regime_clean.title() or 'Transition'}."
+                )
+            st.markdown(
+                f'<div class="ds-card" style="margin-top:12px;'
+                f'background:var(--bg-1);">'
+                f'<div style="font-size:13px;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:0.06em;'
+                f'margin-bottom:6px;">What this means</div>'
+                f'<div style="font-size:14px;line-height:1.5;'
+                f'color:var(--text-primary);">{_html.escape(_rat)}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        elif _ds_level == "intermediate":
+            # Condensed signal interpretation with key numbers visible.
+            _layers_alignment = sum(
+                1 for v in (_l_tech, _l_macro, _l_sent, _l_onch)
+                if v is not None and float(v) >= 50
+            )
+            _comp_str = (f"{float(_composite_score):.0f}"
+                         if _composite_score is not None else "—")
+            _rat = (
+                f"Composite signal: **{_signal_letter or 'HOLD'}** · "
+                f"score {_comp_str} · "
+                f"{_layers_alignment}/4 layers above neutral · "
+                f"regime {_regime_clean.title() or '—'}."
+            )
+            st.markdown(
+                f'<div class="ds-card" style="margin-top:12px;">'
+                f'<div style="font-size:13px;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:0.06em;'
+                f'margin-bottom:6px;">Signal summary</div>'
+                f'<div style="font-size:14px;line-height:1.5;">{_rat}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:  # advanced
+            # Raw numbers: RSI / MACD / ADX / per-layer scores / regime
+            # confidence. Mono font for the number column.
+            _adv_lines = []
+            if _rsi is not None:
+                _adv_lines.append(f"RSI(14)={float(_rsi):.1f}")
+            if _macd_line is not None:
+                if _macd_sig is not None:
+                    _adv_lines.append(
+                        f"MACD={float(_macd_line):.3f} / "
+                        f"signal={float(_macd_sig):.3f}"
+                    )
+                else:
+                    _adv_lines.append(f"MACD={float(_macd_line):.3f}")
+            if _adx is not None:
+                _adv_lines.append(f"ADX(14)={float(_adx):.1f}")
+            if _composite_score is not None:
+                _adv_lines.append(f"composite={float(_composite_score):.1f}")
+            if _regime_conf is not None:
+                _adv_lines.append(
+                    f"regime={_regime_clean.title() or '—'} "
+                    f"(HMM conf {float(_regime_conf):.0f}%)"
+                )
+            _layer_str = " · ".join(
+                f"{name}={(float(v)):.0f}" for name, v in (
+                    ("TA",     _l_tech),
+                    ("Macro",  _l_macro),
+                    ("Sent",   _l_sent),
+                    ("OnCh",   _l_onch),
+                ) if v is not None
+            )
+            if _layer_str:
+                _adv_lines.append(f"layers: {_layer_str}")
+            _rat_html = (
+                ("<br>".join(_html.escape(s) for s in _adv_lines))
+                or "Insufficient indicator data — run a scan to populate."
+            )
+            st.markdown(
+                f'<div class="ds-card" style="margin-top:12px;">'
+                f'<div style="font-size:13px;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:0.06em;'
+                f'margin-bottom:6px;">Advanced diagnostics</div>'
+                f'<div class="num" style="font-size:13px;line-height:1.6;'
+                f'color:var(--text-secondary);">{_rat_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as _e_rat:
+        logger.debug("[Signals] level-aware rationale render failed: %s", _e_rat)
 
     # ── Two-col: price chart + composite score ──
     _col1, _col2 = st.columns([1.2, 1])
@@ -9267,12 +7173,36 @@ def page_signals():
         # "All 4 composite layers + technical indicators + on-chain
         # values empty". The helper has a 5-min TTL so repeated detail-
         # page renders don't re-run compute_composite_signal each time.
+        # Open-item #3 (2026-04-30): per-timeframe composite. When
+        # the user selects a non-1d timeframe in the strip and the
+        # scan_result has a `timeframes[tf]` view, recompute the
+        # composite using that view's TA inputs. Macro / Sentiment /
+        # On-chain layer inputs stay the same since those are not
+        # per-TF concepts. Falls back to the legacy non-TF helper
+        # when the per-TF view is missing.
+        _tf_view_for_composite = (_result.get("timeframes", {}) or {}).get(
+            _selected_tf, {}
+        ) or {}
         if (
             _l_tech is None and _l_macro is None
             and _l_sent is None and _l_onch is None
         ):
             try:
-                _cs_out = _sg_cached_composite_per_pair(_pair) or {}
+                if _tf_view_for_composite:
+                    # Pack tf_view as a hashable tuple for st.cache_data.
+                    _payload = tuple(
+                        _tf_view_for_composite.get(k)
+                        for k in (
+                            "rsi", "adx", "macd_div", "vwap", "ichimoku",
+                            "supertrend", "sr_status", "regime",
+                            "strategy_bias", "agent_vote", "consensus",
+                            "funding", "open_interest", "onchain",
+                            "options_iv", "ob_depth", "cvd", "tvl",
+                        )
+                    )
+                    _cs_out = _sg_cached_composite_per_pair_tf(_pair, _payload) or {}
+                else:
+                    _cs_out = _sg_cached_composite_per_pair(_pair) or {}
                 _layers = (_cs_out or {}).get("layers") or {}
                 # compute_composite_signal returns layer scores in
                 # [-1.0, +1.0] (each "score" key inside the per-layer
@@ -9319,10 +7249,45 @@ def page_signals():
     # ── Three-col: Technical / On-chain / Sentiment indicator cards ──
     _ic1, _ic2, _ic3 = st.columns(3)
     with _ic1:
-        _rsi = _result.get("rsi_14") or _result.get("rsi")
-        _macd_h = _result.get("macd_hist")
-        _supert = _result.get("supertrend_signal") or _result.get("supertrend")
-        _adx = _result.get("adx_14") or _result.get("adx")
+        # C9-fix (2026-04-30): the multi-timeframe strip now drives the
+        # per-TF indicator values. Scan results already store per-TF
+        # data under `_result["timeframes"][tf]` (rsi/adx/supertrend/
+        # confidence/direction), so we overlay that view onto the
+        # legacy top-level `_result.get("rsi_14") ...` reads. Falls
+        # back to the top-level value (1d-canonical) when no per-TF
+        # entry exists.
+        _tf_view = (_result.get("timeframes", {}) or {}).get(
+            _selected_tf, {}
+        ) or {}
+
+        def _tf_or_top(top_keys: list[str], tf_key: str | None = None):
+            """Prefer the per-TF value when present + numeric; else
+            fall back to the first non-None top-level key."""
+            if tf_key and tf_key in _tf_view:
+                v = _tf_view.get(tf_key)
+                if v not in (None, "N/A", ""):
+                    return v
+            for k in top_keys:
+                v = _result.get(k)
+                if v is not None:
+                    return v
+            return None
+
+        _rsi = _tf_or_top(["rsi_14", "rsi"], "rsi")
+        _macd_h = _result.get("macd_hist")  # not in per-TF dict shape
+        _supert = _tf_or_top(
+            ["supertrend_signal", "supertrend"], "supertrend"
+        )
+        _adx = _tf_or_top(["adx_14", "adx"], "adx")
+        # Surface "showing X data" caption so users can tell which
+        # timeframe the values below reflect — avoids the impression
+        # that the strip click did nothing if the per-TF values
+        # happen to be missing for the selected TF.
+        st.caption(
+            f"Showing {_selected_tf} data" if _tf_view else
+            f"Showing 1d data ({_selected_tf} not available — run a "
+            f"scan that includes {_selected_tf}.)"
+        )
         def _v(x, fmt="{:.1f}"):
             if x is None:
                 return "—"
@@ -9455,6 +7420,7 @@ def page_regimes():
         user_level=_ds_level,
         on_refresh=_refresh_all_data,
         on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
     )
     _ds_page_header(
         title="Regimes",
@@ -9465,6 +7431,40 @@ def page_regimes():
             ("FRED", "cached"),
         ],
     )
+
+    # C3 §C3.2: Regimes header — "Showing 8 of 33 pairs · click any to
+    # drill in · More ▾ +25" with the More popover backed by the full
+    # universe. Selected pair from the popover is added to
+    # `regimes_visible_pairs` so it appears in the 8-card grid.
+    _regimes_universe = list(model.PAIRS or [])
+    _universe_n = len(_regimes_universe)
+    try:
+        from ui import pair_dropdown as _ds_pair_dropdown
+    except Exception:
+        _ds_pair_dropdown = None  # type: ignore[assignment]
+
+    # Header text on its own row — full width — then the pair_dropdown
+    # gets the entire row below. Open #1 fix (2026-04-30): the previous
+    # [4, 2] split crammed pair_dropdown's 6 columns (5 quick + More)
+    # into 1/3 of the page width, producing char-by-char vertical
+    # wrapping on the BTC/USDT/etc. pills. Stacking the rows gives the
+    # dropdown its full width and the pills render flat.
+    st.markdown(
+        f'<div style="font-size:13px;color:var(--text-muted);'
+        f'margin:0 0 10px 2px;">Showing 8 of {_universe_n} pairs · '
+        f'click any to drill in · use the dropdown to swap any pair into '
+        f'the visible 8.</div>',
+        unsafe_allow_html=True,
+    )
+    if _ds_pair_dropdown is not None and _regimes_universe:
+        _ds_pair_dropdown(
+            _regimes_universe,
+            active=st.session_state.get(
+                "regimes_focus_pair", _regimes_universe[0]
+            ),
+            key="regimes_focus_pair",
+            label=f"More ▾  +{max(0, _universe_n - 5)}",
+        )
 
     # ── Top: 8-card regime grid ──
     try:
@@ -9533,29 +7533,101 @@ def page_regimes():
         # use it. Otherwise show a representative example using the latest
         # known state (single 100% segment) so the layout still renders.
         try:
-            _segments: list[tuple[str, float]] = []
-            _btc_state = "bull"
-            _btc_conf = None
+            # C8-fix (2026-04-30): focus the placeholder lookup on the
+            # currently-selected focus pair (set by the C3 More
+            # dropdown), not hardcoded BTC. Was a real bug — picking
+            # SOL kept the bar showing BTC's state because the loop
+            # below only matched `_p.startswith("BTC")`.
+            _focus_pair = st.session_state.get(
+                "regimes_focus_pair", "BTC/USDT",
+            )
+            _focus_short = (_focus_pair.split("/")[0].split("-")[0]
+                            or "BTC").upper()
+            _state_now = "bull"
+            _conf_now = None
             for _r in (st.session_state.get("scan_results") or []):
                 _p = str(_r.get("pair") or "").upper()
-                if _p.startswith("BTC"):
+                if _p.startswith(_focus_short):
                     _state_raw = str(_r.get("regime") or _r.get("regime_label") or "").strip()
                     for _pre in ("Regime: ", "Regime:", "Regime "):
                         if _state_raw.lower().startswith(_pre.lower()):
                             _state_raw = _state_raw[len(_pre):].strip()
                             break
-                    _btc_state = (_state_raw or "bull").lower()
-                    _btc_conf = _r.get("regime_confidence")
+                    _state_now = (_state_raw or "bull").lower()
+                    _conf_now = _r.get("regime_confidence")
                     break
-            # Without a regime history table, render the current state full-width
-            _segments = [(_btc_state, 100.0)]
-            _note = (f"HMM 4-state model over composite score + on-chain + macro features. "
-                     f"Current state: {_btc_state.title()}"
-                     f"{f', confidence {int(_btc_conf)}%' if _btc_conf is not None else ''}.")
+            # C8 (Phase C plan §C8): real segmented 90d history from
+            # regime_history table when available. Fall back to a
+            # single 100%-current-state segment when the table has no
+            # rows for this focus pair (fresh deploy, no scans run).
+            _segments: list[tuple[str, float]] = []
+            _hist_count = 0
+            try:
+                from database import (
+                    regime_history_segments as _rh_segs,
+                    regime_history_count as _rh_count,
+                )
+                _segments = _rh_segs(_focus_pair, days=90)
+                _hist_count = _rh_count(_focus_pair, days=90)
+            except Exception as _e_rh:
+                logger.debug("[Regimes] regime_history fetch failed: %s",
+                             _e_rh)
+                _segments = []
+            if not _segments:
+                _segments = [(_state_now, 100.0)]
+            # Build a 90d label scale for the bar's date row when we
+            # have real history. Three labels: -90d / -45d / today.
+            _date_labels = ["-90d", "-45d", "today"] if len(_segments) > 1 else None
+            # C8-fix (2026-04-30): the bar visual is identical when
+            # there are 0 DB rows vs N rows that all share the same
+            # state. Surface the actual snapshot count in the note so
+            # users can tell whether their scans are landing in the
+            # regime_history table even when the bar still looks like
+            # a single segment.
+            if _hist_count == 0:
+                _hist_msg = (
+                    "No regime history recorded for "
+                    f"{_focus_short}/USDT yet — run a scan that includes "
+                    "this pair and the bar will start segmenting."
+                )
+            elif len(_segments) == 1:
+                _hist_msg = (
+                    f"{_hist_count} scan snapshot{'s' if _hist_count != 1 else ''} "
+                    f"recorded for {_focus_short}/USDT, all in the "
+                    f"{_segments[0][0].title()} state — bar will segment "
+                    "once the regime changes across scans."
+                )
+            else:
+                _hist_msg = (
+                    f"{_hist_count} scan snapshots over the last 90d, "
+                    f"{len(_segments)} distinct regime bands."
+                )
+            # C9 (2026-04-30): level-aware note. Beginner gets plain
+            # English; Intermediate the standard HMM line; Advanced
+            # the full HMM diagnostic + snapshot count.
+            if _ds_level == "beginner":
+                _note = (
+                    f"Right now, {_focus_short} looks {_state_now.title()} "
+                    f"to the model. The bar above shows how the regime has "
+                    f"moved over the last 90 days. {_hist_msg}"
+                )
+            elif _ds_level == "intermediate":
+                _note = (
+                    f"HMM regime: {_state_now.title()}"
+                    f"{f' · confidence {int(_conf_now)}%' if _conf_now is not None else ''}. "
+                    f"{_hist_msg}"
+                )
+            else:  # advanced
+                _note = (
+                    f"HMM 4-state model over composite score + on-chain + "
+                    f"macro features. Current state: {_state_now.title()}"
+                    f"{f', confidence {int(_conf_now)}%' if _conf_now is not None else ''}. "
+                    f"{_hist_msg}"
+                )
             _ds_state_bar(
                 _segments,
-                title="BTC regime state · last 90d",
-                date_labels=None,  # Only show labels when we have real segmentation
+                title=f"{_focus_short} regime state · last 90d",
+                date_labels=_date_labels,
                 note=_note,
             )
         except Exception as _e_sbar:
@@ -9718,6 +7790,7 @@ def page_onchain():
             render_top_bar as _ds_top_bar,
             page_header as _ds_page_header,
             indicator_card as _ds_ind_card,
+            ticker_pill_button as _ds_ticker_pill,
         )
     except Exception as _e_imp:
         logger.error("[On-chain] import failed: %s", _e_imp)
@@ -9730,16 +7803,56 @@ def page_onchain():
         user_level=_oc_lv,
         on_refresh=_refresh_all_data,
         on_theme=_toggle_theme,
+        status_pills=_agent_topbar_pills(),
     )
+    # C9 (Phase C plan §C9, 2026-04-30): level-aware page subtitle.
+    # Beginner gets a plain-English description of what on-chain
+    # metrics actually measure; Intermediate gets a condensed
+    # technical line; Advanced gets the original full reference.
+    if _oc_lv == "beginner":
+        _oc_sub = ("These numbers come straight from the blockchain itself — "
+                   "they show what holders are actually doing with their coins, "
+                   "not just what the price chart says. Useful for spotting "
+                   "long-cycle inflection points.")
+    elif _oc_lv == "intermediate":
+        _oc_sub = ("On-chain valuation + flow metrics for major pairs: "
+                   "MVRV-Z, SOPR, exchange reserve deltas, active addresses.")
+    else:  # advanced
+        _oc_sub = ("Glassnode + Dune metrics for the major majors. "
+                   "MVRV-Z, SOPR, exchange flows, active addresses.")
     _ds_page_header(
         title="On-chain",
-        subtitle="Glassnode + Dune metrics for the major majors. MVRV-Z, SOPR, exchange flows, active addresses.",
+        subtitle=_oc_sub,
         data_sources=[
             ("Glassnode", "live"),
             ("Dune", "cached"),
             ("Native RPC", "live"),
         ],
     )
+
+    # C3 §C3.3: each card slot is independently swappable to any pair
+    # in the universe. Default slots are BTC / ETH / XRP (matching the
+    # legacy hardcoded layout). Selections persist across reruns under
+    # the per-slot keys so a user's swap on slot 1 doesn't move slot 2.
+    _oc_universe_tickers = sorted({p.split("/")[0].split("-")[0]
+                                   for p in (model.PAIRS or [])}) or ["BTC", "ETH", "XRP"]
+    _oc_slot_keys = [
+        ("onchain_slot_1_ticker", "BTC"),
+        ("onchain_slot_2_ticker", "ETH"),
+        ("onchain_slot_3_ticker", "XRP"),
+    ]
+    for _k, _default in _oc_slot_keys:
+        if st.session_state.get(_k) not in _oc_universe_tickers:
+            st.session_state[_k] = _default
+    _oc_picker_cols = st.columns(3)
+    for _i, (_k, _default) in enumerate(_oc_slot_keys):
+        with _oc_picker_cols[_i]:
+            _ds_ticker_pill(
+                st.session_state[_k],
+                pairs=_oc_universe_tickers,
+                key=_k,
+                label_override=f"Slot {_i+1}: {st.session_state[_k]}  ▾",
+            )
 
     # Pull on-chain data per coin from the latest scan result (or DB fallback,
     # or — C4 fix, 2026-04-28 — a direct on-chain fetch as last resort so the
@@ -9799,50 +7912,51 @@ def page_onchain():
         except Exception:
             return str(x)
 
-    # Three indicator cards — BTC / ETH / overall flow snapshot.
-    _btc = _result_for("BTC")
-    _eth = _result_for("ETH")
-    _xrp = _result_for("XRP")
+    # C3 §C3.3: 3 indicator card slots, each independently bound to its
+    # own ticker_pill_button selection. Was previously hardcoded BTC /
+    # ETH / XRP — now reads from session_state per slot so the user can
+    # swap any slot to any pair in the universe.
+    _slot_tickers = [st.session_state[k] for k, _ in _oc_slot_keys]
+    _slot_data = [_result_for(t) for t in _slot_tickers]
 
     _c1, _c2, _c3 = st.columns(3)
-    with _c1:
-        _ds_ind_card(
-            "BTC · valuation & flows",
-            [
-                ("MVRV-Z",        _v(_btc.get("mvrv_z") or _btc.get("mvrv"), "{:.2f}"),
-                 "mid-cycle" if (_btc.get("mvrv_z") and 1 < float(_btc.get("mvrv_z") or 0) < 5) else "",
-                 ""),
-                ("SOPR",          _v(_btc.get("sopr"), "{:.3f}"),
-                 "profit taking" if (_btc.get("sopr") and float(_btc.get("sopr") or 0) > 1) else "",
-                 ""),
-                ("Exch. reserve", _v(_btc.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _btc.get("exchange_reserve_delta_7d") is not None else "—",
-                 "outflow 7d" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else "inflow 7d",
-                 "success" if (_btc.get("exchange_reserve_delta_7d") and float(_btc.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
-                ("Active addr.",  _v(_btc.get("active_addresses_24h"), "{:,.0f}") if _btc.get("active_addresses_24h") is not None else "—",
-                 "24h",
-                 ""),
-            ],
-        )
-    with _c2:
-        _ds_ind_card(
-            "ETH · valuation & flows",
-            [
-                ("MVRV-Z",        _v(_eth.get("mvrv_z") or _eth.get("mvrv"), "{:.2f}"),                            "", ""),
-                ("SOPR",          _v(_eth.get("sopr"), "{:.3f}"),                                                  "", ""),
-                ("Exch. reserve", _v(_eth.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _eth.get("exchange_reserve_delta_7d") is not None else "—", "7d", "success" if (_eth.get("exchange_reserve_delta_7d") and float(_eth.get("exchange_reserve_delta_7d") or 0) < 0) else ""),
-                ("Active addr.",  _v(_eth.get("active_addresses_24h"), "{:,.0f}") if _eth.get("active_addresses_24h") is not None else "—", "24h", ""),
-            ],
-        )
-    with _c3:
-        _ds_ind_card(
-            "XRP · valuation & flows",
-            [
-                ("MVRV-Z",        _v(_xrp.get("mvrv_z") or _xrp.get("mvrv"), "{:.2f}"), "", ""),
-                ("SOPR",          _v(_xrp.get("sopr"), "{:.3f}"),                       "", ""),
-                ("Exch. reserve", _v(_xrp.get("exchange_reserve_delta_7d"), "{:+,.0f}") if _xrp.get("exchange_reserve_delta_7d") is not None else "—", "7d", ""),
-                ("Active addr.",  _v(_xrp.get("active_addresses_24h"), "{:,.0f}") if _xrp.get("active_addresses_24h") is not None else "—", "24h", ""),
-            ],
-        )
+    for _slot_col, _slot_ticker, _slot_d in zip(
+        (_c1, _c2, _c3), _slot_tickers, _slot_data
+    ):
+        with _slot_col:
+            _ds_ind_card(
+                f"{_slot_ticker} · valuation & flows",
+                [
+                    ("MVRV-Z",
+                     _v(_slot_d.get("mvrv_z") or _slot_d.get("mvrv"), "{:.2f}"),
+                     ("mid-cycle" if (_slot_d.get("mvrv_z")
+                                      and 1 < float(_slot_d.get("mvrv_z") or 0) < 5)
+                      else ""),
+                     ""),
+                    ("SOPR",
+                     _v(_slot_d.get("sopr"), "{:.3f}"),
+                     ("profit taking" if (_slot_d.get("sopr")
+                                          and float(_slot_d.get("sopr") or 0) > 1)
+                      else ""),
+                     ""),
+                    ("Exch. reserve",
+                     (_v(_slot_d.get("exchange_reserve_delta_7d"), "{:+,.0f}")
+                      if _slot_d.get("exchange_reserve_delta_7d") is not None
+                      else "—"),
+                     ("outflow 7d" if (_slot_d.get("exchange_reserve_delta_7d")
+                                       and float(_slot_d.get("exchange_reserve_delta_7d") or 0) < 0)
+                      else "inflow 7d"),
+                     ("success" if (_slot_d.get("exchange_reserve_delta_7d")
+                                    and float(_slot_d.get("exchange_reserve_delta_7d") or 0) < 0)
+                      else "")),
+                    ("Active addr.",
+                     (_v(_slot_d.get("active_addresses_24h"), "{:,.0f}")
+                      if _slot_d.get("active_addresses_24h") is not None
+                      else "—"),
+                     "24h",
+                     ""),
+                ],
+            )
 
     st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
 
@@ -9936,6 +8050,11 @@ elif page == "Arbitrage":
     page_arbitrage()
 elif page == "Agent":
     page_agent()
+elif page == "Alerts":
+    # C6 (Phase C plan §C6, 2026-04-30): Alerts is now a first-class
+    # page — used to deep-link into Settings → Alerts tab via the
+    # _settings_tab=Alerts side-effect (now removed).
+    page_alerts()
 
 # ── Persistent footer: past-performance disclaimer + legal (R3h Tier-1) ───────
 # Audit R3c HIGH: every main page must carry the disclaimer (compliance red flag
