@@ -111,6 +111,38 @@ def test_render_sidebar_uses_on_click_callback():
     )
 
 
+def test_brand_wordmark_uses_nowrap_inside_150px_rail():
+    """C-fix-02 (2026-05-01): the rail brand "Signal.app" wordmark was
+    wrapping mid-word ("Signal.a / pp") inside the 150px rail. Both
+    .ds-rail-brand and .ds-brand-wm must declare white-space:nowrap so
+    Streamlit's outer flex container can't shrink the wordmark below
+    its intrinsic width."""
+    from pathlib import Path
+    css_src = (
+        Path(__file__).resolve().parents[1] / "ui" / "overrides.py"
+    ).read_text(encoding="utf-8")
+    # Both rules must declare nowrap
+    assert ".ds-rail-brand" in css_src
+    assert ".ds-brand-wm" in css_src
+    # Tally: nowrap appears at least twice in the brand block context.
+    # We look for the substring within ~6 lines after each rule starts.
+    def _block_after(rule: str, lines: int = 8) -> str:
+        idx = css_src.find(rule)
+        if idx < 0:
+            return ""
+        return css_src[idx : idx + 600]
+    rail_block = _block_after(".ds-rail-brand")
+    wm_block = _block_after(".ds-brand-wm")
+    assert "white-space: nowrap" in rail_block, (
+        ".ds-rail-brand must declare white-space:nowrap so the wordmark "
+        "can't break inside the 150px rail."
+    )
+    assert "white-space: nowrap" in wm_block, (
+        ".ds-brand-wm must declare white-space:nowrap so the wordmark "
+        "stays on a single line at 14px Inter inside the 150px rail."
+    )
+
+
 def test_select_nav_only_accepts_known_keys_via_PAGE_KEY_TO_APP():
     """Defensive check: an unknown nav key should fall back to
     'Dashboard' (the existing app's default page) rather than wedging

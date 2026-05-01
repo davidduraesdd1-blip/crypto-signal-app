@@ -42,19 +42,34 @@ def inject_streamlit_overrides() -> None:
       background: var(--bg-1) !important;
     }
 
-    /* Brand block */
+    /* Brand block — C-fix-02 (2026-05-01): wordmark "Signal.app" was
+       wrapping to two lines ("Signal.a / pp") inside the 150px rail
+       because neither .ds-rail-brand nor .ds-brand-wm had white-space:
+       nowrap. Streamlit's outer flex container shrinks the wordmark
+       below its intrinsic width and the dot+span flex gap forces the
+       break. Drop font-size from 15px to 14px and pin both the row
+       and the wordmark to nowrap. */
     .ds-rail-brand {
       display: flex; align-items: center; gap: 10px;
       padding: 6px 10px 20px;
-      font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+      font-weight: 600; font-size: 14px; letter-spacing: -0.01em;
       color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
     }
     .ds-brand-dot {
       width: 22px; height: 22px; border-radius: 6px;
       display: grid; place-items: center;
       font-weight: 700; font-size: 12px;
+      flex-shrink: 0;
     }
-    .ds-brand-wm { color: var(--text-primary); }
+    .ds-brand-wm {
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
 
     /* Nav group header — C1 (2026-04-29): bolded + primary text color
        + 12px size + 0.12em letter-spacing for stronger visual
