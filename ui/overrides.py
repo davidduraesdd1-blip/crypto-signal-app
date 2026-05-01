@@ -270,6 +270,19 @@ def inject_streamlit_overrides() -> None:
       color: var(--text-primary) !important;
       font-weight: 600 !important;
     }
+    /* C-fix-04 (2026-05-01): disabled-cell styling. Streamlit applies
+       its own muted/half-opacity treatment to `disabled` buttons but
+       it's not visually distinct enough at our compact size — bump the
+       muted color, force not-allowed cursor, and keep the cell
+       borderline visible so the 8-cell rhythm is preserved. */
+    [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] .ds-tf-strip)
+      + [data-testid="stHorizontalBlock"] [data-testid="stButton"] > button:disabled {
+      color: var(--text-muted) !important;
+      background: var(--bg-2) !important;
+      border-color: var(--border) !important;
+      opacity: 0.55 !important;
+      cursor: not-allowed !important;
+    }
 
     /* ── Pair-dropdown popover content (C3) ─────────────────────────────
        The popover's trigger button is styled by the default sidebar

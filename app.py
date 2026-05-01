@@ -6826,18 +6826,31 @@ def page_signals():
     )
 
     # Multi-timeframe strip — visible selector backed by
-    # st.session_state["selected_timeframe"]. Wires into model.TIMEFRAMES
-    # (1h/4h/1d/1w). Per-timeframe signals dict is computed below from
+    # st.session_state["selected_timeframe"].
+    #
+    # C-fix-04 (2026-05-01): always render the canonical 8-cell set
+    # (1m/5m/15m/30m/1h/4h/1d/1w) per the Signals mockup spec. The
+    # engine may scan only a subset (e.g. model.TIMEFRAMES =
+    # ["1h","4h","1d","1w"]) — those un-scanned cells render disabled
+    # with a tooltip pointing to Settings → Trading → Timeframes so the
+    # user sees the full spec without being able to click into an empty
+    # timeframe. Per-timeframe signals dict is computed below from
     # whatever per-tf data the latest scan_result carries; cells without
     # data render bare label only. The active timeframe drives the
     # composite_score_card and indicator selection further down.
-    _signals_tfs = list(getattr(model, "TIMEFRAMES", ["1h", "4h", "1d", "1w"]))
+    from ui.sidebar import CANONICAL_TIMEFRAMES as _DS_CANON_TFS
+    _signals_tfs_render = list(_DS_CANON_TFS)
+    _signals_tfs_enabled = list(getattr(model, "TIMEFRAMES", ["1h", "4h", "1d", "1w"]))
     _selected_tf = st.session_state.get("selected_timeframe")
-    if _selected_tf not in _signals_tfs:
-        _selected_tf = "1d" if "1d" in _signals_tfs else _signals_tfs[0]
+    if _selected_tf not in _signals_tfs_enabled:
+        _selected_tf = "1d" if "1d" in _signals_tfs_enabled else _signals_tfs_enabled[0]
         st.session_state["selected_timeframe"] = _selected_tf
-    _selected_tf = _ds_tf_strip(_signals_tfs, active=_selected_tf,
-                                 key="selected_timeframe")
+    _selected_tf = _ds_tf_strip(
+        _signals_tfs_render,
+        active=_selected_tf,
+        key="selected_timeframe",
+        enabled_timeframes=_signals_tfs_enabled,
+    )
 
     # Maintain back-compat: keep `signals_active_coin` in sync with
     # the new `selected_pair` so any unmigrated readers below still

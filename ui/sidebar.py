@@ -1155,13 +1155,25 @@ def watchlist_customize_btn(
     return st.session_state.get(key, list(current))
 
 
+CANONICAL_TIMEFRAMES: tuple[str, ...] = (
+    "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w",
+)
+"""C-fix-04 (2026-05-01): canonical 8-cell timeframe set the Signals
+page strip always renders. Mockup `sibling-family-crypto-signal-SIGNALS.html`
+specifies these 8 cells. The live engine may scan a smaller subset
+(e.g. `model.TIMEFRAMES = ["1h","4h","1d","1w"]`); the strip greys out
+the cells the engine isn't actively scanning so the user sees the full
+spec but can't accidentally click into a timeframe with no data."""
+
+
 def multi_timeframe_strip(
-    timeframes: Sequence[str],
+    timeframes: Sequence[str] = CANONICAL_TIMEFRAMES,
     *,
     active: str,
     key: str,
     signals: dict[str, tuple[str, float]] | None = None,
     on_select: Callable[[str], None] | None = None,
+    enabled_timeframes: Sequence[str] | None = None,
 ) -> str:
     """Multi-cell timeframe selector for the Signals page.
 
@@ -1170,27 +1182,54 @@ def multi_timeframe_strip(
     The active cell is rendered as the primary chip.
 
     Args:
-        timeframes: ordered list of timeframes to render (e.g.
-                    ["1h", "4h", "1d", "1w"] or the full 8-cell
-                    ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]).
+        timeframes: ordered list of timeframes to render. Defaults to the
+                    canonical 8-cell set (1m/5m/15m/30m/1h/4h/1d/1w) which
+                    matches the Signals mockup. Pass a smaller list to
+                    render only that subset (e.g. for compact summaries).
         active:     currently-selected timeframe.
         key:        session_state key for persistence.
         signals:    optional `{tf: (signal_letter, score)}` map. Cells
                     without an entry just show the timeframe label.
         on_select:  optional callback fired with the clicked timeframe.
+        enabled_timeframes: optional subset of `timeframes` the engine is
+                    actively scanning. Cells in `timeframes` but not in
+                    this subset render disabled (greyed-out, cursor:
+                    not-allowed, tooltip pointing to Settings). When
+                    None, all cells are enabled.
 
     Returns:
-        The currently-selected timeframe after any click handler.
+        The currently-selected timeframe after any click handler. If
+        `active` falls outside `enabled_timeframes`, falls back to the
+        first enabled cell so downstream consumers always get a real
+        scannable timeframe.
     """
     if st is None:
         return active
 
     if not timeframes:
         return active
-    if active not in timeframes:
-        active = timeframes[0]
+
+    # C-fix-04: normalise enabled set. Default = every rendered cell
+    # is enabled (back-compat with pre-fix callers that don't pass this).
+    _enabled = set(enabled_timeframes) if enabled_timeframes is not None else set(timeframes)
+    if not _enabled:
+        # Defensive: if the caller passed an empty enabled set, fall
+        # back to enabling everything so the page isn't dead.
+        _enabled = set(timeframes)
+
+    # Active must be a real, enabled timeframe — otherwise downstream
+    # data fetches will pull empty results.
+    if active not in _enabled:
+        # Prefer 1d → first enabled tf in user-visible order.
+        if "1d" in _enabled:
+            active = "1d"
+        else:
+            active = next((tf for tf in timeframes if tf in _enabled), timeframes[0])
 
     def _on_pick(tf: str) -> None:
+        # Don't let disabled cells write a non-scannable timeframe.
+        if tf not in _enabled:
+            return
         st.session_state[key] = tf
         if on_select is not None:
             try:
@@ -1213,6 +1252,7 @@ def multi_timeframe_strip(
             label = f"{tf}\n{_html.escape(str(letter))} · {score:.0f}"
         else:
             label = tf
+        _is_enabled = tf in _enabled
         with col:
             st.button(
                 label,
@@ -1221,7 +1261,13 @@ def multi_timeframe_strip(
                 type=("primary" if tf == active else "secondary"),
                 on_click=_on_pick,
                 args=(tf,),
-                help=f"Switch to {tf} timeframe",
+                help=(
+                    f"Switch to {tf} timeframe"
+                    if _is_enabled
+                    else f"{tf} not in active scan set — enable in "
+                         f"Settings → Trading → Timeframes"
+                ),
+                disabled=not _is_enabled,
             )
 
     return st.session_state.get(key, active)
