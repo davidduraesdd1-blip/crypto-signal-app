@@ -3921,7 +3921,16 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 continue
             is_buy = 'BUY' in direction
 
-            entry_price = float(df_full['close'].iloc[i])
+            # Audit 2026-05-02 Phase 8 #52: legacy entered at the same
+            # bar's close as the decision — which is unattainable in
+            # live execution since the bar i close is only knowable
+            # AFTER bar i ends, by which time bar i+1 has begun.
+            # Entry now at bar i+1's open (the first attainable price
+            # after a decision is made). Skip the trade if we don't
+            # have enough forward bars including the entry bar.
+            if i + hold_bars + 1 >= n_bars:
+                continue
+            entry_price = float(df_full['open'].iloc[i + 1])
             if entry_price <= 0:
                 continue
 
@@ -3939,24 +3948,37 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
                 stop = entry_price + stop_dist
                 target = entry_price - target_dist
 
-            # Simulate forward hold_bars
+            # Audit 2026-05-02 Phase 8 #50: slippage model. Stop fills
+            # in fast markets are typically WORSE than the stop level
+            # by ~5 bps for liquid pairs, more for illiquid. Apply
+            # 5 bps adverse slippage to stop exits; target exits use
+            # limit orders so they generally fill at level (no slip).
+            STOP_SLIPPAGE_PCT = 0.05  # 5 bps adverse on stop fills
+
+            # Simulate forward hold_bars — entry at bar i+1, exits at
+            # bars i+2 .. i+hold_bars+1.
             exit_price = None
             exit_reason = 'Hold'
+            exit_slip_pct = 0.0
             for j in range(1, hold_bars + 1):
-                future = df_full.iloc[i + j]
+                future = df_full.iloc[i + 1 + j]
                 h, l = float(future['high']), float(future['low'])
                 if is_buy:
                     if l <= stop:
-                        exit_price = stop; exit_reason = 'Stop'; break
+                        exit_price = stop; exit_reason = 'Stop'
+                        exit_slip_pct = STOP_SLIPPAGE_PCT
+                        break
                     if h >= target:
                         exit_price = target; exit_reason = 'Target'; break
                 else:
                     if h >= stop:
-                        exit_price = stop; exit_reason = 'Stop'; break
+                        exit_price = stop; exit_reason = 'Stop'
+                        exit_slip_pct = STOP_SLIPPAGE_PCT
+                        break
                     if l <= target:
                         exit_price = target; exit_reason = 'Target'; break
             if exit_price is None:
-                exit_price = float(df_full['close'].iloc[i + hold_bars])
+                exit_price = float(df_full['close'].iloc[i + 1 + hold_bars])
                 exit_reason = 'Timeout'
 
             size_usd = equity * pos_pct / 100.0
@@ -3968,6 +3990,25 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
             # CM-32: 0.10% each side = 0.20% round-trip taker cost
             fee_pct = 0.20
             pnl_pct -= fee_pct
+            # Audit 2026-05-02 Phase 8 #50: stop slippage applied here.
+            pnl_pct -= exit_slip_pct
+            # Audit 2026-05-02 Phase 8 #51: perpetual funding cost. For
+            # backtests on perp markets, holders accrue funding payments
+            # every 8h. Free-tier OHLCV doesn't carry the funding rate
+            # series so we apply a conservative 0.01%/8h estimate as a
+            # baseline (BTC long-side average 2020-2024). bar_hours
+            # tells us how many funding intervals were held.
+            FUNDING_PER_8H_PCT = 0.01  # ~0.01% per 8h baseline
+            held_hours = bar_hours * (
+                hold_bars + 1  # entry bar + hold_bars
+                if exit_reason == 'Timeout'
+                else (j + 1)
+            )
+            funding_intervals = held_hours / 8.0
+            # Long pays funding when positive, short receives. Apply
+            # conservatively as a cost on both sides since perp markets
+            # alternate direction over time.
+            pnl_pct -= FUNDING_PER_8H_PCT * funding_intervals
             pnl_usd = size_usd * pnl_pct / 100
             equity += pnl_usd
             peak_equity = max(peak_equity, equity)
@@ -4025,6 +4066,20 @@ def run_deep_backtest(pair: str = 'BTC/USDT', tf: str = '1h',
             'tf':       tf,
             'n_bars':   n_bars,
             'years':    metrics['years_tested'],
+            # Audit 2026-05-02 Phase 8 #53: surface backtest-realism
+            # caveats so the consumer can show them in the UI rather
+            # than treating these numbers as live-equivalent.
+            'caveats':  [
+                "Universe is the current top-100 — survivorship bias "
+                "(coins delisted before today are absent from the test set).",
+                "Entry executed at next-bar open after signal generation "
+                "(modeled live latency).",
+                "Stop fills include 5 bps adverse slippage; target fills "
+                "assumed to fill at limit.",
+                "Perpetual funding cost applied at 0.01%/8h baseline "
+                "(actual realized funding may be higher in trending markets).",
+                "0.20% round-trip taker fee. No spread modeling.",
+            ],
         }
 
     except Exception as e:
