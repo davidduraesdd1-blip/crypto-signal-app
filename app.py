@@ -4825,6 +4825,18 @@ def page_backtest():
         logger.debug("[Backtest] secondary segmented control failed: %s", _e_seg2)
         _bt_subview = "summary"
 
+    # HOTFIX (2026-05-02): df_trades is referenced from BOTH the
+    # `_bt_subview == "summary"` branch (line ~4432) and the
+    # `_bt_subview == "advanced"` branch's Performance Attribution
+    # section (~line 5658). Pre-fix, df_trades was only defined in the
+    # summary branch — clicking the Advanced sub-segment crashed with
+    # UnboundLocalError because the variable was never bound. Define
+    # it once here (above the branch) so both subviews have access.
+    # Each branch may overwrite df_trades with its own logic (the
+    # summary branch swaps in `bt_res.get("trades", df_trades)` from
+    # session state when a fresh run is available).
+    df_trades = _cached_backtest_df()
+
     if _bt_subview == "summary":
         if st.session_state.get("backtest_error"):
             logger.warning("[Backtest] error: %s", st.session_state["backtest_error"])
@@ -4832,7 +4844,11 @@ def page_backtest():
 
         # Show existing results — from session state (fresh run) or DB (prior run)
         bt_res = st.session_state.get("backtest_results")
-        df_trades = _cached_backtest_df()
+        # HOTFIX 2026-05-02: df_trades is now defined above (outside
+        # the if/elif branch) so all 3 subviews (summary/trades/advanced)
+        # have access. The summary branch re-fetches here is redundant
+        # — removed to prevent stale reads when both branches use the
+        # same data.
 
         if bt_res is None and df_trades.empty:
             st.info("No backtest data yet. Run **▶ Run Backtest** or ensure the daily signals DB table has entries.")
