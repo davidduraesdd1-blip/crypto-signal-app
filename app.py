@@ -1572,6 +1572,54 @@ def _render_alerts_configure() -> None:
         )
 
 
+def _stateful_tabs(tab_names: list[str], state_key: str) -> str:
+    """State-persistent tab selector — fixes the Streamlit st.tabs()
+    bug where the active tab resets to the first one on every script
+    rerun (so any button click inside a tab kicks the user back to
+    tab 1).
+
+    Replaces `st.tabs([...])` + `with tab1:` blocks with this helper
+    + `if selected == "Tab 1":` conditional blocks. The selection
+    persists in `st.session_state[state_key]` so reruns triggered by
+    in-tab interactions (button clicks, slider edits, form submits)
+    keep the user on whatever tab they were on.
+
+    Visually: a horizontal segmented-control row that reads as a tab
+    bar. The actual `st.tabs()` widget isn't used because Streamlit
+    doesn't expose its active-tab state to Python (active tab is
+    stored in URL hash on the client only, lost on rerun).
+
+    Args:
+        tab_names: ordered list of tab labels — also used as the
+                   conditional value, so caller does
+                   `if selected == "📊 Trading": ...`.
+        state_key: unique session_state key per tab-bar instance.
+                   Multiple tab-bars on the same page need distinct
+                   keys (e.g. "settings_active_tab" vs
+                   "backtester_active_subtab").
+
+    Returns:
+        The currently-selected tab name (one of `tab_names`).
+    """
+    # Seed the default on first render.
+    if state_key not in st.session_state:
+        st.session_state[state_key] = tab_names[0]
+    # Validate — if the saved value is no longer in the list (e.g.
+    # tab labels changed between deploys), fall back to the first.
+    if st.session_state[state_key] not in tab_names:
+        st.session_state[state_key] = tab_names[0]
+    # st.segmented_control was added in Streamlit 1.36 and is
+    # state-persistent via key=. Use it; fall back to st.radio for
+    # older Streamlit versions where segmented_control may not exist.
+    _selector = getattr(st, "segmented_control", None) or st.radio
+    return _selector(
+        "Tabs",
+        tab_names,
+        key=state_key,
+        label_visibility="collapsed",
+    )
+
+
 def _agent_topbar_pills() -> list[dict]:
     """Return the topbar-pill list reflecting the autonomous agent's
     runtime state. Empty list when agent.py couldn't import or the
@@ -3196,7 +3244,12 @@ def page_config():
     # read + dead conditional removed below.
     _cfg_tab_names = ["📊 Trading", "⚡ Signal & Risk", "🛠️ Dev Tools", "⚙️ Execution"]
 
-    _cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4 = st.tabs(_cfg_tab_names)
+    # State-persistent tabs (Streamlit's native st.tabs() resets to the
+    # first tab on every rerun — so any button click inside a tab
+    # kicked users back to "📊 Trading"). _stateful_tabs returns the
+    # currently-selected tab name; we then gate each tab's content
+    # behind an `if _cfg_active == "...":` check below.
+    _cfg_active = _stateful_tabs(_cfg_tab_names, state_key="settings_active_tab")
 
     # ── ALERTS TAB content definition (full config moved from sidebar)
     def _render_alerts_tab():
@@ -3245,7 +3298,7 @@ def page_config():
             st.caption("Use a Gmail App Password (Settings → Security → 2FA → App passwords)")
 
     # ── Tab 1: Trading Parameters
-    with _cfg_t1:
+    if _cfg_active == "📊 Trading":
         # ── Trading Pairs ──
         _ui.section_header("Trading Pairs", "Select which crypto pairs to include in each scan", icon="🪙")
         _common_pairs = [
@@ -3303,8 +3356,11 @@ def page_config():
         # ── TA Exchange ──
         _ui.section_header("Data Source Exchange", "OHLCV data provider for technical analysis", icon="🔗")
         exchange_options = ['kraken', 'binance', 'coinbase', 'kucoin', 'okx', 'gemini', 'bitstamp']
-        ta_ex = st.selectbox("TA Exchange (OHLCV source)", exchange_options,
-                             index=exchange_options.index(model.TA_EXCHANGE) if model.TA_EXCHANGE in exchange_options else 0)
+        ta_ex = st.selectbox(
+            "TA Exchange (OHLCV source)", exchange_options,
+            index=exchange_options.index(model.TA_EXCHANGE) if model.TA_EXCHANGE in exchange_options else 0,
+            key="cfg_ta_exchange",
+        )
         overrides["TA_EXCHANGE"] = ta_ex
 
         # ── Display Preferences (ToS #10) ─────────────────────────────────
@@ -3318,50 +3374,71 @@ def page_config():
 
 
     # ── Tab 2: Signal & Risk
-    with _cfg_t2:
+    if _cfg_active == "⚡ Signal & Risk":
         # ── Risk Parameters ──
         _ui.section_header("Risk Parameters", "Position sizing, Kelly Criterion inputs, and exposure limits", icon="⚖️")
         r1, r2, r3 = st.columns(3)
         with r1:
-            portfolio = st.number_input("Portfolio Size (USD)", min_value=100.0, max_value=10_000_000.0,
-                                        value=float(model.PORTFOLIO_SIZE_USD), step=500.0,
-                                        help=_ui.HELP_PORTFOLIO_SIZE)
+            portfolio = st.number_input(
+                "Portfolio Size (USD)", min_value=100.0, max_value=10_000_000.0,
+                value=float(model.PORTFOLIO_SIZE_USD), step=500.0,
+                help=_ui.HELP_PORTFOLIO_SIZE,
+                key="cfg_portfolio_size",
+            )
             overrides["PORTFOLIO_SIZE_USD"] = portfolio
         with r2:
-            risk_pct = st.number_input("Risk Per Trade (%)", min_value=0.1, max_value=10.0,
-                                       value=float(model.RISK_PER_TRADE_PCT), step=0.1,
-                                       help=_ui.HELP_RISK_PER_TRADE)
+            risk_pct = st.number_input(
+                "Risk Per Trade (%)", min_value=0.1, max_value=10.0,
+                value=float(model.RISK_PER_TRADE_PCT), step=0.1,
+                help=_ui.HELP_RISK_PER_TRADE,
+                key="cfg_risk_per_trade_pct",
+            )
             overrides["RISK_PER_TRADE_PCT"] = risk_pct
         with r3:
-            max_exp = st.number_input("Max Total Exposure (%)", min_value=10.0, max_value=100.0,
-                                      value=float(model.MAX_TOTAL_EXPOSURE_PCT), step=5.0,
-                                      help=_ui.HELP_MAX_EXPOSURE)
+            max_exp = st.number_input(
+                "Max Total Exposure (%)", min_value=10.0, max_value=100.0,
+                value=float(model.MAX_TOTAL_EXPOSURE_PCT), step=5.0,
+                help=_ui.HELP_MAX_EXPOSURE,
+                key="cfg_max_total_exposure_pct",
+            )
             overrides["MAX_TOTAL_EXPOSURE_PCT"] = max_exp
 
         r4, r5 = st.columns(2)
         with r4:
-            max_pos_cap = st.number_input("Max Position Cap (%)", min_value=5.0, max_value=100.0,
-                                          value=float(model.MAX_POSITION_PCT_CAP), step=5.0,
-                                          help=_ui.HELP_MAX_POS_CAP)
+            max_pos_cap = st.number_input(
+                "Max Position Cap (%)", min_value=5.0, max_value=100.0,
+                value=float(model.MAX_POSITION_PCT_CAP), step=5.0,
+                help=_ui.HELP_MAX_POS_CAP,
+                key="cfg_max_position_pct_cap",
+            )
             overrides["MAX_POSITION_PCT_CAP"] = max_pos_cap
         with r5:
-            max_per_pair = st.number_input("Max Open Per Pair", min_value=1, max_value=5,
-                                           value=int(model.MAX_OPEN_PER_PAIR),
-                                           help=_ui.HELP_MAX_PER_PAIR)
+            max_per_pair = st.number_input(
+                "Max Open Per Pair", min_value=1, max_value=5,
+                value=int(model.MAX_OPEN_PER_PAIR),
+                help=_ui.HELP_MAX_PER_PAIR,
+                key="cfg_max_open_per_pair",
+            )
             overrides["MAX_OPEN_PER_PAIR"] = max_per_pair
 
         # ── Signal Thresholds ──
         _ui.section_header("Signal Thresholds", "Confidence and alignment thresholds for HIGH-CONF flag and alerts", icon="🎯")
         t1, t2 = st.columns(2)
         with t1:
-            hc_thresh = st.slider("High-Confidence Threshold (%)", 50, 90,
-                                  int(model.HIGH_CONF_THRESHOLD), step=1,
-                                  help=_ui.HELP_HIGH_CONF_THRESH)
+            hc_thresh = st.slider(
+                "High-Confidence Threshold (%)", 50, 90,
+                int(model.HIGH_CONF_THRESHOLD), step=1,
+                help=_ui.HELP_HIGH_CONF_THRESH,
+                key="cfg_high_conf_threshold",
+            )
             overrides["HIGH_CONF_THRESHOLD"] = _clamp(float(hc_thresh), 50.0, 90.0)
         with t2:
-            mtf_thresh = st.slider("MTF Alignment Threshold (%)", 10, 80,
-                                   int(model.HIGH_MTF_THRESHOLD), step=5,
-                                   help=_ui.HELP_MTF_THRESH)
+            mtf_thresh = st.slider(
+                "MTF Alignment Threshold (%)", 10, 80,
+                int(model.HIGH_MTF_THRESHOLD), step=5,
+                help=_ui.HELP_MTF_THRESH,
+                key="cfg_mtf_threshold",
+            )
             overrides["HIGH_MTF_THRESHOLD"] = float(mtf_thresh)
 
         # ── Indicator Weights ──
@@ -3395,14 +3472,20 @@ def page_config():
         _ui.section_header("Correlation Filter", "Reduces position size for assets highly correlated with BTC", icon="🔗")
         cr1, cr2 = st.columns(2)
         with cr1:
-            corr_thresh = st.slider("BTC Correlation Threshold", 0.0, 1.0,
-                                    float(model.CORR_THRESHOLD), step=0.05,
-                                    help=_ui.HELP_CORR_THRESH)
+            corr_thresh = st.slider(
+                "BTC Correlation Threshold", 0.0, 1.0,
+                float(model.CORR_THRESHOLD), step=0.05,
+                help=_ui.HELP_CORR_THRESH,
+                key="cfg_corr_threshold",
+            )
             overrides["CORR_THRESHOLD"] = corr_thresh
         with cr2:
-            corr_lb = st.number_input("Correlation Lookback (days)", 5, 90,
-                                      int(model.CORR_LOOKBACK_DAYS),
-                                      help=_ui.HELP_CORR_LB)
+            corr_lb = st.number_input(
+                "Correlation Lookback (days)", 5, 90,
+                int(model.CORR_LOOKBACK_DAYS),
+                help=_ui.HELP_CORR_LB,
+                key="cfg_corr_lookback_days",
+            )
             overrides["CORR_LOOKBACK_DAYS"] = corr_lb
 
         # ── Backtest Settings ──
@@ -3434,17 +3517,21 @@ def page_config():
 
         b3, b4 = st.columns(2)
         with b3:
-            trailing_on = st.checkbox("Enable Trailing Stops in Backtest",
-                                      value=bool(model.TRAILING_STOP_ENABLED),
-                                      help="Stop loss advances with price to lock in profits. "
-                                           "More realistic than fixed stops.")
+            trailing_on = st.checkbox(
+                "Enable Trailing Stops in Backtest",
+                value=bool(model.TRAILING_STOP_ENABLED),
+                help="Stop loss advances with price to lock in profits. "
+                     "More realistic than fixed stops.",
+                key="cfg_trailing_stop_enabled",
+            )
             overrides["TRAILING_STOP_ENABLED"] = trailing_on
         with b4:
             dd_threshold = st.number_input(
                 "Drawdown Circuit Breaker (%)", 5.0, 50.0,
                 float(model.DRAWDOWN_CIRCUIT_BREAKER_PCT), step=1.0,
                 help="If paper trade portfolio drawdown exceeds this %, "
-                     "all new scan signals are downgraded to NEUTRAL (no entries)."
+                     "all new scan signals are downgraded to NEUTRAL (no entries).",
+                key="cfg_drawdown_circuit_breaker_pct",
             )
             overrides["DRAWDOWN_CIRCUIT_BREAKER_PCT"] = dd_threshold
 
@@ -3568,7 +3655,7 @@ def page_config():
 
 
     # ── Tab 3: Dev Tools (consolidated — Alerts moved to page_alerts in C6)
-    with _cfg_t3:
+    if _cfg_active == "🛠️ Dev Tools":
         # ── Paid API Keys ──
         st.markdown("---")
         _ui.section_header("API Keys", "Add keys to unlock premium data feeds", icon="🔑")
@@ -3710,6 +3797,7 @@ def page_config():
                     # in their saved config keep their setting (.get with
                     # default applies only when the key is absent).
                     value=_sched_cfg.get("autoscan_enabled", True),
+                    key="cfg_form_autoscan_enabled",
                 )
                 _sched_interval_opts = {
                     "15 minutes": 15, "30 minutes": 30, "1 hour": 60,
@@ -3723,23 +3811,27 @@ def page_config():
                             # C-fix-12: default 15 min per §12 (was 60 min).
                             key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 15)))
                     ),
+                    key="cfg_form_autoscan_interval",
                 )
             with _sc2:
                 _quiet_on = st.toggle(
                     "Quiet Hours (UTC)",
                     value=_sched_cfg.get("autoscan_quiet_hours_enabled", False),
                     help="Scheduled scans are skipped during this UTC time window.",
+                    key="cfg_form_autoscan_quiet_on",
                 )
                 _sqc1, _sqc2 = st.columns(2)
                 with _sqc1:
                     _quiet_start = st.text_input(
                         "Start HH:MM",
                         value=_sched_cfg.get("autoscan_quiet_start", "22:00"),
+                        key="cfg_form_autoscan_quiet_start",
                     )
                 with _sqc2:
                     _quiet_end = st.text_input(
                         "End HH:MM",
                         value=_sched_cfg.get("autoscan_quiet_end", "06:00"),
+                        key="cfg_form_autoscan_quiet_end",
                     )
             if st.form_submit_button("💾 Save Scheduler Config", type="primary"):
                 _sched_cfg.update({
@@ -3907,7 +3999,7 @@ def page_config():
 
     # ── Tab 3 (cont.): the rest of the legacy Dev Tools content,
     #    re-entering the same tab via Streamlit's tab-context API.
-    with _cfg_t3:
+    if _cfg_active == "🛠️ Dev Tools":
         # ── Sidebar legacy widgets (relocated from sidebar in 2026-04-25 redesign)
         _ui.section_header("Sidebar tools", "Auto-Scan, Demo / Sandbox, API Health, Wallet Import, API Keys, Build Info", icon="🧰")
         try:
@@ -4029,7 +4121,7 @@ def page_config():
 
 
     # ── Tab 5: Live Execution
-    with _cfg_t4:  # was _cfg_t5 before C6 dropped the Alerts tab
+    if _cfg_active == "⚙️ Execution":  # was _cfg_t5 before C6 dropped the Alerts tab
         # ── Live Execution Settings ────────────────────────────────────────────────
         st.markdown("---")
         _ui.section_header("Live Execution (OKX)", "Connect OKX API keys to place real or paper orders directly from the dashboard", icon="⚡")
@@ -5181,12 +5273,18 @@ def page_backtest():
 
 
     elif _bt_subview == "trades":
-        tab_master, tab_paper, tab_feedback, tab_exec, tab_slip = st.tabs([
-            "Signal Master Log", "Paper Trades", "Feedback Log", "Execution Log", "Slippage Analytics"
-        ])
+        # State-persistent sub-tabs (st.tabs() loses active tab on
+        # rerun — see _stateful_tabs docstring).
+        _bt_tab_names = [
+            "Signal Master Log", "Paper Trades", "Feedback Log",
+            "Execution Log", "Slippage Analytics",
+        ]
+        _bt_active_tab = _stateful_tabs(
+            _bt_tab_names, state_key="backtester_trades_active_tab"
+        )
 
         # ── Tab 1: Master Log ──
-        with tab_master:
+        if _bt_active_tab == "Signal Master Log":
             df = _cached_signals_df()
             if df.empty:
                 st.info("No master log data yet. Run a scan first.")
@@ -5250,7 +5348,7 @@ def page_backtest():
                                    key="dl_master_log")
 
         # ── Tab 2: Paper Trades ──
-        with tab_paper:
+        if _bt_active_tab == "Paper Trades":
             df_closed = _cached_paper_trades_df()
             try:
                 positions = model.load_positions()
@@ -5457,7 +5555,7 @@ def page_backtest():
                                    key="dl_paper_trades")
 
         # ── Tab 3: Feedback Log ──
-        with tab_feedback:
+        if _bt_active_tab == "Feedback Log":
             df_fb = _cached_feedback_df()
             if df_fb.empty:
                 st.info("No feedback log data yet.")
@@ -5482,7 +5580,7 @@ def page_backtest():
                                    key="dl_feedback_log")
 
         # ── Tab 4: Execution Log ──
-        with tab_exec:
+        if _bt_active_tab == "Execution Log":
             _exec_st = _exec.get_status()
             _mode_disp = "🔴 LIVE" if _exec_st.get("live_trading", False) else "📄 Paper"
             ec1, ec2, ec3 = st.columns(3)
@@ -5517,7 +5615,7 @@ def page_backtest():
                 )
 
         # ── Tab 5: Slippage Analytics ─────────────────────────────────────────────
-        with tab_slip:
+        if _bt_active_tab == "Slippage Analytics":
             st.subheader("Post-Trade Slippage Analytics")
             st.caption("Tracks fill price vs. expected signal entry price. Lower slippage = better execution quality.")
             df_slip = _cached_execution_log_df(limit=500)
