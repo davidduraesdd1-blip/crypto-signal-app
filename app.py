@@ -3953,7 +3953,16 @@ def page_config():
                             else:
                                 st.warning(f"{_status}: {_result.get('reason', '')}")
                         except Exception as _e_rt:
-                            st.error(f"Retune failed: {_e_rt}")
+                            # Audit 2026-05-02 Phase 4 (CLAUDE.md §8): never
+                            # surface a Python exception object to the user.
+                            # Log the technical detail; show plain English.
+                            logger.warning("[Retune] manual retune failed: %s", _e_rt)
+                            st.error(
+                                "Couldn't run a retune right now. "
+                                "Likely cause: not enough resolved feedback rows yet "
+                                "(needs ≥50 with layer scores). Try again after the next "
+                                "scheduled scan completes."
+                            )
                 with _rt_col2:
                     st.caption(
                         "Manual retune for diagnostic use. The daily 04:00 UTC "
@@ -4461,7 +4470,14 @@ def page_backtest():
         except Exception as _e_arb_render:
             logger.error("[Backtest] arbitrage view render failed: %s",
                          _e_arb_render)
-            st.error("Arbitrage scanner failed to load — check logs.")
+            # Audit 2026-05-02 Phase 4: page-specific truthful copy instead
+        # of generic "check logs". The technical detail is in the log,
+        # the user gets a clear next action.
+        st.error(
+            "The arbitrage scanner couldn't initialize right now. "
+            "This usually means an exchange API is temporarily unreachable. "
+            "Try refreshing in 30 seconds."
+        )
         return
 
     # ── C4: Universe selector — drives every backtest query below.
@@ -6846,10 +6862,30 @@ def _render_arbitrage_view():
                     # clicks within a 10-min window now cost 0 round-trips.
                     multi = _sg_cached_multi_exchange_funding(pair)
                     row: dict = {"Pair": pair}
+                    # Audit 2026-05-02 C7 + C24 (Image 7): legacy code wrote
+                    # `None` to the cell on any error, which Streamlit
+                    # displays as the literal string "None". User cannot
+                    # distinguish geo-block from rate-limit from outage.
+                    # Translate the error into a truthful single-word
+                    # cell label. Cells with real data stay numeric so
+                    # the column color formatter still works.
                     for exch in ("okx", "binance", "bybit", "kucoin"):
                         rd   = multi.get(exch, {})
                         rate = rd.get("funding_rate_pct", 0.0)
-                        row[exch.upper()] = None if rd.get("error") else rate
+                        if rd.get("error"):
+                            err = str(rd.get("error_code") or rd.get("error") or "").lower()
+                            if any(k in err for k in ("451", "403", "geo")):
+                                row[exch.upper()] = "geo-blocked"
+                            elif any(k in err for k in ("429", "rate")):
+                                row[exch.upper()] = "rate-limited"
+                            elif "timeout" in err:
+                                row[exch.upper()] = "timeout"
+                            elif "key" in err:
+                                row[exch.upper()] = "no api key"
+                            else:
+                                row[exch.upper()] = "unreachable"
+                        else:
+                            row[exch.upper()] = rate
                     # best carry = exchange with largest |rate|
                     valid = {
                         exch: multi[exch]["funding_rate_pct"]
@@ -7021,7 +7057,11 @@ def page_alerts():
         )
     except Exception as _e_imp:
         logger.error("[Alerts] import failed: %s", _e_imp)
-        st.error("Alerts page failed to load — check logs.")
+        st.error(
+            "The Alerts page couldn't load. This is usually a temporary "
+            "issue. Try refreshing — if it persists, the alerts database "
+            "may be locked by another session."
+        )
         return
 
     _ds_top_bar(
@@ -7057,7 +7097,11 @@ def page_alerts():
         from database import recent_alerts as _recent_alerts
     except Exception as _e_ra:
         logger.error("[Alerts] recent_alerts import failed: %s", _e_ra)
-        st.error("Alert history database helper unavailable — check logs.")
+        st.error(
+            "Alert history isn't available right now. "
+            "The alerts database is missing or unreadable — alerts can still "
+            "be configured but past triggers won't display."
+        )
         return
 
     _f1, _f2, _f3, _f4 = st.columns(4)
@@ -7521,7 +7565,11 @@ def page_signals():
         )
     except Exception as _e_imp:
         logger.error("[Signals] import failed: %s", _e_imp)
-        st.error("Signal page failed to load — check logs.")
+        st.error(
+            "The Signals page couldn't load. This is usually a temporary "
+            "data fetch issue. Try refreshing — if it persists, run a fresh "
+            "scan via the Update button."
+        )
         return
 
     _ds_level = st.session_state.get("user_level", "beginner")
@@ -8202,7 +8250,11 @@ def page_regimes():
         )
     except Exception as _e_imp:
         logger.error("[Regimes] import failed: %s", _e_imp)
-        st.error("Regimes page failed to load — check logs.")
+        st.error(
+            "The Regimes page couldn't load. The HMM regime detector "
+            "needs at least 90 days of macro + on-chain data; try again "
+            "after the next scheduled scan completes."
+        )
         return
 
     _ds_level = st.session_state.get("user_level", "beginner")
@@ -8638,7 +8690,11 @@ def page_onchain():
         )
     except Exception as _e_imp:
         logger.error("[On-chain] import failed: %s", _e_imp)
-        st.error("On-chain page failed to load — check logs.")
+        st.error(
+            "The On-chain page couldn't load. The on-chain data sources "
+            "(Glassnode / CoinMetrics) are temporarily unreachable. "
+            "Try refreshing in a minute."
+        )
         return
 
     _oc_lv = st.session_state.get("user_level", "beginner")
