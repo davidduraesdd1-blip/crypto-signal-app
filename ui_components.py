@@ -170,34 +170,17 @@ _CSS = """
    ui/design_system.py + ui/overrides.py own the rail look post-redesign. */
 
 /* ═══════════════════════════════════════════════
-   BUTTONS — gradient primary, ghost secondary
-   AUDIT (a) load-bearing: main-area buttons (scan, run backtest,
-   etc.) want the gradient look. Scoped to `section.main` post-2026-04-25
-   so ui/overrides.py wins for the sidebar nav.
+   BUTTONS — primary CTA styling owned by ui/overrides.py
+   Audit 2026-05-02 C9 (Phase 3, bright-green saturation): the legacy
+   linear-gradient block here used hardcoded #00d4aa, drifted from the
+   design system's --accent (#22d36f), and won the cascade via
+   `!important`. It painted every primary button across the app a
+   bright saturated teal that the user flagged as "looking outdated"
+   (Images 4, 6, 7, 8). Block REMOVED — primary button styling now
+   comes from ui/overrides.py which uses tokens (--accent-soft +
+   --text-primary) for muted treatment matching the sidebar's active
+   nav item.
 ═══════════════════════════════════════════════ */
-section.main .stButton > button[kind="primary"],
-section.main button[kind="primary"] {
-    background: linear-gradient(135deg, #00d4aa 0%, #10b981 60%, #a78bfa 100%) !important;
-    border: none !important;
-    color: #0d0e14 !important;
-    font-weight: 700 !important;
-    font-size: var(--fs-sm) !important;
-    letter-spacing: 0.3px !important;
-    border-radius: var(--r-sm) !important;
-    transition: box-shadow var(--t-base), transform var(--t-fast) !important;
-    box-shadow: 0 2px 14px rgba(0,212,170,0.25) !important;
-    padding: 8px 18px !important;
-}
-section.main .stButton > button[kind="primary"]:hover,
-section.main button[kind="primary"]:hover {
-    box-shadow: 0 4px 28px rgba(0,212,170,0.45), 0 0 0 1px rgba(0,212,170,0.3) !important;
-    transform: translateY(-2px) !important;
-}
-section.main .stButton > button[kind="primary"]:active,
-section.main button[kind="primary"]:active {
-    transform: translateY(0) !important;
-    box-shadow: 0 1px 8px rgba(0,212,170,0.25) !important;
-}
 
 /* Secondary / ghost buttons (also scoped — sidebar nav uses its own
    plain text-link look in ui/overrides.py). */
