@@ -589,6 +589,39 @@ def test_watchlist_row_falls_back_to_sparkline_close_for_price():
     )
 
 
+def test_scan_thread_auto_runs_backtest_and_feedback_loop():
+    """C-fix-20b (2026-05-02): every scan completion (manual or
+    scheduled) must trigger model.run_feedback_loop() AND
+    model.run_backtest() in sequence, in the same background thread.
+    The order matters: feedback first (resolves outcomes for the
+    backtest data window), backtest second (walks fresh signals
+    against historical OHLCV)."""
+    src = _app_source()
+    # Locate the scan thread.
+    idx = src.find("def _run_scan_thread")
+    assert idx > 0, "_run_scan_thread not found"
+    body = src[idx : idx + 6000]
+    assert "model.run_feedback_loop()" in body, (
+        "_run_scan_thread no longer calls model.run_feedback_loop() — "
+        "feedback outcomes / agent weights / threshold calibration "
+        "won't update on scan completion."
+    )
+    assert "model.run_backtest()" in body, (
+        "_run_scan_thread no longer calls model.run_backtest() after "
+        "the feedback loop. Composite-backtest card will stay empty "
+        "between manual Backtester clicks."
+    )
+    # And the order must be feedback → backtest (feedback resolves
+    # outcomes that the backtest then walks).
+    fb_idx = body.find("model.run_feedback_loop()")
+    bt_idx = body.find("model.run_backtest()")
+    assert fb_idx < bt_idx, (
+        "Auto-backtest call now precedes the feedback loop. The order "
+        "must be: scan results → feedback (resolve outcomes) → "
+        "backtest (walk fresh data)."
+    )
+
+
 def test_home_composite_backtest_card_shows_cta_when_empty():
     """C-fix-17 (2026-05-02): the Home page composite-backtest mini-card
     must render a CTA ("No backtest run yet") when none of the 4 KPIs

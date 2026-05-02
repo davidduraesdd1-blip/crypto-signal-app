@@ -2849,6 +2849,35 @@ def _run_scan_thread():
             model.run_feedback_loop()
         except Exception as _fb_err:
             logging.warning("Feedback loop error: %s", _fb_err)
+        # C-fix-20b (2026-05-02): auto-backtest after every scan.
+        # Per user direction: every scan (manual or scheduled) should
+        # trigger a backtest so the Composite-backtest card always
+        # reflects the latest signal-vs-price reality. Sequential
+        # in-thread (not parallel) so we never double-burn the API
+        # rate-limit budget — the scan already used its quota for the
+        # 15-min interval.
+        #
+        # run_backtest() reads daily_signals (just-appended above) +
+        # historical OHLCV (cached from scan), walks signals → exits,
+        # writes per-trade rows to backtest_trades. Total elapsed:
+        # ~10-30s on a populated DB. The user-facing scan-progress
+        # banner does not change — this runs after the scan-complete
+        # event paints, so the UI repaints with fresh prices first
+        # then the backtest card flips a few seconds later.
+        try:
+            _bt_metrics = model.run_backtest()
+            if _bt_metrics:
+                logging.info(
+                    "[AutoBT] post-scan backtest complete: %d trades, "
+                    "total_return=%.2f%%",
+                    _bt_metrics.get("total_trades", 0) or 0,
+                    float(_bt_metrics.get("total_return", 0) or 0),
+                )
+            else:
+                logging.debug("[AutoBT] post-scan backtest skipped — "
+                              "insufficient signal history")
+        except Exception as _bt_err:
+            logging.warning("[AutoBT] post-scan backtest error: %s", _bt_err)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
         audit("scan_complete", pairs=len(results), timestamp=ts)
