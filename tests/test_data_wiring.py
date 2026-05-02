@@ -242,6 +242,33 @@ def test_backtester_shows_cta_when_no_results():
     )
 
 
+# ── HOTFIX 2026-05-02: df_trades UnboundLocalError on Backtester ─────────
+
+def test_df_trades_defined_outside_subview_branches():
+    """Pre-fix bug: `df_trades = _cached_backtest_df()` was inside the
+    `if _bt_subview == "summary":` branch only. The Performance
+    Attribution section inside `elif _bt_subview == "advanced":`
+    referenced df_trades — which was never bound when advanced was
+    active → UnboundLocalError on every page render with
+    _bt_subview == "advanced".
+
+    Fix: hoist df_trades above the if/elif so all 3 subviews
+    (summary/trades/advanced) share the assignment."""
+    src = _app_source()
+    pb_idx = src.find("def page_backtest(")
+    assert pb_idx > 0
+    body = src[pb_idx : pb_idx + 60000]
+    summary_idx = body.find('if _bt_subview == "summary":')
+    assert summary_idx > 0, "subview branch missing"
+    df_idx = body.find("df_trades = _cached_backtest_df()")
+    assert df_idx > 0, "df_trades assignment missing"
+    assert df_idx < summary_idx, (
+        "df_trades is still defined INSIDE the if _bt_subview branch — "
+        "the advanced subview's Performance Attribution section will "
+        "UnboundLocalError on first page render."
+    )
+
+
 # ── C-fix-08: scan-completion writeback in _sg_sidebar_progress ──────────
 
 def test_sidebar_progress_clears_session_scan_running_on_completion():
