@@ -169,10 +169,159 @@ def format_delta_color(value) -> str:
     return "#64748b"
 
 
+# ─────────────────────────────────────────────────────────────────────
+# TRUTHFUL EMPTY STATES (Audit 2026-05-02 Phase 4)
+# ─────────────────────────────────────────────────────────────────────
+# CLAUDE.md §8 mandates plain-English error messages with detail
+# scaling per user level. The pre-Phase-4 codebase had 135+ bare "—"
+# sites and 19 silent except-pass paths that left users unable to
+# tell loading vs geo-blocked vs rate-limited vs no-key vs genuinely
+# zero. This helper centralizes those copy strings into 9 reason
+# codes × 3 user-level tiers so a one-line call replaces every
+# misleading dash.
+
+_EMPTY_STATE_COPY = {
+    "loading": {
+        "beginner":     "Loading…",
+        "intermediate": "Loading…",
+        "advanced":     "Fetching…",
+    },
+    "pending_scan": {
+        "beginner":     "No data yet — run a scan to see results",
+        "intermediate": "No scan data yet — run a scan",
+        "advanced":     "No scan data — run scan to populate",
+    },
+    "geo_blocked": {
+        "beginner":     "Not available from this server location",
+        "intermediate": "Geo-blocked — datacenter IP rejected",
+        "advanced":     "Geo-blocked",
+    },
+    "rate_limited": {
+        "beginner":     "Hit a rate limit — try again in a few minutes",
+        "intermediate": "Rate-limited — back off + retry",
+        "advanced":     "Rate-limited (429)",
+    },
+    "no_api_key": {
+        "beginner":     "Not configured — add an API key to enable",
+        "intermediate": "API key required",
+        "advanced":     "No API key",
+    },
+    "not_listed": {
+        "beginner":     "Not available for this coin",
+        "intermediate": "Not listed on this exchange",
+        "advanced":     "Not listed",
+    },
+    "not_tracked": {
+        "beginner":     "Not tracked yet — coming soon",
+        "intermediate": "Not tracked for this asset",
+        "advanced":     "Not tracked",
+    },
+    "source_offline": {
+        "beginner":     "Data source is offline — try again later",
+        "intermediate": "Source offline — temporary outage",
+        "advanced":     "Source offline",
+    },
+    "no_data": {
+        "beginner":     "No data available right now",
+        "intermediate": "No data",
+        "advanced":     "No data",
+    },
+    "error": {
+        "beginner":     "Couldn't load this — try refreshing",
+        "intermediate": "Load failed — refresh to retry",
+        "advanced":     "Error",
+    },
+}
+
+_VALID_REASONS = set(_EMPTY_STATE_COPY.keys())
+
+
+def truthful_empty_state(
+    reason: str,
+    level: str = "beginner",
+    detail: str | None = None,
+) -> str:
+    """
+    Return a truthful empty-state message for a given reason code and
+    user level. Replaces bare em-dash / "None" / "N/A" with a label
+    that tells the user WHY data is missing and what to do about it.
+
+    reason : one of `loading`, `pending_scan`, `geo_blocked`,
+             `rate_limited`, `no_api_key`, `not_listed`, `not_tracked`,
+             `source_offline`, `no_data`, `error`
+    level  : `beginner` | `intermediate` | `advanced`
+    detail : optional advanced-mode detail (e.g. "429 from Glassnode")
+             — only appended for advanced level.
+
+    Unknown reason → falls through to "no_data".
+    """
+    if reason not in _VALID_REASONS:
+        reason = "no_data"
+    lv = (level or "beginner").lower()
+    if lv not in ("beginner", "intermediate", "advanced"):
+        lv = "beginner"
+    base = _EMPTY_STATE_COPY[reason][lv]
+    if detail and lv == "advanced":
+        return f"{base} — {detail}"
+    return base
+
+
+def data_source_health(
+    *,
+    has_key: bool = True,
+    last_success_ts: float | None = None,
+    last_error_code: str | None = None,
+    cache_ttl_s: int = 3600,
+) -> tuple[str, str]:
+    """
+    Compute the page_header pill state from data-source observable
+    health. Returns (status, label_suffix) where status is one of the
+    page_header-recognized strings ("live" | "cached" | "down") and
+    label_suffix is a human-readable detail to append to the source
+    name in the pill (e.g. "live", "cached 12m", "rate-limited").
+
+    Rules:
+      - has_key=False                    → ("down", "no api key")
+      - last_error_code in (429, "rate") → ("cached", "rate-limited")
+      - last_error_code in (451, 403)    → ("down", "geo-blocked")
+      - last_success_ts within ttl       → ("live", "live")
+      - last_success_ts older than ttl   → ("cached", f"cached {N}m")
+      - last_success_ts is None          → ("cached", "fetching")
+      - any other error_code present     → ("down", "error")
+    """
+    import time as _time
+
+    if not has_key:
+        return ("down", "no api key")
+
+    err = (last_error_code or "").lower() if last_error_code else ""
+    if err in ("429", "rate", "rate_limited", "rate-limited"):
+        return ("cached", "rate-limited")
+    if err in ("451", "403", "geo", "geo_blocked", "geo-blocked"):
+        return ("down", "geo-blocked")
+    if err and err not in ("0", "ok", "none"):
+        return ("down", "error")
+
+    if last_success_ts is None:
+        return ("cached", "fetching")
+    age = max(0.0, _time.time() - last_success_ts)
+    if age <= cache_ttl_s:
+        return ("live", "live")
+    if age <= cache_ttl_s * 24:
+        mins = int(age // 60)
+        if mins >= 60:
+            hrs = mins // 60
+            return ("cached", f"cached {hrs}h")
+        return ("cached", f"cached {mins}m")
+    return ("down", "stale")
+
+
 __all__ = [
     "format_usd",
     "format_pct",
     "format_large_number",
     "format_basis_points",
     "format_delta_color",
+    "truthful_empty_state",
+    "data_source_health",
 ]

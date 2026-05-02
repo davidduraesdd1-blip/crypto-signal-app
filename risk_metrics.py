@@ -76,7 +76,18 @@ def compute_historical_var(
     pnl_returns = _raw[np.isfinite(_raw)]  # drop any NaN/Inf from corrupted rows
     position_usd = portfolio_size_usd * position_pct / 100
 
-    if len(pnl_returns) >= _MIN_HIST_SAMPLES:
+    # Audit 2026-05-02 C13: historical simulation needs enough samples for
+    # the requested confidence tail to be statistically meaningful.
+    # Rule of thumb: need at least ~10 expected tail events (10 / (1-c)).
+    #   c=0.99 → ≥ 1000 (relax to 250 for usable approximation)
+    #   c=0.95 → ≥ 200  (relax to 100 for usable approximation)
+    #   c=0.90 → ≥ 100  (relax to 40)
+    # Below that, fall through to parametric Cornish-Fisher VaR which is
+    # more honest about its uncertainty.
+    _MIN_FOR_C = {0.99: 250, 0.95: 100, 0.90: 40}
+    _min_required = _MIN_FOR_C.get(round(confidence, 2), _MIN_HIST_SAMPLES)
+    _min_required = max(_min_required, _MIN_HIST_SAMPLES)
+    if len(pnl_returns) >= _min_required:
         # Historical simulation: sort losses, take percentile
         sorted_pnl = np.sort(pnl_returns)
         idx        = int((1 - confidence) * len(sorted_pnl))

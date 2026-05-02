@@ -2461,9 +2461,30 @@ def page_dashboard():
             return None
 
         def _ds_build_hero(pair_key: str, display: str) -> dict:
+            # Audit 2026-05-02 C11 (Image 1): hero cards previously read
+            # only from _live_prices (WebSocket OKX SWAP). For pairs
+            # without an OKX SWAP market (XDC, SHX, ZBCN, FLR, CC) the
+            # tick was empty and the card showed "—" with no 24h change.
+            # The watchlist below the hero row solved this via the
+            # cascade fallback (CMC → CG → Kraken → OKX → MEXC); apply
+            # the same fallback here so non-OKX-SWAP pairs populate.
             tick = (_live_prices or {}).get(pair_key) or {}
             price = tick.get("price") or tick.get("last") or None
             chg = tick.get("change_24h_pct") or tick.get("change_pct") or None
+            if price is None or chg is None:
+                try:
+                    sym = pair_key.split("/")[0].split("-")[0].upper()
+                    _cascade = _sg_cached_live_prices_cascade((sym,))
+                    _c_tick = (_cascade or {}).get(sym) or {}
+                    if price is None:
+                        price = _c_tick.get("price") or _c_tick.get("last")
+                    if chg is None:
+                        chg = (_c_tick.get("change_24h_pct")
+                               or _c_tick.get("change_pct")
+                               or _c_tick.get("price_change_24h_pct"))
+                except Exception as _e_cas:
+                    logger.debug("[Hero] cascade fallback for %s failed: %s",
+                                 pair_key, _e_cas)
             r = _ds_latest_result_for_pair(pair_key)
             return {
                 "ticker": display,
@@ -3953,7 +3974,16 @@ def page_config():
                             else:
                                 st.warning(f"{_status}: {_result.get('reason', '')}")
                         except Exception as _e_rt:
-                            st.error(f"Retune failed: {_e_rt}")
+                            # Audit 2026-05-02 Phase 4 (CLAUDE.md §8): never
+                            # surface a Python exception object to the user.
+                            # Log the technical detail; show plain English.
+                            logger.warning("[Retune] manual retune failed: %s", _e_rt)
+                            st.error(
+                                "Couldn't run a retune right now. "
+                                "Likely cause: not enough resolved feedback rows yet "
+                                "(needs ≥50 with layer scores). Try again after the next "
+                                "scheduled scan completes."
+                            )
                 with _rt_col2:
                     st.caption(
                         "Manual retune for diagnostic use. The daily 04:00 UTC "
@@ -4461,7 +4491,14 @@ def page_backtest():
         except Exception as _e_arb_render:
             logger.error("[Backtest] arbitrage view render failed: %s",
                          _e_arb_render)
-            st.error("Arbitrage scanner failed to load — check logs.")
+            # Audit 2026-05-02 Phase 4: page-specific truthful copy instead
+        # of generic "check logs". The technical detail is in the log,
+        # the user gets a clear next action.
+        st.error(
+            "The arbitrage scanner couldn't initialize right now. "
+            "This usually means an exchange API is temporarily unreachable. "
+            "Try refreshing in 30 seconds."
+        )
         return
 
     # ── C4: Universe selector — drives every backtest query below.
@@ -6846,10 +6883,30 @@ def _render_arbitrage_view():
                     # clicks within a 10-min window now cost 0 round-trips.
                     multi = _sg_cached_multi_exchange_funding(pair)
                     row: dict = {"Pair": pair}
+                    # Audit 2026-05-02 C7 + C24 (Image 7): legacy code wrote
+                    # `None` to the cell on any error, which Streamlit
+                    # displays as the literal string "None". User cannot
+                    # distinguish geo-block from rate-limit from outage.
+                    # Translate the error into a truthful single-word
+                    # cell label. Cells with real data stay numeric so
+                    # the column color formatter still works.
                     for exch in ("okx", "binance", "bybit", "kucoin"):
                         rd   = multi.get(exch, {})
                         rate = rd.get("funding_rate_pct", 0.0)
-                        row[exch.upper()] = None if rd.get("error") else rate
+                        if rd.get("error"):
+                            err = str(rd.get("error_code") or rd.get("error") or "").lower()
+                            if any(k in err for k in ("451", "403", "geo")):
+                                row[exch.upper()] = "geo-blocked"
+                            elif any(k in err for k in ("429", "rate")):
+                                row[exch.upper()] = "rate-limited"
+                            elif "timeout" in err:
+                                row[exch.upper()] = "timeout"
+                            elif "key" in err:
+                                row[exch.upper()] = "no api key"
+                            else:
+                                row[exch.upper()] = "unreachable"
+                        else:
+                            row[exch.upper()] = rate
                     # best carry = exchange with largest |rate|
                     valid = {
                         exch: multi[exch]["funding_rate_pct"]
@@ -7021,7 +7078,11 @@ def page_alerts():
         )
     except Exception as _e_imp:
         logger.error("[Alerts] import failed: %s", _e_imp)
-        st.error("Alerts page failed to load — check logs.")
+        st.error(
+            "The Alerts page couldn't load. This is usually a temporary "
+            "issue. Try refreshing — if it persists, the alerts database "
+            "may be locked by another session."
+        )
         return
 
     _ds_top_bar(
@@ -7057,7 +7118,11 @@ def page_alerts():
         from database import recent_alerts as _recent_alerts
     except Exception as _e_ra:
         logger.error("[Alerts] recent_alerts import failed: %s", _e_ra)
-        st.error("Alert history database helper unavailable — check logs.")
+        st.error(
+            "Alert history isn't available right now. "
+            "The alerts database is missing or unreadable — alerts can still "
+            "be configured but past triggers won't display."
+        )
         return
 
     _f1, _f2, _f3, _f4 = st.columns(4)
@@ -7521,7 +7586,11 @@ def page_signals():
         )
     except Exception as _e_imp:
         logger.error("[Signals] import failed: %s", _e_imp)
-        st.error("Signal page failed to load — check logs.")
+        st.error(
+            "The Signals page couldn't load. This is usually a temporary "
+            "data fetch issue. Try refreshing — if it persists, run a fresh "
+            "scan via the Update button."
+        )
         return
 
     _ds_level = st.session_state.get("user_level", "beginner")
@@ -8202,7 +8271,11 @@ def page_regimes():
         )
     except Exception as _e_imp:
         logger.error("[Regimes] import failed: %s", _e_imp)
-        st.error("Regimes page failed to load — check logs.")
+        st.error(
+            "The Regimes page couldn't load. The HMM regime detector "
+            "needs at least 90 days of macro + on-chain data; try again "
+            "after the next scheduled scan completes."
+        )
         return
 
     _ds_level = st.session_state.get("user_level", "beginner")
@@ -8565,6 +8638,59 @@ def page_regimes():
 
 
 # ──────────────────────────────────────────────
+# ON-CHAIN SOURCE HEALTH HELPERS
+# ──────────────────────────────────────────────
+# Audit 2026-05-02 C3 (Image 8 headline): page_onchain previously hardcoded
+# "Glassnode · live", "Dune · cached", "Native RPC · live" regardless of
+# real source state. These helpers return the page_header pill status
+# string directly — "live" / "cached" / "down" — based on the source's
+# observable health (key present, recent successful fetch, error code).
+
+def _onchain_source_health_glassnode() -> str:
+    """Return 'live' / 'cached' / 'down' for the Glassnode pill."""
+    try:
+        keys = data_feeds._load_api_keys()  # type: ignore[attr-defined]
+        if not keys.get("glassnode_key", "").strip():
+            return "down"  # no api key — pill UI gets warn styling
+        cache = getattr(data_feeds, "_GN_CACHE", None) or {}
+        if not cache:
+            return "cached"  # has key but never fetched — neutral state
+        # Most recent cache entry
+        latest = max((v.get("_ts", 0) for v in cache.values() if isinstance(v, dict)), default=0)
+        age = time.time() - latest if latest else float("inf")
+        if age < 3600:
+            # Any cached entry should be error-free for "live" status
+            for v in cache.values():
+                if isinstance(v, dict) and v.get("error"):
+                    return "cached"
+            return "live"
+        return "cached"
+    except Exception:
+        return "down"
+
+
+def _onchain_source_health_coinmetrics() -> str:
+    """Return 'live' / 'cached' / 'down' for the CoinMetrics pill."""
+    try:
+        # CoinMetrics community is keyless. Inspect _MACRO_CACHE_SG for
+        # the cm_onchain_alltime entry written by fetch_coinmetrics_onchain.
+        cache = getattr(data_feeds, "_MACRO_CACHE_SG", None) or {}
+        cm_entry = cache.get("cm_onchain_alltime")
+        if cm_entry is None:
+            return "cached"  # never fetched yet — neutral
+        if isinstance(cm_entry, dict):
+            payload = cm_entry.get("data") if "data" in cm_entry else cm_entry
+            if isinstance(payload, dict):
+                if payload.get("error"):
+                    return "down"
+                # Fresh, error-free CoinMetrics payload.
+                return "live"
+        return "cached"
+    except Exception:
+        return "down"
+
+
+# ──────────────────────────────────────────────
 # PAGE: ON-CHAIN (thin design-system pass — no dedicated mockup)
 # ──────────────────────────────────────────────
 def page_onchain():
@@ -8585,7 +8711,11 @@ def page_onchain():
         )
     except Exception as _e_imp:
         logger.error("[On-chain] import failed: %s", _e_imp)
-        st.error("On-chain page failed to load — check logs.")
+        st.error(
+            "The On-chain page couldn't load. The on-chain data sources "
+            "(Glassnode / CoinMetrics) are temporarily unreachable. "
+            "Try refreshing in a minute."
+        )
         return
 
     _oc_lv = st.session_state.get("user_level", "beginner")
@@ -8611,14 +8741,29 @@ def page_onchain():
     else:  # advanced
         _oc_sub = ("Glassnode + Dune metrics for the major majors. "
                    "MVRV-Z, SOPR, exchange flows, active addresses.")
+    # Audit 2026-05-02 C3 + 14 (Image 8 headline bug):
+    # legacy header hardcoded "Glassnode · live", "Dune · cached",
+    # "Native RPC · live" regardless of actual source health. The page
+    # never even called Glassnode/Dune/RPC, and the "Native RPC"
+    # integration does not exist in this codebase. Compute real pills
+    # below from each source's last response state.
+    _oc_pills: list[tuple[str, str]] = []
+    try:
+        _gn_health = _onchain_source_health_glassnode()
+        _oc_pills.append(("Glassnode", _gn_health))
+    except Exception as _e_gp:
+        logger.debug("[On-chain] Glassnode health probe failed: %s", _e_gp)
+        _oc_pills.append(("Glassnode", "down"))
+    try:
+        _cm_health = _onchain_source_health_coinmetrics()
+        _oc_pills.append(("CoinMetrics", _cm_health))
+    except Exception as _e_cmp:
+        logger.debug("[On-chain] CoinMetrics health probe failed: %s", _e_cmp)
+        _oc_pills.append(("CoinMetrics", "down"))
     _ds_page_header(
         title="On-chain",
         subtitle=_oc_sub,
-        data_sources=[
-            ("Glassnode", "live"),
-            ("Dune", "cached"),
-            ("Native RPC", "live"),
-        ],
+        data_sources=_oc_pills,
     )
 
     # C3 §C3.3: each card slot is independently swappable to any pair
@@ -8667,41 +8812,88 @@ def page_onchain():
                     return _hits.sort_values("scan_timestamp", ascending=False).iloc[0].to_dict()
         except Exception as _e:
             logger.debug("[On-chain] DB lookup for %s failed: %s", ticker, _e)
-        # Direct on-chain fetch fallback — keeps the page from being
-        # data-less on first load. get_onchain_metrics is cached
-        # (_ONCHAIN_TTL in data_feeds), so repeated page renders won't
-        # hammer the upstream APIs.
+        # Audit 2026-05-02 C5 + #13 (Image 8 headline bug):
+        # the legacy fallback only called get_onchain_metrics (a
+        # CoinGecko/OKX price PROXY, not real on-chain data) and
+        # explicitly hardcoded active_addresses_24h to None. That left
+        # the page blank for users without a recent scan.
+        # New cascade: real CoinMetrics community API (free, no key —
+        # works for BTC end-to-end with active addresses), then
+        # Glassnode (BTC + ETH when key present), then the legacy
+        # price-proxy as last resort.
+        _pair = f"{ticker}/USDT"
+        out: dict[str, Any] = {"pair": _pair}
+        # ── Glassnode (BTC + ETH only, requires key) ────────────────
         try:
-            _pair = f"{ticker}/USDT"
-            _oc = data_feeds.get_onchain_metrics(_pair) or {}
-            if _oc:
-                # Field-name adapter — map fetcher output → card expectations.
-                return {
-                    "pair": _pair,
-                    "mvrv_z": _oc.get("mvrv_z"),
-                    "mvrv": _oc.get("mvrv_z"),  # legacy alias used by some cards
-                    "sopr": _oc.get("sopr"),
-                    # Approximate exchange_reserve_delta_7d from net_flow.
-                    # get_onchain_metrics returns net_flow as a ±400-scaled
-                    # proxy; we surface it directly. The card displays
-                    # outflow/inflow tone correctly off the sign alone.
-                    "exchange_reserve_delta_7d": _oc.get("net_flow"),
-                    # Active addresses isn't in the free Binance ticker —
-                    # leave None so the card renders the "—" graceful empty.
-                    "active_addresses_24h": None,
-                    "_source": _oc.get("source", "fallback"),
-                }
+            if ticker.upper() in {"BTC", "ETH"}:
+                _gn = data_feeds.get_glassnode_onchain(_pair) or {}
+                if _gn and not _gn.get("error"):
+                    if _gn.get("mvrv_z") is not None:
+                        out["mvrv_z"] = _gn.get("mvrv_z")
+                        out["mvrv"]   = _gn.get("mvrv_z")
+                    if _gn.get("sopr") is not None:
+                        out["sopr"] = _gn.get("sopr")
+                    out["_source"] = "glassnode"
+        except Exception as _e_gn:
+            logger.debug("[On-chain] Glassnode fetch for %s failed: %s", ticker, _e_gn)
+        # ── CoinMetrics (BTC only via community free tier) ──────────
+        try:
+            if ticker.upper() == "BTC":
+                _cm = data_feeds.fetch_coinmetrics_onchain(400) or {}
+                if _cm and not _cm.get("error"):
+                    if out.get("mvrv_z") is None and _cm.get("mvrv_z") is not None:
+                        out["mvrv_z"] = _cm.get("mvrv_z")
+                        out["mvrv"]   = _cm.get("mvrv_z")
+                    if out.get("sopr") is None and _cm.get("sopr") is not None:
+                        out["sopr"] = _cm.get("sopr")
+                    if _cm.get("active_addresses") is not None:
+                        out["active_addresses_24h"] = _cm.get("active_addresses")
+                    out.setdefault("_source", "coinmetrics")
+        except Exception as _e_cm:
+            logger.debug("[On-chain] CoinMetrics fetch for %s failed: %s", ticker, _e_cm)
+        # ── Legacy price-proxy fallback (last resort) ───────────────
+        try:
+            if "mvrv_z" not in out or "sopr" not in out or "exchange_reserve_delta_7d" not in out:
+                _oc = data_feeds.get_onchain_metrics(_pair) or {}
+                if _oc:
+                    if out.get("mvrv_z") is None and _oc.get("mvrv_z") is not None:
+                        out["mvrv_z"] = _oc.get("mvrv_z")
+                        out["mvrv"]   = _oc.get("mvrv_z")
+                    if out.get("sopr") is None and _oc.get("sopr") is not None:
+                        out["sopr"] = _oc.get("sopr")
+                    out["exchange_reserve_delta_7d"] = _oc.get("net_flow")
+                    out.setdefault("_source", _oc.get("source", "fallback"))
         except Exception as _e_oc:
-            logger.debug("[On-chain] direct fetch for %s failed: %s", ticker, _e_oc)
-        return {}
+            logger.debug("[On-chain] proxy fetch for %s failed: %s", ticker, _e_oc)
+        # If we ended up with nothing at all, return empty so card renders
+        # truthful empty-state copy below rather than misleading "—".
+        if not any(k in out for k in ("mvrv_z", "sopr", "exchange_reserve_delta_7d", "active_addresses_24h")):
+            return {}
+        return out
 
     def _v(x, fmt="{:.2f}"):
+        # Audit 2026-05-02 C4: explicit None test (was `or` chain that
+        # collapsed legitimate 0.0 values to "—"). 0.0 mvrv_z, 0.0 sopr
+        # delta, and 0.0 net flow are real signals at the neutral midpoint
+        # and should render as numbers, not bare em-dashes.
         if x is None:
             return "—"
         try:
             return fmt.format(float(x))
         except Exception:
             return str(x)
+
+    def _present(x) -> bool:
+        """Treat 0.0 as present; only None / empty-string / NaN as absent."""
+        if x is None:
+            return False
+        try:
+            xf = float(x)
+        except (TypeError, ValueError):
+            return bool(str(x))
+        if xf != xf:  # NaN check (NaN != NaN)
+            return False
+        return True
 
     # C3 §C3.3: 3 indicator card slots, each independently bound to its
     # own ticker_pill_button selection. Was previously hardcoded BTC /
@@ -8710,41 +8902,53 @@ def page_onchain():
     _slot_tickers = [st.session_state[k] for k, _ in _oc_slot_keys]
     _slot_data = [_result_for(t) for t in _slot_tickers]
 
+    # Audit 2026-05-02 C4: each card cell now uses _present() (explicit
+    # None/NaN test) instead of truthy chains that collapsed 0.0 to "—".
+    # Empty-state copy below the card cell explains WHY a value is
+    # missing (no scan / no key / not tracked for ticker) rather than
+    # a bare em-dash with no signal of cause.
     _c1, _c2, _c3 = st.columns(3)
     for _slot_col, _slot_ticker, _slot_d in zip(
         (_c1, _c2, _c3), _slot_tickers, _slot_data
     ):
         with _slot_col:
+            _mvrv_raw = _slot_d.get("mvrv_z") if _slot_d.get("mvrv_z") is not None else _slot_d.get("mvrv")
+            _sopr_raw = _slot_d.get("sopr")
+            _exch_raw = _slot_d.get("exchange_reserve_delta_7d")
+            _aa_raw   = _slot_d.get("active_addresses_24h")
+            # Per-ticker tracking footnote — only BTC/ETH have full
+            # on-chain coverage in the free tier; everything else gets
+            # the truthful "not yet tracked" label.
+            _ticker_upper = (_slot_ticker or "").upper()
+            _is_btc = _ticker_upper == "BTC"
+            _is_eth = _ticker_upper == "ETH"
+            def _empty_label(metric: str) -> str:
+                if _is_btc:
+                    return "no data yet — run a scan"
+                if _is_eth and metric == "active_addresses":
+                    return "Glassnode key required"
+                if not _is_btc and not _is_eth:
+                    return "not tracked — BTC/ETH only"
+                return "no data yet — run a scan"
             _ds_ind_card(
                 f"{_slot_ticker} · valuation & flows",
                 [
                     ("MVRV-Z",
-                     _v(_slot_d.get("mvrv_z") or _slot_d.get("mvrv"), "{:.2f}"),
-                     ("mid-cycle" if (_slot_d.get("mvrv_z")
-                                      and 1 < float(_slot_d.get("mvrv_z") or 0) < 5)
-                      else ""),
+                     _v(_mvrv_raw, "{:.2f}") if _present(_mvrv_raw) else _empty_label("mvrv"),
+                     ("mid-cycle" if (_present(_mvrv_raw) and 1 < float(_mvrv_raw) < 5) else ""),
                      ""),
                     ("SOPR",
-                     _v(_slot_d.get("sopr"), "{:.3f}"),
-                     ("profit taking" if (_slot_d.get("sopr")
-                                          and float(_slot_d.get("sopr") or 0) > 1)
-                      else ""),
+                     _v(_sopr_raw, "{:.3f}") if _present(_sopr_raw) else _empty_label("sopr"),
+                     ("profit taking" if (_present(_sopr_raw) and float(_sopr_raw) > 1) else ""),
                      ""),
                     ("Exch. reserve",
-                     (_v(_slot_d.get("exchange_reserve_delta_7d"), "{:+,.0f}")
-                      if _slot_d.get("exchange_reserve_delta_7d") is not None
-                      else "—"),
-                     ("outflow 7d" if (_slot_d.get("exchange_reserve_delta_7d")
-                                       and float(_slot_d.get("exchange_reserve_delta_7d") or 0) < 0)
-                      else "inflow 7d"),
-                     ("success" if (_slot_d.get("exchange_reserve_delta_7d")
-                                    and float(_slot_d.get("exchange_reserve_delta_7d") or 0) < 0)
-                      else "")),
+                     _v(_exch_raw, "{:+,.0f}") if _present(_exch_raw) else _empty_label("exch_reserve"),
+                     ("outflow 7d" if (_present(_exch_raw) and float(_exch_raw) < 0) else "inflow 7d")
+                       if _present(_exch_raw) else "",
+                     ("success" if (_present(_exch_raw) and float(_exch_raw) < 0) else "")),
                     ("Active addr.",
-                     (_v(_slot_d.get("active_addresses_24h"), "{:,.0f}")
-                      if _slot_d.get("active_addresses_24h") is not None
-                      else "—"),
-                     "24h",
+                     _v(_aa_raw, "{:,.0f}") if _present(_aa_raw) else _empty_label("active_addresses"),
+                     "24h" if _present(_aa_raw) else "",
                      ""),
                 ],
             )
@@ -8759,17 +8963,26 @@ def page_onchain():
     # legacy isinstance(list) check was always False even when the call shape
     # was right. Pass a sane default pair + price=0.0 (the tracker handles
     # both shapes), then accept either dict-with-events or bare-list returns.
+    # Audit 2026-05-02 C12 (Image 8): three distinct states (offline /
+    # live-quiet / live-with-events) instead of the legacy ambiguous
+    # "no transfers OR offline" copy. Tracker now reports its real
+    # status via tracker_status; this block branches on it.
     try:
         _whale_raw = _cached_whale_activity("BTC/USDT", 0.0)
+        _whale_status = "offline"
         _whale = []
         if isinstance(_whale_raw, dict):
+            _whale_status = _whale_raw.get("tracker_status") or "offline"
             _whale = (_whale_raw.get("events")
                       or _whale_raw.get("transfers")
                       or _whale_raw.get("recent")
                       or [])
         elif isinstance(_whale_raw, list):
             _whale = _whale_raw
+            _whale_status = "live"
+
         if _whale and isinstance(_whale, list) and len(_whale) > 0:
+            # State 1: live with events — render the table.
             st.markdown(
                 '<div class="ds-card">'
                 '<div class="ds-card-hd">'
@@ -8780,7 +8993,7 @@ def page_onchain():
             )
             for _w in _whale[:8]:
                 _amt = _w.get("amount_usd") or _w.get("value_usd") or 0
-                _coin = _w.get("symbol") or _w.get("coin") or "—"
+                _coin = _w.get("symbol") or _w.get("coin") or "BTC"
                 _direction = _w.get("direction") or _w.get("flow") or ""
                 _time = str(_w.get("timestamp") or "")[:16]
                 st.markdown(
@@ -8794,12 +9007,39 @@ def page_onchain():
                     unsafe_allow_html=True,
                 )
             st.markdown('</div>', unsafe_allow_html=True)
-        else:
+        elif _whale_status == "live":
+            # State 2: tracker reachable, but no transfers in the window.
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd"><div class="ds-card-title">Whale activity</div>'
+                '<span class="ds-pill"><span class="tick"></span> Tracker · live</span></div>'
+                '<div style="color:var(--text-muted);font-size:13px;padding:12px 4px;">'
+                'No whale transfers above the threshold in the last 24h. '
+                'Quiet on-chain — usually a sign of low conviction in either direction.'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+        elif _whale_status == "not_supported":
+            # State 3a: tracker doesn't cover this chain.
             st.markdown(
                 '<div class="ds-card">'
                 '<div class="ds-card-hd"><div class="ds-card-title">Whale activity</div></div>'
                 '<div style="color:var(--text-muted);font-size:13px;padding:12px 4px;">'
-                'No large transfers in the last 24h, or whale tracker is offline.'
+                'Whale tracking is currently available for BTC, ETH, SOL, XRP, BNB, DOGE only. '
+                'Other chains coming soon.'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # State 3b: tracker offline — explicit, no ambiguity.
+            st.markdown(
+                '<div class="ds-card">'
+                '<div class="ds-card-hd"><div class="ds-card-title">Whale activity</div>'
+                '<span class="ds-pill warn"><span class="tick"></span> Tracker · offline</span></div>'
+                '<div style="color:var(--text-muted);font-size:13px;padding:12px 4px;">'
+                'Whale tracker is temporarily unreachable. The on-chain explorer API '
+                'either rate-limited the request or is in a brief outage. '
+                'Try again in a few minutes.'
                 '</div></div>',
                 unsafe_allow_html=True,
             )

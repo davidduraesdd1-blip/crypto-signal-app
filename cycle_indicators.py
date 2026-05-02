@@ -90,8 +90,14 @@ def fetch_google_trends_signal(
             series = df[keyword].astype(float).tolist()
             if len(series) < 5:
                 return None
+            # Audit 2026-05-02 C19: prior baseline `series[-4:]` included
+            # the current week, muting any actual spike. Use the 4 PRIOR
+            # weeks (`series[-5:-1]`) so `current` is compared against the
+            # truly trailing baseline.
+            if len(series) < 5:
+                return None
             current = float(series[-1])
-            avg_4w  = sum(series[-4:]) / 4.0
+            avg_4w  = sum(series[-5:-1]) / 4.0
             if avg_4w <= 0:
                 return None
             spike = (current / avg_4w - 1.0) * 100.0
@@ -309,8 +315,11 @@ def cycle_score_100(
     wsum  = sum(w for _, w in parts)
     blend = sum(s * w for s, w in parts) / wsum if wsum > 0 else 0.0
     blend = max(-1.0, min(1.0, blend))
-    cycle = int(round(50 - blend * 49))
-    cycle = max(1, min(100, cycle))
+    # Audit 2026-05-02 C18: legacy used 49, capping cycle at [1, 99]
+    # asymmetric to the documented [0, 100] range. blend=-1 should map
+    # to 100 (max euphoria) and blend=+1 to 0 (max accumulation).
+    cycle = int(round(50 - blend * 50))
+    cycle = max(0, min(100, cycle))
 
     if   cycle <= 15:  zone, label, color = "STRONG_BUY",   "Strong Buy",    "#22c55e"
     elif cycle <= 35:  zone, label, color = "BUY",           "Buy",           "#00d4aa"

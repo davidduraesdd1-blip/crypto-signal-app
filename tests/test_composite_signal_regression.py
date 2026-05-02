@@ -35,7 +35,7 @@ _BASELINE_PATH = (
     Path(__file__).resolve().parent.parent
     / "docs"
     / "signal-regression"
-    / "2026-04-28-baseline.json"
+    / "2026-05-02-baseline.json"
 )
 _TOLERANCE = 0.05  # absolute drift allowed before the test fails
 

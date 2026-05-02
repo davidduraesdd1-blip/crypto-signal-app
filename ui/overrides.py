@@ -577,7 +577,17 @@ def inject_streamlit_overrides() -> None:
     section.main [data-testid="stButton"] > button:hover {
       border-color: var(--border-strong); background: var(--bg-2);
     }
+    /* Audit 2026-05-02 Phase 3 (bright-green saturation):
+       Primary CTA now uses --accent-soft background + --text-primary
+       text (muted treatment matching sidebar active nav). Reserve
+       full --accent for hover state only — same pattern as the
+       sidebar nav. */
     section.main [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft); color: var(--text-primary);
+      border-color: var(--border-strong);
+      font-weight: 600;
+    }
+    section.main [data-testid="stButton"] > button[kind="primary"]:hover {
       background: var(--accent); color: var(--accent-ink);
       border-color: var(--accent);
     }
@@ -680,6 +690,64 @@ def inject_streamlit_overrides() -> None:
       border-radius: var(--card-radius);
     }
     [data-testid="stExpander"] summary { color: var(--text-primary); }
+
+    /* Audit 2026-05-02 Phase 3: sidebar expander labels (e.g.
+       "📜 Legal (Internal Beta)") were wrapping each word onto its
+       own vertical line because the rail width is narrow and the
+       summary had no overflow rule. Truncate with ellipsis instead;
+       full label still available on hover via the native browser
+       tooltip from the label text. */
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary > * {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    /* Audit 2026-05-02 Phase 3: multiselect tag chips were rendering
+       in Streamlit's bright-green default (driven by primaryColor in
+       config.toml). primaryColor is now muted to --accent (#22d36f)
+       which already softens the chips, but we additionally reduce
+       padding + adopt design-system token colors so the chips match
+       the muted treatment used everywhere else. */
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      border-radius: 6px !important;
+      padding: 2px 8px !important;
+      font-size: 12.5px !important;
+    }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg {
+      fill: var(--text-secondary) !important;
+    }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg:hover {
+      fill: var(--text-primary) !important;
+    }
+
+    /* Audit 2026-05-02 Phase 3: topbar action buttons (Update, Theme)
+       were wrapping mid-word ("Updat / e", "Them / e") at narrow
+       viewports between the mobile breakpoint (768px) and desktop
+       (1024px) because the column widths shrink before the topbar
+       collapses. Force nowrap + ellipsis so labels truncate cleanly
+       in that band rather than visibly breaking. */
+    @media (min-width: 769px) and (max-width: 1023px) {
+      [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button {
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        min-width: 0;
+        padding: 6px 10px;
+        font-size: 12.5px;
+      }
+      [data-stkey="ds_topbar_row"] .ds-pill {
+        white-space: nowrap;
+      }
+    }
 
     /* Tabs — C7 (Phase C plan §C7.2, 2026-04-30): underline pattern
        matching docs/mockups/sibling-family-crypto-signal-SETTINGS.html

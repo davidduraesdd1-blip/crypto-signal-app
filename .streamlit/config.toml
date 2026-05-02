@@ -1,6 +1,12 @@
 [theme]
 base = "dark"
-primaryColor = "#00D4AA"
+# Audit 2026-05-02 C10: primaryColor was "#00D4AA" — bright saturated
+# teal that drifted from the design system (--accent = #22d36f) AND
+# painted Streamlit-native widgets (multiselect tag chips, default
+# focus rings) a brighter green than anything else on screen. Updated
+# to match design-system accent so native widgets blend into the
+# muted treatment used everywhere else.
+primaryColor = "#22D36F"
 backgroundColor = "#080B12"
 secondaryBackgroundColor = "#111520"
 textColor = "#F8FAFC"

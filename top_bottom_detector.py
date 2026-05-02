@@ -1620,12 +1620,15 @@ def compute_composite_top_bottom_score(
             div_scores.append(d["score_0to1"] * w)
             div_weights.append(w)
 
+    # Audit 2026-05-02 C15: MTF confluence aggregates RSI divergence across
+    # 15m/1h/4h timeframes. Mixing it into the divergence layer alongside
+    # rsi_div (already weight 0.45) double-counts the RSI contribution —
+    # 0.45/1.30 + 0.30·(rsi share within MTF) ≈ 50%+ of the layer driven
+    # by RSI alone. Keep mtf as a diagnostic component for transparency,
+    # but no longer feed it into the layer aggregation.
     if df_15m is not None or df_1h is not None or df_4h is not None:
         mtf = compute_mtf_divergence_confluence(df_15m, df_1h, df_4h)
         components["mtf_confluence"] = mtf
-        if mtf.get("confidence", 0) > 0:
-            div_scores.append(mtf["score_0to1"] * 0.30)
-            div_weights.append(0.30)
     else:
         mtf = {"signal": "NEUTRAL", "score_0to1": 0.5}
 

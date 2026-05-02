@@ -840,7 +840,11 @@ def _score_hash_ribbon(
         "CAPITULATION":       -0.2,
         "CAPITULATION_START": -0.5,
     }.get(signal, 0.0)
-    if signal == "BUY" and btc_above_20sma is False:
+    # E1 gate (audit 2026-05-02 C2): downgrade BUY when price-confirmation
+    # is missing OR explicitly False. Previously `btc_above_20sma is False`
+    # silently skipped the gate when value was None (cold-start / <20 bars
+    # of data), letting BUY score at full +0.8 with no price confirmation.
+    if signal == "BUY" and btc_above_20sma is not True:
         return +0.4
     return base
 
@@ -1008,12 +1012,64 @@ def _decision_from_score(score: float) -> str:
     return "HOLD"
 
 
-def _confidence_from_score(score: float) -> float:
-    """Confidence in [0, 100] derived from |score|."""
+def _confidence_from_score(
+    score: float,
+    layers: "dict[str, dict] | None" = None,
+) -> float:
+    """
+    Confidence in [0, 100] — measures conviction in the composite signal.
+
+    Audit 2026-05-02 C20: legacy implementation was `abs(score) * 100`,
+    which is signal magnitude, not real conviction. A score of +0.5 from
+    one strong layer + three None layers had identical "confidence" to a
+    score of +0.5 from four layers all aligned at +0.5 — clearly different
+    levels of conviction.
+
+    New formulation:
+      base    = abs(score) * 100              # magnitude component
+      align   = inter-layer agreement bonus  (1 - normalized stddev of
+                surviving layer scores), in [0, 1]
+      n_alive = count of surviving (non-None) layers
+      coverage = n_alive / 4                  # data coverage in [0.25, 1.0]
+      conf    = base * (0.5 + 0.5 * align) * (0.5 + 0.5 * coverage)
+
+    With layers=None, falls back to the legacy magnitude-only metric for
+    backward compatibility.
+    """
     try:
-        return round(min(100.0, abs(float(score)) * 100.0), 1)
+        base = min(100.0, abs(float(score)) * 100.0)
     except (TypeError, ValueError):
         return 0.0
+    if not layers:
+        return round(base, 1)
+
+    try:
+        scores = []
+        for lyr in layers.values():
+            s = lyr.get("score") if isinstance(lyr, dict) else None
+            try:
+                if s is not None:
+                    scores.append(float(s))
+            except (TypeError, ValueError):
+                continue
+        if not scores:
+            return round(base, 1)
+
+        n_alive  = len(scores)
+        coverage = n_alive / 4.0
+        if n_alive < 2:
+            align = 0.5  # single-layer signal — neutral alignment bonus
+        else:
+            mean = sum(scores) / n_alive
+            var  = sum((s - mean) ** 2 for s in scores) / n_alive
+            std  = var ** 0.5
+            # Layer scores are clamped to [-1, +1]; max possible std is 1.0.
+            align = max(0.0, min(1.0, 1.0 - std))
+
+        conf = base * (0.5 + 0.5 * align) * (0.5 + 0.5 * coverage)
+        return round(min(100.0, conf), 1)
+    except Exception:
+        return round(base, 1)
 
 
 def _beginner_label(score: float) -> str:
@@ -1152,11 +1208,31 @@ def compute_composite_signal(
         (sentiment_layer, w_sent),
         (onchain_layer,   w_oc),
     )
-    _surviving = [
-        (lyr, w) for lyr, w in _layer_specs
-        if (lyr.get("components") or 0.0) or float(lyr.get("score") or 0.0) != 0.0
-    ]
-    if _surviving and len(_surviving) < 4:
+    # Audit 2026-05-02 C1: a layer with components={"foo": None, "bar": None}
+    # is truthy as a dict, which made the legacy filter treat data-failure
+    # layers as alive and pollute the composite with fake-neutral 0.0.
+    # Fix: a layer is "surviving" only if it has at least one non-None
+    # component value OR a non-zero raw score.
+    def _layer_alive(lyr: dict) -> bool:
+        comps = lyr.get("components") or {}
+        if isinstance(comps, dict):
+            for v in comps.values():
+                if v is not None and not (isinstance(v, dict) and v.get("score") is None):
+                    return True
+        try:
+            if float(lyr.get("score") or 0.0) != 0.0:
+                return True
+        except (TypeError, ValueError):
+            pass
+        return False
+    _surviving = [(lyr, w) for lyr, w in _layer_specs if _layer_alive(lyr)]
+    # Audit 2026-05-02 C1: renormalize ONLY when 2 or 3 layers alive.
+    # 4 alive → use raw weights (the design point).
+    # 1 alive → use raw weights too (a single-layer signal at +0.5 should
+    #   not be enough conviction to flip to BUY; keep it at its base weight
+    #   contribution so a one-layer survivor doesn't over-rotate the
+    #   composite). 0 alive → raw weights collapse to 0.0 cleanly.
+    if 2 <= len(_surviving) <= 3:
         _surv_w = sum(w for _, w in _surviving)
         if _surv_w > 0:
             total = sum(float(lyr["score"]) * (w / _surv_w) for lyr, w in _surviving)
@@ -1174,7 +1250,12 @@ def compute_composite_signal(
         # P0 audit fix — emit canonical BUY/HOLD/SELL + confidence per
         # CLAUDE.md §9. Legacy 7-state `signal` is kept alongside.
         "decision":         _decision_from_score(total),
-        "confidence":       _confidence_from_score(total),
+        "confidence":       _confidence_from_score(total, {
+            "technical": ta_layer,
+            "macro":     macro_layer,
+            "sentiment": sentiment_layer,
+            "onchain":   onchain_layer,
+        }),
         "signal":           _signal_label(total),
         "risk_off":         is_risk_off(total),
         "beginner_summary": _beginner_label(total),

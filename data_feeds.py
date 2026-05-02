@@ -2079,10 +2079,35 @@ def get_glassnode_onchain(pair: str) -> dict:
         # sopr_adjusted is the industry standard for BTC on-chain signal clarity.
         # Source: Glassnode docs; CheckOnChain (2021): aSOPR ≈ 30% less noisy than SOPR.
         with ThreadPoolExecutor(max_workers=2) as _ex:
-            _sopr_fut = _ex.submit(_SESSION.get, f"{base}/indicators/sopr_adjusted", params=params, headers=headers, timeout=10)
-            _mvrv_fut = _ex.submit(_SESSION.get, f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
+            # Audit 2026-05-02 Phase 6 #36: use _NO_RETRY_SESSION here.
+            # Glassnode free-tier 429 means daily cap exhausted — the
+            # legacy _SESSION retry adapter retried 3× wasting budget
+            # we don't have. Single fetch + cache the rate-limited
+            # state for 30 min so the page doesn't hammer.
+            _sopr_fut = _ex.submit(_NO_RETRY_SESSION.get, f"{base}/indicators/sopr_adjusted", params=params, headers=headers, timeout=10)
+            _mvrv_fut = _ex.submit(_NO_RETRY_SESSION.get, f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
             sopr_resp = _sopr_fut.result()
             mvrv_resp = _mvrv_fut.result()
+
+        # Detect rate-limited or geo-blocked early so the on-chain
+        # status pill can render the truthful state.
+        rate_limited = (sopr_resp.status_code == 429 or mvrv_resp.status_code == 429)
+        geo_blocked  = (sopr_resp.status_code in (451, 403) or mvrv_resp.status_code in (451, 403))
+        if rate_limited or geo_blocked:
+            err_code = "429" if rate_limited else "geo_blocked"
+            result = {
+                "signal": "N/A", "sopr": None, "mvrv_z": None,
+                "source": "glassnode",
+                "error": "rate-limited" if rate_limited else "geo-blocked",
+                "error_code": err_code,
+                "_ts": now,
+                # Rate-limited entries cache for 30 min so we don't
+                # re-hit a known-exhausted budget every page render.
+                "_rl_until": now + (1800 if rate_limited else 3600),
+            }
+            with _GN_LOCK:
+                _GN_CACHE[pair] = result
+            return result
 
         sopr = mvrv_z = None
         try:
@@ -4415,7 +4440,18 @@ def get_hyperliquid_stats(pair: str) -> dict:
     Fetch open interest and funding rate for a pair on Hyperliquid.
     Uses the /info endpoint with metaAndAssetCtxs action.
 
-    Returns: open_interest_usd, funding_rate_8h, funding_annualised_pct, mark_price, signal, cached_at
+    Audit 2026-05-02 C6 (Image 7): Hyperliquid's `funding` field is the
+    HOURLY rate, not 8h. Legacy code labeled it `funding_rate_8h` and
+    annualised as `× 3 × 365` (which would be correct for 8h). The
+    actual annualisation is `× 24 × 365` — the displayed funding was
+    therefore 8× too low. Fixed: field renamed to `funding_rate_1h`
+    and annualisation corrected. Legacy alias `funding_rate_8h` is
+    kept for backwards compatibility but populated as the equivalent
+    8h rate (× 8).
+
+    Returns: open_interest_usd, funding_rate_1h, funding_rate_8h
+             (legacy alias, computed), funding_annualised_pct,
+             mark_price, signal, cached_at, source
     Signal: HIGH_OI_POSITIVE_FUNDING | HIGH_OI_NEGATIVE_FUNDING | NORMAL
     """
     coin = pair.replace("/USDT", "").replace("/USDC", "").replace("USDT", "").replace("USDC", "")
@@ -4425,6 +4461,11 @@ def get_hyperliquid_stats(pair: str) -> dict:
         if cached and now - cached.get("cached_at", 0) < _HL_CACHE_TTL:
             return cached
 
+    # Audit 2026-05-02 C6: when called from get_hyperliquid_batch the
+    # legacy code only cached pairs[0], forcing every subsequent pair
+    # to re-POST /info (10 identical POSTs for a 10-pair batch). Now
+    # populate ALL coins from a single payload into the cache so the
+    # batch genuinely runs in one round trip.
     try:
         resp = _SESSION.post(
             "https://api.hyperliquid.xyz/info",
@@ -4438,41 +4479,56 @@ def get_hyperliquid_stats(pair: str) -> dict:
         ctxs   = payload[1]
         result = None
         for i, asset in enumerate(assets):
-            if asset.get("name", "").upper() == coin.upper() and i < len(ctxs):
-                ctx      = ctxs[i]
-                mark_px  = float(ctx.get("markPx") or 0)
-                oi       = float(ctx.get("openInterest") or 0) * mark_px
-                fund     = float(ctx.get("funding") or 0)
-                fund_ann = fund * 3 * 365 * 100  # 8h rate → annualised %
-                signal   = "NORMAL"
-                if oi > 50_000_000:
-                    signal = "HIGH_OI_POSITIVE_FUNDING" if fund > 0 else "HIGH_OI_NEGATIVE_FUNDING"
-                result = {
-                    "coin":                   coin,
-                    "open_interest_usd":      round(oi),
-                    "funding_rate_8h":        round(fund, 6),
-                    "funding_annualised_pct": round(fund_ann, 2),
-                    "mark_price":             mark_px,
-                    "signal":                 signal,
-                    "source":                 "hyperliquid",
-                    "cached_at":              now,
-                }
-                break
+            if i >= len(ctxs):
+                continue
+            asset_name = asset.get("name", "").upper()
+            ctx        = ctxs[i]
+            try:
+                mark_px = float(ctx.get("markPx") or 0)
+                oi      = float(ctx.get("openInterest") or 0) * mark_px
+                fund_1h = float(ctx.get("funding") or 0)
+            except (TypeError, ValueError):
+                continue
+            # Annualise an HOURLY rate.
+            fund_ann = fund_1h * 24 * 365 * 100
+            sig      = "NORMAL"
+            if oi > 50_000_000:
+                sig = "HIGH_OI_POSITIVE_FUNDING" if fund_1h > 0 else "HIGH_OI_NEGATIVE_FUNDING"
+            entry = {
+                "coin":                   asset_name,
+                "open_interest_usd":      round(oi),
+                "funding_rate_1h":        round(fund_1h, 8),
+                "funding_rate_8h":        round(fund_1h * 8, 8),  # legacy alias
+                "funding_annualised_pct": round(fund_ann, 2),
+                "mark_price":             mark_px,
+                "signal":                 sig,
+                "source":                 "hyperliquid",
+                "cached_at":              now,
+            }
+            with _HL_LOCK:
+                _HL_CACHE[asset_name] = entry
+            if asset_name == coin.upper():
+                result = entry
         if result is None:
-            result = {"error": f"{coin} not found on Hyperliquid", "signal": "UNKNOWN", "cached_at": now}
+            result = {"error": f"{coin} not found on Hyperliquid",
+                      "signal": "UNKNOWN", "cached_at": now}
+            with _HL_LOCK:
+                _HL_CACHE[coin] = result
     except Exception as e:
         logging.debug("Hyperliquid stats failed for %s: %s", coin, e)
         result = {"error": str(e), "signal": "UNKNOWN", "cached_at": now}
+        with _HL_LOCK:
+            _HL_CACHE[coin] = result
 
-    with _HL_LOCK:
-        _HL_CACHE[coin] = result
     return result
 
 
 def get_hyperliquid_batch(pairs: list) -> dict:
     """
     Fetch Hyperliquid stats for multiple coins efficiently.
-    The first call fetches all assets in one API request; subsequent calls are cache hits.
+    Audit 2026-05-02 C6: the first call now fully populates the cache
+    for every coin in the response; subsequent reads inside the dict
+    comprehension hit the cache rather than re-POSTing /info N times.
     """
     if pairs:
         get_hyperliquid_stats(pairs[0])  # warms the full cache in one call
@@ -5059,7 +5115,10 @@ def fetch_coinalyze_funding(symbols: list | None = None) -> dict:
             logging.debug("[Coinalyze] funding fetch failed: %s", e)
         return None
 
-    cached = _macro_cached_get("coinalyze_funding", 300, _fetch)
+    # Audit 2026-05-02 Phase 6 #34: TTL was 300s (5 min) but CLAUDE.md
+    # §12 spec is 600s (10 min). Bumped — funding rate is a slow-moving
+    # signal and 300s halved the budget vs spec.
+    cached = _macro_cached_get("coinalyze_funding", 600, _fetch)
     return cached if cached else {}
 
 
@@ -8135,6 +8194,17 @@ def clear_all_module_caches() -> None:
         _FNG2_CACHE.update({"value": None, "label": None, "_ts": 0.0})
     except Exception as _fng2_err:
         logging.debug("[CacheClear] FNG2 cache reset failed: %s", _fng2_err)
+    # Audit 2026-05-02 Phase 6 #32: requests-cache HTTP session cache
+    # was previously NOT cleared by Refresh All Data. Stale 60-3600s
+    # cached HTTP responses survived a forced refresh — clearing it
+    # so Refresh All Data is genuinely "all".
+    for _sess in (_SESSION, _FRED_SESSION, _NO_RETRY_SESSION):
+        try:
+            cache = getattr(_sess, "cache", None)
+            if cache is not None and hasattr(cache, "clear"):
+                cache.clear()
+        except Exception as _sc_err:
+            logging.debug("[CacheClear] requests-cache session clear failed: %s", _sc_err)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -8325,9 +8395,12 @@ def fetch_btc_ta_signals() -> dict:
             ma_signal = "GOLDEN_CROSS"
         elif ma50 < ma200 * 0.99:
             ma_signal = "DEATH_CROSS"
-    elif len(closes) >= 50:
-        ma50 = sum(closes[-50:]) / 50
-        above_200ma = closes[-1] > ma50
+    # Audit 2026-05-02 C17: legacy fallback assigned `above_200ma = closes[-1] > ma50`
+    # when 200d data was unavailable. The variable name promises a 200-day
+    # comparison but stored a 50-day comparison — downstream `_score_ma_signal`
+    # treated the result as "price vs 200d MA". On cold-start markets the
+    # semantics were silently inverted. Leave None when 200d data isn't
+    # available; consumers handle None as "unknown".
 
     # ── 20d Momentum (Issue #R1: 20d outperforms 30d for BTC — Jegadeesh 1993; crypto 2021) ──
     price_momentum = None
