@@ -62,15 +62,15 @@ def test_config_editor_has_all_five_tabs():
 
 def test_config_editor_tabs_are_unwrapped_in_st_tabs():
     body = _config_body()
-    # The tabs declaration is `_cfg_t1, _cfg_t2, ... = st.tabs(_cfg_tab_names)`.
-    # Defending against a refactor that splits these across multiple
-    # st.tabs() calls — that breaks the auto-jump behaviour from the
-    # sidebar Alerts shortcut.
-    assert "= st.tabs(_cfg_tab_names)" in body, (
+    # 2026-05-02: st.tabs(_cfg_tab_names) replaced with
+    # _stateful_tabs(_cfg_tab_names, ...) for state-persistence across
+    # reruns. The single-call constraint stays — defends against a
+    # refactor that splits the tab construction into multiple calls,
+    # which would break the rest of page_config.
+    assert "_stateful_tabs(_cfg_tab_names" in body, (
         "Config Editor tab declaration changed shape. The single "
-        "st.tabs(_cfg_tab_names) call is required for "
-        "_settings_tab session_state auto-jump (sidebar Alerts deep-"
-        "link) to keep working."
+        "_stateful_tabs(_cfg_tab_names, ...) call is required for "
+        "consistent tab persistence across reruns."
     )
 
 
@@ -84,7 +84,8 @@ def test_beginner_branch_no_longer_returns_before_tabs():
     # immediately after the simplified controls but before st.tabs.
     beg_idx = body.find('if _cfg_lv == "beginner":')
     assert beg_idx > 0, "beginner branch not found in page_config"
-    tabs_idx = body.find("= st.tabs(_cfg_tab_names)")
+    # 2026-05-02: refactored to _stateful_tabs.
+    tabs_idx = body.find("_stateful_tabs(_cfg_tab_names")
     assert tabs_idx > beg_idx, "tabs declaration must come AFTER beginner branch"
 
     # Slice the beginner branch up to the tabs line.

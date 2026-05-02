@@ -77,7 +77,13 @@ def test_settings_dropped_to_four_tabs():
         "Settings still has '🔔 Alerts' in its tab list (executable "
         "code) — C6 was supposed to drop it."
     )
-    assert "_cfg_t1, _cfg_t2, _cfg_t3, _cfg_t4 = st.tabs(_cfg_tab_names)" in code_only
+    # 2026-05-02: st.tabs() replaced with _stateful_tabs (state-persistent
+    # alternative — st.tabs lost active tab on rerun, kicking users back
+    # to the first tab on every button click).
+    assert "_cfg_active = _stateful_tabs(_cfg_tab_names" in code_only, (
+        "Settings tab construction is no longer using _stateful_tabs. "
+        "Reverting to st.tabs() re-introduces the rerun-resets-active-tab bug."
+    )
 
 
 # ── Routing + nav model ────────────────────────────────────────────────
