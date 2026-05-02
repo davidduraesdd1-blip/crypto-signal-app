@@ -167,7 +167,11 @@ def test_sg_cached_ohlcv_returns_list_of_lists_at_runtime(monkeypatch):
     # streamlit's cache_data exposes the wrapped function via .__wrapped__
     # or the unwrapped fn via .func — we use a fresh import + direct call
     # via the underlying `func` attribute.
+    # Audit 2026-05-02 C16: legacy used bare `return` here which made
+    # the test silently pass without asserting. Replaced with explicit
+    # pytest.skip so a non-behavioural skip is surfaced in the report.
     import sys
+    import pytest as _pytest_local
     if "app" in sys.modules:
         # Already imported — pick up the existing module without re-running.
         app_mod = sys.modules["app"]
@@ -175,10 +179,10 @@ def test_sg_cached_ohlcv_returns_list_of_lists_at_runtime(monkeypatch):
         # Importing app.py at test time spins the whole Streamlit harness;
         # for a focused behavioural assertion we instead exercise the
         # wrapped logic via a hand-rolled call site.
-        return  # pragma: no cover — env-specific skip
+        _pytest_local.skip("app.py not preloaded — skipping behavioural ohlcv test in this env")
     cached = getattr(app_mod, "_sg_cached_ohlcv", None)
     if cached is None:
-        return  # pragma: no cover
+        _pytest_local.skip("_sg_cached_ohlcv helper not exposed — env-specific skip")
 
     # Patch the underlying fetcher.
     fake_rows = [[i * 86400_000, 100.0 + i, 101.0, 99.0, 100.0 + i * 0.5, 1.0]

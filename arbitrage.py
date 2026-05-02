@@ -429,6 +429,10 @@ def compute_spot_spread(pair: str) -> dict:
         "signal":           signal,
         "prices":           {k: v["price"] for k, v in prices.items()},
         "n_exchanges":      len(prices),
+        # Audit 2026-05-02 C8: NO_ARB returns from this branch (where
+        # an arb was computed but ended up below threshold) are also
+        # diagnostic — tag for UI styling parity with the empty branch.
+        "is_diagnostic":    signal == "NO_ARB",
     }
 
 
