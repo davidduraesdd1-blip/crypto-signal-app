@@ -815,6 +815,7 @@ _AUTOSCAN_JOB_ID = "autoscan_job"
 
 
 _CALIBRATION_JOB_ID = "calibration_job"
+_COMPOSITE_RETUNE_JOB_ID = "composite_retune_job"
 
 
 def _get_scheduler() -> BackgroundScheduler:
@@ -835,6 +836,12 @@ def _get_scheduler() -> BackgroundScheduler:
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
+        # C-fix-21b (2026-05-02): start the composite-layer-weight
+        # Optuna retune job. Daily at 04:00 UTC — low-activity window,
+        # well outside the autoscan + calibration cadences. The job is
+        # a no-op when fewer than 50 resolved-feedback rows have layer
+        # scores (cold-start window after C-fix-21b ships).
+        _setup_composite_retune_job()
         # C-fix-12 (2026-05-02): bootstrap the autoscan job from saved
         # config on first scheduler init. Without this, autoscan was
         # only registered when the user opened Settings → Dev Tools,
@@ -890,6 +897,55 @@ def _setup_calibration_job():
             id=_CALIBRATION_JOB_ID,
             replace_existing=True,
             next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+
+def _setup_composite_retune_job():
+    """C-fix-21b (2026-05-02): schedule the daily Optuna composite-
+    layer-weight retune. Runs at 04:00 UTC each day — low-activity
+    window, well outside the autoscan / calibration cadences.
+
+    Per-call work: reads resolved feedback (last 90d), runs 100
+    Optuna trials, writes learned weights to alerts_config.json,
+    invalidates the composite_signal in-memory cache. ~5-15s
+    wall-clock when data is sufficient. No-op when fewer than 50
+    resolved rows have layer scores."""
+    def _run_composite_retune():
+        try:
+            import composite_weight_optimizer
+            result = composite_weight_optimizer.retune_layer_weights()
+            _status = result.get("status", "?")
+            if _status == "ok":
+                logging.info(
+                    "[CompositeRetune] OK: n=%d loss %.4f→%.4f Δ=%.4f weights=%s",
+                    result.get("n_samples", 0),
+                    result.get("loss_old", 0.0) or 0.0,
+                    result.get("loss_new", 0.0) or 0.0,
+                    result.get("improvement", 0.0) or 0.0,
+                    result.get("new_weights"),
+                )
+            elif _status == "no_op":
+                logging.info(
+                    "[CompositeRetune] no-op: %s",
+                    result.get("reason", ""),
+                )
+            else:
+                logging.warning(
+                    "[CompositeRetune] %s: %s", _status, result.get("reason", "")
+                )
+        except Exception as _e:
+            logging.warning("[CompositeRetune] Failed: %s", _e)
+
+    sched = _scheduler
+    if sched is not None and not sched.get_job(_COMPOSITE_RETUNE_JOB_ID):
+        # Cron-style trigger at 04:00 UTC daily.
+        sched.add_job(
+            _run_composite_retune,
+            trigger="cron",
+            hour=4,
+            minute=0,
+            id=_COMPOSITE_RETUNE_JOB_ID,
+            replace_existing=True,
         )
 
 

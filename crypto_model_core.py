@@ -3156,9 +3156,22 @@ def generate_entry_exit(df, regime_from_1h, pair, master_df, direction="NEUTRAL"
 # ──────────────────────────────────────────────
 # FEEDBACK / LOGGING
 # ──────────────────────────────────────────────
-def log_feedback(pair, direction, entry, exit_, confidence, agent_votes=None, indicator_snaps=None):
+def log_feedback(pair, direction, entry, exit_, confidence,
+                 agent_votes=None, indicator_snaps=None,
+                 layer_scores=None):
+    """Log a signal to feedback_log.
+
+    C-fix-21b (2026-05-02): added `layer_scores` arg — dict of per-layer
+    composite-signal scores at signal time (technical / macro / sentiment
+    / onchain). Required by the daily Optuna retune job to learn optimal
+    layer weights from resolved P&L outcomes. Nullable; pre-fix callers
+    that don't pass layer_scores result in NULL columns, which the
+    optimizer excludes from its training set.
+    """
     _db.log_feedback(pair, direction, entry, exit_, confidence,
-                     agent_votes=agent_votes, indicator_snaps=indicator_snaps)
+                     agent_votes=agent_votes,
+                     indicator_snaps=indicator_snaps,
+                     layer_scores=layer_scores)
 
 MASTER_LOG_COLUMNS = [
     'scan_timestamp', 'pair', 'price_usd', 'confidence_avg_pct', 'direction',

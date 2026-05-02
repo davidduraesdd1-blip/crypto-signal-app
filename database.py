@@ -452,6 +452,15 @@ def init_db():
                 ('snap_regime',     'TEXT'),
                 # P8: price at signal time — enables accurate retro-evaluation months later
                 ('price_at_signal', 'REAL'),
+                # C-fix-21b (2026-05-02): per-layer composite-signal
+                # scores at signal time. The daily Optuna retune job
+                # uses these + was_correct to learn optimal layer
+                # weights. Nullable — pre-fix rows have NULL and are
+                # excluded from the optimizer's training set.
+                ('layer_ta_score',     'REAL'),
+                ('layer_macro_score',  'REAL'),
+                ('layer_sent_score',   'REAL'),
+                ('layer_onchain_score','REAL'),
             ]:
                 _add_col('feedback_log', col, dfn)
 
@@ -779,7 +788,8 @@ def migrate_csv_to_db():
 def log_feedback(pair: str, direction: str, entry: float,
                  exit_: float, confidence: float,
                  agent_votes: dict = None,
-                 indicator_snaps: dict = None):
+                 indicator_snaps: dict = None,
+                 layer_scores: dict = None):
     """Append one signal to the feedback log. Thread-safe.
 
     Args:
@@ -788,19 +798,41 @@ def log_feedback(pair: str, direction: str, entry: float,
         indicator_snaps:  dict with keys 'rsi','macd_hist','bb_pos','adx','stoch_k',
                           'volume_ok','regime' (F-SNAP) — stored for LightGBM retraining.
                           All values optional; missing keys stored as NULL.
+        layer_scores:     C-fix-21b (2026-05-02). dict with keys
+                          'technical','macro','sentiment','onchain' — the per-
+                          layer composite-signal scores at signal time.
+                          Required by the daily Optuna retune job to learn
+                          optimal layer weights from resolved P&L outcomes.
+                          All values optional; missing keys stored as NULL.
     """
     v = agent_votes or {}
     s = indicator_snaps or {}
+    L = layer_scores or {}
     with _write_lock:
         conn = _get_conn()
         try:
+            # C-fix-21b: idempotent column-add for layer_*_score (the
+            # _add_col helper at module-load time may not have fired
+            # for every fresh DB; double-check on first insert).
+            try:
+                _existing_cols = {r[1] for r in conn.execute(
+                    "PRAGMA table_info(feedback_log)"
+                ).fetchall()}
+                for _col in ("layer_ta_score", "layer_macro_score",
+                             "layer_sent_score", "layer_onchain_score"):
+                    if _col not in _existing_cols:
+                        conn.execute(f"ALTER TABLE feedback_log ADD COLUMN {_col} REAL")
+            except Exception:
+                pass  # benign — older SQLite or a concurrent migration
+
             conn.execute(
                 "INSERT INTO feedback_log "
                 "(timestamp, pair, direction, entry, exit_target, confidence,"
                 " vote_trend, vote_momentum, vote_meanrev, vote_sentiment, vote_risk, vote_lgbm,"
                 " snap_rsi, snap_macd_hist, snap_bb_pos, snap_adx, snap_stoch_k,"
-                " snap_volume_ok, snap_regime)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " snap_volume_ok, snap_regime,"
+                " layer_ta_score, layer_macro_score, layer_sent_score, layer_onchain_score)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 # BUG-09: use UTC-aware timestamp so resolution cutoff comparisons are correct
                 (datetime.now(timezone.utc).isoformat(), pair, direction, float(entry or 0),
                  float(exit_ or 0), float(confidence or 0),
@@ -809,7 +841,9 @@ def log_feedback(pair: str, direction: str, entry: float,
                  s.get('rsi'), s.get('macd_hist'), s.get('bb_pos'),
                  s.get('adx'), s.get('stoch_k'),
                  int(bool(s.get('volume_ok'))) if s.get('volume_ok') is not None else None,
-                 s.get('regime'))
+                 s.get('regime'),
+                 L.get('technical'), L.get('macro'),
+                 L.get('sentiment'), L.get('onchain'))
             )
             conn.commit()
         finally:
