@@ -41,7 +41,16 @@ def test_onchain_page_falls_back_to_data_feeds_get_onchain_metrics():
     )
     # And it must adapt the field names — get_onchain_metrics returns
     # 'net_flow' but the new card expects 'exchange_reserve_delta_7d'.
-    assert '"exchange_reserve_delta_7d": _oc.get("net_flow")' in src, (
+    # Audit 2026-05-02 Phase 2 refactor: the assignment shape changed
+    # from `"exchange_reserve_delta_7d": _oc.get("net_flow")` (dict
+    # literal) to `out["exchange_reserve_delta_7d"] = _oc.get("net_flow")`
+    # (assignment) when the cascade was extended to query Glassnode +
+    # CoinMetrics first. Either shape is acceptable as long as the
+    # net_flow → exchange_reserve_delta_7d adapter is preserved.
+    assert (
+        '"exchange_reserve_delta_7d": _oc.get("net_flow")' in src
+        or 'out["exchange_reserve_delta_7d"] = _oc.get("net_flow")' in src
+    ), (
         "On-chain page no longer adapts the get_onchain_metrics field "
         "names to what the new ds-indicator-card expects. Without this "
         "mapping, MVRV-Z renders but Exchange Reserve renders as '—'."

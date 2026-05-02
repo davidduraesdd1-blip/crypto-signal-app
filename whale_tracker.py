@@ -408,6 +408,11 @@ def _synthesize_signal(moves: list[dict]) -> dict:
         signal = "WHALE_DISTRIBUTION"
     else:
         signal = "NEUTRAL"
+    # Audit 2026-05-02 C12: include the per-transfer events so the page
+    # can render the actual list. Legacy implementation discarded `moves`
+    # before returning, leaving the caller to render an ambiguous "no
+    # transfers, OR offline" empty state regardless of whether transfers
+    # were present.
     return {
         "signal":            signal,
         "whale_count":       len(moves),
@@ -416,6 +421,8 @@ def _synthesize_signal(moves: list[dict]) -> dict:
         "accumulation":      acc,
         "distribution":      dist,
         "score":             round(score, 3),
+        "events":            moves[:25],
+        "tracker_status":    "live",
     }
 
 
@@ -429,6 +436,8 @@ _NEUTRAL_RESULT = {
     "accumulation":      0,
     "distribution":      0,
     "score":             0.0,
+    "events":            [],
+    "tracker_status":    "live",      # populated; just no transfers in window
     "error":             None,
 }
 
@@ -461,7 +470,11 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
 
     chain = _PAIR_CHAIN.get(pair, "")
     if not chain:
-        result = {**_NEUTRAL_RESULT, "error": f"Unsupported chain for {pair}", "pair": pair}
+        # Audit 2026-05-02 C12 disambiguation: tracker_status="not_supported"
+        # is a separate state from "offline". UI distinguishes these so a user
+        # can tell whether their pair has no whale tracking vs the tracker is down.
+        result = {**_NEUTRAL_RESULT, "error": f"Unsupported chain for {pair}",
+                  "pair": pair, "tracker_status": "not_supported"}
         with _cache_lock:
             _cache[pair] = {**result, "_ts": now}
         return result
@@ -487,13 +500,15 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
 
     if price_usd == 0.0:
         # Cannot compute USD whale thresholds without a valid price — return neutral
-        result = {**_NEUTRAL_RESULT, "error": "price_usd unavailable — whale USD thresholds cannot be computed"}
+        result = {**_NEUTRAL_RESULT, "error": "price_usd unavailable — whale USD thresholds cannot be computed",
+                  "tracker_status": "no_price"}
         result["pair"] = pair
         with _cache_lock:
             _cache[pair] = {**result, "_ts": now}
         return result
 
     moves: list[dict] = []
+    fetch_errored = False
     try:
         if chain == "btc":
             moves = _fetch_btc_whales(price_usd)
@@ -509,10 +524,17 @@ def get_whale_activity(pair: str, price_usd: float = 0.0) -> dict:
             moves = _fetch_doge_whales(price_usd)
     except Exception as e:
         logger.warning("Whale fetch exception for %s: %s", pair, e)
+        fetch_errored = True
 
     result = _synthesize_signal(moves)
     result["error"] = None
     result["pair"]  = pair
+    # Audit 2026-05-02 C12: distinguish offline (fetch threw) from
+    # live-quiet (fetch succeeded, no whale moves in window).
+    if fetch_errored:
+        result["tracker_status"] = "offline"
+    else:
+        result["tracker_status"] = "live"
 
     with _cache_lock:
         _cache[pair] = {**result, "_ts": now}
