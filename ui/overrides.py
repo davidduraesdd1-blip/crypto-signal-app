@@ -581,15 +581,23 @@ def inject_streamlit_overrides() -> None:
        Primary CTA now uses --accent-soft background + --text-primary
        text (muted treatment matching sidebar active nav). Reserve
        full --accent for hover state only — same pattern as the
-       sidebar nav. */
-    section.main [data-testid="stButton"] > button[kind="primary"] {
-      background: var(--accent-soft); color: var(--text-primary);
-      border-color: var(--border-strong);
-      font-weight: 600;
+       sidebar nav.
+       Hotfix 2026-05-02: !important needed to win cascade against
+       Streamlit's native primary-button rule driven by primaryColor
+       in config.toml. Without it, the level pills (Beginner /
+       Intermediate / Advanced) rendered as bright #22D36F. */
+    section.main [data-testid="stButton"] > button[kind="primary"],
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button[kind="primary"] {
+      background: var(--accent-soft) !important;
+      color: var(--text-primary) !important;
+      border-color: var(--border-strong) !important;
+      font-weight: 600 !important;
     }
-    section.main [data-testid="stButton"] > button[kind="primary"]:hover {
-      background: var(--accent); color: var(--accent-ink);
-      border-color: var(--accent);
+    section.main [data-testid="stButton"] > button[kind="primary"]:hover,
+    [data-stkey="ds_topbar_row"] [data-testid="stButton"] > button[kind="primary"]:hover {
+      background: var(--accent) !important;
+      color: var(--accent-ink) !important;
+      border-color: var(--accent) !important;
     }
 
     /* Topbar row container — matches mockup .topbar (bg-0 + border-bottom +

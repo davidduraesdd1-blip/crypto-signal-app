@@ -2241,14 +2241,36 @@ def page_dashboard():
         )
         _ds_level = st.session_state.get("user_level", "beginner")
         _ds_top_bar(breadcrumb=("Markets", "Home"), user_level=_ds_level, on_refresh=_refresh_all_data, on_theme=_toggle_theme, status_pills=_agent_topbar_pills())
+        # Hotfix 2026-05-02: Home page header pills were hardcoded
+        # "live" regardless of source health (same Image 8 issue Phase
+        # 2 fixed for the On-chain page only). Now probe each source.
+        _home_pills: list[tuple[str, str]] = []
+        try:
+            _ta_label = str(model.TA_EXCHANGE).upper()
+            # The CCXT live-price WebSocket ticks update _live_prices; if
+            # the dict has any tick the OHLCV exchange is reachable.
+            _ta_status = "live" if (_live_prices and len(_live_prices) > 0) else "cached"
+            _home_pills.append((_ta_label, _ta_status))
+        except Exception:
+            _home_pills.append(("OKX", "cached"))
+        try:
+            _gn_h = _onchain_source_health_glassnode()
+            _home_pills.append(("Glassnode", _gn_h))
+        except Exception:
+            _home_pills.append(("Glassnode", "down"))
+        try:
+            # News sentiment health: any cached entry implies the
+            # fetcher is functional, even if the latest call is stale.
+            _ns_cache = getattr(data_feeds, "_NEWS_CACHE", None) or {}
+            _ns_status = "cached" if _ns_cache else "fetching"
+            _home_pills.append(("News sentiment", _ns_status))
+        except Exception:
+            _home_pills.append(("News sentiment", "cached"))
+
         _ds_page_header(
             title="Market home",
             subtitle="Composite signals + regime state across the top-cap set.",
-            data_sources=[
-                (str(model.TA_EXCHANGE).upper(), "live"),
-                ("Glassnode", "live"),
-                ("News sentiment", "cached"),
-            ],
+            data_sources=_home_pills,
         )
         # Macro strip — mirrors the mockup's 5-col strip with real data.
         # Pulls from LIVE data-source functions directly (each already cached
@@ -2475,13 +2497,28 @@ def page_dashboard():
                 try:
                     sym = pair_key.split("/")[0].split("-")[0].upper()
                     _cascade = _sg_cached_live_prices_cascade((sym,))
-                    _c_tick = (_cascade or {}).get(sym) or {}
-                    if price is None:
-                        price = _c_tick.get("price") or _c_tick.get("last")
-                    if chg is None:
-                        chg = (_c_tick.get("change_24h_pct")
-                               or _c_tick.get("change_pct")
-                               or _c_tick.get("price_change_24h_pct"))
+                    _c_val = (_cascade or {}).get(sym)
+                    # Hotfix 2026-05-02: cascade returns {SYMBOL: float}
+                    # (just the price), not a dict. Legacy code assumed
+                    # a dict shape and called .get() on a float → silent
+                    # AttributeError → hero cards stayed "—". Handle
+                    # both shapes defensively.
+                    if isinstance(_c_val, dict):
+                        if price is None:
+                            price = _c_val.get("price") or _c_val.get("last")
+                        if chg is None:
+                            chg = (_c_val.get("change_24h_pct")
+                                   or _c_val.get("change_pct")
+                                   or _c_val.get("price_change_24h_pct"))
+                    elif _c_val is not None:
+                        # Float price; the cascade does not provide a
+                        # 24h-change figure. Fall back to the regime
+                        # result for the change once it's wired through.
+                        if price is None:
+                            try:
+                                price = float(_c_val)
+                            except (TypeError, ValueError):
+                                pass
                 except Exception as _e_cas:
                     logger.debug("[Hero] cascade fallback for %s failed: %s",
                                  pair_key, _e_cas)
@@ -7619,14 +7656,28 @@ def page_signals():
         _selected_pair = _signals_universe[0]
         st.session_state["selected_pair"] = _selected_pair
 
+    # Hotfix 2026-05-02: Signals page header pills probe-driven now.
+    _sig_pills: list[tuple[str, str]] = []
+    try:
+        _ta_label = str(model.TA_EXCHANGE).upper()
+        _ta_status = "live" if (_live_prices and len(_live_prices) > 0) else "cached"
+        _sig_pills.append((_ta_label, _ta_status))
+    except Exception:
+        _sig_pills.append(("OKX", "cached"))
+    try:
+        _sig_pills.append(("Glassnode", _onchain_source_health_glassnode()))
+    except Exception:
+        _sig_pills.append(("Glassnode", "down"))
+    try:
+        _ns_cache = getattr(data_feeds, "_NEWS_CACHE", None) or {}
+        _sig_pills.append(("News sentiment", "cached" if _ns_cache else "fetching"))
+    except Exception:
+        _sig_pills.append(("News sentiment", "cached"))
+
     _ds_page_header(
         title="Signal detail",
         subtitle="Layer-by-layer composite signal breakdown for a single coin.",
-        data_sources=[
-            (str(model.TA_EXCHANGE).upper(), "live"),
-            ("Glassnode", "live"),
-            ("News sentiment", "cached"),
-        ],
+        data_sources=_sig_pills,
     )
     _selected_pair = _ds_pair_dropdown(
         _signals_universe,
@@ -8286,14 +8337,30 @@ def page_regimes():
         on_theme=_toggle_theme,
         status_pills=_agent_topbar_pills(),
     )
+    # Hotfix 2026-05-02: Regimes page pills probe-driven.
+    _reg_pills: list[tuple[str, str]] = []
+    try:
+        _ta_label = str(model.TA_EXCHANGE).upper()
+        _ta_status = "live" if (_live_prices and len(_live_prices) > 0) else "cached"
+        _reg_pills.append((_ta_label, _ta_status))
+    except Exception:
+        _reg_pills.append(("OKX", "cached"))
+    try:
+        _reg_pills.append(("Glassnode", _onchain_source_health_glassnode()))
+    except Exception:
+        _reg_pills.append(("Glassnode", "down"))
+    try:
+        # FRED has its own cache key in the macro cache.
+        _macro_cache = getattr(data_feeds, "_MACRO_CACHE_SG", None) or {}
+        _has_fred = any("fred" in str(k).lower() for k in _macro_cache.keys())
+        _reg_pills.append(("FRED", "cached" if _has_fred else "fetching"))
+    except Exception:
+        _reg_pills.append(("FRED", "cached"))
+
     _ds_page_header(
         title="Regimes",
         subtitle="HMM-inferred market regime per asset + macro overlay. Regime-specific signal weights auto-adjust.",
-        data_sources=[
-            (str(model.TA_EXCHANGE).upper(), "live"),
-            ("Glassnode", "live"),
-            ("FRED", "cached"),
-        ],
+        data_sources=_reg_pills,
     )
 
     # C3 §C3.2: Regimes header — "Showing 8 of 33 pairs · click any to
