@@ -378,11 +378,19 @@ def _compute_accuracy(model, df: pd.DataFrame) -> float:
         else:
             gbm = model
 
-        # True holdout: 40 bars BEFORE the training window (strictly out-of-sample)
-        training_start_idx = -(TRAIN_BARS + LOOKAHEAD_BARS)
-        holdout_end_idx    = training_start_idx          # exclusive end
-        holdout_start_idx  = training_start_idx - 40    # 40 bars before training
-        holdout = df.iloc[holdout_start_idx:holdout_end_idx] if abs(holdout_start_idx) <= len(df) else None
+        # Audit 2026-05-02 C14: holdout must come AFTER the training window,
+        # not before. Bars before training are stale-regime data the model
+        # never claimed to fit; reporting accuracy on them inflates apparent
+        # generalization. The trailing 40 bars (excluding the LOOKAHEAD_BARS
+        # leak buffer) are the most recent out-of-sample evaluation we can
+        # do without retraining.
+        if len(df) < (TRAIN_BARS + LOOKAHEAD_BARS + 40 + LOOKAHEAD_BARS):
+            holdout = None
+        else:
+            # df: …  [train start] [train…train end] [LOOKAHEAD buffer] [holdout 40] [LOOKAHEAD buffer for labels]
+            holdout_end_idx   = -LOOKAHEAD_BARS                 # last LOOKAHEAD bars unlabeled
+            holdout_start_idx = holdout_end_idx - 40            # 40-bar near-term holdout
+            holdout = df.iloc[holdout_start_idx:holdout_end_idx]
 
         if holdout is None or len(holdout) < 10:
             return 0.0

@@ -8325,9 +8325,12 @@ def fetch_btc_ta_signals() -> dict:
             ma_signal = "GOLDEN_CROSS"
         elif ma50 < ma200 * 0.99:
             ma_signal = "DEATH_CROSS"
-    elif len(closes) >= 50:
-        ma50 = sum(closes[-50:]) / 50
-        above_200ma = closes[-1] > ma50
+    # Audit 2026-05-02 C17: legacy fallback assigned `above_200ma = closes[-1] > ma50`
+    # when 200d data was unavailable. The variable name promises a 200-day
+    # comparison but stored a 50-day comparison — downstream `_score_ma_signal`
+    # treated the result as "price vs 200d MA". On cold-start markets the
+    # semantics were silently inverted. Leave None when 200d data isn't
+    # available; consumers handle None as "unknown".
 
     # ── 20d Momentum (Issue #R1: 20d outperforms 30d for BTC — Jegadeesh 1993; crypto 2021) ──
     price_momentum = None

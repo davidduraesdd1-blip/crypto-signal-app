@@ -104,11 +104,54 @@ grouped by bucket.
   rendering.
 - **Bucket:** Mix of (d) functional + (b) no mockup styling.
 
+### Image 8 — On-chain page (Advanced view, narrow viewport)
+- **Issues:**
+  1. **Topbar tab labels clipped + wrapping** — "er" / "te" / "ed" /
+     "Updat e" / "Them e" visible. The topbar action buttons (Update,
+     Theme) and probably the level pills are not collapsing gracefully
+     at this width. They wrap mid-word inside their pill instead of
+     truncating with ellipsis or collapsing to icon-only.
+  2. **"Update" button is bright green** — recurring `--accent`
+     saturation problem (same as Image 4, 6, 7). Should be
+     `--accent-soft` muted treatment.
+  3. **Sidebar "Legal (Internal Beta)" item** — text is wrapping each
+     word onto its own line vertically inside its card-like container.
+     "Legal / (Internal / Beta)" stacked vertically. Should either
+     truncate to "Legal" with tooltip showing full label, or use a
+     wider container, or shrink to fit.
+  4. **All metric cards are blank** — MVRV-Z, SOPR, Exch. Reserve,
+     Active Addr show "—" across all 3 slots (BTC/ETH/XRP). Status
+     pills at top claim "Glassnode · live" + "Native RPC · live", so
+     either (a) the data sources are NOT actually live (status pills
+     are lying — should be "rate-limited" / "free-tier exhausted" /
+     "geo-blocked") or (b) the data is being fetched but not bound to
+     the card slots. **User confirmed: "nothing is shown here"** —
+     this is the headline bug on this page, not a cosmetic
+     empty-state issue. Need to (i) verify whether Glassnode + Native
+     RPC calls are actually returning data, (ii) if yes, fix the
+     binding from result → card; if no, fix the status pills to
+     reflect reality and the cards to show truthful empty-state copy
+     ("rate-limited — try again in N min", "free-tier exhausted",
+     "no data yet — run a scan").
+  5. **Whale Activity empty state is ambiguous** — "No large transfers
+     in the last 24h, or whale tracker is offline." mixes two distinct
+     states into one sentence. User cannot tell whether the tracker is
+     working (and there are genuinely no whale moves) or whether it
+     is offline. Should resolve to one definite state and say so.
+- **Positives:**
+  - Status pills (View · Advanced, Glassnode · live, Dune · cached,
+    Native RPC · live) — properly styled with muted dots, good.
+  - Slot 1/2/3 selector dropdowns look properly redesigned.
+  - Card layout grid + section headers follow the design system.
+- **Bucket:** Mix of (c) hybrid (topbar wrapping, bright-green button)
+  + (d) functional (sidebar Legal item layout bug) + (e) empty-state
+  copy improvements.
+
 ---
 
 ## Cross-cutting themes
 
-Already surfaced from images 1-7:
+Already surfaced from images 1-8:
 
 1. **Bright-green saturation problem** (recurring in 4+ screenshots) —
    `--accent` (#00d4aa) is being used directly on active states and CTAs

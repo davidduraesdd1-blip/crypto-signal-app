@@ -1,0 +1,988 @@
+{
+  "all_none_neutral_baseline": {
+    "inputs": {
+      "btc_funding_rate_pct": null,
+      "fg_30d_avg": null,
+      "fg_value": null,
+      "macro_data": {},
+      "onchain_data": {},
+      "put_call_ratio": null,
+      "ta_data": null
+    },
+    "output": {
+      "beginner_summary": "Conditions are slightly favorable for new positions",
+      "confidence": 10.4,
+      "decision": "HOLD",
+      "layers": {
+        "macro": {
+          "components": {
+            "cpi_yoy": {
+              "score": null,
+              "value": null
+            },
+            "dxy_composite": {
+              "score": null,
+              "sub_components": {
+                "dxy_level": null,
+                "dxy_momentum": null
+              },
+              "value": null
+            },
+            "m2_yoy": {
+              "score": null,
+              "value": null
+            },
+            "vix": {
+              "score": null,
+              "value": null
+            },
+            "yield_curve": {
+              "score": null,
+              "value": null
+            }
+          },
+          "layer": "macro",
+          "score": 0.0,
+          "weight": 0.2,
+          "weighted": 0.0
+        },
+        "onchain": {
+          "components": {
+            "dune_custom": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "hash_ribbon": {
+              "score": null,
+              "sub_weight": 0.22,
+              "value": null
+            },
+            "mvrv_z": {
+              "score": null,
+              "sub_weight": 0.3,
+              "value": null
+            },
+            "nvt_signal": {
+              "score": null,
+              "sub_weight": 0.05,
+              "value": null
+            },
+            "puell_multiple": {
+              "score": null,
+              "sub_weight": 0.08,
+              "value": null
+            },
+            "realized_price": {
+              "btc_price": null,
+              "score": null,
+              "sub_weight": 0.07,
+              "value": null
+            },
+            "sopr": {
+              "score": null,
+              "sub_weight": 0.18,
+              "value": null
+            }
+          },
+          "layer": "onchain",
+          "score": 0.0,
+          "weight": 0.35,
+          "weighted": 0.0
+        },
+        "sentiment": {
+          "components": {
+            "fear_greed": {
+              "score": null,
+              "sub_weight": 0.4,
+              "value": null
+            },
+            "fg_trend_30d": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "funding_rate": {
+              "score": null,
+              "sub_weight": 0.15,
+              "value": null
+            },
+            "put_call_ratio": {
+              "score": null,
+              "sub_weight": 0.25,
+              "value": null,
+              "vix_gated": false
+            },
+            "vc_funding": {
+              "score": 0.462,
+              "sub_weight": 0.1,
+              "value": 0.4618
+            }
+          },
+          "layer": "sentiment",
+          "score": 0.4618,
+          "weight": 0.25,
+          "weighted": 0.1154
+        },
+        "technical": {
+          "components": {
+            "adx_14": {
+              "ranging_market": false,
+              "value": null
+            },
+            "ichimoku": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "ma_cross": {
+              "score": null,
+              "sub_weight": 0.18,
+              "value": null
+            },
+            "momentum": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "pi_cycle": {
+              "score": null,
+              "sub_weight": 0.13,
+              "value": null
+            },
+            "rsi_14": {
+              "adx_gated": false,
+              "score": null,
+              "sub_weight": 0.32,
+              "value": null
+            },
+            "vwap_dev": {
+              "score": null,
+              "sub_weight": 0.08,
+              "value": null
+            },
+            "weekly_rsi": {
+              "score": null,
+              "sub_weight": 0.09,
+              "value": null
+            }
+          },
+          "layer": "technical",
+          "score": 0.0,
+          "weight": 0.2,
+          "weighted": 0.0
+        }
+      },
+      "regime": "NORMAL",
+      "risk_off": false,
+      "score": 0.1154,
+      "signal": "MILD_RISK_ON",
+      "weights_applied": {
+        "macro": 0.2,
+        "onchain": 0.35,
+        "sentiment": 0.25,
+        "technical": 0.2
+      }
+    }
+  },
+  "extreme_risk_off_bear": {
+    "inputs": {
+      "btc_funding_rate_pct": 0.1,
+      "fg_30d_avg": 75,
+      "fg_value": 88,
+      "macro_data": {
+        "cpi_yoy": 9.0,
+        "dxy": 110,
+        "vix": 35,
+        "yield_spread_2y10y": -0.6
+      },
+      "onchain_data": {
+        "hash_ribbon_signal": "NEUTRAL",
+        "mvrv_z": 8.0,
+        "nvt": 110,
+        "puell_multiple": 4.5,
+        "sopr": 1.08
+      },
+      "put_call_ratio": 1.4,
+      "ta_data": {
+        "above_20sma": true,
+        "btc_price": 95000
+      }
+    },
+    "output": {
+      "beginner_summary": "Market is under stress \u2014 wait for better conditions before opening new trades",
+      "confidence": 42.0,
+      "decision": "SELL",
+      "layers": {
+        "macro": {
+          "components": {
+            "cpi_yoy": {
+              "score": -0.6,
+              "value": 9.0
+            },
+            "dxy_composite": {
+              "score": -1.0,
+              "sub_components": {
+                "dxy_level": -1.0,
+                "dxy_momentum": null
+              },
+              "value": 110
+            },
+            "m2_yoy": {
+              "score": null,
+              "value": null
+            },
+            "vix": {
+              "score": 0.6,
+              "value": 35
+            },
+            "yield_curve": {
+              "score": -0.26,
+              "value": -0.6
+            }
+          },
+          "layer": "macro",
+          "score": -0.315,
+          "weight": 0.15,
+          "weighted": -0.0473
+        },
+        "onchain": {
+          "components": {
+            "dune_custom": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "hash_ribbon": {
+              "score": 0.0,
+              "sub_weight": 0.22,
+              "value": "NEUTRAL"
+            },
+            "mvrv_z": {
+              "score": -1.0,
+              "sub_weight": 0.3,
+              "value": 8.0
+            },
+            "nvt_signal": {
+              "score": null,
+              "sub_weight": 0.05,
+              "value": null
+            },
+            "puell_multiple": {
+              "score": -0.8,
+              "sub_weight": 0.08,
+              "value": 4.5
+            },
+            "realized_price": {
+              "btc_price": 95000,
+              "score": null,
+              "sub_weight": 0.07,
+              "value": null
+            },
+            "sopr": {
+              "score": -0.5,
+              "sub_weight": 0.18,
+              "value": 1.08
+            }
+          },
+          "layer": "onchain",
+          "score": -0.5821,
+          "weight": 0.5,
+          "weighted": -0.291
+        },
+        "sentiment": {
+          "components": {
+            "fear_greed": {
+              "score": -0.8,
+              "sub_weight": 0.4,
+              "value": 88
+            },
+            "fg_trend_30d": {
+              "score": -0.05,
+              "sub_weight": 0.1,
+              "value": 75
+            },
+            "funding_rate": {
+              "score": -0.7,
+              "sub_weight": 0.15,
+              "value": 0.1
+            },
+            "put_call_ratio": {
+              "score": 0.2,
+              "sub_weight": 0.25,
+              "value": 1.4,
+              "vix_gated": false
+            },
+            "vc_funding": {
+              "score": 0.462,
+              "sub_weight": 0.1,
+              "value": 0.4618
+            }
+          },
+          "layer": "sentiment",
+          "score": -0.3338,
+          "weight": 0.25,
+          "weighted": -0.0834
+        },
+        "technical": {
+          "components": {
+            "adx_14": {
+              "ranging_market": false,
+              "value": null
+            },
+            "ichimoku": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "ma_cross": {
+              "score": null,
+              "sub_weight": 0.18,
+              "value": null
+            },
+            "momentum": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "pi_cycle": {
+              "score": null,
+              "sub_weight": 0.13,
+              "value": null
+            },
+            "rsi_14": {
+              "adx_gated": false,
+              "score": null,
+              "sub_weight": 0.32,
+              "value": null
+            },
+            "vwap_dev": {
+              "score": null,
+              "sub_weight": 0.08,
+              "value": null
+            },
+            "weekly_rsi": {
+              "score": null,
+              "sub_weight": 0.09,
+              "value": null
+            }
+          },
+          "layer": "technical",
+          "score": 0.0,
+          "weight": 0.1,
+          "weighted": 0.0
+        }
+      },
+      "regime": "CRISIS",
+      "risk_off": true,
+      "score": -0.4686,
+      "signal": "RISK_OFF",
+      "weights_applied": {
+        "macro": 0.15,
+        "onchain": 0.5,
+        "sentiment": 0.25,
+        "technical": 0.1
+      }
+    }
+  },
+  "extreme_risk_on_bull": {
+    "inputs": {
+      "btc_funding_rate_pct": -0.02,
+      "fg_30d_avg": 35,
+      "fg_value": 18,
+      "macro_data": {
+        "cpi_yoy": 2.0,
+        "dxy": 95,
+        "vix": 12,
+        "yield_spread_2y10y": 0.5
+      },
+      "onchain_data": {
+        "hash_ribbon_signal": "BUY",
+        "mvrv_z": -0.5,
+        "nvt": 25,
+        "puell_multiple": 0.4,
+        "sopr": 0.97
+      },
+      "put_call_ratio": 0.55,
+      "ta_data": {
+        "above_20sma": true,
+        "btc_price": 30000
+      }
+    },
+    "output": {
+      "beginner_summary": "Market conditions look good for trading \u2014 macro and on-chain are aligned",
+      "confidence": 39.9,
+      "decision": "BUY",
+      "layers": {
+        "macro": {
+          "components": {
+            "cpi_yoy": {
+              "score": 0.0,
+              "value": 2.0
+            },
+            "dxy_composite": {
+              "score": 0.875,
+              "sub_components": {
+                "dxy_level": 0.875,
+                "dxy_momentum": null
+              },
+              "value": 95
+            },
+            "m2_yoy": {
+              "score": null,
+              "value": null
+            },
+            "vix": {
+              "score": -0.4,
+              "value": 12
+            },
+            "yield_curve": {
+              "score": 0.3,
+              "value": 0.5
+            }
+          },
+          "layer": "macro",
+          "score": 0.1937,
+          "weight": 0.2,
+          "weighted": 0.0387
+        },
+        "onchain": {
+          "components": {
+            "dune_custom": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "hash_ribbon": {
+              "score": 0.8,
+              "sub_weight": 0.22,
+              "value": "BUY"
+            },
+            "mvrv_z": {
+              "score": 0.75,
+              "sub_weight": 0.3,
+              "value": -0.5
+            },
+            "nvt_signal": {
+              "score": null,
+              "sub_weight": 0.05,
+              "value": null
+            },
+            "puell_multiple": {
+              "score": 0.9,
+              "sub_weight": 0.08,
+              "value": 0.4
+            },
+            "realized_price": {
+              "btc_price": 30000,
+              "score": null,
+              "sub_weight": 0.07,
+              "value": null
+            },
+            "sopr": {
+              "score": 0.7,
+              "sub_weight": 0.18,
+              "value": 0.97
+            }
+          },
+          "layer": "onchain",
+          "score": 0.7679,
+          "weight": 0.35,
+          "weighted": 0.2688
+        },
+        "sentiment": {
+          "components": {
+            "fear_greed": {
+              "score": 0.72,
+              "sub_weight": 0.4,
+              "value": 18
+            },
+            "fg_trend_30d": {
+              "score": 0.15,
+              "sub_weight": 0.1,
+              "value": 35
+            },
+            "funding_rate": {
+              "score": 0.4,
+              "sub_weight": 0.15,
+              "value": -0.02
+            },
+            "put_call_ratio": {
+              "score": -0.6,
+              "sub_weight": 0.25,
+              "value": 0.55,
+              "vix_gated": false
+            },
+            "vc_funding": {
+              "score": 0.462,
+              "sub_weight": 0.1,
+              "value": 0.4618
+            }
+          },
+          "layer": "sentiment",
+          "score": 0.2592,
+          "weight": 0.25,
+          "weighted": 0.0648
+        },
+        "technical": {
+          "components": {
+            "adx_14": {
+              "ranging_market": false,
+              "value": null
+            },
+            "ichimoku": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "ma_cross": {
+              "score": null,
+              "sub_weight": 0.18,
+              "value": null
+            },
+            "momentum": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "pi_cycle": {
+              "score": null,
+              "sub_weight": 0.13,
+              "value": null
+            },
+            "rsi_14": {
+              "adx_gated": false,
+              "score": null,
+              "sub_weight": 0.32,
+              "value": null
+            },
+            "vwap_dev": {
+              "score": null,
+              "sub_weight": 0.08,
+              "value": null
+            },
+            "weekly_rsi": {
+              "score": null,
+              "sub_weight": 0.09,
+              "value": null
+            }
+          },
+          "layer": "technical",
+          "score": 0.0,
+          "weight": 0.2,
+          "weighted": 0.0
+        }
+      },
+      "regime": "NORMAL",
+      "risk_off": false,
+      "score": 0.4654,
+      "signal": "RISK_ON",
+      "weights_applied": {
+        "macro": 0.2,
+        "onchain": 0.35,
+        "sentiment": 0.25,
+        "technical": 0.2
+      }
+    }
+  },
+  "mid_cycle_balanced": {
+    "inputs": {
+      "btc_funding_rate_pct": 0.01,
+      "fg_30d_avg": 50,
+      "fg_value": 50,
+      "macro_data": {
+        "cpi_yoy": 3.5,
+        "dxy": 102,
+        "vix": 18,
+        "yield_spread_2y10y": 0.0
+      },
+      "onchain_data": {
+        "hash_ribbon_signal": "NEUTRAL",
+        "mvrv_z": 2.0,
+        "nvt": 60,
+        "puell_multiple": 1.5,
+        "sopr": 1.01
+      },
+      "put_call_ratio": 0.85,
+      "ta_data": {
+        "above_20sma": true,
+        "btc_price": 60000
+      }
+    },
+    "output": {
+      "beginner_summary": "Mixed signals \u2014 hold existing positions, wait for clarity",
+      "confidence": 0.2,
+      "decision": "HOLD",
+      "layers": {
+        "macro": {
+          "components": {
+            "cpi_yoy": {
+              "score": 0.0,
+              "value": 3.5
+            },
+            "dxy_composite": {
+              "score": 0.0,
+              "sub_components": {
+                "dxy_level": 0.0,
+                "dxy_momentum": null
+              },
+              "value": 102
+            },
+            "m2_yoy": {
+              "score": null,
+              "value": null
+            },
+            "vix": {
+              "score": 0.0,
+              "value": 18
+            },
+            "yield_curve": {
+              "score": 0.0,
+              "value": 0.0
+            }
+          },
+          "layer": "macro",
+          "score": 0.0,
+          "weight": 0.2,
+          "weighted": 0.0
+        },
+        "onchain": {
+          "components": {
+            "dune_custom": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "hash_ribbon": {
+              "score": 0.0,
+              "sub_weight": 0.22,
+              "value": "NEUTRAL"
+            },
+            "mvrv_z": {
+              "score": -0.033,
+              "sub_weight": 0.3,
+              "value": 2.0
+            },
+            "nvt_signal": {
+              "score": null,
+              "sub_weight": 0.05,
+              "value": null
+            },
+            "puell_multiple": {
+              "score": 0.0,
+              "sub_weight": 0.08,
+              "value": 1.5
+            },
+            "realized_price": {
+              "btc_price": 60000,
+              "score": null,
+              "sub_weight": 0.07,
+              "value": null
+            },
+            "sopr": {
+              "score": 0.0,
+              "sub_weight": 0.18,
+              "value": 1.01
+            }
+          },
+          "layer": "onchain",
+          "score": -0.0128,
+          "weight": 0.35,
+          "weighted": -0.0045
+        },
+        "sentiment": {
+          "components": {
+            "fear_greed": {
+              "score": 0.0,
+              "sub_weight": 0.4,
+              "value": 50
+            },
+            "fg_trend_30d": {
+              "score": 0.0,
+              "sub_weight": 0.1,
+              "value": 50
+            },
+            "funding_rate": {
+              "score": 0.1,
+              "sub_weight": 0.15,
+              "value": 0.01
+            },
+            "put_call_ratio": {
+              "score": -0.2,
+              "sub_weight": 0.25,
+              "value": 0.85,
+              "vix_gated": false
+            },
+            "vc_funding": {
+              "score": 0.462,
+              "sub_weight": 0.1,
+              "value": 0.4618
+            }
+          },
+          "layer": "sentiment",
+          "score": 0.0112,
+          "weight": 0.25,
+          "weighted": 0.0028
+        },
+        "technical": {
+          "components": {
+            "adx_14": {
+              "ranging_market": false,
+              "value": null
+            },
+            "ichimoku": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "ma_cross": {
+              "score": null,
+              "sub_weight": 0.18,
+              "value": null
+            },
+            "momentum": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "pi_cycle": {
+              "score": null,
+              "sub_weight": 0.13,
+              "value": null
+            },
+            "rsi_14": {
+              "adx_gated": false,
+              "score": null,
+              "sub_weight": 0.32,
+              "value": null
+            },
+            "vwap_dev": {
+              "score": null,
+              "sub_weight": 0.08,
+              "value": null
+            },
+            "weekly_rsi": {
+              "score": null,
+              "sub_weight": 0.09,
+              "value": null
+            }
+          },
+          "layer": "technical",
+          "score": 0.0,
+          "weight": 0.2,
+          "weighted": 0.0
+        }
+      },
+      "regime": "NORMAL",
+      "risk_off": false,
+      "score": -0.0021,
+      "signal": "NEUTRAL",
+      "weights_applied": {
+        "macro": 0.2,
+        "onchain": 0.35,
+        "sentiment": 0.25,
+        "technical": 0.2
+      }
+    }
+  },
+  "panic_vix_gate_check": {
+    "inputs": {
+      "btc_funding_rate_pct": -0.05,
+      "fg_30d_avg": 40,
+      "fg_value": 25,
+      "macro_data": {
+        "cpi_yoy": 5.0,
+        "dxy": 108,
+        "vix": 45,
+        "yield_spread_2y10y": -0.3
+      },
+      "onchain_data": {
+        "hash_ribbon_signal": "NEUTRAL",
+        "mvrv_z": 3.0,
+        "nvt": 70,
+        "puell_multiple": 2.0,
+        "sopr": 1.0
+      },
+      "put_call_ratio": 1.8,
+      "ta_data": {
+        "above_20sma": false,
+        "btc_price": 50000
+      }
+    },
+    "output": {
+      "beginner_summary": "Mixed signals \u2014 hold existing positions, wait for clarity",
+      "confidence": 3.1,
+      "decision": "HOLD",
+      "layers": {
+        "macro": {
+          "components": {
+            "cpi_yoy": {
+              "score": -0.4,
+              "value": 5.0
+            },
+            "dxy_composite": {
+              "score": -1.0,
+              "sub_components": {
+                "dxy_level": -1.0,
+                "dxy_momentum": null
+              },
+              "value": 108
+            },
+            "m2_yoy": {
+              "score": null,
+              "value": null
+            },
+            "vix": {
+              "score": 0.6,
+              "value": 45
+            },
+            "yield_curve": {
+              "score": -0.12,
+              "value": -0.3
+            }
+          },
+          "layer": "macro",
+          "score": -0.23,
+          "weight": 0.15,
+          "weighted": -0.0345
+        },
+        "onchain": {
+          "components": {
+            "dune_custom": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "hash_ribbon": {
+              "score": 0.0,
+              "sub_weight": 0.22,
+              "value": "NEUTRAL"
+            },
+            "mvrv_z": {
+              "score": -0.144,
+              "sub_weight": 0.3,
+              "value": 3.0
+            },
+            "nvt_signal": {
+              "score": null,
+              "sub_weight": 0.05,
+              "value": null
+            },
+            "puell_multiple": {
+              "score": 0.0,
+              "sub_weight": 0.08,
+              "value": 2.0
+            },
+            "realized_price": {
+              "btc_price": 50000,
+              "score": null,
+              "sub_weight": 0.07,
+              "value": null
+            },
+            "sopr": {
+              "score": 0.0,
+              "sub_weight": 0.18,
+              "value": 1.0
+            }
+          },
+          "layer": "onchain",
+          "score": -0.0556,
+          "weight": 0.5,
+          "weighted": -0.0278
+        },
+        "sentiment": {
+          "components": {
+            "fear_greed": {
+              "score": 0.533,
+              "sub_weight": 0.4,
+              "value": 25
+            },
+            "fg_trend_30d": {
+              "score": 0.1,
+              "sub_weight": 0.1,
+              "value": 40
+            },
+            "funding_rate": {
+              "score": 0.7,
+              "sub_weight": 0.15,
+              "value": -0.05
+            },
+            "put_call_ratio": {
+              "score": 0.0,
+              "sub_weight": 0.25,
+              "value": 1.8,
+              "vix_gated": true
+            },
+            "vc_funding": {
+              "score": 0.462,
+              "sub_weight": 0.1,
+              "value": 0.4618
+            }
+          },
+          "layer": "sentiment",
+          "score": 0.3745,
+          "weight": 0.25,
+          "weighted": 0.0936
+        },
+        "technical": {
+          "components": {
+            "adx_14": {
+              "ranging_market": false,
+              "value": null
+            },
+            "ichimoku": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "ma_cross": {
+              "score": null,
+              "sub_weight": 0.18,
+              "value": null
+            },
+            "momentum": {
+              "score": null,
+              "sub_weight": 0.1,
+              "value": null
+            },
+            "pi_cycle": {
+              "score": null,
+              "sub_weight": 0.13,
+              "value": null
+            },
+            "rsi_14": {
+              "adx_gated": false,
+              "score": null,
+              "sub_weight": 0.32,
+              "value": null
+            },
+            "vwap_dev": {
+              "score": null,
+              "sub_weight": 0.08,
+              "value": null
+            },
+            "weekly_rsi": {
+              "score": null,
+              "sub_weight": 0.09,
+              "value": null
+            }
+          },
+          "layer": "technical",
+          "score": 0.0,
+          "weight": 0.1,
+          "weighted": 0.0
+        }
+      },
+      "regime": "CRISIS",
+      "risk_off": false,
+      "score": 0.0348,
+      "signal": "NEUTRAL",
+      "weights_applied": {
+        "macro": 0.15,
+        "onchain": 0.5,
+        "sentiment": 0.25,
+        "technical": 0.1
+      }
+    }
+  }
+}
