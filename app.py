@@ -2434,6 +2434,24 @@ def page_dashboard():
             # collapsing the dict to `{None: <last row>}` and dropping
             # every row on every customize-save.
             def _build_wl_row(_wp: str) -> dict:
+                # C-fix-16 (2026-05-02): the WebSocket primary feed
+                # (OKX SWAP tickers) silently drops pairs that don't have
+                # a perpetual market — ZBCN, XDC, FLR, SHX show "—" for
+                # price even though their sparkline closes ARE fetched
+                # from the REST OHLCV chain. Use the last sparkline close
+                # as a price fallback so every watchlist pair shows SOME
+                # current-ish price instead of a dash. The closes are
+                # 1h-bar daily-fetched data so the price is at most 1
+                # hour stale — acceptable for a watchlist row, and the
+                # sparkline visual already implicitly tells the user
+                # this is recent-history data.
+                #
+                # The proper fix (full REST live-price fallback chain
+                # CMC → CoinGecko → Kraken → OKX REST) is queued as a
+                # separate follow-up because it's MEDIUM effort and
+                # touches the websocket_feeds.py + data_feeds.py
+                # boundary. This is the band-aid that closes the visible
+                # gap NOW without that scope.
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
@@ -2443,9 +2461,20 @@ def page_dashboard():
                     logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
                     _closes = []
                 _pts = _spark_points_from_closes(_closes)
+                # Change-pct fallback (existing, C-fix-09): derive 24h %
+                # from the first vs last sparkline close.
                 if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
                     try:
                         _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
+                    except Exception:
+                        pass
+                # C-fix-16: price fallback — if WebSocket has nothing
+                # AND we have at least one sparkline close, use the
+                # most-recent close. Mirror the existing change_pct
+                # fallback pattern.
+                if _price is None and _closes:
+                    try:
+                        _price = float(_closes[-1])
                     except Exception:
                         pass
                 _row = {
@@ -2563,11 +2592,44 @@ def page_dashboard():
                     rows=_ds_wl_rows,
                 )
             with _ds_col2:
-                _ds_bt_preview(
-                    title="Composite backtest",
-                    subtitle="latest run — Run Backtest to update",
-                    kpis=_ds_kpis,
-                )
+                # C-fix-17 (2026-05-02): when no backtest has populated
+                # any of the 4 KPIs (cold session + empty backtest_trades
+                # DB), the card was rendering "—" for every metric, which
+                # looks broken / misleading. Mirror C-fix-06's CTA card
+                # treatment from the Backtester page so users see a clear
+                # call-to-action instead. Once the user clicks "Run
+                # Backtest" on the Backtester page (or once the deeper
+                # auto-backtest follow-up lands), the card flips back to
+                # the populated KPI grid automatically.
+                _ds_bt_has_data = any(v is not None for v in (
+                    _bt_tr, _bt_dd, _bt_sh, _bt_wr,
+                ))
+                if not _ds_bt_has_data:
+                    st.markdown(
+                        '<div class="ds-card" style="padding:18px 16px;'
+                        'min-height:175px;display:flex;flex-direction:column;'
+                        'justify-content:center;text-align:center;">'
+                        '<div style="font-size:11px;color:var(--text-muted);'
+                        'text-transform:uppercase;letter-spacing:0.05em;'
+                        'margin-bottom:8px;">Composite backtest</div>'
+                        '<div style="font-size:14px;font-weight:600;'
+                        'color:var(--text-primary);margin-bottom:6px;">'
+                        'No backtest run yet</div>'
+                        '<div style="font-size:12.5px;color:var(--text-muted);'
+                        'max-width:340px;margin:0 auto 10px;">'
+                        'Open the Backtester page and click '
+                        '<strong>Run Backtest</strong> to walk historical '
+                        'composite signals against past prices and populate '
+                        'this card.</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    _ds_bt_preview(
+                        title="Composite backtest",
+                        subtitle="latest run — Run Backtest to update",
+                        kpis=_ds_kpis,
+                    )
         except Exception as _ds_wl_err:
             logger.debug("[App] watchlist/backtest preview render failed: %s", _ds_wl_err)
     except Exception as _ds_hero_err:
@@ -3476,6 +3538,21 @@ def page_config():
                 f"match spec, or keep your current cadence. Last scan: {_c12_last_scan_label}."
             )
 
+        # C-fix-18 (2026-05-02): widgets inside an st.form do NOT
+        # propagate value changes to sibling widgets until the form is
+        # submitted. So a `disabled=not _sched_on` on the Scan Interval
+        # selectbox would stay True (disabled) for the entire form
+        # render even after the user toggled "Enable Auto-Scan" on —
+        # forcing the user to click 💾 Save once just to enable the
+        # interval field, then make their interval change, then click
+        # Save again. The intent of the form was to batch all changes
+        # into ONE save.
+        # All `disabled=` props on form children are removed. Widgets
+        # stay editable inside the form regardless of toggle state;
+        # the form's submit handler is the source of truth — the
+        # if-toggle-off-ignore-quiet-hours semantics are enforced
+        # there (or implicitly by the autoscan job not running when
+        # `autoscan_enabled=False`).
         with st.form("autoscan_form"):
             _sc1, _sc2 = st.columns(2)
             with _sc1:
@@ -3500,13 +3577,11 @@ def page_config():
                             # C-fix-12: default 15 min per §12 (was 60 min).
                             key=lambda v: abs(v - _sched_cfg.get("autoscan_interval_minutes", 15)))
                     ),
-                    disabled=not _sched_on,
                 )
             with _sc2:
                 _quiet_on = st.toggle(
                     "Quiet Hours (UTC)",
                     value=_sched_cfg.get("autoscan_quiet_hours_enabled", False),
-                    disabled=not _sched_on,
                     help="Scheduled scans are skipped during this UTC time window.",
                 )
                 _sqc1, _sqc2 = st.columns(2)
@@ -3514,13 +3589,11 @@ def page_config():
                     _quiet_start = st.text_input(
                         "Start HH:MM",
                         value=_sched_cfg.get("autoscan_quiet_start", "22:00"),
-                        disabled=not (_sched_on and _quiet_on),
                     )
                 with _sqc2:
                     _quiet_end = st.text_input(
                         "End HH:MM",
                         value=_sched_cfg.get("autoscan_quiet_end", "06:00"),
-                        disabled=not (_sched_on and _quiet_on),
                     )
             if st.form_submit_button("💾 Save Scheduler Config", type="primary"):
                 _sched_cfg.update({

@@ -334,7 +334,8 @@ def test_watchlist_rows_carry_pair_key_for_lookup():
         "_build_wl_row helper missing — without it the row construction "
         "is duplicated and the 'pair' key was easy to forget."
     )
-    body = src[idx : idx + 2000]
+    # 4000 chars covers the helper body + comments after C-fix-16.
+    body = src[idx : idx + 4000]
     assert '"pair": _wp' in body, (
         "Watchlist row no longer carries the full pair string under "
         "the 'pair' key. Customize-save filter will collapse to "
@@ -536,6 +537,51 @@ def test_no_duplicate_autoscan_expander_in_sidebar_tools():
     )
 
 
+def test_watchlist_row_falls_back_to_sparkline_close_for_price():
+    """C-fix-16 (2026-05-02): the WebSocket live-price feed (OKX SWAP
+    tickers) silently drops pairs without active perpetual markets.
+    On prod, ZBCN / XDC / FLR / SHX show "—" for price while their
+    sparkline closes ARE fetched. The fallback uses the last sparkline
+    close as a near-current price so the watchlist never shows a dash
+    when REST data is available."""
+    src = _app_source()
+    idx = src.find("def _build_wl_row")
+    assert idx > 0, "_build_wl_row helper missing"
+    body = src[idx : idx + 3500]
+    # Positive: price fallback from sparkline close.
+    assert "_price = float(_closes[-1])" in body, (
+        "Watchlist row no longer falls back to the last sparkline close "
+        "when WebSocket has no live price. Pairs without OKX SWAP "
+        "markets (ZBCN, XDC, FLR, SHX) will show '—' for price even "
+        "though their sparkline data IS fetched from REST."
+    )
+
+
+def test_home_composite_backtest_card_shows_cta_when_empty():
+    """C-fix-17 (2026-05-02): the Home page composite-backtest mini-card
+    must render a CTA ("No backtest run yet") when none of the 4 KPIs
+    have populated. The labels-with-dashes layout was misleading on cold
+    start — users couldn't tell whether the metrics were genuinely zero
+    or simply absent. Mirrors the C-fix-06 CTA pattern from the full
+    Backtester page."""
+    src = _app_source()
+    # Anchor on the Home composite-backtest section.
+    assert "_ds_bt_has_data" in src, (
+        "Home composite-backtest card no longer guards on a "
+        "_ds_bt_has_data check. When no metric is populated, users see "
+        "an empty-labels grid that looks broken."
+    )
+    assert "No backtest run yet" in src, (
+        "Home composite-backtest card is missing the empty-state CTA. "
+        "Without it the cold-start view shows 'Return —' / 'CAGR —' / "
+        "'Sharpe —' / 'Win rate —' which is misleading."
+    )
+    assert "Open the Backtester page" in src, (
+        "Home composite-backtest CTA no longer directs users to the "
+        "Backtester page — the call-to-action loses meaning."
+    )
+
+
 def test_form_based_autoscan_scheduler_still_present():
     """C-fix-15: the canonical form-based Auto-Scan Scheduler lives in
     page_config and must remain. Removing the duplicate is not the same
@@ -545,6 +591,34 @@ def test_form_based_autoscan_scheduler_still_present():
         "The form-based Auto-Scan Scheduler is missing. C-fix-15 only "
         "removed the duplicate; the form-based one must remain."
     )
+
+
+def test_autoscan_form_widgets_have_no_disabled_props():
+    """C-fix-18 (2026-05-02): widgets inside the autoscan form must NOT
+    have `disabled=` props that gate on other form widgets. Streamlit
+    forms don't propagate widget value changes between siblings until
+    submit, so a `disabled=not _sched_on` on the interval selectbox
+    would force the user to click Save just to enable subsequent
+    edits — defeating the form's batch-save semantics."""
+    src = _app_source()
+    form_idx = src.find('st.form("autoscan_form"):')
+    assert form_idx > 0, "autoscan form not found"
+    # Find the form_submit_button to bound the form body.
+    end_idx = src.find('st.form_submit_button("💾 Save Scheduler Config"', form_idx)
+    assert end_idx > 0, "form submit button not found"
+    body = src[form_idx:end_idx]
+    # The disabled props that gated on _sched_on / _quiet_on must be gone.
+    bad_patterns = [
+        "disabled=not _sched_on",
+        "disabled=not (_sched_on and _quiet_on)",
+    ]
+    for pat in bad_patterns:
+        assert pat not in body, (
+            f"autoscan form still has '{pat}' on a child widget. "
+            f"Streamlit forms don't propagate sibling widget changes "
+            f"until submit, so this disabled prop blocks edits until "
+            f"the user clicks Save once — defeats batch-save semantics."
+        )
 
 
 # ── Cache-clear coverage: refresh button must drop new caches too ───────
