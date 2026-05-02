@@ -4,6 +4,33 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-05-02 (later) — Phase D batch D1 landed
+
+D1 (FastAPI gap-fill, 6 new routers) shipped on
+`phase-d/next-fastapi-cutover` off `main`. Existing 22 endpoints in
+`api.py` untouched; 6 new routers add 15 endpoints for Home,
+Regimes, On-Chain, Alerts CRUD, AI Assistant, Settings.
+
+- 9 new modules: `routers/{__init__,utils,deps,home,regimes,onchain,
+  alerts,ai_assistant,settings}.py`
+- `api.py` minimal-touch: 6 `include_router` calls + CORS extended for
+  `localhost:3000` (Next.js dev) + `*.vercel.app` regex (preview/prod)
+  + PUT/DELETE methods (alerts/configure DELETE, settings PUTs)
+- 19 new smoke tests in `tests/test_api_routers.py` (TestClient-based,
+  network-hermetic via monkeypatch on `fetch_onchain_metrics`,
+  `generate_signal_story`, `save_alerts_config`)
+- pytest **340 passed, 1 skipped** in 40s (baseline 321 + 19 new = 340)
+- §4 regression diff NOT required at D1 (presentation/transport only;
+  composite_signal output unchanged) — runs at D7 per plan §6.
+
+**Next blocking action — David:** D2 start. Create a free Render
+account at https://render.com (no credit card), then provide the
+deploy hook URL so Code can wire `render.yaml` + Cron-job.org
+keep-alive. Streamlit fallback unchanged at
+https://cryptosignal-ddb1.streamlit.app/.
+
+---
+
 ## 2026-05-02 (later) — Phase D approved + handed off to Code
 
 **Approvals locked** (David, via AskUserQuestion):

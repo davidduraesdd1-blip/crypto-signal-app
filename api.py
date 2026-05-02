@@ -97,8 +97,17 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost", "http://localhost:8501", "http://127.0.0.1:8501"],
-    allow_methods=["GET", "POST"],
+    # Phase D D1: include Next.js local dev (3000) so the new FastAPI
+    # routers can be hit from `npm run dev` while the Streamlit fallback
+    # stays addressable on 8501. Vercel preview + production domains are
+    # admitted via the regex (matches https://*.vercel.app and
+    # https://crypto-signal-app.vercel.app once Vercel assigns it).
+    allow_origins=[
+        "http://localhost", "http://localhost:8501", "http://127.0.0.1:8501",
+        "http://localhost:3000", "http://127.0.0.1:3000",
+    ],
+    allow_origin_regex=r"https://([a-z0-9-]+\.)*vercel\.app",
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # PUT/DELETE added for D1 routers
     allow_headers=["X-API-Key", "Content-Type"],
     allow_credentials=False,  # SEC-HIGH-02: explicit
 )
@@ -864,3 +873,27 @@ def get_alerts_log(limit: int = 100):
         "count": len(df),
         "alerts": _serialize(df.tail(limit).to_dict(orient="records")),
     }
+
+
+# ─── Phase D D1 — Next.js frontend gap-fill routers ────────────────────────────
+# Six new routers wrapping the existing engine for the Next.js + Tailwind
+# frontend (Vercel). Mounted last so they layer on top of the existing
+# /signals, /backtest, /weights, /scan, /execute, /alerts/log surface
+# without disturbing it.
+#
+# Plan:  docs/redesign/2026-05-02_phase-d-streamlit-retirement.md
+# Audit: docs/redesign/2026-05-02_d1-api-audit.md
+
+from routers import home as _home_router
+from routers import regimes as _regimes_router
+from routers import onchain as _onchain_router
+from routers import alerts as _alerts_router_module
+from routers import ai_assistant as _ai_router
+from routers import settings as _settings_router
+
+app.include_router(_home_router.router,            prefix="",          tags=["Home"])
+app.include_router(_regimes_router.router,         prefix="/regimes",  tags=["Regimes"])
+app.include_router(_onchain_router.router,         prefix="/onchain",  tags=["On-Chain"])
+app.include_router(_alerts_router_module.router,   prefix="/alerts",   tags=["Alerts"])
+app.include_router(_ai_router.router,              prefix="/ai",       tags=["AI Assistant"])
+app.include_router(_settings_router.router,        prefix="/settings", tags=["Settings"])
