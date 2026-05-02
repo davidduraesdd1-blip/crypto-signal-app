@@ -73,7 +73,18 @@ PAIRS = [
     'ZBCN/USDT', # Zebec Network — MEXC: ZBCNUSDT, Gate.io: ZBCN_USDT
     # WFLR, FXRP: wrapped Flare ecosystem tokens — near-zero CEX volume, chart-only
 ]
-TIMEFRAMES = ['1h', '4h', '1d', '1w']
+# C-fix-20a (2026-05-02): added '1M' (monthly) timeframe to the engine
+# scan set per user direction. The 4 short timeframes (1m/5m/15m/30m)
+# were considered but rejected: each timeframe is a separate
+# fetch_chart_ohlcv call per pair, so adding 4 short ones would 2x
+# the API call count per scan and risk hitting CCXT free-tier rate
+# limits during active hours. Adding only '1M' is one extra call per
+# pair (well within budget) and gives the feedback loop a long-horizon
+# signal track for low-frequency macro positions. The 8-cell display
+# strip (1m/5m/15m/30m/1h/4h/1d/1w + greyed-out cells) stays as-is —
+# the strip's `enabled_timeframes` arg controls which cells respond
+# to clicks, separate from what the engine actually scans.
+TIMEFRAMES = ['1h', '4h', '1d', '1w', '1M']
 OHLCV_LIMIT      = 500  # Ichimoku (10/30/45) needs 45-bar warmup; 500 gives 455 usable bars on 1h (~18.9 days)
 SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need < 150 bars; ~40% faster OHLCV fetch
 # PERF-A4: per-timeframe OHLCV limits — longer TFs have fewer useful bars; reduces payload further
@@ -81,7 +92,8 @@ SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need <
 # 4h: 100 bars (16.7 days) — Ichimoku / Supertrend need ~50; 100 gives comfortable headroom
 # 1d: 100 bars (3.3 months) — daily indicators saturate by bar 60
 # 1w: 52 bars (1 year)     — weekly only needs ~26 for Ichimoku kijun (26-period)
-_TF_OHLCV_LIMIT: dict = {'1h': 150, '4h': 100, '1d': 100, '1w': 52}
+# 1M: 36 bars (3 years)    — monthly indicators saturate by bar 26 (Ichimoku kijun)
+_TF_OHLCV_LIMIT: dict = {'1h': 150, '4h': 100, '1d': 100, '1w': 52, '1M': 36}
 
 # PERF-A5: delta scan cache — stores last result + price per pair so unchanged pairs
 # can be skipped on repeat scan presses (60-80% faster on manual re-presses)
@@ -102,6 +114,9 @@ _TF_TTL: dict = {
     "15m": 180,  "30m": 240,  "1h":  300,
     "2h":  420,  "4h":  600,  "6h":  900,
     "12h": 1200, "1d":  1800, "1w":  3600,
+    # C-fix-20a: monthly bars close once per ~30 days; 6h cache is
+    # generous yet still re-fetches mid-month if needed.
+    "1M":  21600,
 }
 
 # PERF: Enriched DataFrame cache — avoids recomputing 24 technical indicators
