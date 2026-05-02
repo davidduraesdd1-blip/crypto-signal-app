@@ -2461,9 +2461,30 @@ def page_dashboard():
             return None
 
         def _ds_build_hero(pair_key: str, display: str) -> dict:
+            # Audit 2026-05-02 C11 (Image 1): hero cards previously read
+            # only from _live_prices (WebSocket OKX SWAP). For pairs
+            # without an OKX SWAP market (XDC, SHX, ZBCN, FLR, CC) the
+            # tick was empty and the card showed "—" with no 24h change.
+            # The watchlist below the hero row solved this via the
+            # cascade fallback (CMC → CG → Kraken → OKX → MEXC); apply
+            # the same fallback here so non-OKX-SWAP pairs populate.
             tick = (_live_prices or {}).get(pair_key) or {}
             price = tick.get("price") or tick.get("last") or None
             chg = tick.get("change_24h_pct") or tick.get("change_pct") or None
+            if price is None or chg is None:
+                try:
+                    sym = pair_key.split("/")[0].split("-")[0].upper()
+                    _cascade = _sg_cached_live_prices_cascade((sym,))
+                    _c_tick = (_cascade or {}).get(sym) or {}
+                    if price is None:
+                        price = _c_tick.get("price") or _c_tick.get("last")
+                    if chg is None:
+                        chg = (_c_tick.get("change_24h_pct")
+                               or _c_tick.get("change_pct")
+                               or _c_tick.get("price_change_24h_pct"))
+                except Exception as _e_cas:
+                    logger.debug("[Hero] cascade fallback for %s failed: %s",
+                                 pair_key, _e_cas)
             r = _ds_latest_result_for_pair(pair_key)
             return {
                 "ticker": display,

@@ -4415,7 +4415,18 @@ def get_hyperliquid_stats(pair: str) -> dict:
     Fetch open interest and funding rate for a pair on Hyperliquid.
     Uses the /info endpoint with metaAndAssetCtxs action.
 
-    Returns: open_interest_usd, funding_rate_8h, funding_annualised_pct, mark_price, signal, cached_at
+    Audit 2026-05-02 C6 (Image 7): Hyperliquid's `funding` field is the
+    HOURLY rate, not 8h. Legacy code labeled it `funding_rate_8h` and
+    annualised as `× 3 × 365` (which would be correct for 8h). The
+    actual annualisation is `× 24 × 365` — the displayed funding was
+    therefore 8× too low. Fixed: field renamed to `funding_rate_1h`
+    and annualisation corrected. Legacy alias `funding_rate_8h` is
+    kept for backwards compatibility but populated as the equivalent
+    8h rate (× 8).
+
+    Returns: open_interest_usd, funding_rate_1h, funding_rate_8h
+             (legacy alias, computed), funding_annualised_pct,
+             mark_price, signal, cached_at, source
     Signal: HIGH_OI_POSITIVE_FUNDING | HIGH_OI_NEGATIVE_FUNDING | NORMAL
     """
     coin = pair.replace("/USDT", "").replace("/USDC", "").replace("USDT", "").replace("USDC", "")
@@ -4425,6 +4436,11 @@ def get_hyperliquid_stats(pair: str) -> dict:
         if cached and now - cached.get("cached_at", 0) < _HL_CACHE_TTL:
             return cached
 
+    # Audit 2026-05-02 C6: when called from get_hyperliquid_batch the
+    # legacy code only cached pairs[0], forcing every subsequent pair
+    # to re-POST /info (10 identical POSTs for a 10-pair batch). Now
+    # populate ALL coins from a single payload into the cache so the
+    # batch genuinely runs in one round trip.
     try:
         resp = _SESSION.post(
             "https://api.hyperliquid.xyz/info",
@@ -4438,41 +4454,56 @@ def get_hyperliquid_stats(pair: str) -> dict:
         ctxs   = payload[1]
         result = None
         for i, asset in enumerate(assets):
-            if asset.get("name", "").upper() == coin.upper() and i < len(ctxs):
-                ctx      = ctxs[i]
-                mark_px  = float(ctx.get("markPx") or 0)
-                oi       = float(ctx.get("openInterest") or 0) * mark_px
-                fund     = float(ctx.get("funding") or 0)
-                fund_ann = fund * 3 * 365 * 100  # 8h rate → annualised %
-                signal   = "NORMAL"
-                if oi > 50_000_000:
-                    signal = "HIGH_OI_POSITIVE_FUNDING" if fund > 0 else "HIGH_OI_NEGATIVE_FUNDING"
-                result = {
-                    "coin":                   coin,
-                    "open_interest_usd":      round(oi),
-                    "funding_rate_8h":        round(fund, 6),
-                    "funding_annualised_pct": round(fund_ann, 2),
-                    "mark_price":             mark_px,
-                    "signal":                 signal,
-                    "source":                 "hyperliquid",
-                    "cached_at":              now,
-                }
-                break
+            if i >= len(ctxs):
+                continue
+            asset_name = asset.get("name", "").upper()
+            ctx        = ctxs[i]
+            try:
+                mark_px = float(ctx.get("markPx") or 0)
+                oi      = float(ctx.get("openInterest") or 0) * mark_px
+                fund_1h = float(ctx.get("funding") or 0)
+            except (TypeError, ValueError):
+                continue
+            # Annualise an HOURLY rate.
+            fund_ann = fund_1h * 24 * 365 * 100
+            sig      = "NORMAL"
+            if oi > 50_000_000:
+                sig = "HIGH_OI_POSITIVE_FUNDING" if fund_1h > 0 else "HIGH_OI_NEGATIVE_FUNDING"
+            entry = {
+                "coin":                   asset_name,
+                "open_interest_usd":      round(oi),
+                "funding_rate_1h":        round(fund_1h, 8),
+                "funding_rate_8h":        round(fund_1h * 8, 8),  # legacy alias
+                "funding_annualised_pct": round(fund_ann, 2),
+                "mark_price":             mark_px,
+                "signal":                 sig,
+                "source":                 "hyperliquid",
+                "cached_at":              now,
+            }
+            with _HL_LOCK:
+                _HL_CACHE[asset_name] = entry
+            if asset_name == coin.upper():
+                result = entry
         if result is None:
-            result = {"error": f"{coin} not found on Hyperliquid", "signal": "UNKNOWN", "cached_at": now}
+            result = {"error": f"{coin} not found on Hyperliquid",
+                      "signal": "UNKNOWN", "cached_at": now}
+            with _HL_LOCK:
+                _HL_CACHE[coin] = result
     except Exception as e:
         logging.debug("Hyperliquid stats failed for %s: %s", coin, e)
         result = {"error": str(e), "signal": "UNKNOWN", "cached_at": now}
+        with _HL_LOCK:
+            _HL_CACHE[coin] = result
 
-    with _HL_LOCK:
-        _HL_CACHE[coin] = result
     return result
 
 
 def get_hyperliquid_batch(pairs: list) -> dict:
     """
     Fetch Hyperliquid stats for multiple coins efficiently.
-    The first call fetches all assets in one API request; subsequent calls are cache hits.
+    Audit 2026-05-02 C6: the first call now fully populates the cache
+    for every coin in the response; subsequent reads inside the dict
+    comprehension hit the cache rather than re-POSTing /info N times.
     """
     if pairs:
         get_hyperliquid_stats(pairs[0])  # warms the full cache in one call

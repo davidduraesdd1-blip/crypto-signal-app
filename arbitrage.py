@@ -322,14 +322,54 @@ def compute_spot_spread(pair: str) -> dict:
     """
     prices = get_spot_prices(pair)
 
+    # Audit 2026-05-02 C8 (Image 5): when there's no profitable arb,
+    # the legacy NO_ARB return still left buy/sell exchange + price as
+    # None. The Spot Spread table then rendered "—" in those columns
+    # even though prices DID exist on multiple exchanges — the user
+    # could see "All Prices" populated but had no idea which exchange
+    # was cheapest vs most expensive. Now compute the min-by-ask /
+    # max-by-bid pair as a non-actionable diagnostic so the table
+    # surfaces the real price differential even below threshold.
+    def _diagnostic_pair() -> tuple[str | None, str | None, float | None, float | None]:
+        """Pick min-ask exchange and max-bid exchange (must differ)."""
+        if not prices:
+            return None, None, None, None
+        # min ask
+        try:
+            asks = {k: v["ask"] for k, v in prices.items()
+                    if v.get("ask") and v["ask"] > 0}
+            bids = {k: v["bid"] for k, v in prices.items()
+                    if v.get("bid") and v["bid"] > 0}
+        except Exception:
+            return None, None, None, None
+        if not asks or not bids:
+            return None, None, None, None
+        min_ask_ex = min(asks, key=asks.get)
+        max_bid_ex = max(bids, key=bids.get)
+        # Force distinct exchanges so the diagnostic isn't degenerate.
+        if min_ask_ex == max_bid_ex and len(asks) > 1:
+            others = [k for k in asks if k != min_ask_ex]
+            min_ask_ex = min(others, key=lambda k: asks[k])
+        return min_ask_ex, max_bid_ex, asks[min_ask_ex], bids[max_bid_ex]
+
+    _diag_buy_ex, _diag_sell_ex, _diag_buy_p, _diag_sell_p = _diagnostic_pair()
+
     _empty = {
         "pair": pair,
-        "buy_exchange": None, "sell_exchange": None,
-        "buy_price": None,    "sell_price": None,
-        "gross_spread_pct": 0.0, "fees_pct": 0.0, "net_spread_pct": 0.0,
-        "signal": "NO_ARB",
-        "prices": {k: v["price"] for k, v in prices.items()},
-        "n_exchanges": len(prices),
+        "buy_exchange":  _diag_buy_ex,
+        "sell_exchange": _diag_sell_ex,
+        "buy_price":     round(_diag_buy_p, 8) if _diag_buy_p else None,
+        "sell_price":    round(_diag_sell_p, 8) if _diag_sell_p else None,
+        "gross_spread_pct": (
+            round((_diag_sell_p - _diag_buy_p) / _diag_buy_p * 100, 4)
+            if _diag_buy_p and _diag_sell_p and _diag_buy_p > 0 else 0.0
+        ),
+        "fees_pct":         0.0,
+        "net_spread_pct":   0.0,
+        "signal":           "NO_ARB",
+        "prices":           {k: v["price"] for k, v in prices.items()},
+        "n_exchanges":      len(prices),
+        "is_diagnostic":    True,  # marks these as min/max display, not an actionable arb
     }
 
     if len(prices) < 2:
