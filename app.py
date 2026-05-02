@@ -717,6 +717,46 @@ def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 4
         return None
 
 
+@st.cache_data(ttl=60, show_spinner=False, max_entries=10)
+def _sg_cached_live_prices_cascade(symbols_tuple: tuple) -> dict:
+    """Live-price cascade (CMC → CoinGecko → Kraken → OKX → MEXC).
+
+    C-fix-19 (2026-05-02): wraps `data_feeds.fetch_prices_cascade` with
+    a 60-second TTL. Used as the REST fallback when the WebSocket live-
+    price feed has no tick for a pair (pairs without OKX SWAP markets:
+    ZBCN, XDC, FLR, SHX, etc.).
+
+    Tier order matches CLAUDE.md §10 user-specified spec:
+      1. CoinMarketCap   (gated on COINMARKETCAP_API_KEY env / secret)
+      2. CoinGecko       (free, simple/price endpoint)
+      3. Kraken          (free, no auth, US-accessible)
+      4. OKX             (free spot ticker, no auth)
+      5. MEXC            (free, covers low-cap pairs CC/SHX/ZBCN/XDC)
+
+    Each tier respects existing rate limiters (_CMC_LIMITER /
+    _COINGECKO_LIMITER) so the chain is API-budget-safe by construction.
+    Symbols that fail all 5 tiers are absent from the result dict —
+    callers must handle the missing key gracefully.
+
+    The 60s cache window is shorter than the 5-min OHLCV cache (closer
+    to a "live" price), but long enough that even if every coin in
+    model.PAIRS misses the WebSocket, we burn at most one cascade call
+    per minute per session.
+
+    Args:
+        symbols_tuple: tuple of bare symbols, e.g. ("BTC", "ETH", "ZBCN").
+                       Tuple instead of list so st.cache_data can hash it.
+
+    Returns:
+        {SYMBOL: price_usd_float} for symbols that resolved.
+    """
+    try:
+        return data_feeds.fetch_prices_cascade(list(symbols_tuple)) or {}
+    except Exception as _e:
+        logger.debug("[App] cached cascade-prices fetch failed: %s", _e)
+        return {}
+
+
 @st.cache_data(ttl=8 * 3600, show_spinner=False, max_entries=120)
 def _sg_cached_token_unlocks(pair: str) -> dict:
     """Token unlock schedule per pair — 8h TTL (matches cryptorank
@@ -775,6 +815,7 @@ _AUTOSCAN_JOB_ID = "autoscan_job"
 
 
 _CALIBRATION_JOB_ID = "calibration_job"
+_COMPOSITE_RETUNE_JOB_ID = "composite_retune_job"
 
 
 def _get_scheduler() -> BackgroundScheduler:
@@ -795,6 +836,12 @@ def _get_scheduler() -> BackgroundScheduler:
         _scheduler.start()
         # Start alert threshold calibration job (runs every 6 hours)
         _setup_calibration_job()
+        # C-fix-21b (2026-05-02): start the composite-layer-weight
+        # Optuna retune job. Daily at 04:00 UTC — low-activity window,
+        # well outside the autoscan + calibration cadences. The job is
+        # a no-op when fewer than 50 resolved-feedback rows have layer
+        # scores (cold-start window after C-fix-21b ships).
+        _setup_composite_retune_job()
         # C-fix-12 (2026-05-02): bootstrap the autoscan job from saved
         # config on first scheduler init. Without this, autoscan was
         # only registered when the user opened Settings → Dev Tools,
@@ -850,6 +897,55 @@ def _setup_calibration_job():
             id=_CALIBRATION_JOB_ID,
             replace_existing=True,
             next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+
+def _setup_composite_retune_job():
+    """C-fix-21b (2026-05-02): schedule the daily Optuna composite-
+    layer-weight retune. Runs at 04:00 UTC each day — low-activity
+    window, well outside the autoscan / calibration cadences.
+
+    Per-call work: reads resolved feedback (last 90d), runs 100
+    Optuna trials, writes learned weights to alerts_config.json,
+    invalidates the composite_signal in-memory cache. ~5-15s
+    wall-clock when data is sufficient. No-op when fewer than 50
+    resolved rows have layer scores."""
+    def _run_composite_retune():
+        try:
+            import composite_weight_optimizer
+            result = composite_weight_optimizer.retune_layer_weights()
+            _status = result.get("status", "?")
+            if _status == "ok":
+                logging.info(
+                    "[CompositeRetune] OK: n=%d loss %.4f→%.4f Δ=%.4f weights=%s",
+                    result.get("n_samples", 0),
+                    result.get("loss_old", 0.0) or 0.0,
+                    result.get("loss_new", 0.0) or 0.0,
+                    result.get("improvement", 0.0) or 0.0,
+                    result.get("new_weights"),
+                )
+            elif _status == "no_op":
+                logging.info(
+                    "[CompositeRetune] no-op: %s",
+                    result.get("reason", ""),
+                )
+            else:
+                logging.warning(
+                    "[CompositeRetune] %s: %s", _status, result.get("reason", "")
+                )
+        except Exception as _e:
+            logging.warning("[CompositeRetune] Failed: %s", _e)
+
+    sched = _scheduler
+    if sched is not None and not sched.get_job(_COMPOSITE_RETUNE_JOB_ID):
+        # Cron-style trigger at 04:00 UTC daily.
+        sched.add_job(
+            _run_composite_retune,
+            trigger="cron",
+            hour=4,
+            minute=0,
+            id=_COMPOSITE_RETUNE_JOB_ID,
+            replace_existing=True,
         )
 
 
@@ -2433,25 +2529,34 @@ def page_dashboard():
             # keyed on r.get("pair") which always returned None,
             # collapsing the dict to `{None: <last row>}` and dropping
             # every row on every customize-save.
+            # C-fix-19 (2026-05-02): batch the REST live-price cascade
+            # into ONE call before building rows. The cascade walks
+            # CMC → CoinGecko → Kraken → OKX → MEXC and respects per-
+            # tier rate limiters; calling it once with the union of
+            # the seed-pairs AND any user-customized watchlist pairs
+            # preserves the API budget regardless of the user's
+            # selection. Cached 60s — after a tick, the WebSocket
+            # catches up for pairs with OKX SWAP markets, and the
+            # cascade keeps the others fresh.
+            _wl_seed_pairs = list(model.PAIRS[:6])
+            _wl_user_pairs = list(st.session_state.get("watchlist_pairs") or [])
+            _wl_all_syms = tuple(sorted({
+                p.split("/")[0].upper()
+                for p in (_wl_seed_pairs + _wl_user_pairs)
+                if p
+            }))
+            _wl_cascade_prices = _sg_cached_live_prices_cascade(_wl_all_syms)
+
             def _build_wl_row(_wp: str) -> dict:
-                # C-fix-16 (2026-05-02): the WebSocket primary feed
-                # (OKX SWAP tickers) silently drops pairs that don't have
-                # a perpetual market — ZBCN, XDC, FLR, SHX show "—" for
-                # price even though their sparkline closes ARE fetched
-                # from the REST OHLCV chain. Use the last sparkline close
-                # as a price fallback so every watchlist pair shows SOME
-                # current-ish price instead of a dash. The closes are
-                # 1h-bar daily-fetched data so the price is at most 1
-                # hour stale — acceptable for a watchlist row, and the
-                # sparkline visual already implicitly tells the user
-                # this is recent-history data.
-                #
-                # The proper fix (full REST live-price fallback chain
-                # CMC → CoinGecko → Kraken → OKX REST) is queued as a
-                # separate follow-up because it's MEDIUM effort and
-                # touches the websocket_feeds.py + data_feeds.py
-                # boundary. This is the band-aid that closes the visible
-                # gap NOW without that scope.
+                # 3-tier price fallback chain:
+                #   1. WebSocket live tick (OKX SWAP, primary)
+                #   2. REST cascade   (CMC → CG → Kraken → OKX → MEXC)
+                #   3. Sparkline last close (REST OHLCV last bar)
+                # Whichever tier resolves first wins. The cascade was
+                # added in C-fix-19 (2026-05-02) — it's the proper fix
+                # for pairs without OKX SWAP markets (ZBCN/XDC/FLR/SHX).
+                # The sparkline tier from C-fix-16 stays as the safety
+                # net for pairs the cascade can't resolve either.
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
@@ -2461,17 +2566,21 @@ def page_dashboard():
                     logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
                     _closes = []
                 _pts = _spark_points_from_closes(_closes)
-                # Change-pct fallback (existing, C-fix-09): derive 24h %
-                # from the first vs last sparkline close.
+                # Change-pct fallback (C-fix-09): derive 24h % from
+                # first vs last sparkline close.
                 if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
                     try:
                         _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
                     except Exception:
                         pass
-                # C-fix-16: price fallback — if WebSocket has nothing
-                # AND we have at least one sparkline close, use the
-                # most-recent close. Mirror the existing change_pct
-                # fallback pattern.
+                # Tier 2 (C-fix-19): REST cascade lookup.
+                if _price is None:
+                    _sym = _wp.split("/")[0].upper()
+                    _cascade_px = _wl_cascade_prices.get(_sym)
+                    if _cascade_px and float(_cascade_px) > 0:
+                        _price = float(_cascade_px)
+                # Tier 3 (C-fix-16): sparkline last close as final
+                # safety net.
                 if _price is None and _closes:
                     try:
                         _price = float(_closes[-1])
@@ -2796,6 +2905,35 @@ def _run_scan_thread():
             model.run_feedback_loop()
         except Exception as _fb_err:
             logging.warning("Feedback loop error: %s", _fb_err)
+        # C-fix-20b (2026-05-02): auto-backtest after every scan.
+        # Per user direction: every scan (manual or scheduled) should
+        # trigger a backtest so the Composite-backtest card always
+        # reflects the latest signal-vs-price reality. Sequential
+        # in-thread (not parallel) so we never double-burn the API
+        # rate-limit budget — the scan already used its quota for the
+        # 15-min interval.
+        #
+        # run_backtest() reads daily_signals (just-appended above) +
+        # historical OHLCV (cached from scan), walks signals → exits,
+        # writes per-trade rows to backtest_trades. Total elapsed:
+        # ~10-30s on a populated DB. The user-facing scan-progress
+        # banner does not change — this runs after the scan-complete
+        # event paints, so the UI repaints with fresh prices first
+        # then the backtest card flips a few seconds later.
+        try:
+            _bt_metrics = model.run_backtest()
+            if _bt_metrics:
+                logging.info(
+                    "[AutoBT] post-scan backtest complete: %d trades, "
+                    "total_return=%.2f%%",
+                    _bt_metrics.get("total_trades", 0) or 0,
+                    float(_bt_metrics.get("total_return", 0) or 0),
+                )
+            else:
+                logging.debug("[AutoBT] post-scan backtest skipped — "
+                              "insufficient signal history")
+        except Exception as _bt_err:
+            logging.warning("[AutoBT] post-scan backtest error: %s", _bt_err)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         _write_scan_results(results)
         audit("scan_complete", pairs=len(results), timestamp=ts)
@@ -3620,6 +3758,133 @@ def page_config():
             st.info(f"Scheduler active — next auto-scan fires in **{_m}m {_s}s**")
         else:
             st.caption("Scheduler inactive — enable via the sidebar ⏰ Auto-Scan toggle.")
+
+        # ── Math Model Variables (C-fix-22, 2026-05-02) ────────────────────────
+        # Per user direction: "the only things that should exposed and
+        # open for change should be the variables that are being used
+        # in the calculations". This section surfaces the LIVE 4-layer
+        # composite-signal weights and the (research-fixed) regime-
+        # override weights for transparency. The auto-tuned NORMAL
+        # weights are view-only at every level; CRISIS/TRENDING/RANGING
+        # are fixed by research and cannot be edited (they encode market-
+        # mode-specific dynamics that hand-tuning got right). All
+        # feedback-loop calculations remain hidden — only the resulting
+        # parameters are surfaced.
+        st.markdown("---")
+        _ui.section_header(
+            "Math Model Variables",
+            "Composite-signal layer weights — auto-tuned daily by feedback loop",
+            icon="🧮",
+        )
+        try:
+            import composite_signal as _cs
+            _live_weights = _cs._current_layer_weights()
+            _defaults = {
+                "technical": _cs._DEFAULT_W_TECHNICAL,
+                "macro":     _cs._DEFAULT_W_MACRO,
+                "sentiment": _cs._DEFAULT_W_SENTIMENT,
+                "onchain":   _cs._DEFAULT_W_ONCHAIN,
+            }
+            _is_default = all(
+                abs(_live_weights[k] - _defaults[k]) < 1e-6 for k in _defaults
+            )
+            st.markdown(
+                f'<div style="font-size:12.5px;color:var(--text-muted);'
+                f'margin-bottom:10px;">Active 4-layer weights driving the '
+                f'NORMAL-regime composite signal. {"Currently at research defaults — feedback loop has not yet learned overrides." if _is_default else "Currently using feedback-loop-learned overrides."}</div>',
+                unsafe_allow_html=True,
+            )
+            _mw1, _mw2, _mw3, _mw4 = st.columns(4)
+            for _col, _key, _label in (
+                (_mw1, "technical", "Technical"),
+                (_mw2, "macro", "Macro"),
+                (_mw3, "sentiment", "Sentiment"),
+                (_mw4, "onchain", "On-chain"),
+            ):
+                _v = float(_live_weights.get(_key, 0.0))
+                _d = float(_defaults.get(_key, 0.0))
+                _delta_pct = (_v - _d) * 100  # in percentage points
+                _delta_str = (
+                    f"<span style=\"color:var(--text-muted);font-size:11px;\">at default</span>"
+                    if abs(_delta_pct) < 0.5
+                    else (
+                        f"<span style=\"color:var(--success);font-size:11px;\">"
+                        f"+{_delta_pct:.1f}pp vs default</span>"
+                        if _delta_pct > 0
+                        else f"<span style=\"color:var(--danger);font-size:11px;\">"
+                             f"{_delta_pct:.1f}pp vs default</span>"
+                    )
+                )
+                _col.markdown(
+                    f'<div class="ds-card" style="padding:14px;text-align:center;">'
+                    f'<div style="font-size:11px;color:var(--text-muted);'
+                    f'text-transform:uppercase;letter-spacing:0.05em;'
+                    f'margin-bottom:6px;">{_label}</div>'
+                    f'<div style="font-size:22px;font-weight:600;'
+                    f'color:var(--text-primary);font-family:var(--font-mono);">'
+                    f'{_v:.3f}</div>'
+                    f'<div style="margin-top:4px;">{_delta_str}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Manual retune button — admin-only convenience for testing.
+            # Only show at Advanced level so beginners aren't tempted.
+            if st.session_state.get("user_level") == "advanced":
+                _rt_col1, _rt_col2 = st.columns([1, 3])
+                with _rt_col1:
+                    if st.button("🔄 Retune now",
+                                 key="composite_retune_now",
+                                 help="Manually trigger an Optuna retune of the 4 layer weights. Normally runs daily at 04:00 UTC."):
+                        try:
+                            import composite_weight_optimizer as _cwo
+                            with st.spinner("Running Optuna retune…"):
+                                _result = _cwo.retune_layer_weights()
+                            _status = _result.get("status", "?")
+                            if _status == "ok":
+                                st.success(
+                                    f"Retune OK · n={_result.get('n_samples')} samples · "
+                                    f"loss {_result.get('loss_old', 0):.4f} → "
+                                    f"{_result.get('loss_new', 0):.4f} "
+                                    f"(Δ={_result.get('improvement', 0):.4f})"
+                                )
+                            elif _status == "no_op":
+                                st.info(f"No-op: {_result.get('reason', '')}")
+                            else:
+                                st.warning(f"{_status}: {_result.get('reason', '')}")
+                        except Exception as _e_rt:
+                            st.error(f"Retune failed: {_e_rt}")
+                with _rt_col2:
+                    st.caption(
+                        "Manual retune for diagnostic use. The daily 04:00 UTC "
+                        "scheduled job runs unconditionally — it's a no-op when "
+                        "fewer than 50 resolved-feedback rows have layer scores."
+                    )
+
+            # Regime override table — view-only.
+            with st.expander("Regime overrides (research-fixed)", expanded=False):
+                st.caption(
+                    "These weights override the NORMAL baseline when the "
+                    "market enters CRISIS / TRENDING / RANGING regimes. "
+                    "They're NOT auto-tuned — research / academic literature "
+                    "established each regime's optimal layer balance and "
+                    "the feedback signal in each is too sparse to retune "
+                    "reliably. Source citations live in composite_signal.py "
+                    "lines 47-58."
+                )
+                _regime_table = _cs._REGIME_WEIGHTS_BASE
+                _rt_md = ["| Regime | Technical | Macro | Sentiment | On-chain |",
+                          "|---|---|---|---|---|"]
+                for _rname, _rw in _regime_table.items():
+                    _rt_md.append(
+                        f"| **{_rname}** | {_rw['technical']:.2f} | "
+                        f"{_rw['macro']:.2f} | {_rw['sentiment']:.2f} | "
+                        f"{_rw['onchain']:.2f} |"
+                    )
+                st.markdown("\n".join(_rt_md))
+        except Exception as _mmv_err:
+            logger.warning("[Settings] math-model variables render failed: %s", _mmv_err)
+            st.caption("Math model variables temporarily unavailable.")
 
         st.markdown("---")
         save_col, reset_col = st.columns(2)

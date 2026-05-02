@@ -1172,14 +1172,16 @@ def watchlist_customize_btn(
 
 
 CANONICAL_TIMEFRAMES: tuple[str, ...] = (
-    "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w",
+    "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M",
 )
-"""C-fix-04 (2026-05-01): canonical 8-cell timeframe set the Signals
-page strip always renders. Mockup `sibling-family-crypto-signal-SIGNALS.html`
-specifies these 8 cells. The live engine may scan a smaller subset
-(e.g. `model.TIMEFRAMES = ["1h","4h","1d","1w"]`); the strip greys out
-the cells the engine isn't actively scanning so the user sees the full
-spec but can't accidentally click into a timeframe with no data."""
+"""C-fix-04 (2026-05-01) + C-fix-20a (2026-05-02): canonical timeframe
+set the Signals page strip renders. Originally 8 cells per the mockup;
+extended to 9 cells with the addition of '1M' (monthly) per user
+direction — the engine now scans 1M alongside 1h/4h/1d/1w. The 4
+short timeframes (1m/5m/15m/30m) are deliberately kept as visually-
+disabled cells: they consume no API budget (the engine doesn't scan
+them) and surface where the user could opt into scalping coverage if
+API budgets allow in future."""
 
 
 def multi_timeframe_strip(

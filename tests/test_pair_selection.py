@@ -260,26 +260,29 @@ def test_multi_timeframe_strip_first_click_writes_session_state(fake_streamlit):
     assert fake_streamlit.session_state["tf"] == "4h"
 
 
-# ── C-fix-04: canonical 8-cell strip + disabled-cell behaviour ──────────
+# ── C-fix-04 + C-fix-20a: canonical 9-cell strip + disabled-cell behaviour ─
 
-def test_canonical_timeframes_is_eight_cells_in_mockup_order():
-    """C-fix-04 (2026-05-01): the canonical timeframe set must be the 8
-    cells specified in docs/mockups/sibling-family-crypto-signal-SIGNALS.html
-    in display order. Any reorder risks breaking visual parity."""
+def test_canonical_timeframes_is_nine_cells_in_display_order():
+    """C-fix-04 (2026-05-01) + C-fix-20a (2026-05-02): the canonical
+    timeframe set is the 9 cells the Signals strip renders in display
+    order. Originally 8 cells per the mockup; the C-fix-20a follow-up
+    added '1M' (monthly) when the engine was extended to scan that
+    timeframe alongside 1h/4h/1d/1w. Any reorder risks breaking
+    visual parity."""
     from ui.sidebar import CANONICAL_TIMEFRAMES
     assert CANONICAL_TIMEFRAMES == (
-        "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w",
+        "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M",
     )
 
 
-def test_multi_timeframe_strip_default_renders_eight_cells(fake_streamlit):
-    """C-fix-04: with no `timeframes` argument, the strip falls back to
-    the canonical 8-cell set (matches the Signals mockup spec)."""
+def test_multi_timeframe_strip_default_renders_nine_cells(fake_streamlit):
+    """C-fix-04 + C-fix-20a: with no `timeframes` argument, the strip
+    falls back to the canonical 9-cell set."""
     from ui.sidebar import multi_timeframe_strip
     multi_timeframe_strip(active="1d", key="tf")
     labels = [b["label"] for b in fake_streamlit.button_calls
               if b["key"].startswith("_tfs_tf_")]
-    assert labels == ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+    assert labels == ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"]
 
 
 def test_multi_timeframe_strip_disabled_cells_render_disabled(fake_streamlit):

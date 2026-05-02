@@ -33,10 +33,115 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ─── Layer weights (must sum to 1.0) ─────────────────────────────────────────
-_W_TECHNICAL = 0.20   # Layer 1: BTC TA (RSI, MA cross, momentum)
-_W_MACRO     = 0.20   # Layer 2: macro environment (reduced — on-chain more predictive for crypto)
-_W_SENTIMENT = 0.25   # Layer 3: market sentiment
-_W_ONCHAIN   = 0.35   # Layer 4: on-chain fundamentals (increased — harder to arbitrage, unique to crypto)
+# Default values — research-backed starting point. The 4 weights act as
+# the NORMAL-regime baseline; CRISIS/TRENDING/RANGING regimes override
+# them via _REGIME_WEIGHTS below.
+#
+# C-fix-21a (2026-05-02): these defaults are now the FALLBACK only.
+# The Optuna-driven feedback loop (C-fix-21b) writes learned weights
+# to alerts_config.json["composite_layer_weights"] daily, and the
+# `_current_layer_weights()` helper below loads them at signal-compute
+# time with a 30s in-memory cache. When no learned weights exist (fresh
+# install, alerts_config.json missing key, validation failure), the
+# defaults stand. The composite signal stays algorithmic — it's just
+# parameterized by data-driven weights instead of static constants.
+_DEFAULT_W_TECHNICAL = 0.20   # Layer 1: BTC TA (RSI, MA cross, momentum)
+_DEFAULT_W_MACRO     = 0.20   # Layer 2: macro environment
+_DEFAULT_W_SENTIMENT = 0.25   # Layer 3: market sentiment
+_DEFAULT_W_ONCHAIN   = 0.35   # Layer 4: on-chain fundamentals
+
+# Backwards-compat module-level constants — preserved so any external
+# importer (or older test) reading e.g. `composite_signal._W_TECHNICAL`
+# still gets a value. New code should call _current_layer_weights().
+_W_TECHNICAL = _DEFAULT_W_TECHNICAL
+_W_MACRO     = _DEFAULT_W_MACRO
+_W_SENTIMENT = _DEFAULT_W_SENTIMENT
+_W_ONCHAIN   = _DEFAULT_W_ONCHAIN
+
+# In-memory cache for the learned weights. Refreshed every 30s so
+# Optuna-tuned weight updates propagate within one cache tick without
+# requiring a process restart.
+_LAYER_WEIGHT_CACHE_TTL = 30.0
+_layer_weight_cache: dict = {"ts": 0.0, "weights": None}
+
+
+def _current_layer_weights() -> dict:
+    """Return the active 4-layer weight dict, applying learned weights
+    from alerts_config.json when available and valid.
+
+    Shape: {"technical": float, "macro": float, "sentiment": float,
+    "onchain": float}. Values guaranteed to sum to 1.0 (±0.01).
+
+    Lookup order:
+      1. In-memory cache (30s TTL) — avoid disk reads on every call.
+      2. alerts_config.json["composite_layer_weights"] — the Optuna-
+         tuned values if the daily-retune job has populated them.
+      3. Module defaults (_DEFAULT_W_*) — research baseline.
+
+    Validation: each value must be a finite float in [0, 1] and the
+    four values must sum to within 0.01 of 1.0. Any failure falls
+    through to defaults so a bad config never breaks signal computation.
+    """
+    import time
+    _now = time.time()
+    if (
+        _layer_weight_cache["weights"] is not None
+        and (_now - _layer_weight_cache["ts"]) < _LAYER_WEIGHT_CACHE_TTL
+    ):
+        return _layer_weight_cache["weights"]
+
+    _w = {
+        "technical": _DEFAULT_W_TECHNICAL,
+        "macro":     _DEFAULT_W_MACRO,
+        "sentiment": _DEFAULT_W_SENTIMENT,
+        "onchain":   _DEFAULT_W_ONCHAIN,
+    }
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _cfg_path = _Path(__file__).resolve().parent / "alerts_config.json"
+        if _cfg_path.exists():
+            _cfg = _json.loads(_cfg_path.read_text(encoding="utf-8"))
+            _learned = (_cfg or {}).get("composite_layer_weights")
+            if isinstance(_learned, dict):
+                _candidate = {}
+                _ok = True
+                for _k in ("technical", "macro", "sentiment", "onchain"):
+                    _v = _learned.get(_k)
+                    try:
+                        _vf = float(_v)
+                    except Exception:
+                        _ok = False
+                        break
+                    if not (0.0 <= _vf <= 1.0):
+                        _ok = False
+                        break
+                    _candidate[_k] = _vf
+                if _ok and abs(sum(_candidate.values()) - 1.0) <= 0.01:
+                    _w = _candidate
+                    logger.debug(
+                        "[composite] Using learned layer weights: %s", _candidate
+                    )
+                else:
+                    logger.warning(
+                        "[composite] composite_layer_weights in alerts_config.json "
+                        "failed validation; falling back to defaults"
+                    )
+    except Exception as _e:
+        logger.debug("[composite] _current_layer_weights load failed: %s", _e)
+
+    _layer_weight_cache["ts"] = _now
+    _layer_weight_cache["weights"] = _w
+    return _w
+
+
+def reload_layer_weights() -> dict:
+    """Force-invalidate the layer-weight cache and reload from disk.
+    Called by the Optuna retuning job after it writes new weights.
+    Returns the freshly-loaded weights for caller logging."""
+    _layer_weight_cache["ts"] = 0.0
+    _layer_weight_cache["weights"] = None
+    return _current_layer_weights()
 
 
 def _clamp(val: float, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -57,13 +162,34 @@ def _clamp(val: float, lo: float = -1.0, hi: float = 1.0) -> float:
 #     Source: Wilder (1978); mean-reversion dominates; RSI unreliable (see A5).
 #   NORMAL   (default): No extreme condition — base weights.
 
-_REGIME_WEIGHTS = {
+_REGIME_WEIGHTS_BASE = {
     #                        TA     MAC   SENT   OC
     "CRISIS":   {"technical": 0.10, "macro": 0.15, "sentiment": 0.25, "onchain": 0.50},
     "TRENDING": {"technical": 0.30, "macro": 0.20, "sentiment": 0.20, "onchain": 0.30},
     "RANGING":  {"technical": 0.10, "macro": 0.20, "sentiment": 0.30, "onchain": 0.40},
-    "NORMAL":   {"technical": _W_TECHNICAL, "macro": _W_MACRO, "sentiment": _W_SENTIMENT, "onchain": _W_ONCHAIN},
+    # NORMAL is computed dynamically from _current_layer_weights() so
+    # learned (Optuna-tuned) weights apply at signal-compute time.
 }
+
+
+def _regime_weights() -> dict:
+    """Return the full regime-weight table with NORMAL filled in from
+    `_current_layer_weights()` (which reads learned weights from
+    alerts_config.json with a 30s cache, falling back to defaults)."""
+    _w = _current_layer_weights()
+    _table = dict(_REGIME_WEIGHTS_BASE)
+    _table["NORMAL"] = {
+        "technical": _w["technical"], "macro": _w["macro"],
+        "sentiment": _w["sentiment"], "onchain":  _w["onchain"],
+    }
+    return _table
+
+
+# Backwards-compat: if any external caller reads _REGIME_WEIGHTS
+# directly, expose it as a snapshot of the current regime-weight table.
+# The snapshot is computed at module-import time with the defaults; for
+# a live view, use `_regime_weights()` instead.
+_REGIME_WEIGHTS = _regime_weights()
 
 
 def _detect_regime(vix: float | None, adx_14: float | None) -> tuple[str, float, float, float, float]:
@@ -83,7 +209,11 @@ def _detect_regime(vix: float | None, adx_14: float | None) -> tuple[str, float,
         if vix is None and adx_14 is None:
             logger.debug("[composite] Both VIX and ADX unavailable — defaulting to NORMAL regime")
         regime = "NORMAL"
-    w = _REGIME_WEIGHTS[regime]
+    # Use the live regime-weight table so NORMAL picks up Optuna-tuned
+    # weights from alerts_config.json. CRISIS/TRENDING/RANGING are
+    # research-fixed and don't auto-tune (regime overrides take priority
+    # over learned base weights — they encode different market dynamics).
+    w = _regime_weights()[regime]
     return regime, w["technical"], w["macro"], w["sentiment"], w["onchain"]
 
 

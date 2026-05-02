@@ -51,16 +51,22 @@ def test_legacy_removed_c10_sentinel_present():
     )
 
 
-def test_app_py_size_dropped_below_8500():
+def test_app_py_size_dropped_below_legacy_bound():
     """Spec: 'line count drops by ~2500'. Pre-C10 app.py was ~10,667
-    lines; post-cut should be roughly 7,800-8,400. Generous upper
-    bound here so future feature work doesn't trip this guard
-    needlessly — point is just to flag if someone restores the
-    legacy block."""
+    lines; post-cut should stay well below that. Generous upper bound
+    here so future feature work doesn't trip this guard needlessly —
+    the point is just to flag if someone restores the legacy ~2800-
+    line tabs block.
+
+    Bound history:
+      8500  — initial post-C10 cut (2026-04-30)
+      9500  — raised after the C-fix-19/20/21/22 sprint added auto-
+              backtest chain, layer-weight loading, math-model UI
+              section, etc. (2026-05-02)"""
     s = _src()
     n = len(s.splitlines())
-    assert n < 8500, (
-        f"app.py is {n} lines — expected < 8500 after C10 deletion. "
-        f"If a feature genuinely needs to push past this, raise the "
-        f"bound; otherwise the legacy tabs may have crept back."
+    assert n < 9500, (
+        f"app.py is {n} lines — expected < 9500. If a feature "
+        f"genuinely needs to push past this, raise the bound; "
+        f"otherwise the legacy tabs may have crept back."
     )

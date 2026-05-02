@@ -503,6 +503,33 @@ def test_settings_page_surfaces_section_12_compliance_banner():
 
 # ── C-fix-15: duplicate Auto-Scan UI removed from sidebar tools ────────
 
+def test_settings_page_surfaces_math_model_variables():
+    """C-fix-22 (2026-05-02): Settings → Dev Tools must surface a
+    "Math Model Variables" section showing the live 4 layer weights
+    + a manual retune button (Advanced-only) + the research-fixed
+    regime overrides. This is the user-facing transparency on what
+    the feedback loop is doing — calculations stay hidden, only
+    parameters are exposed."""
+    src = _app_source()
+    assert "Math Model Variables" in src, (
+        "Settings page no longer surfaces the Math Model Variables "
+        "section. Users have no visibility into what the feedback "
+        "loop is tuning."
+    )
+    # The manual retune button must be Advanced-level gated.
+    assert 'st.session_state.get("user_level") == "advanced"' in src, (
+        "The manual retune button is no longer Advanced-level gated. "
+        "Beginner / Intermediate users could trigger expensive Optuna "
+        "runs by accident."
+    )
+    # And the regime overrides must render the fixed table.
+    assert "Regime overrides (research-fixed)" in src, (
+        "The CRISIS/TRENDING/RANGING regime override table is missing "
+        "from Settings. Without it users have no visibility into how "
+        "regime detection alters layer weights."
+    )
+
+
 def test_no_duplicate_autoscan_expander_in_sidebar_tools():
     """C-fix-15 (2026-05-02): the legacy "⏰ Auto-Scan" expander that
     used to live inside _render_relocated_sidebar_widgets is removed.
@@ -537,6 +564,38 @@ def test_no_duplicate_autoscan_expander_in_sidebar_tools():
     )
 
 
+def test_watchlist_uses_rest_cascade_for_price_fallback():
+    """C-fix-19 (2026-05-02): the watchlist must call the REST live-
+    price cascade (data_feeds.fetch_prices_cascade) as the secondary
+    fallback when the WebSocket has no tick. Order: CMC → CoinGecko
+    → Kraken → OKX → MEXC, matching CLAUDE.md §10 user-specified spec.
+    The sparkline last-close fallback (C-fix-16) is preserved as the
+    tertiary safety net.
+    """
+    src = _app_source()
+    # The cached cascade helper must exist.
+    assert "def _sg_cached_live_prices_cascade" in src, (
+        "_sg_cached_live_prices_cascade helper missing — REST cascade "
+        "won't be cached and could blow the rate-limit budget."
+    )
+    # And it must wrap fetch_prices_cascade.
+    helper_idx = src.find("def _sg_cached_live_prices_cascade")
+    helper_body = src[helper_idx : helper_idx + 2000]
+    assert "data_feeds.fetch_prices_cascade(" in helper_body, (
+        "_sg_cached_live_prices_cascade no longer calls "
+        "data_feeds.fetch_prices_cascade. The CMC→CG→Kraken→OKX→MEXC "
+        "chain won't fire."
+    )
+    # _build_wl_row must consult the cascade dict before falling back
+    # to the sparkline close.
+    wl_idx = src.find("def _build_wl_row")
+    wl_body = src[wl_idx : wl_idx + 4000]
+    assert "_wl_cascade_prices.get(" in wl_body, (
+        "_build_wl_row no longer reads from _wl_cascade_prices — the "
+        "REST cascade tier is dead, only WebSocket + sparkline remain."
+    )
+
+
 def test_watchlist_row_falls_back_to_sparkline_close_for_price():
     """C-fix-16 (2026-05-02): the WebSocket live-price feed (OKX SWAP
     tickers) silently drops pairs without active perpetual markets.
@@ -554,6 +613,39 @@ def test_watchlist_row_falls_back_to_sparkline_close_for_price():
         "when WebSocket has no live price. Pairs without OKX SWAP "
         "markets (ZBCN, XDC, FLR, SHX) will show '—' for price even "
         "though their sparkline data IS fetched from REST."
+    )
+
+
+def test_scan_thread_auto_runs_backtest_and_feedback_loop():
+    """C-fix-20b (2026-05-02): every scan completion (manual or
+    scheduled) must trigger model.run_feedback_loop() AND
+    model.run_backtest() in sequence, in the same background thread.
+    The order matters: feedback first (resolves outcomes for the
+    backtest data window), backtest second (walks fresh signals
+    against historical OHLCV)."""
+    src = _app_source()
+    # Locate the scan thread.
+    idx = src.find("def _run_scan_thread")
+    assert idx > 0, "_run_scan_thread not found"
+    body = src[idx : idx + 6000]
+    assert "model.run_feedback_loop()" in body, (
+        "_run_scan_thread no longer calls model.run_feedback_loop() — "
+        "feedback outcomes / agent weights / threshold calibration "
+        "won't update on scan completion."
+    )
+    assert "model.run_backtest()" in body, (
+        "_run_scan_thread no longer calls model.run_backtest() after "
+        "the feedback loop. Composite-backtest card will stay empty "
+        "between manual Backtester clicks."
+    )
+    # And the order must be feedback → backtest (feedback resolves
+    # outcomes that the backtest then walks).
+    fb_idx = body.find("model.run_feedback_loop()")
+    bt_idx = body.find("model.run_backtest()")
+    assert fb_idx < bt_idx, (
+        "Auto-backtest call now precedes the feedback loop. The order "
+        "must be: scan results → feedback (resolve outcomes) → "
+        "backtest (walk fresh data)."
     )
 
 
