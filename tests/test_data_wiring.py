@@ -537,6 +537,38 @@ def test_no_duplicate_autoscan_expander_in_sidebar_tools():
     )
 
 
+def test_watchlist_uses_rest_cascade_for_price_fallback():
+    """C-fix-19 (2026-05-02): the watchlist must call the REST live-
+    price cascade (data_feeds.fetch_prices_cascade) as the secondary
+    fallback when the WebSocket has no tick. Order: CMC → CoinGecko
+    → Kraken → OKX → MEXC, matching CLAUDE.md §10 user-specified spec.
+    The sparkline last-close fallback (C-fix-16) is preserved as the
+    tertiary safety net.
+    """
+    src = _app_source()
+    # The cached cascade helper must exist.
+    assert "def _sg_cached_live_prices_cascade" in src, (
+        "_sg_cached_live_prices_cascade helper missing — REST cascade "
+        "won't be cached and could blow the rate-limit budget."
+    )
+    # And it must wrap fetch_prices_cascade.
+    helper_idx = src.find("def _sg_cached_live_prices_cascade")
+    helper_body = src[helper_idx : helper_idx + 2000]
+    assert "data_feeds.fetch_prices_cascade(" in helper_body, (
+        "_sg_cached_live_prices_cascade no longer calls "
+        "data_feeds.fetch_prices_cascade. The CMC→CG→Kraken→OKX→MEXC "
+        "chain won't fire."
+    )
+    # _build_wl_row must consult the cascade dict before falling back
+    # to the sparkline close.
+    wl_idx = src.find("def _build_wl_row")
+    wl_body = src[wl_idx : wl_idx + 4000]
+    assert "_wl_cascade_prices.get(" in wl_body, (
+        "_build_wl_row no longer reads from _wl_cascade_prices — the "
+        "REST cascade tier is dead, only WebSocket + sparkline remain."
+    )
+
+
 def test_watchlist_row_falls_back_to_sparkline_close_for_price():
     """C-fix-16 (2026-05-02): the WebSocket live-price feed (OKX SWAP
     tickers) silently drops pairs without active perpetual markets.

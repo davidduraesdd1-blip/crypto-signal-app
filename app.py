@@ -717,6 +717,46 @@ def _sg_cached_ohlcv(exchange_id: str, pair: str, timeframe: str, limit: int = 4
         return None
 
 
+@st.cache_data(ttl=60, show_spinner=False, max_entries=10)
+def _sg_cached_live_prices_cascade(symbols_tuple: tuple) -> dict:
+    """Live-price cascade (CMC → CoinGecko → Kraken → OKX → MEXC).
+
+    C-fix-19 (2026-05-02): wraps `data_feeds.fetch_prices_cascade` with
+    a 60-second TTL. Used as the REST fallback when the WebSocket live-
+    price feed has no tick for a pair (pairs without OKX SWAP markets:
+    ZBCN, XDC, FLR, SHX, etc.).
+
+    Tier order matches CLAUDE.md §10 user-specified spec:
+      1. CoinMarketCap   (gated on COINMARKETCAP_API_KEY env / secret)
+      2. CoinGecko       (free, simple/price endpoint)
+      3. Kraken          (free, no auth, US-accessible)
+      4. OKX             (free spot ticker, no auth)
+      5. MEXC            (free, covers low-cap pairs CC/SHX/ZBCN/XDC)
+
+    Each tier respects existing rate limiters (_CMC_LIMITER /
+    _COINGECKO_LIMITER) so the chain is API-budget-safe by construction.
+    Symbols that fail all 5 tiers are absent from the result dict —
+    callers must handle the missing key gracefully.
+
+    The 60s cache window is shorter than the 5-min OHLCV cache (closer
+    to a "live" price), but long enough that even if every coin in
+    model.PAIRS misses the WebSocket, we burn at most one cascade call
+    per minute per session.
+
+    Args:
+        symbols_tuple: tuple of bare symbols, e.g. ("BTC", "ETH", "ZBCN").
+                       Tuple instead of list so st.cache_data can hash it.
+
+    Returns:
+        {SYMBOL: price_usd_float} for symbols that resolved.
+    """
+    try:
+        return data_feeds.fetch_prices_cascade(list(symbols_tuple)) or {}
+    except Exception as _e:
+        logger.debug("[App] cached cascade-prices fetch failed: %s", _e)
+        return {}
+
+
 @st.cache_data(ttl=8 * 3600, show_spinner=False, max_entries=120)
 def _sg_cached_token_unlocks(pair: str) -> dict:
     """Token unlock schedule per pair — 8h TTL (matches cryptorank
@@ -2433,25 +2473,34 @@ def page_dashboard():
             # keyed on r.get("pair") which always returned None,
             # collapsing the dict to `{None: <last row>}` and dropping
             # every row on every customize-save.
+            # C-fix-19 (2026-05-02): batch the REST live-price cascade
+            # into ONE call before building rows. The cascade walks
+            # CMC → CoinGecko → Kraken → OKX → MEXC and respects per-
+            # tier rate limiters; calling it once with the union of
+            # the seed-pairs AND any user-customized watchlist pairs
+            # preserves the API budget regardless of the user's
+            # selection. Cached 60s — after a tick, the WebSocket
+            # catches up for pairs with OKX SWAP markets, and the
+            # cascade keeps the others fresh.
+            _wl_seed_pairs = list(model.PAIRS[:6])
+            _wl_user_pairs = list(st.session_state.get("watchlist_pairs") or [])
+            _wl_all_syms = tuple(sorted({
+                p.split("/")[0].upper()
+                for p in (_wl_seed_pairs + _wl_user_pairs)
+                if p
+            }))
+            _wl_cascade_prices = _sg_cached_live_prices_cascade(_wl_all_syms)
+
             def _build_wl_row(_wp: str) -> dict:
-                # C-fix-16 (2026-05-02): the WebSocket primary feed
-                # (OKX SWAP tickers) silently drops pairs that don't have
-                # a perpetual market — ZBCN, XDC, FLR, SHX show "—" for
-                # price even though their sparkline closes ARE fetched
-                # from the REST OHLCV chain. Use the last sparkline close
-                # as a price fallback so every watchlist pair shows SOME
-                # current-ish price instead of a dash. The closes are
-                # 1h-bar daily-fetched data so the price is at most 1
-                # hour stale — acceptable for a watchlist row, and the
-                # sparkline visual already implicitly tells the user
-                # this is recent-history data.
-                #
-                # The proper fix (full REST live-price fallback chain
-                # CMC → CoinGecko → Kraken → OKX REST) is queued as a
-                # separate follow-up because it's MEDIUM effort and
-                # touches the websocket_feeds.py + data_feeds.py
-                # boundary. This is the band-aid that closes the visible
-                # gap NOW without that scope.
+                # 3-tier price fallback chain:
+                #   1. WebSocket live tick (OKX SWAP, primary)
+                #   2. REST cascade   (CMC → CG → Kraken → OKX → MEXC)
+                #   3. Sparkline last close (REST OHLCV last bar)
+                # Whichever tier resolves first wins. The cascade was
+                # added in C-fix-19 (2026-05-02) — it's the proper fix
+                # for pairs without OKX SWAP markets (ZBCN/XDC/FLR/SHX).
+                # The sparkline tier from C-fix-16 stays as the safety
+                # net for pairs the cascade can't resolve either.
                 _tick = (_live_prices or {}).get(_wp) or {}
                 _price = _tick.get("price") or _tick.get("last")
                 _chg = _tick.get("change_24h_pct") or _tick.get("change_pct")
@@ -2461,17 +2510,21 @@ def page_dashboard():
                     logger.debug("[Dashboard] sparkline fetch failed for %s: %s", _wp, _spark_err)
                     _closes = []
                 _pts = _spark_points_from_closes(_closes)
-                # Change-pct fallback (existing, C-fix-09): derive 24h %
-                # from the first vs last sparkline close.
+                # Change-pct fallback (C-fix-09): derive 24h % from
+                # first vs last sparkline close.
                 if _chg is None and _closes and len(_closes) >= 2 and _closes[0]:
                     try:
                         _chg = (_closes[-1] - _closes[0]) / _closes[0] * 100.0
                     except Exception:
                         pass
-                # C-fix-16: price fallback — if WebSocket has nothing
-                # AND we have at least one sparkline close, use the
-                # most-recent close. Mirror the existing change_pct
-                # fallback pattern.
+                # Tier 2 (C-fix-19): REST cascade lookup.
+                if _price is None:
+                    _sym = _wp.split("/")[0].upper()
+                    _cascade_px = _wl_cascade_prices.get(_sym)
+                    if _cascade_px and float(_cascade_px) > 0:
+                        _price = float(_cascade_px)
+                # Tier 3 (C-fix-16): sparkline last close as final
+                # safety net.
                 if _price is None and _closes:
                     try:
                         _price = float(_closes[-1])
