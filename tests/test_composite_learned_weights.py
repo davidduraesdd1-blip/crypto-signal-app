@@ -39,6 +39,17 @@ def _reset_cache():
     composite_signal._layer_weight_cache["weights"] = None
 
 
+@pytest.fixture(autouse=True)
+def _isolate_layer_weight_cache():
+    """Reset the layer-weight cache BEFORE and AFTER each test so
+    polluted cache state can't leak across tests (or contaminate
+    test_composite_signal_regression.py which runs in the same
+    pytest session)."""
+    _reset_cache()
+    yield
+    _reset_cache()
+
+
 # ── 1. Defaults preserved when no learned weights exist ──────────────────
 
 def test_default_weights_match_research_baseline(tmp_path, monkeypatch):
