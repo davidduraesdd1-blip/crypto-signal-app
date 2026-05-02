@@ -2079,10 +2079,35 @@ def get_glassnode_onchain(pair: str) -> dict:
         # sopr_adjusted is the industry standard for BTC on-chain signal clarity.
         # Source: Glassnode docs; CheckOnChain (2021): aSOPR ≈ 30% less noisy than SOPR.
         with ThreadPoolExecutor(max_workers=2) as _ex:
-            _sopr_fut = _ex.submit(_SESSION.get, f"{base}/indicators/sopr_adjusted", params=params, headers=headers, timeout=10)
-            _mvrv_fut = _ex.submit(_SESSION.get, f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
+            # Audit 2026-05-02 Phase 6 #36: use _NO_RETRY_SESSION here.
+            # Glassnode free-tier 429 means daily cap exhausted — the
+            # legacy _SESSION retry adapter retried 3× wasting budget
+            # we don't have. Single fetch + cache the rate-limited
+            # state for 30 min so the page doesn't hammer.
+            _sopr_fut = _ex.submit(_NO_RETRY_SESSION.get, f"{base}/indicators/sopr_adjusted", params=params, headers=headers, timeout=10)
+            _mvrv_fut = _ex.submit(_NO_RETRY_SESSION.get, f"{base}/market/mvrv_z_score", params=params, headers=headers, timeout=10)
             sopr_resp = _sopr_fut.result()
             mvrv_resp = _mvrv_fut.result()
+
+        # Detect rate-limited or geo-blocked early so the on-chain
+        # status pill can render the truthful state.
+        rate_limited = (sopr_resp.status_code == 429 or mvrv_resp.status_code == 429)
+        geo_blocked  = (sopr_resp.status_code in (451, 403) or mvrv_resp.status_code in (451, 403))
+        if rate_limited or geo_blocked:
+            err_code = "429" if rate_limited else "geo_blocked"
+            result = {
+                "signal": "N/A", "sopr": None, "mvrv_z": None,
+                "source": "glassnode",
+                "error": "rate-limited" if rate_limited else "geo-blocked",
+                "error_code": err_code,
+                "_ts": now,
+                # Rate-limited entries cache for 30 min so we don't
+                # re-hit a known-exhausted budget every page render.
+                "_rl_until": now + (1800 if rate_limited else 3600),
+            }
+            with _GN_LOCK:
+                _GN_CACHE[pair] = result
+            return result
 
         sopr = mvrv_z = None
         try:
@@ -5090,7 +5115,10 @@ def fetch_coinalyze_funding(symbols: list | None = None) -> dict:
             logging.debug("[Coinalyze] funding fetch failed: %s", e)
         return None
 
-    cached = _macro_cached_get("coinalyze_funding", 300, _fetch)
+    # Audit 2026-05-02 Phase 6 #34: TTL was 300s (5 min) but CLAUDE.md
+    # §12 spec is 600s (10 min). Bumped — funding rate is a slow-moving
+    # signal and 300s halved the budget vs spec.
+    cached = _macro_cached_get("coinalyze_funding", 600, _fetch)
     return cached if cached else {}
 
 
@@ -8166,6 +8194,17 @@ def clear_all_module_caches() -> None:
         _FNG2_CACHE.update({"value": None, "label": None, "_ts": 0.0})
     except Exception as _fng2_err:
         logging.debug("[CacheClear] FNG2 cache reset failed: %s", _fng2_err)
+    # Audit 2026-05-02 Phase 6 #32: requests-cache HTTP session cache
+    # was previously NOT cleared by Refresh All Data. Stale 60-3600s
+    # cached HTTP responses survived a forced refresh — clearing it
+    # so Refresh All Data is genuinely "all".
+    for _sess in (_SESSION, _FRED_SESSION, _NO_RETRY_SESSION):
+        try:
+            cache = getattr(_sess, "cache", None)
+            if cache is not None and hasattr(cache, "clear"):
+                cache.clear()
+        except Exception as _sc_err:
+            logging.debug("[CacheClear] requests-cache session clear failed: %s", _sc_err)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -91,15 +91,33 @@ _REQUEST_TIMEOUT = 8  # seconds
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
 def _fetch_cryptopanic(currencies: list[str]) -> list[str]:
-    """Fetch recent headlines from CryptoPanic for given currency tickers."""
+    """Fetch recent headlines from CryptoPanic for given currency tickers.
+
+    Audit 2026-05-02 Phase 6 #35: legacy code only sent `public=true`
+    and ignored config.CRYPTOPANIC_API_KEY. Public tier is ~50 req/24h
+    vs 50,000 req/month for the authenticated tier — pass the key
+    when present.
+    """
     # NEWS-04: guard against empty list to prevent IndexError
     if not currencies:
         return []
     ticker = currencies[0]  # use the short ticker (e.g. BTC)
     try:
+        # Pull CryptoPanic key from config (env var or alerts_config.json).
+        _cp_key = ""
+        try:
+            import config as _cfg
+            _cp_key = (getattr(_cfg, "CRYPTOPANIC_API_KEY", "") or "").strip()
+        except Exception:
+            _cp_key = ""
+        params: dict = {"currencies": ticker, "kind": "news"}
+        if _cp_key:
+            params["auth_token"] = _cp_key
+        else:
+            params["public"] = "true"
         resp = _SESSION.get(
             _CRYPTOPANIC_BASE,
-            params={"public": "true", "currencies": ticker, "kind": "news"},
+            params=params,
             timeout=_REQUEST_TIMEOUT,
         )
         if resp.status_code != 200:
