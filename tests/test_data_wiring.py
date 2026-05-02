@@ -503,6 +503,33 @@ def test_settings_page_surfaces_section_12_compliance_banner():
 
 # ── C-fix-15: duplicate Auto-Scan UI removed from sidebar tools ────────
 
+def test_settings_page_surfaces_math_model_variables():
+    """C-fix-22 (2026-05-02): Settings → Dev Tools must surface a
+    "Math Model Variables" section showing the live 4 layer weights
+    + a manual retune button (Advanced-only) + the research-fixed
+    regime overrides. This is the user-facing transparency on what
+    the feedback loop is doing — calculations stay hidden, only
+    parameters are exposed."""
+    src = _app_source()
+    assert "Math Model Variables" in src, (
+        "Settings page no longer surfaces the Math Model Variables "
+        "section. Users have no visibility into what the feedback "
+        "loop is tuning."
+    )
+    # The manual retune button must be Advanced-level gated.
+    assert 'st.session_state.get("user_level") == "advanced"' in src, (
+        "The manual retune button is no longer Advanced-level gated. "
+        "Beginner / Intermediate users could trigger expensive Optuna "
+        "runs by accident."
+    )
+    # And the regime overrides must render the fixed table.
+    assert "Regime overrides (research-fixed)" in src, (
+        "The CRISIS/TRENDING/RANGING regime override table is missing "
+        "from Settings. Without it users have no visibility into how "
+        "regime detection alters layer weights."
+    )
+
+
 def test_no_duplicate_autoscan_expander_in_sidebar_tools():
     """C-fix-15 (2026-05-02): the legacy "⏰ Auto-Scan" expander that
     used to live inside _render_relocated_sidebar_widgets is removed.

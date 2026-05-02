@@ -3759,6 +3759,133 @@ def page_config():
         else:
             st.caption("Scheduler inactive — enable via the sidebar ⏰ Auto-Scan toggle.")
 
+        # ── Math Model Variables (C-fix-22, 2026-05-02) ────────────────────────
+        # Per user direction: "the only things that should exposed and
+        # open for change should be the variables that are being used
+        # in the calculations". This section surfaces the LIVE 4-layer
+        # composite-signal weights and the (research-fixed) regime-
+        # override weights for transparency. The auto-tuned NORMAL
+        # weights are view-only at every level; CRISIS/TRENDING/RANGING
+        # are fixed by research and cannot be edited (they encode market-
+        # mode-specific dynamics that hand-tuning got right). All
+        # feedback-loop calculations remain hidden — only the resulting
+        # parameters are surfaced.
+        st.markdown("---")
+        _ui.section_header(
+            "Math Model Variables",
+            "Composite-signal layer weights — auto-tuned daily by feedback loop",
+            icon="🧮",
+        )
+        try:
+            import composite_signal as _cs
+            _live_weights = _cs._current_layer_weights()
+            _defaults = {
+                "technical": _cs._DEFAULT_W_TECHNICAL,
+                "macro":     _cs._DEFAULT_W_MACRO,
+                "sentiment": _cs._DEFAULT_W_SENTIMENT,
+                "onchain":   _cs._DEFAULT_W_ONCHAIN,
+            }
+            _is_default = all(
+                abs(_live_weights[k] - _defaults[k]) < 1e-6 for k in _defaults
+            )
+            st.markdown(
+                f'<div style="font-size:12.5px;color:var(--text-muted);'
+                f'margin-bottom:10px;">Active 4-layer weights driving the '
+                f'NORMAL-regime composite signal. {"Currently at research defaults — feedback loop has not yet learned overrides." if _is_default else "Currently using feedback-loop-learned overrides."}</div>',
+                unsafe_allow_html=True,
+            )
+            _mw1, _mw2, _mw3, _mw4 = st.columns(4)
+            for _col, _key, _label in (
+                (_mw1, "technical", "Technical"),
+                (_mw2, "macro", "Macro"),
+                (_mw3, "sentiment", "Sentiment"),
+                (_mw4, "onchain", "On-chain"),
+            ):
+                _v = float(_live_weights.get(_key, 0.0))
+                _d = float(_defaults.get(_key, 0.0))
+                _delta_pct = (_v - _d) * 100  # in percentage points
+                _delta_str = (
+                    f"<span style=\"color:var(--text-muted);font-size:11px;\">at default</span>"
+                    if abs(_delta_pct) < 0.5
+                    else (
+                        f"<span style=\"color:var(--success);font-size:11px;\">"
+                        f"+{_delta_pct:.1f}pp vs default</span>"
+                        if _delta_pct > 0
+                        else f"<span style=\"color:var(--danger);font-size:11px;\">"
+                             f"{_delta_pct:.1f}pp vs default</span>"
+                    )
+                )
+                _col.markdown(
+                    f'<div class="ds-card" style="padding:14px;text-align:center;">'
+                    f'<div style="font-size:11px;color:var(--text-muted);'
+                    f'text-transform:uppercase;letter-spacing:0.05em;'
+                    f'margin-bottom:6px;">{_label}</div>'
+                    f'<div style="font-size:22px;font-weight:600;'
+                    f'color:var(--text-primary);font-family:var(--font-mono);">'
+                    f'{_v:.3f}</div>'
+                    f'<div style="margin-top:4px;">{_delta_str}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Manual retune button — admin-only convenience for testing.
+            # Only show at Advanced level so beginners aren't tempted.
+            if st.session_state.get("user_level") == "advanced":
+                _rt_col1, _rt_col2 = st.columns([1, 3])
+                with _rt_col1:
+                    if st.button("🔄 Retune now",
+                                 key="composite_retune_now",
+                                 help="Manually trigger an Optuna retune of the 4 layer weights. Normally runs daily at 04:00 UTC."):
+                        try:
+                            import composite_weight_optimizer as _cwo
+                            with st.spinner("Running Optuna retune…"):
+                                _result = _cwo.retune_layer_weights()
+                            _status = _result.get("status", "?")
+                            if _status == "ok":
+                                st.success(
+                                    f"Retune OK · n={_result.get('n_samples')} samples · "
+                                    f"loss {_result.get('loss_old', 0):.4f} → "
+                                    f"{_result.get('loss_new', 0):.4f} "
+                                    f"(Δ={_result.get('improvement', 0):.4f})"
+                                )
+                            elif _status == "no_op":
+                                st.info(f"No-op: {_result.get('reason', '')}")
+                            else:
+                                st.warning(f"{_status}: {_result.get('reason', '')}")
+                        except Exception as _e_rt:
+                            st.error(f"Retune failed: {_e_rt}")
+                with _rt_col2:
+                    st.caption(
+                        "Manual retune for diagnostic use. The daily 04:00 UTC "
+                        "scheduled job runs unconditionally — it's a no-op when "
+                        "fewer than 50 resolved-feedback rows have layer scores."
+                    )
+
+            # Regime override table — view-only.
+            with st.expander("Regime overrides (research-fixed)", expanded=False):
+                st.caption(
+                    "These weights override the NORMAL baseline when the "
+                    "market enters CRISIS / TRENDING / RANGING regimes. "
+                    "They're NOT auto-tuned — research / academic literature "
+                    "established each regime's optimal layer balance and "
+                    "the feedback signal in each is too sparse to retune "
+                    "reliably. Source citations live in composite_signal.py "
+                    "lines 47-58."
+                )
+                _regime_table = _cs._REGIME_WEIGHTS_BASE
+                _rt_md = ["| Regime | Technical | Macro | Sentiment | On-chain |",
+                          "|---|---|---|---|---|"]
+                for _rname, _rw in _regime_table.items():
+                    _rt_md.append(
+                        f"| **{_rname}** | {_rw['technical']:.2f} | "
+                        f"{_rw['macro']:.2f} | {_rw['sentiment']:.2f} | "
+                        f"{_rw['onchain']:.2f} |"
+                    )
+                st.markdown("\n".join(_rt_md))
+        except Exception as _mmv_err:
+            logger.warning("[Settings] math-model variables render failed: %s", _mmv_err)
+            st.caption("Math model variables temporarily unavailable.")
+
         st.markdown("---")
         save_col, reset_col = st.columns(2)
         with save_col:
