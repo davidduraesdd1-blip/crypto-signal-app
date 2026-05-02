@@ -271,12 +271,31 @@ def test_sidebar_progress_clears_session_scan_running_on_completion():
         "st.session_state['scan_running'] on completion. The 'Analyzing…' "
         "Home button label will stay stuck after every scan."
     )
-    # And it must trigger a full-page rerun so the Home button label
-    # reverts (default fragment scope wouldn't repaint Home).
-    assert 'st.rerun(scope="app")' in body, (
-        "_sg_sidebar_progress no longer triggers an app-scope rerun on "
-        "scan completion. Without it, the sidebar updates but the Home "
-        "page button label and watchlist stay stale until next interaction."
+    # HOTFIX (2026-05-02): the C-fix-08 design originally called
+    # `st.rerun(scope="app")` from inside the fragment to immediately
+    # repaint the Home page after a scan completed. That triggered a
+    # Streamlit bug — when a fragment forces an app-scope rerun while
+    # the user is on a page with form widgets (e.g. Settings → Dev
+    # Tools → Indicator Weights sliders keyed `w_onchain`, `w_macro`,
+    # etc.), Streamlit attaches the fragment's $$ID-{hash} prefix to
+    # those widget keys at serialization time, then crashes with
+    # `KeyError: $$ID-...-w_onchain` in _check_serializable on the
+    # next tick → infinite death loop on prod.
+    # The cleaner path: do the session_state writeback (above) and
+    # let the NEXT natural render pick up the cleared flag. Fragment
+    # ticks every 2s, so the Home page repaint lags by ≤ 2s — worth
+    # the trade vs crashing the whole app.
+    # Strip leading-whitespace comment lines so the explanatory comment
+    # documenting the bug doesn't trip the guard.
+    code_lines = [
+        line for line in body.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code_only = "\n".join(code_lines)
+    assert 'st.rerun(scope="app")' not in code_only, (
+        "_sg_sidebar_progress is calling st.rerun(scope='app') from "
+        "inside the fragment again. This re-introduces the death-loop "
+        "bug — see HOTFIX comment in app.py around line 1340."
     )
 
 

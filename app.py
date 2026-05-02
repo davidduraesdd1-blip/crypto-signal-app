@@ -1330,20 +1330,28 @@ def _sg_sidebar_progress():
                 st.session_state["scan_timestamp"] = _final_st.get("timestamp")
         except Exception as _wb_err:
             logger.debug("[App] scan-completion writeback failed: %s", _wb_err)
-        # Trigger a full-page rerun so the Home button label reverts to
-        # "🔍 Run a fresh scan now" and watchlist / hero cards re-read
-        # the fresh scan_results from session_state. scope="app" because
-        # this runs inside @st.fragment — the default scope="fragment"
-        # would only re-render this sidebar block, leaving the stale
-        # button label in the main column.
-        try:
-            st.rerun(scope="app")
-        except TypeError:
-            # Streamlit < 1.36 doesn't accept the scope kwarg; fall back
-            # to the bare rerun (still triggers the rerun, may need a
-            # second tick to propagate fully).
-            st.rerun()
-        return  # rerun aborts current pass; defensive
+        # HOTFIX (2026-05-02): the previous code called
+        # `st.rerun(scope="app")` here to immediately repaint the Home
+        # button label / watchlist / hero cards once the scan thread
+        # finishes. That triggered a known Streamlit bug: when a
+        # fragment calls scope="app" rerun WHILE the user is on a page
+        # that has form widgets (e.g. Settings → Dev Tools → Indicator
+        # Weights with sliders keyed `w_onchain`, `w_macro`, etc.),
+        # Streamlit attaches the fragment's $$ID-{hash} prefix to those
+        # widget keys at serialization time, and the next render
+        # crashes with `KeyError: $$ID-...-w_onchain` in
+        # `_check_serializable`. The KeyError fires every fragment tick
+        # → infinite death loop.
+        #
+        # The session_state writeback above is the load-bearing part —
+        # it clears `scan_running` and persists the fresh scan_results.
+        # The cleared flag is picked up naturally on the next fragment
+        # tick (≤ 2s) AND on any user interaction (page nav, button
+        # click, etc.) — those naturally trigger a full rerender. We
+        # just don't FORCE a rerun from inside the fragment anymore.
+        # UX cost: ≤ 2s delay before the Home page repaints with fresh
+        # data. Worth it to avoid crashing the entire app.
+        return  # state writeback complete; let the next render catch up
 
     _running = _thread_running or _session_thinks_running
     if not _running:
