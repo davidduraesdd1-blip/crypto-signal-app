@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter, JetBrains_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { AppProviders } from '@/providers/app-providers'
 import './globals.css'
 
 const inter = Inter({
@@ -50,9 +51,11 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} bg-bg-0`}>
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} bg-bg-0`} suppressHydrationWarning>
       <body className="font-sans antialiased">
-        {children}
+        <AppProviders>
+          {children}
+        </AppProviders>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
