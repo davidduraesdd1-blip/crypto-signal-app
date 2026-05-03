@@ -8,110 +8,95 @@ import { AlertLogTable } from "@/components/alert-log-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { useAlertLog } from "@/hooks/use-alerts";
+import type { AlertLogRow } from "@/lib/api-types";
 
-// Mock data
+// AUDIT-2026-05-03 (D4b): Alerts → History page wired to GET /alerts/log.
+// Stats cards stay as visual mock until /alerts/log enriches with the
+// 24h/7d rollup numbers + send-rate stats — that's a small D-extension.
+// Filters (Range / Type / Status / Channel) stay non-functional in
+// D4b; D4c wires them via URL search params + repeat-query patterns.
+
 const stats = [
-  { label: "Last 24h", value: "14", sub: "+ 2 vs prior 24h" },
-  { label: "Last 7d", value: "86", sub: "81 sent · 3 failed · 2 suppressed" },
-  { label: "Sent rate", value: "94.2%", sub: "7d rolling · email channel", valueColor: "text-success" },
-  { label: "Avg latency", value: "3.4s", sub: "event fired → email delivered" },
+  // TODO(D-ext): aggregate counts from /alerts/log enriched response
+  { label: "Last 24h", value: "—", sub: "—" },
+  { label: "Last 7d", value: "—", sub: "—" },
+  { label: "Sent rate", value: "—", sub: "—", valueColor: "text-success" },
+  { label: "Avg latency", value: "—", sub: "—" },
 ];
 
-const alertLog = [
-  {
-    timestamp: "Apr 29 · 14:32",
-    type: "buy" as const,
-    typeLabel: "Buy crossing",
-    asset: "BTC",
-    message: "Composite signal crossed 75 (78.4 conf, regime bull stable 14d). Recommended action: enter long.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 29 · 12:18",
-    type: "onchain" as const,
-    typeLabel: "On-chain",
-    asset: "XRP",
-    message: "MVRV-Z flipped to 0.84 (undervalued); SOPR at 0.998 (capitulation). Divergence vs spot up 0.96%.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 29 · 10:04",
-    type: "regime" as const,
-    typeLabel: "Regime",
-    asset: "SOL",
-    message: "SOL regime transitioned: Distribution → Bear (confidence 74%, since Apr 16). Composite weight rebalanced.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 29 · 08:56",
-    type: "buy" as const,
-    typeLabel: "Buy crossing",
-    asset: "AVAX",
-    message: "Composite signal crossed 70 on 4h timeframe (regime bull, on-chain accumulation tier).",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 29 · 06:22",
-    type: "sell" as const,
-    typeLabel: "Sell crossing",
-    asset: "NEAR",
-    message: "Composite signal dropped to 28 (regime bear, since Apr 06 · 18d stable). Exit suggested.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 28 · 22:14",
-    type: "funding" as const,
-    typeLabel: "Funding",
-    asset: "SOL",
-    message: "Bybit perpetual funding spiked to −0.018% (long-side over-leveraged). Possible flush within 8h.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 28 · 18:42",
-    type: "unlock" as const,
-    typeLabel: "Unlock",
-    asset: "DOT",
-    message: "Polkadot unlock event in 5 days: 3.2M tokens (~$22.8M at current price). Forward sell-pressure flag.",
-    status: "failed" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 28 · 15:08",
-    type: "regime" as const,
-    typeLabel: "Regime",
-    asset: "ETH",
-    message: "ETH regime: Bull → Transition (confidence 61%, since Apr 20 · 4d). Weights shifted to defensive.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 28 · 11:34",
-    type: "onchain" as const,
-    typeLabel: "On-chain",
-    asset: "BTC",
-    message: "BTC exchange reserve −12.4k over 7d (significant outflow, supply tightening). Bullish on-chain.",
-    status: "sent" as const,
-    channel: "email",
-  },
-  {
-    timestamp: "Apr 28 · 09:12",
-    type: "buy" as const,
-    typeLabel: "Buy crossing",
-    asset: "LINK",
-    message: "Composite crossed 70 (regime accumulation, since Apr 14 · 10d). On-chain layer score 72.",
-    status: "suppressed" as const,
-    channel: "email",
-  },
-];
+type AlertEntryType = "buy" | "sell" | "regime" | "onchain" | "funding" | "unlock";
+
+/** Map FastAPI alert-log row to the AlertLogTable entry shape. The
+ * FastAPI `type` field carries names like "email_signal", "watchlist",
+ * "agent_decision". The v0 table expects "buy" / "sell" / "regime" /
+ * "onchain" / "funding" / "unlock" for the colored badge. We fall back
+ * to "regime" (neutral teal) when unmappable. */
+function rowToEntry(row: AlertLogRow): {
+  timestamp: string;
+  type: AlertEntryType;
+  typeLabel: string;
+  asset: string;
+  message: string;
+  status: "sent" | "failed" | "suppressed";
+  channel: string;
+} {
+  const t = String(row.type ?? "").toLowerCase();
+  let entryType: AlertEntryType = "regime";
+  let typeLabel = "Alert";
+  if (t.includes("buy")) {
+    entryType = "buy";
+    typeLabel = "Buy crossing";
+  } else if (t.includes("sell")) {
+    entryType = "sell";
+    typeLabel = "Sell crossing";
+  } else if (t.includes("regime")) {
+    entryType = "regime";
+    typeLabel = "Regime";
+  } else if (t.includes("onchain") || t.includes("on-chain")) {
+    entryType = "onchain";
+    typeLabel = "On-chain";
+  } else if (t.includes("funding")) {
+    entryType = "funding";
+    typeLabel = "Funding";
+  } else if (t.includes("unlock")) {
+    entryType = "unlock";
+    typeLabel = "Unlock";
+  } else if (t.includes("email") || t.includes("signal")) {
+    // Default category: bucket as "buy" if direction looked like buy,
+    // otherwise regime (neutral)
+    entryType = "regime";
+    typeLabel = String(row.type ?? "Alert");
+  }
+
+  const status: "sent" | "failed" | "suppressed" =
+    String(row.status ?? "sent").toLowerCase() === "failed"
+      ? "failed"
+      : String(row.status ?? "").toLowerCase() === "suppressed"
+        ? "suppressed"
+        : "sent";
+
+  return {
+    timestamp: String(row.timestamp ?? "—"),
+    type: entryType,
+    typeLabel,
+    asset: row.pair ? row.pair.split("/")[0] : "—",
+    message: String(row.message ?? ""),
+    status,
+    channel: String(row.channel ?? "email"),
+  };
+}
 
 export default function AlertsHistoryPage() {
   const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 10;
+  const logQuery = useAlertLog(100);  // Server returns up to 100, paginate client-side for now
+
+  const allEntries = (logQuery.data?.alerts ?? []).map(rowToEntry);
+  const totalCount = logQuery.data?.count ?? 0;
+  const startIdx = (currentPage - 1) * PAGE_SIZE;
+  const visibleEntries = allEntries.slice(startIdx, startIdx + PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(allEntries.length / PAGE_SIZE));
 
   return (
     <AppShell crumbs="Account / Alerts" currentPage="History">
@@ -159,7 +144,7 @@ export default function AlertsHistoryPage() {
         ))}
       </div>
 
-      {/* Filter row */}
+      {/* Filter row — TODO(D-ext): wire via URL search params */}
       <div className="mb-5 flex flex-wrap items-center gap-2.5">
         <div className="flex min-w-[200px] max-w-[320px] flex-1 items-center gap-2 rounded-lg border border-border bg-bg-1 px-3 py-1.5">
           <span className="text-text-muted">🔎</span>
@@ -201,55 +186,59 @@ export default function AlertsHistoryPage() {
       {/* Alert log */}
       <Card>
         <CardContent className="p-4">
-          <AlertLogTable entries={alertLog} />
+          {visibleEntries.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {logQuery.isLoading
+                ? "Loading alerts log…"
+                : logQuery.isError
+                  ? "Couldn't load alerts — try refreshing in 30 seconds."
+                  : "No alerts in the last 7d."}
+            </div>
+          ) : (
+            <AlertLogTable entries={visibleEntries} />
+          )}
 
           {/* Pagination */}
-          <div className="mt-3.5 flex items-center justify-between border-t border-border pt-3.5 text-[12px] text-text-muted">
-            <span>Showing 10 of 86 · last 7d</span>
-            <div className="flex gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2.5 text-[12px]"
-              >
-                ‹ Prev
-              </Button>
-              {[1, 2, 3].map((p) => (
+          {visibleEntries.length > 0 && (
+            <div className="mt-3.5 flex items-center justify-between border-t border-border pt-3.5 text-[12px] text-text-muted">
+              <span>
+                Showing {visibleEntries.length} of {totalCount}
+              </span>
+              <div className="flex gap-1.5">
                 <Button
-                  key={p}
                   variant="outline"
                   size="sm"
-                  className={`h-7 w-7 px-0 text-[12px] ${
-                    currentPage === p ? "bg-accent-soft border-accent-brand text-text-primary" : ""
-                  }`}
-                  onClick={() => setCurrentPage(p)}
+                  className="h-7 px-2.5 text-[12px]"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 >
-                  {p}
+                  ‹ Prev
                 </Button>
-              ))}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2 text-[12px]"
-              >
-                ...
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 w-7 px-0 text-[12px]"
-              >
-                9
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2.5 text-[12px]"
-              >
-                Next ›
-              </Button>
+                {Array.from({ length: Math.min(3, totalPages) }, (_, i) => i + 1).map((p) => (
+                  <Button
+                    key={p}
+                    variant="outline"
+                    size="sm"
+                    className={`h-7 w-7 px-0 text-[12px] ${
+                      currentPage === p ? "bg-accent-soft border-accent-brand text-text-primary" : ""
+                    }`}
+                    onClick={() => setCurrentPage(p)}
+                  >
+                    {p}
+                  </Button>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2.5 text-[12px]"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Next ›
+                </Button>
+              </div>
             </div>
-          </div>
+          )}
         </CardContent>
       </Card>
     </AppShell>

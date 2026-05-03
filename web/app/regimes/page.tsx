@@ -8,24 +8,30 @@ import { RegimeTimeline, type TimelineState } from "@/components/regime-timeline
 import { MacroOverlay } from "@/components/macro-overlay";
 import { RegimeWeights } from "@/components/regime-weights";
 import { Button } from "@/components/ui/button";
+import { useRegimes } from "@/hooks/use-regimes";
 
-// Mock data
-const regimeStates: {
-  ticker: string;
-  state: RegimeState;
-  confidence: number;
-  since: string;
-  durationDays: number;
-}[] = [
-  { ticker: "BTC", state: "bull", confidence: 82, since: "Apr 12", durationDays: 12 },
-  { ticker: "ETH", state: "transition", confidence: 61, since: "Apr 20", durationDays: 4 },
-  { ticker: "XRP", state: "accumulation", confidence: 68, since: "Apr 08", durationDays: 16 },
-  { ticker: "SOL", state: "distribution", confidence: 74, since: "Apr 16", durationDays: 8 },
-  { ticker: "AVAX", state: "bull", confidence: 78, since: "Apr 10", durationDays: 14 },
-  { ticker: "LINK", state: "accumulation", confidence: 64, since: "Apr 14", durationDays: 10 },
-  { ticker: "NEAR", state: "bear", confidence: 72, since: "Apr 06", durationDays: 18 },
-  { ticker: "DOT", state: "transition", confidence: 58, since: "Apr 21", durationDays: 3 },
-];
+// AUDIT-2026-05-03 (D4b): regime cards wired to GET /regimes/. The
+// timeline + MacroOverlay + RegimeWeights stay as v0 mock until the
+// downstream endpoints exist (regime_history with date strings,
+// consolidated /macro endpoint). Each is decorative + visually
+// anchors the page.
+
+/** Map engine regime label → v0's RegimeState union */
+function toRegimeState(label: string | null | undefined): RegimeState {
+  if (!label) return "bear";
+  const l = label.toLowerCase();
+  if (l.includes("bull")) return "bull";
+  if (l.includes("bear")) return "bear";
+  if (l.includes("trans")) return "transition";
+  if (l.includes("accum")) return "accumulation";
+  if (l.includes("distrib")) return "distribution";
+  if (l.includes("rang")) return "bear";  // "ranging" maps to neutral; v0 lacks that, fold into bear
+  return "bear";
+}
+
+function pairToTicker(pair: string): string {
+  return pair.split("/")[0] ?? pair;
+}
 
 const timelineSegments: { state: TimelineState; widthPercent: number; label: string }[] = [
   { state: "bear", widthPercent: 12, label: "Bear" },
@@ -114,6 +120,24 @@ const regimeWeightColumns = [
 
 export default function RegimesPage() {
   const [selectedTicker, setSelectedTicker] = useState("BTC");
+  const regimesQuery = useRegimes();
+
+  // Map /regimes/ rows → RegimeCard props. `since` and `durationDays`
+  // aren't in the API response; show "—" placeholders until
+  // /regimes/{pair}/history wiring lands in a follow-up commit.
+  const regimeStates = (() => {
+    const rows = regimesQuery.data?.results ?? [];
+    if (rows.length === 0) return [];
+    return rows.slice(0, 8).map((row) => ({
+      ticker: pairToTicker(row.pair),
+      state: toRegimeState(row.regime),
+      confidence: Math.round(row.confidence ?? 0),
+      since: "—",
+      durationDays: 0,
+    }));
+  })();
+
+  const totalCount = regimesQuery.data?.count ?? 0;
 
   return (
     <AppShell crumbs="Markets" currentPage="Regimes">
@@ -125,28 +149,38 @@ export default function RegimesPage() {
       {/* Section header */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-medium uppercase tracking-wider text-text-muted">
-          Regime states · showing 8 of 33 pairs · click any to drill in
+          Regime states · showing {regimeStates.length} of {totalCount} pairs · click any to drill in
         </span>
         <Button variant="outline" size="sm" className="h-8 text-xs">
-          More <span className="ml-1 opacity-60">+25</span>
+          More <span className="ml-1 opacity-60">+{Math.max(0, totalCount - regimeStates.length)}</span>
         </Button>
       </div>
 
       {/* Regime cards grid */}
-      <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {regimeStates.map((r) => (
-          <RegimeCard
-            key={r.ticker}
-            ticker={r.ticker}
-            state={r.state}
-            confidence={r.confidence}
-            since={r.since}
-            durationDays={r.durationDays}
-            selected={selectedTicker === r.ticker}
-            onClick={() => setSelectedTicker(r.ticker)}
-          />
-        ))}
-      </div>
+      {regimeStates.length === 0 ? (
+        <div className="mb-5 rounded-lg border border-dashed border-border-default p-8 text-center text-sm text-muted-foreground">
+          {regimesQuery.isLoading
+            ? "Loading regime states…"
+            : regimesQuery.isError
+              ? "Couldn't load regime states — try refreshing in 30 seconds."
+              : "Run a scan to populate regime states (no scan results yet)."}
+        </div>
+      ) : (
+        <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {regimeStates.map((r) => (
+            <RegimeCard
+              key={r.ticker}
+              ticker={r.ticker}
+              state={r.state}
+              confidence={r.confidence}
+              since={r.since}
+              durationDays={r.durationDays}
+              selected={selectedTicker === r.ticker}
+              onClick={() => setSelectedTicker(r.ticker)}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Timeline + Macro overlay - 2 columns */}
       <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
