@@ -43,9 +43,14 @@ def _load_rules() -> list[dict[str, Any]]:
 
 
 def _save_rules(rules: list[dict[str, Any]]):
-    cfg = alerts_module.load_alerts_config()
-    cfg["watchlist_alerts"] = rules
-    alerts_module.save_alerts_config(cfg)
+    """AUDIT-2026-05-03 (P1): use update_alerts_config so the
+    load → modify → save sequence runs under the module RLock.
+    Concurrent POST/DELETE callers no longer race the rules list.
+    """
+    def _updater(cfg: dict[str, Any]) -> dict[str, Any]:
+        cfg["watchlist_alerts"] = rules
+        return cfg
+    alerts_module.update_alerts_config(_updater)
 
 
 @router.get(
@@ -72,17 +77,30 @@ def create_alert_rule(rule: AlertRuleIn):
     match regardless of how the frontend formatted the input
     (`BTCUSDT`, `BTC-USDT`, `BTC_USDT`, `BTC/USDT-SWAP` all collapse
     to `BTC/USDT`).
+
+    AUDIT-2026-05-03 (P1): the load-append-save sequence runs inside
+    `update_alerts_config`'s RLock so two concurrent POSTs no longer
+    lose one caller's rule. Each caller's append happens against the
+    most-recent persisted state, not a stale baseline.
     """
     try:
         normalized_pair = normalize_pair(rule.pair)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    rules = _load_rules()
+
     new_rule = rule.model_dump()
     new_rule["pair"] = normalized_pair
     new_rule["id"] = uuid.uuid4().hex
-    rules.append(new_rule)
-    _save_rules(rules)
+
+    def _append_rule(cfg: dict[str, Any]) -> dict[str, Any]:
+        rules = cfg.get("watchlist_alerts") or []
+        if not isinstance(rules, list):
+            rules = []
+        rules.append(new_rule)
+        cfg["watchlist_alerts"] = rules
+        return cfg
+
+    alerts_module.update_alerts_config(_append_rule)
     return serialize({"status": "created", "rule": new_rule})
 
 
@@ -92,9 +110,27 @@ def create_alert_rule(rule: AlertRuleIn):
     dependencies=[Depends(require_api_key)],
 )
 def delete_alert_rule(rule_id: str):
-    rules = _load_rules()
-    new_rules = [r for r in rules if r.get("id") != rule_id]
-    if len(new_rules) == len(rules):
+    """AUDIT-2026-05-03 (P1): delete runs inside update_alerts_config
+    so a concurrent POST/DELETE doesn't reintroduce or clobber the
+    rule. The 404 is raised inside the updater so the lock is held
+    only for the read+check, then released without a write.
+    """
+    deletion_state: dict[str, Any] = {"found": False, "remaining": 0}
+
+    def _delete_rule(cfg: dict[str, Any]) -> dict[str, Any]:
+        rules = cfg.get("watchlist_alerts") or []
+        if not isinstance(rules, list):
+            rules = []
+        new_rules = [r for r in rules if r.get("id") != rule_id]
+        if len(new_rules) == len(rules):
+            # No-op write — preserves the existing config exactly.
+            return cfg
+        cfg["watchlist_alerts"] = new_rules
+        deletion_state["found"] = True
+        deletion_state["remaining"] = len(new_rules)
+        return cfg
+
+    alerts_module.update_alerts_config(_delete_rule)
+    if not deletion_state["found"]:
         raise HTTPException(status_code=404, detail=f"No rule with id {rule_id!r}")
-    _save_rules(new_rules)
-    return {"status": "deleted", "id": rule_id, "remaining": len(new_rules)}
+    return {"status": "deleted", "id": rule_id, "remaining": deletion_state["remaining"]}

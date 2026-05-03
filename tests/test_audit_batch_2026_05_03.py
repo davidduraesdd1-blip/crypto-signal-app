@@ -200,6 +200,65 @@ def test_serialize_event_failure_includes_envelope_fields():
         pass
 
 
+# ── P1: alerts.py update_alerts_config concurrent-write race ────────────────
+
+def test_update_alerts_config_serializes_concurrent_writes(tmp_path, monkeypatch):
+    """N=20 threads each appending a unique rule must all land in the
+    persisted config. Without the RLock this fails by ~10-30% on a
+    multi-core box because two threads can each load the same baseline,
+    append a different rule, and both call save — the second save
+    overwrites the first's rule.
+    """
+    import threading
+    import alerts as alerts_module
+
+    cfg_file = tmp_path / "alerts_config.json"
+    monkeypatch.setattr(alerts_module, "_ALERTS_CONFIG_FILE", str(cfg_file))
+    cfg_file.write_text('{"watchlist_alerts": []}')
+
+    def _add_rule(rule_id: int):
+        def _updater(cfg):
+            rules = cfg.get("watchlist_alerts") or []
+            rules.append({"id": f"rule-{rule_id}", "pair": "BTC/USDT"})
+            cfg["watchlist_alerts"] = rules
+            return cfg
+        alerts_module.update_alerts_config(_updater)
+
+    threads = [threading.Thread(target=_add_rule, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    final_cfg = alerts_module.load_alerts_config()
+    final_rules = final_cfg.get("watchlist_alerts") or []
+    final_ids = {r["id"] for r in final_rules}
+    assert len(final_rules) == 20, (
+        f"expected 20 rules persisted, got {len(final_rules)} — race regression"
+    )
+    assert final_ids == {f"rule-{i}" for i in range(20)}
+
+
+def test_update_alerts_config_returns_updated_cfg(tmp_path, monkeypatch):
+    """The transactional API returns the post-save config so callers
+    don't need a second load round-trip.
+    """
+    import alerts as alerts_module
+
+    cfg_file = tmp_path / "alerts_config.json"
+    monkeypatch.setattr(alerts_module, "_ALERTS_CONFIG_FILE", str(cfg_file))
+    cfg_file.write_text('{"min_confidence": 70}')
+
+    def _bump(cfg):
+        cfg["min_confidence"] = 80
+        return cfg
+
+    result = alerts_module.update_alerts_config(_bump)
+    assert result["min_confidence"] == 80
+    # And the persisted file matches the returned value.
+    assert alerts_module.load_alerts_config()["min_confidence"] == 80
+
+
 # ── S-1: scheduler interval globals exposed for live reschedule ─────────────
 
 def test_scheduler_exposes_interval_globals():

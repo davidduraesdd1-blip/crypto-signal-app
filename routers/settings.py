@@ -237,6 +237,14 @@ def _apply_partial(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], dict[str, Any]]:
     """Validate and persist a partial settings patch.
 
+    AUDIT-2026-05-03 (P1): now uses `alerts_module.update_alerts_config`
+    so the load → validate → mutate → save sequence runs under the
+    module-level RLock. Without the lock, two concurrent PUTs (e.g. the
+    Next.js Settings page issuing parallel saves on rapid form edits)
+    could each load the same baseline cfg, mutate different keys, and
+    both call save — the second save would overwrite the first's
+    changes silently.
+
     Returns `(updated_cfg, rejected, unknown, applied_post_coerce)` where:
       - `rejected` is a list of `{key, reason, value}` dicts for known
         keys that failed type/range validation. The `value` is echoed
@@ -247,24 +255,27 @@ def _apply_partial(
         persisted, with any harmless coercion applied (e.g. "true" → True,
         65.0 → 65 for an int field).
     """
-    cfg = alerts_module.load_alerts_config()
     rejected: list[dict[str, Any]] = []
     unknown: list[str] = []
     applied: dict[str, Any] = {}
-    for k, v in patch.items():
-        if k not in allowed:
-            logger.debug("[settings] dropping unknown key %r (not in %s)", k, sorted(allowed))
-            unknown.append(k)
-            continue
-        ok, coerced, err = _validate_value(k, v)
-        if not ok:
-            logger.warning("[settings] rejected key %r: %s", k, err)
-            rejected.append({"key": k, "reason": err, "value": v})
-            continue
-        cfg[k] = coerced
-        applied[k] = coerced
-    alerts_module.save_alerts_config(cfg)
-    return cfg, rejected, unknown, applied
+
+    def _updater(cfg: dict[str, Any]) -> dict[str, Any]:
+        for k, v in patch.items():
+            if k not in allowed:
+                logger.debug("[settings] dropping unknown key %r (not in %s)", k, sorted(allowed))
+                unknown.append(k)
+                continue
+            ok, coerced, err = _validate_value(k, v)
+            if not ok:
+                logger.warning("[settings] rejected key %r: %s", k, err)
+                rejected.append({"key": k, "reason": err, "value": v})
+                continue
+            cfg[k] = coerced
+            applied[k] = coerced
+        return cfg
+
+    updated_cfg = alerts_module.update_alerts_config(_updater)
+    return updated_cfg, rejected, unknown, applied
 
 
 @router.get(
