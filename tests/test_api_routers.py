@@ -412,6 +412,92 @@ def test_settings_put_execution_smoke(client, stub_alerts_config):
     assert r.json()["applied"]["max_order_size_usd"] == 250.0
 
 
+# ── Settings PUT validation (AUDIT-2026-05-03) ──────────────────────────────
+
+def test_settings_put_rejects_string_for_numeric(client, stub_alerts_config):
+    """Per-key validator drops `min_confidence_threshold: "abc"` rather than
+    persisting a string into the alerts_config.json schema where the next
+    scan would crash comparing it to a numeric threshold.
+    """
+    r = client.put("/settings/signal-risk", json={
+        "min_confidence_threshold": "abc",  # type mismatch
+        "high_conf_threshold": 80,           # valid
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    assert "min_confidence_threshold" not in body["applied"]
+    assert body["applied"]["high_conf_threshold"] == 80
+    assert any(r["key"] == "min_confidence_threshold" for r in body["rejected"])
+
+
+def test_settings_put_rejects_out_of_range(client, stub_alerts_config):
+    """Range bounds enforced — `min_confidence_threshold: 200` (above 100)
+    is rejected with a structured reason.
+    """
+    r = client.put("/settings/signal-risk", json={
+        "min_confidence_threshold": 200,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    rejected_keys = {r["key"] for r in body["rejected"]}
+    assert "min_confidence_threshold" in rejected_keys
+
+
+def test_settings_put_coerces_bool_string(client, stub_alerts_config):
+    """`debug_logging: "true"` (string) is coerced to bool True so the
+    frontend's form-serialization quirks don't trip up the validator.
+    """
+    r = client.put("/settings/dev-tools", json={"debug_logging": "true"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["applied"]["debug_logging"] is True
+
+
+def test_settings_put_rejects_unknown_order_type(client, stub_alerts_config):
+    """`default_order_type` is enum-constrained — anything outside
+    {market, limit, MARKET, LIMIT} is rejected.
+    """
+    r = client.put("/settings/execution", json={"default_order_type": "twap"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    rejected_keys = {r["key"] for r in body["rejected"]}
+    assert "default_order_type" in rejected_keys
+
+
+def test_settings_put_rejects_list_item_type_mismatch(client, stub_alerts_config):
+    """`trading_pairs` must be `list[str]` — a list with a non-string item
+    is rejected so the frontend doesn't silently corrupt the watchlist.
+    """
+    r = client.put("/settings/trading", json={
+        "trading_pairs": ["BTC/USDT", 12345, "ETH/USDT"],  # int sneaks in
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    rejected_keys = {r["key"] for r in body["rejected"]}
+    assert "trading_pairs" in rejected_keys
+
+
+def test_settings_put_status_ok_when_all_valid(client, stub_alerts_config):
+    """Backward-compat: when every value is type-valid the response shape
+    matches the pre-validation contract — `status: "ok"`, `rejected: []`.
+    Existing clients should not need to change.
+    """
+    r = client.put("/settings/signal-risk", json={
+        "min_confidence_threshold": 65,
+        "high_conf_threshold": 80,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["rejected"] == []
+    assert body["applied"]["min_confidence_threshold"] == 65
+
+
 # ── Settings · Trading (D-ext) ──────────────────────────────────────────────
 
 def test_settings_put_trading_smoke(client, stub_alerts_config):

@@ -102,6 +102,119 @@ _TRADING_KEYS = {
 }
 
 
+# AUDIT-2026-05-03 (MEDIUM bug — config corruption): per-key type +
+# range validators for every PUT-able settings field. Prior code accepted
+# `dict[str, Any]` and wrote whatever the caller sent into
+# alerts_config.json, so a frontend bug or malicious caller could persist
+# `min_confidence_threshold: "abc"` and crash the next scan when the
+# engine compares a string to a numeric threshold. Validators reject the
+# bad value (silent drop + structured `rejected` array in the response)
+# while leaving valid keys in the same patch fully applied. Backward
+# compatible: the existing `status: "ok"` + `applied: {...}` shape only
+# changes (`status: "partial"` + non-empty `rejected: [...]`) when at
+# least one value fails type/range — clean PUTs look exactly like before.
+#
+# Coercion: only the most common harmless cases — bool from "true"/"false"
+# strings (frontend form serialization quirk), float ↔ int when
+# loss-free. Anything else fails fast.
+_VALIDATORS: dict[str, dict[str, Any]] = {
+    # ── Signal-risk (percentages 0-100, except dict overrides) ──────────────
+    "min_confidence_threshold":    {"type": int,   "ge": 0,    "le": 100},
+    "high_conf_threshold":         {"type": int,   "ge": 0,    "le": 100},
+    "min_alert_confidence":        {"type": int,   "ge": 0,    "le": 100},
+    "regime_high_conf_overrides":  {"type": dict},
+    "max_drawdown_pct":            {"type": float, "ge": 0.0,  "le": 100.0},
+    "position_size_pct":           {"type": float, "ge": 0.0,  "le": 100.0},
+    # ── Dev-tools (bools + free-form dict for feature flags) ────────────────
+    "debug_logging":               {"type": bool},
+    "verbose_scan_output":         {"type": bool},
+    "feature_flags_override":      {"type": dict},
+    "dev_mode":                    {"type": bool},
+    # ── Execution (mostly bools + numeric caps; enum on order type) ─────────
+    "live_trading_enabled":        {"type": bool},
+    "auto_execute":                {"type": bool},
+    "exchange":                    {"type": str},
+    "max_order_size_usd":          {"type": float, "ge": 0.0},
+    "default_order_type":          {"type": str,
+                                    "choices": ("market", "limit",
+                                                "MARKET", "LIMIT")},
+    "slippage_tolerance_pct":      {"type": float, "ge": 0.0,  "le": 100.0},
+    # ── Trading (lists of strings + bools + free strings) ────────────────────
+    "trading_pairs":               {"type": list, "item_type": str},
+    "active_timeframes":           {"type": list, "item_type": str},
+    "ta_exchange":                 {"type": str},
+    "custom_pair":                 {"type": str},
+    "regional_color_convention":   {"type": bool},
+    "compact_watchlist_mode":      {"type": bool},
+}
+
+
+def _validate_value(key: str, value: Any) -> tuple[bool, Any, str | None]:
+    """Validate `value` against the spec for `key`.
+
+    Returns `(ok, coerced_value, error_message)`. When `ok` is False, the
+    caller drops the key from the persisted patch and surfaces
+    `error_message` in the `rejected` response array.
+    """
+    spec = _VALIDATORS.get(key)
+    if spec is None:
+        return True, value, None  # unknown — handled by caller's allowlist
+    expected = spec["type"]
+
+    # ── Coerce (only loss-free common cases) ─────────────────────────────────
+    if expected is bool and isinstance(value, str):
+        v_lower = value.strip().lower()
+        if v_lower in ("true", "1", "yes", "on"):
+            value = True
+        elif v_lower in ("false", "0", "no", "off"):
+            value = False
+    if expected is int and isinstance(value, float) and not isinstance(value, bool):
+        if value.is_integer():
+            value = int(value)
+    if expected is float and isinstance(value, int) and not isinstance(value, bool):
+        value = float(value)
+
+    # ── Type check (bool is treated separately because it's a subclass of int) ──
+    if expected is bool:
+        if not isinstance(value, bool):
+            return False, value, f"expected bool, got {type(value).__name__}"
+    elif expected is int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return False, value, f"expected int, got {type(value).__name__}"
+    elif expected is float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, value, f"expected number, got {type(value).__name__}"
+    elif expected is str:
+        if not isinstance(value, str):
+            return False, value, f"expected str, got {type(value).__name__}"
+    elif expected is dict:
+        if not isinstance(value, dict):
+            return False, value, f"expected dict, got {type(value).__name__}"
+    elif expected is list:
+        if not isinstance(value, list):
+            return False, value, f"expected list, got {type(value).__name__}"
+
+    # ── Range / enum check ───────────────────────────────────────────────────
+    if expected in (int, float):
+        if "ge" in spec and value < spec["ge"]:
+            return False, value, f"value {value} below min {spec['ge']}"
+        if "le" in spec and value > spec["le"]:
+            return False, value, f"value {value} above max {spec['le']}"
+    if expected is str and "choices" in spec:
+        if value not in spec["choices"]:
+            return False, value, f"value {value!r} not in {list(spec['choices'])}"
+    if expected is list and "item_type" in spec:
+        item_t = spec["item_type"]
+        for i, item in enumerate(value):
+            if not isinstance(item, item_t):
+                return False, value, (
+                    f"item[{i}] expected {item_t.__name__}, "
+                    f"got {type(item).__name__}"
+                )
+
+    return True, value, None
+
+
 def _is_sensitive_key(name: str) -> bool:
     """Match against the explicit allowlist OR the sensitive-suffix set."""
     if name in _REDACTED_KEYS:
@@ -119,15 +232,39 @@ def _redact(cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _apply_partial(allowed: set[str], patch: dict[str, Any]) -> dict[str, Any]:
+def _apply_partial(
+    allowed: set[str], patch: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], dict[str, Any]]:
+    """Validate and persist a partial settings patch.
+
+    Returns `(updated_cfg, rejected, unknown, applied_post_coerce)` where:
+      - `rejected` is a list of `{key, reason, value}` dicts for known
+        keys that failed type/range validation. The `value` is echoed
+        back so the frontend can show "you tried X, why it failed".
+      - `unknown` is a list of key names that aren't in `allowed` —
+        silently dropped per the existing contract.
+      - `applied_post_coerce` is the subset of `patch` that was actually
+        persisted, with any harmless coercion applied (e.g. "true" → True,
+        65.0 → 65 for an int field).
+    """
     cfg = alerts_module.load_alerts_config()
+    rejected: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    applied: dict[str, Any] = {}
     for k, v in patch.items():
-        if k in allowed:
-            cfg[k] = v
-        else:
+        if k not in allowed:
             logger.debug("[settings] dropping unknown key %r (not in %s)", k, sorted(allowed))
+            unknown.append(k)
+            continue
+        ok, coerced, err = _validate_value(k, v)
+        if not ok:
+            logger.warning("[settings] rejected key %r: %s", k, err)
+            rejected.append({"key": k, "reason": err, "value": v})
+            continue
+        cfg[k] = coerced
+        applied[k] = coerced
     alerts_module.save_alerts_config(cfg)
-    return cfg
+    return cfg, rejected, unknown, applied
 
 
 @router.get(
@@ -147,18 +284,33 @@ def get_settings():
     })
 
 
+def _put_response(
+    allowed: set[str], updated: dict[str, Any], rejected: list[dict[str, Any]],
+    applied: dict[str, Any],
+) -> dict[str, Any]:
+    """Shared response shape for the four PUT endpoints.
+
+    `status` stays `"ok"` when nothing was rejected so existing callers
+    don't notice the new validation layer; flips to `"partial"` only when
+    at least one known key failed type/range. Unknown keys are silently
+    dropped (existing contract) and never affect status.
+    """
+    return serialize({
+        "status":   "partial" if rejected else "ok",
+        "applied":  applied,
+        "rejected": rejected,
+        "current":  {k: updated.get(k) for k in allowed if k in updated},
+    })
+
+
 @router.put(
     "/trading",
     summary="Update Trading settings (partial)",
     dependencies=[Depends(require_api_key)],
 )
 def put_trading(patch: dict[str, Any]):
-    updated = _apply_partial(_TRADING_KEYS, patch)
-    return serialize({
-        "status":  "ok",
-        "applied": {k: v for k, v in patch.items() if k in _TRADING_KEYS},
-        "current": {k: updated.get(k) for k in _TRADING_KEYS if k in updated},
-    })
+    updated, rejected, _unknown, applied = _apply_partial(_TRADING_KEYS, patch)
+    return _put_response(_TRADING_KEYS, updated, rejected, applied)
 
 
 @router.put(
@@ -167,12 +319,8 @@ def put_trading(patch: dict[str, Any]):
     dependencies=[Depends(require_api_key)],
 )
 def put_signal_risk(patch: dict[str, Any]):
-    updated = _apply_partial(_SIGNAL_RISK_KEYS, patch)
-    return serialize({
-        "status":  "ok",
-        "applied": {k: v for k, v in patch.items() if k in _SIGNAL_RISK_KEYS},
-        "current": {k: updated.get(k) for k in _SIGNAL_RISK_KEYS if k in updated},
-    })
+    updated, rejected, _unknown, applied = _apply_partial(_SIGNAL_RISK_KEYS, patch)
+    return _put_response(_SIGNAL_RISK_KEYS, updated, rejected, applied)
 
 
 @router.put(
@@ -181,12 +329,8 @@ def put_signal_risk(patch: dict[str, Any]):
     dependencies=[Depends(require_api_key)],
 )
 def put_dev_tools(patch: dict[str, Any]):
-    updated = _apply_partial(_DEV_TOOLS_KEYS, patch)
-    return serialize({
-        "status":  "ok",
-        "applied": {k: v for k, v in patch.items() if k in _DEV_TOOLS_KEYS},
-        "current": {k: updated.get(k) for k in _DEV_TOOLS_KEYS if k in updated},
-    })
+    updated, rejected, _unknown, applied = _apply_partial(_DEV_TOOLS_KEYS, patch)
+    return _put_response(_DEV_TOOLS_KEYS, updated, rejected, applied)
 
 
 @router.put(
@@ -195,9 +339,5 @@ def put_dev_tools(patch: dict[str, Any]):
     dependencies=[Depends(require_api_key)],
 )
 def put_execution(patch: dict[str, Any]):
-    updated = _apply_partial(_EXECUTION_KEYS, patch)
-    return serialize({
-        "status":  "ok",
-        "applied": {k: v for k, v in patch.items() if k in _EXECUTION_KEYS},
-        "current": {k: updated.get(k) for k in _EXECUTION_KEYS if k in updated},
-    })
+    updated, rejected, _unknown, applied = _apply_partial(_EXECUTION_KEYS, patch)
+    return _put_response(_EXECUTION_KEYS, updated, rejected, applied)

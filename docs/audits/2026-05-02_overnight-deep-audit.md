@@ -271,10 +271,7 @@ Queued for D6 security pass. Catalogued in this audit doc for reference; no urge
   - `test_ai_ask_rejects_unknown_signal` — `signal="MOON"` returns 422 with the rejected token echoed back
 
   **Found-but-deferred (need David sign-off / frontend coordination):**
-  - `routers/settings.py` PUTs accept `dict[str, Any]` with no per-key
-    type/range validation. Malformed PUT (e.g. `min_confidence_threshold: "abc"`)
-    silently writes garbage that crashes the next scan. Fix needs Pydantic
-    models per group + frontend coordination on accepted shape.
+  - ~~`routers/settings.py` PUTs accept `dict[str, Any]`...~~ ✅ **APPLIED 2026-05-03 (batch 2)** — see Finding #19 below.
   - `routers/alerts.py` _load → modify → _save sequence has a read-modify-write
     race on concurrent POSTs. The `alerts` module's locking is the right
     place to fix; needs a concurrency design pass.
@@ -283,3 +280,21 @@ Queued for D6 security pass. Catalogued in this audit doc for reference; no urge
     "gates 4/5/6" claim glosses over. Defensible (gate 5 IS enforced at order
     time, just not measurable at status-read time) but worth a deliberate
     UX call vs the consistency principle.
+
+- **2026-05-03 (afternoon, batch 2) — settings PUT validation landed.**
+  Closes the highest-value MEDIUM finding from batch 1's deferred list.
+
+  **1 fix applied + 6 new regression tests; 360 passed / 1 skipped /
+  0 regressions:**
+
+  | # | Severity | File:line | Summary |
+  |---|---|---|---|
+  | 19 | MEDIUM | `routers/settings.py:104-218, 245-308` | All four PUT endpoints (`/settings/trading`, `/signal-risk`, `/dev-tools`, `/execution`) now run each value through a per-key validator before persisting. Type-mismatched values (`min_confidence_threshold: "abc"`), out-of-range numerics (`min_confidence_threshold: 200`), enum violations (`default_order_type: "twap"`), and list-item mismatches (`trading_pairs: [..., 12345, ...]`) are dropped from the persisted patch and returned in a structured `rejected: [{key, reason, value}]` array. `status` flips to `"partial"` only when at least one key fails validation; clean PUTs keep the pre-existing `status: "ok"` + empty `rejected: []` shape — backward-compatible. Common harmless coercion supported: bool from `"true"/"false"/"1"/"0"/"on"/"off"`, int↔float when loss-free. |
+
+  **New regression tests (6):**
+  - `test_settings_put_rejects_string_for_numeric` — type mismatch
+  - `test_settings_put_rejects_out_of_range` — bound enforcement
+  - `test_settings_put_coerces_bool_string` — frontend serialization quirk
+  - `test_settings_put_rejects_unknown_order_type` — enum constraint
+  - `test_settings_put_rejects_list_item_type_mismatch` — list-item type
+  - `test_settings_put_status_ok_when_all_valid` — backward-compat regression guard
