@@ -34,7 +34,20 @@ def _extract_regime(result: dict) -> str | None:
     dependencies=[Depends(require_api_key)],
 )
 def list_regimes():
-    """Return the current regime state for every pair in the latest scan."""
+    """Return the current regime state for every pair in the latest scan.
+
+    AUDIT-2026-05-02 (MEDIUM bug fix): the previous summary used hardcoded
+    bucket keys {"Trending", "Ranging", "Neutral", "Unknown"} that never
+    matched the actual HMM state labels emitted by the engine
+    (Bull/Bear/Sideways/Transition per CLAUDE.md §9). Every real regime
+    landed in "Unknown" and the four real labels never incremented —
+    the summary card on the Regimes page was structurally wrong.
+
+    Now seeds the canonical HMM labels at zero (so the front-end always
+    renders the four pills even when an early scan has produced no rows
+    yet) AND increments dynamically for any other state string the
+    engine emits, with anything missing falling into "Unknown".
+    """
     try:
         results = db.read_scan_results() or []
     except Exception as exc:
@@ -42,14 +55,25 @@ def list_regimes():
         results = []
 
     rows: list[dict[str, Any]] = []
-    summary = {"Trending": 0, "Ranging": 0, "Neutral": 0, "Unknown": 0}
+    # Canonical HMM labels per CLAUDE.md §9; seeded so the four pills
+    # always render. The legacy {Trending, Ranging, Neutral} set is kept
+    # alongside as a back-compat shim for any test or frontend still
+    # asserting on those keys — they always read 0 unless the engine
+    # actually emits them.
+    summary: dict[str, int] = {
+        "Bull": 0, "Bear": 0, "Sideways": 0, "Transition": 0,
+        "Trending": 0, "Ranging": 0, "Neutral": 0,
+        "Unknown": 0,
+    }
     for r in results:
         pair = r.get("pair")
         if not pair:
             continue
         state = _extract_regime(r) or "Unknown"
-        bucket = state if state in summary else "Unknown"
-        summary[bucket] += 1
+        # Increment the matching bucket, creating it on the fly if the
+        # engine emits a state name we haven't seen before. Never silently
+        # bucket a real state into "Unknown".
+        summary[state] = summary.get(state, 0) + 1
         rows.append({
             "pair":       pair,
             "regime":     state,

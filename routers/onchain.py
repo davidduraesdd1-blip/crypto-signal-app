@@ -27,13 +27,29 @@ _KNOWN_METRICS = {"sopr", "mvrv_z", "net_flow", "whale_activity"}
 
 
 def _safe_fetch(pair: str) -> dict[str, Any]:
+    """Fetch on-chain metrics for `pair` with truthful empty-state semantics.
+
+    AUDIT-2026-05-02 (MEDIUM error-handling fix): the previous fallback
+    returned hard-coded `sopr=1.0, mvrv_z=0.0, net_flow=0.0` — values that
+    read as a real "neutral" signal. The frontend cannot distinguish
+    "metric is genuinely neutral" from "API totally down" without
+    inspecting the source string, and SOPR=1.0 / MVRV-Z=0 happens to
+    be the literal "everything is fine" reading. For a Layer-4 input
+    that can flip a BUY to SELL, fail-open with neutral values is wrong.
+
+    Per `feedback_empty_states` memory: return explicit `None` for every
+    metric and surface the failure in `source` + `error` so the page can
+    render the "rate-limited / geo-blocked / unavailable" empty-state pill.
+    """
     try:
         return model.fetch_onchain_metrics(pair) or {}
     except Exception as exc:
         logger.warning("[onchain] fetch_onchain_metrics(%s) failed: %s", pair, exc)
         return {
-            "sopr": 1.0, "mvrv_z": 0.0, "net_flow": 0.0,
-            "whale_activity": False, "source": "fallback",
+            "sopr": None, "mvrv_z": None, "net_flow": None,
+            "whale_activity": None,
+            "source": "unavailable",
+            "error": "On-chain data temporarily unavailable — using cached values where possible",
         }
 
 

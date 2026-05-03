@@ -54,6 +54,20 @@ def _breach(label: str, detail: str, value: Any = None, limit: Any = None) -> di
             "value": value, "limit": limit}
 
 
+def _unmeasured(label: str, detail: str, limit: Any = None) -> dict:
+    """A gate whose state cannot be computed from current engine state.
+
+    AUDIT-2026-05-02 (MEDIUM bug fix): the previous implementation
+    returned `_ok` for gates 4/5/6 even when their state was never
+    actually measured — operators saw a green pill for a check that
+    never ran. `_unmeasured` makes that visible to the frontend so
+    the card can render an accurate "not yet wired" indicator instead
+    of fail-open misleading-green.
+    """
+    return {"label": label, "status": "unmeasured", "detail": detail,
+            "value": None, "limit": limit}
+
+
 def _build_gates() -> list[dict]:
     """Synthesize the 7-gate status array from agent + execution + db state."""
     try:
@@ -127,27 +141,40 @@ def _build_gates() -> list[dict]:
                     value=open_count, limit=max_concurrent)
 
     # Gate 4 — Cooldown after loss
+    # AUDIT-2026-05-02 (MEDIUM bug fix): the cooldown gate had no live
+    # state to measure — `agent.py._check_pre_risk` doesn't track the
+    # last-loss timestamp, so this row used to always say "inactive"
+    # regardless of reality. Until the agent pipeline logs cooldown
+    # state to the DB, we report the gate's threshold as configured
+    # and mark it `unmeasured` so the frontend renders an honest "not
+    # currently tracked" pill instead of a misleading green check.
     cooldown_s = int(cfg.get("agent_cooldown_after_loss_s", 1800))
-    gate4 = _ok("Cooldown after loss",
-                "inactive",
-                value=0, limit=cooldown_s)
+    gate4 = _unmeasured("Cooldown after loss",
+                        f"threshold {cooldown_s}s · live state not tracked",
+                        limit=cooldown_s)
 
-    # Gate 5 — Trade-size cap
+    # Gate 5 — Trade-size cap (configured threshold; the gate fires
+    # inside agent._check_post_risk at order time, not at status-read
+    # time, so the most we can report here is the configured limit).
     max_trade_pct = float(cfg.get("agent_max_trade_size_pct", 10.0))
     gate5 = _ok("Trade-size cap",
-                f"{max_trade_pct:.0f}% · enforced",
+                f"{max_trade_pct:.0f}% configured cap · enforced at order time",
                 value=max_trade_pct, limit=max_trade_pct)
 
     # Gate 6 — Allowlist (TIER1 ∪ TIER2)
+    # AUDIT-2026-05-02 (MEDIUM bug fix): previous implementation reported
+    # "all pairs valid" regardless of whether any actual validation
+    # happened. Now reports the allowlist size when configured and an
+    # explicit "default universe" status when no allowlist is set.
     allowlist = alerts_cfg.get("trading_pairs") or []
     if allowlist:
         gate6 = _ok("Allowlist (TIER1 ∪ TIER2)",
-                    "all pairs valid",
+                    f"{len(allowlist)} pairs configured",
                     value=len(allowlist), limit=None)
     else:
-        gate6 = _ok("Allowlist (TIER1 ∪ TIER2)",
-                    "default universe",
-                    value=None, limit=None)
+        gate6 = _unmeasured("Allowlist (TIER1 ∪ TIER2)",
+                            "no explicit allowlist · using default universe",
+                            limit=None)
 
     # Gate 7 — Emergency stop flag
     if emergency:
@@ -179,16 +206,25 @@ def get_circuit_breakers():
     the card header; individual gate rows render with status + detail.
     """
     gates = _build_gates()
+    # AUDIT-2026-05-02: only treat ok-status gates as operational; an
+    # `unmeasured` gate is NOT counted as healthy (the frontend can
+    # render an honest yellow pill instead of misleading-green).
     all_ok = all(g["status"] == "ok" for g in gates)
+    has_unmeasured = any(g["status"] == "unmeasured" for g in gates)
     last_check_ts = datetime.now(timezone.utc).isoformat()
-    return serialize({
+    payload: dict[str, Any] = {
         "all_operational": all_ok,
+        "has_unmeasured":  has_unmeasured,
         "gate_count":      len(gates),
         "gates":           gates,
         "last_check":      last_check_ts,
-        "resume_count":    0,         # placeholder until breach-resume tracking lands
-        "session_halts":   0,
-    })
+    }
+    # AUDIT-2026-05-02 (MEDIUM bug fix): omit the resume_count and
+    # session_halts placeholders until the agent supervisor actually
+    # tracks them. Returning a hard-coded 0 was misleading dashboard
+    # telemetry on a real-money execution path. Frontend should hide
+    # the row when these fields are absent (per Agent A finding M-x).
+    return serialize(payload)
 
 
 @router.get(

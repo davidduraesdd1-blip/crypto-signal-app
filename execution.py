@@ -37,37 +37,43 @@ logger = logging.getLogger(__name__)
 _MAX_SLIPPAGE_PCT = 0.005  # 0.5% hard cap — matches DeFi model
 
 
+# AUDIT-2026-05-02 (HIGH race fix H-3): the previous implementation used
+# the global `random` module state for slippage noise. Concurrent threads
+# (TWAP daemon thread + main FastAPI worker + backtester) all read/write
+# the same global RNG, producing non-reproducible paper slippage AND
+# perturbing other modules' random draws (backtester sampling, etc.).
+# The old `_seed_slippage` docstring claimed "the rest of the Python
+# random state across modules is unaffected because random is already
+# module-imported here" — that claim was wrong; `random.seed()` sets the
+# process-global Mersenne Twister state for every importer. The fix is a
+# module-private `random.Random()` instance that's properly scoped.
+_slip_rng = random.Random()
+
+
 def _simulate_slippage(size_usd: float) -> float:
     """
     Realistic slippage model for crypto CEX/spot fills (paper mode).
     Small trades: ~0.1%. Large trades scale up to 0.5% cap.
     Adds random micro-noise to prevent deterministic fills.
 
-    P2 audit fix — `random.uniform` here is intentionally unseeded so
-    paper-mode runs feel realistic across reloads, BUT for backtest
-    determinism callers can pass a seeded `_seed_slippage()` block
-    above their fill loop. The micro-noise (±0.05%) is small enough
-    that two seeded runs of the same backtest produce within ±5bp
-    of each other on a per-fill basis — well below the regression
-    test tolerance (CTRL-F EXPECTED_ in tests/test_indicator_fixtures.py).
+    Uses a module-private RNG (`_slip_rng`) so concurrent threads and
+    other modules' RNG state are not perturbed; deterministic seeding
+    is available via `_seed_slippage()`.
     """
     base        = 0.001                                       # 0.1% base
     size_factor = min(size_usd / 10_000, 1.0) * 0.003        # +0–0.3% for large trades
-    noise       = random.uniform(-0.0005, 0.0005)             # ±0.05% micro-noise
+    noise       = _slip_rng.uniform(-0.0005, 0.0005)          # ±0.05% micro-noise
     return max(0.0, min(_MAX_SLIPPAGE_PCT, base + size_factor + noise))
 
 
 def _seed_slippage(seed: int = 42) -> None:
     """Seed the slippage RNG for deterministic backtests.
 
-    P2 audit fix — call this once before a backtest run if you need
-    reproducible fill prices (e.g., when comparing two strategies on
-    the same OHLCV universe). The seed only affects this module's
-    `random.uniform` calls in `_simulate_slippage`; the rest of the
-    Python `random` state across modules is unaffected because
-    `random` is already module-imported here.
+    Seeds only this module's private `_slip_rng` — does NOT touch the
+    process-global `random` state. Safe to call concurrently with
+    backtests in other modules without RNG cross-contamination.
     """
-    random.seed(seed)
+    _slip_rng.seed(seed)
 
 
 def _simulate_exchange_fee(size_usd: float) -> float:
@@ -703,7 +709,12 @@ def auto_execute_signals(
 # ─── DB persistence ─────────────────────────────────────────────────────────────
 
 def _log_to_db(result: dict) -> None:
-    """Persist execution result to database.execution_log (best-effort)."""
+    """Persist execution result to database.execution_log (best-effort).
+
+    AUDIT-2026-05-02 (HIGH financial fix H-1): pass `fee_usd` through
+    to the DB. Previously it was computed and put on `result["fee_usd"]`
+    but never persisted, breaking downstream P&L attribution.
+    """
     try:
         db.log_execution(
             placed_at    = result.get("placed_at", datetime.now(timezone.utc).isoformat()),
@@ -718,6 +729,7 @@ def _log_to_db(result: dict) -> None:
             mode         = result.get("mode", "paper"),
             error_msg    = result.get("error"),
             slippage_pct = result.get("slippage_pct"),
+            fee_usd      = result.get("fee_usd"),
         )
     except Exception as exc:
         logger.warning("[EXEC] DB log failed: %s", exc)
@@ -1056,10 +1068,32 @@ def check_circuit_breaker(portfolio_size_usd: float = 10_000.0) -> dict:
         month_start   = (now - timedelta(days=30)).isoformat()
 
         def _pnl_since(since_str: str) -> float:
+            """Compounded percentage P&L since `since_str`.
+
+            AUDIT-2026-05-02 (HIGH financial fix H-2): the previous
+            implementation summed `pnl_pct` directly, which is
+            mathematically wrong for percentage returns:
+              two trades of -2% each summed = -4%, but the actually
+              compounded loss is -3.96% (small per-trade, but it
+              drifts as the number of trades grows). More critically,
+              summing per-trade percentages conflates "% of trade size"
+              with "% of portfolio" — five trades each losing 2% of
+              their own size would sum to -10% even when portfolio
+              drawdown is only -1%. We now compound: equity multiplier
+              = ∏(1 + pnl_pct/100), drawdown = (multiplier - 1) * 100.
+              Long-term, dollar-weighted via `pnl_usd / portfolio_size`
+              is more correct still — that switch waits until pnl_usd
+              is logged consistently across paper + live paths.
+            """
             if "close_time" not in trades_df.columns:
                 return 0.0
             mask = trades_df["close_time"] >= since_str
-            return float(trades_df.loc[mask, "pnl_pct"].sum())
+            window = trades_df.loc[mask, "pnl_pct"]
+            if window.empty:
+                return 0.0
+            # (1 + r1/100) * (1 + r2/100) * ... - 1, expressed as %
+            multiplier = float((1.0 + window.astype(float) / 100.0).prod())
+            return (multiplier - 1.0) * 100.0
 
         daily_pnl   = _pnl_since(today_start)
         weekly_pnl  = _pnl_since(week_start)

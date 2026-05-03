@@ -467,6 +467,14 @@ def init_db():
             # T3-11: slippage tracking column in execution_log
             _add_col('execution_log', 'slippage_pct', 'REAL')
 
+            # AUDIT-2026-05-02 (HIGH financial fix H-1): execution.py
+            # computes fee_usd on every fill and puts it on
+            # `result["fee_usd"]`, but `_log_to_db` previously did NOT
+            # pass it through to `log_execution`. P&L attribution was
+            # silently lossy. Add the column so the persistence path can
+            # write it.
+            _add_col('execution_log', 'fee_usd', 'REAL')
+
             # C6 (Phase C plan §C6.3, 2026-04-30): extend alerts_log to
             # power the new AI Assistant → Alerts → History page.
             # `type` stores the alert taxonomy ("email_signal",
@@ -1666,20 +1674,30 @@ def get_alerts_log_df() -> pd.DataFrame:
 def log_execution(placed_at: str, pair: str, direction: str, side: str,
                   size_usd: float, order_type: str, price: float,
                   order_id: str, status: str, mode: str,
-                  error_msg: str = None, slippage_pct: float = None):
-    """Append one execution record. Thread-safe."""
+                  error_msg: str = None, slippage_pct: float = None,
+                  fee_usd: float = None):
+    """Append one execution record. Thread-safe.
+
+    AUDIT-2026-05-02 (HIGH financial fix H-1): added `fee_usd` parameter
+    so the fee that `execution._simulate_exchange_fee` (or live ccxt
+    fill) computes is persisted alongside size and price. Without this,
+    downstream P&L attribution silently dropped fees and overstated
+    realized returns.
+    """
     with _write_lock:
         conn = _get_conn()
         try:
             conn.execute("""
                 INSERT INTO execution_log
                     (placed_at, pair, direction, side, size_usd, order_type,
-                     price, order_id, status, mode, error_msg, slippage_pct)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     price, order_id, status, mode, error_msg, slippage_pct,
+                     fee_usd)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (placed_at, pair, direction, side, float(size_usd or 0),
                   order_type, float(price or 0), order_id or "",
                   status, mode, error_msg,
-                  float(slippage_pct) if slippage_pct is not None else None))
+                  float(slippage_pct) if slippage_pct is not None else None,
+                  float(fee_usd) if fee_usd is not None else None))
             conn.commit()
         finally:
             conn.close()

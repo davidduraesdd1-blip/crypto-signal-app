@@ -18,7 +18,6 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
 
 import alerts as alerts_module
 
@@ -30,12 +29,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# AUDIT-2026-05-02 (CRITICAL security fix C-2): the prior list drifted vs the
+# actual alerts_config schema — the live config dump from
+# /settings/ shows `okx_secret` (not `okx_api_secret`),
+# `email_pass` (not `smtp_password`), and several unlisted third-party keys
+# (lunarcrush_key, coinglass_key, cryptoquant_key, glassnode_key,
+# bscscan_key, etherscan_key, cryptorank_key, helius_key). With the
+# CRYPTO_SIGNAL_ALLOW_UNAUTH=true bypass on the live deploy, any of these
+# would leak via GET /settings/ the moment David fills them in. We now
+# redact (a) every name in the explicit allowlist below AND (b) every key
+# whose name ends in a sensitive suffix — defense-in-depth so a future
+# config field doesn't silently expose its value because someone forgot
+# to update this list.
 _REDACTED_KEYS = {
+    # Internal API key + the original list
     "api_key",
     "okx_api_key", "okx_api_secret", "okx_passphrase",
     "smtp_password", "email_app_password",
     "anthropic_api_key", "cryptopanic_api_key",
+    # Live config schema names (drift fix)
+    "okx_secret",
+    "email_pass",
+    # Third-party data providers
+    "lunarcrush_key", "coinglass_key", "cryptoquant_key", "glassnode_key",
+    "bscscan_key", "etherscan_key", "cryptorank_key", "helius_key",
+    "supergrok_coingecko_api_key", "coinmarketcap_api_key",
+    "zerion_api_key",
+    # Telemetry / errors
+    "supergrok_sentry_dsn", "sentry_dsn",
 }
+
+# Suffixes that always indicate a sensitive value. Defense-in-depth:
+# even if a future config key isn't named in `_REDACTED_KEYS`, it'll
+# still be redacted if its name matches one of these.
+_REDACTED_SUFFIXES = (
+    "_key", "_secret", "_passphrase", "_pass", "_password",
+    "_token", "_dsn",
+)
 
 _SIGNAL_RISK_KEYS = {
     "min_confidence_threshold",
@@ -72,10 +102,18 @@ _TRADING_KEYS = {
 }
 
 
+def _is_sensitive_key(name: str) -> bool:
+    """Match against the explicit allowlist OR the sensitive-suffix set."""
+    if name in _REDACTED_KEYS:
+        return True
+    name_lower = name.lower()
+    return any(name_lower.endswith(suffix) for suffix in _REDACTED_SUFFIXES)
+
+
 def _redact(cfg: dict[str, Any]) -> dict[str, Any]:
     out = dict(cfg)
     for k in list(out.keys()):
-        if k in _REDACTED_KEYS:
+        if _is_sensitive_key(k):
             v = out[k]
             out[k] = "•" * 8 if v else ""
     return out
@@ -90,12 +128,6 @@ def _apply_partial(allowed: set[str], patch: dict[str, Any]) -> dict[str, Any]:
             logger.debug("[settings] dropping unknown key %r (not in %s)", k, sorted(allowed))
     alerts_module.save_alerts_config(cfg)
     return cfg
-
-
-class SettingsPatch(BaseModel):
-    """Partial settings dict — caller sends only the keys they want to update."""
-    model_config = {"extra": "allow"}
-    fields: dict[str, Any] | None = Field(default=None)
 
 
 @router.get(

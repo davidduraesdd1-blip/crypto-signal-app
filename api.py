@@ -28,7 +28,6 @@ Alert message (JSON):
 from __future__ import annotations
 
 import hmac
-import html as _html
 import logging
 import os
 import threading
@@ -105,8 +104,17 @@ app.add_middleware(
     allow_origins=[
         "http://localhost", "http://localhost:8501", "http://127.0.0.1:8501",
         "http://localhost:3000", "http://127.0.0.1:3000",
+        # Production domains added explicitly once Vercel deploy lands in D5
     ],
-    allow_origin_regex=r"https://([a-z0-9-]+\.)*vercel\.app",
+    # AUDIT-2026-05-02 (HIGH security fix): previous regex
+    # `https://([a-z0-9-]+\.)*vercel\.app` matched ANY subdomain of
+    # vercel.app (including every other Vercel customer's preview deploy),
+    # which means a malicious site at attacker.vercel.app could prompt-
+    # inject a victim's browser into issuing authenticated calls if the
+    # X-API-Key was ever placed in a fetchable surface. Tightened to the
+    # owner-prefixed Vercel preview pattern only. Update the literal
+    # owner segment when the production domain is assigned in D5.
+    allow_origin_regex=r"^https://crypto-signal-app(-[a-z0-9-]+-davidduraesdd1-blip)?\.vercel\.app$",
     allow_methods=["GET", "POST", "PUT", "DELETE"],  # PUT/DELETE added for D1 routers
     allow_headers=["X-API-Key", "Content-Type"],
     allow_credentials=False,  # SEC-HIGH-02: explicit
@@ -669,9 +677,27 @@ def tradingview_webhook(
     # requests.post) is safe here and will not block the event loop.
 
     # API-03: enforce authentication — this was accepted but never validated
+    # AUDIT-2026-05-02 (HIGH security fix): previously failed OPEN when
+    # _expected was empty — any caller could write to alerts_log + trigger
+    # downstream agent paths. Now mirrors require_api_key fail-closed
+    # contract: 503 if no key is configured (unless the local-dev
+    # CRYPTO_SIGNAL_ALLOW_UNAUTH escape hatch is set). Constant-time
+    # compare prevents timing attacks on key guessing.
     _expected = _get_configured_api_key()
-    _provided = x_api_key or token
-    if _expected and not hmac.compare_digest(_provided, _expected):
+    _provided = x_api_key or token or ""
+    if not _expected:
+        if os.environ.get("CRYPTO_SIGNAL_ALLOW_UNAUTH", "").strip().lower() == "true":
+            pass  # local dev bypass — explicit env var only
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Webhook auth unavailable: API key not configured. "
+                    "Set 'api_key' via the Settings page before exposing "
+                    "this webhook URL publicly."
+                ),
+            )
+    elif not hmac.compare_digest(_provided, _expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     try:

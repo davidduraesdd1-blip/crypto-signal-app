@@ -4,6 +4,84 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-05-02 (overnight audit) — Deep audit landed, 12 fixes shipped
+
+David requested a comprehensive overnight audit before going to bed.
+Spawned 7 parallel deep-audit agents covering Tier 1 (security +
+financial), Tier 2 (math), Tier 3 (data feeds), Tier 4 (Streamlit
+read-only), and Tier 5 (misc). Results aggregated into
+`docs/audits/2026-05-02_overnight-deep-audit.md`.
+
+**Total findings:** ~160 — roughly 22 CRITICAL, 51 HIGH, 53 MEDIUM,
+34 LOW. Restore tag created at `pre-overnight-audit-2026-05-02`
+before any code change.
+
+**Shipped this run** (all 12 under one commit, 348 tests pass, 0
+regressions):
+- HIGH security: TradingView webhook fail-CLOSED on missing key
+- HIGH security: CORS regex tightened from `*.vercel.app` (any Vercel
+  customer) to owner-prefix-only
+- CRITICAL security: `_REDACTED_KEYS` expanded + suffix-match
+  defense-in-depth + regression test (was missing okx_secret,
+  email_pass, lunarcrush_key, coinglass_key, cryptoquant_key,
+  glassnode_key, etc.)
+- HIGH financial: `fee_usd` plumbed through to DB (was silently
+  dropped from execution_log)
+- HIGH financial / math: `check_circuit_breaker` compounds % returns
+  instead of summing (sum() is mathematically wrong on >1 trade)
+- HIGH race: Module-private `_slip_rng` for slippage; eliminates
+  cross-module RNG cross-contamination
+- MEDIUM error-handling: Onchain `_safe_fetch` returns explicit None
+  + error string instead of misleading fake-neutral 1.0/0.0/false
+- MEDIUM bug: Regimes summary now uses canonical HMM labels
+  (Bull/Bear/Sideways/Transition) seeded at zero + dynamic-bucket
+  fallback; legacy "Trending/Ranging/Neutral" kept as zero back-compat
+- MEDIUM bug: Diagnostics gates 4/5/6 no longer fail-open green;
+  new `unmeasured` status; removed misleading `resume_count: 0` /
+  `session_halts: 0` placeholders
+- LOW dead-code: removed unused `import html as _html` + unused
+  `SettingsPatch` model
+
+**Deferred to David's review tomorrow morning** (architectural or
+§22-regression-affecting):
+- **C-1 live deploy auth bypass** — David must set `api_key` in
+  production via `PUT /settings/dev-tools` then flip
+  `CRYPTO_SIGNAL_ALLOW_UNAUTH=false` in Render dashboard. Defense-in-
+  depth redaction fix mitigates leak risk meanwhile.
+- **C-3/C-4/C-5/C-6 execution-layer architectural** — allowlist +
+  size cap + SL/TP validation, idempotency via clientOrderId,
+  circuit breaker bypass on every order path, short-side slippage
+  math. Each touches the order-placement contract; needs sign-off
+  + paired §22 backtest diff.
+- **4 LOOK-AHEAD-BIAS math CRITICALs** in
+  `top_bottom_detector.py` (centered pivots), `crypto_model_core.py`
+  (MACD divergence shift(-1)), and AVWAP anchors. Per §22, need
+  backtest regression diff against 2023-2026 universe before
+  shipping. Documented + queued for dedicated batch.
+- **3 LLM trust-boundary CRITICALs** — prompt-injection sanitizer is
+  a 7-phrase substring wall (trivially bypassed); emergency stop
+  TOCTOU window during ~45s Claude round-trip; LLM_analysis.py has
+  zero sanitization on prompts. Needs design-pass + threat-model
+  review.
+- **4 DB concurrency CRITICALs** — default `isolation_level=""` +
+  pooled connections + missing `PRAGMA busy_timeout`. Concurrency
+  rewrite needs a dedicated test plan.
+
+**Streamlit (Tier 4):** 0 immediate fixes needed, all 11 findings
+deferred to D8 cutover archive. Phase D §6 retirement plan unchanged.
+
+**Math (Tier 2):** No changes shipped this run (per §22 regression-
+diff requirement). 4 CRITICAL look-ahead findings catalogued.
+
+**Restore point:** if any of the 12 shipped fixes regresses something
+overnight, `git checkout pre-overnight-audit-2026-05-02` returns the
+branch to the D-ext baseline (commit `23f6fd7`).
+
+**Next session:** read this entry → audit doc → queue the deferred
+CRITICAL items as approved-batch decisions for David in the morning.
+
+---
+
 ## 2026-05-02 (D-ext) — D-extension endpoints landed
 
 Closed the 4 endpoint gaps surfaced by the D4 code-wire plan

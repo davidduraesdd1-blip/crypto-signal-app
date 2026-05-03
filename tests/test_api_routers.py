@@ -235,6 +235,42 @@ def test_settings_get_redacts_secrets(client, stub_alerts_config):
     assert "secret-deadbeef" not in r.text
 
 
+def test_settings_get_redacts_unlisted_secrets_by_suffix(client, stub_alerts_config):
+    """AUDIT-2026-05-02 (CRITICAL C-2): the redaction list previously had
+    drift vs the live alerts_config schema. This regression-guards the
+    defense-in-depth suffix match — any future config field with a
+    sensitive suffix MUST be redacted even if a maintainer forgets to
+    add it to `_REDACTED_KEYS`.
+    """
+    canary_secrets = {
+        "okx_secret":              "leak-okx-secret-xyz",
+        "email_pass":              "leak-email-pass-xyz",
+        "lunarcrush_key":          "leak-lc-xyz",
+        "coinglass_key":           "leak-cg-xyz",
+        "cryptoquant_key":         "leak-cq-xyz",
+        "glassnode_key":           "leak-gn-xyz",
+        "supergrok_sentry_dsn":    "https://leak@sentry.io/xyz",
+        # New hypothetical field added by a future maintainer:
+        "future_provider_secret":  "leak-future-secret-xyz",
+        "future_provider_token":   "leak-future-token-xyz",
+    }
+    for k, v in canary_secrets.items():
+        stub_alerts_config[k] = v
+    r = client.get("/settings/")
+    assert r.status_code == 200
+    body_text = r.text
+    body = r.json()
+    for k, v in canary_secrets.items():
+        # No canary secret value should appear in the response anywhere
+        assert v not in body_text, (
+            f"Secret value for {k!r} leaked plaintext in /settings/ response"
+        )
+        # The field itself should still be present, just redacted to bullets
+        assert body["all"][k].startswith("•"), (
+            f"{k!r} not redacted (current value: {body['all'][k]!r})"
+        )
+
+
 def test_settings_put_signal_risk_smoke(client, stub_alerts_config):
     r = client.put("/settings/signal-risk", json={
         "min_confidence_threshold": 65,
@@ -322,13 +358,16 @@ def test_diagnostics_circuit_breakers_smoke(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "all_operational" in body
+    assert "has_unmeasured" in body  # AUDIT-2026-05-02: surfaced for honest UI
     assert isinstance(body["gates"], list)
     assert body["gate_count"] == 7
     assert len(body["gates"]) == 7
     # Each gate has the canonical shape the frontend renders
     for g in body["gates"]:
         assert {"id", "label", "status", "detail"} <= set(g.keys())
-        assert g["status"] in {"ok", "warn", "breach"}
+        # AUDIT-2026-05-02: "unmeasured" status added so gates that
+        # cannot be computed don't fail-open as misleading-green.
+        assert g["status"] in {"ok", "warn", "breach", "unmeasured"}
     # Mockup-locked labels in mockup order
     expected_labels = [
         "Daily loss limit",
@@ -340,6 +379,15 @@ def test_diagnostics_circuit_breakers_smoke(client):
         "Emergency stop flag",
     ]
     assert [g["label"] for g in body["gates"]] == expected_labels
+    # Cooldown is the canonical "unmeasured" gate (live state not tracked
+    # in the agent pipeline yet); regression-guard against a future
+    # change that silently flips it back to fake-green.
+    g4 = body["gates"][3]
+    assert g4["label"] == "Cooldown after loss"
+    assert g4["status"] == "unmeasured"
+    # Operational composite must reflect the unmeasured gate.
+    assert body["all_operational"] is False
+    assert body["has_unmeasured"] is True
 
 
 def test_diagnostics_circuit_breakers_emergency_breach(client, monkeypatch):
