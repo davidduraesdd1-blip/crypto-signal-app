@@ -516,7 +516,21 @@ def _check_pre_risk(state: AgentState, cfg: dict) -> tuple:
 
 
 def _check_post_risk(state: AgentState, cfg: dict) -> tuple:
-    """Hard post-decision gates — validate + cap Claude's approved size. Returns (passed, reason)."""
+    """Hard post-decision gates — validate + cap Claude's approved size. Returns (passed, reason).
+
+    AUDIT-2026-05-03 (P6-LLM-3): emergency-stop is re-checked here at
+    the top so the TOCTOU window during the ~45s Claude round-trip
+    can't sneak a kill-switched cycle past pre-risk into execution.
+    Pre-risk (line ~461) checks emergency_stop BEFORE the Claude call;
+    this re-check picks up a flip that happened DURING the call.
+    """
+    # AUDIT-2026-05-03 (P6-LLM-3): mid-pipeline TOCTOU check.
+    if is_emergency_stop():
+        return False, (
+            "EMERGENCY STOP activated during Claude round-trip — aborting "
+            "before execution. Reset from Agent Control Panel to resume."
+        )
+
     size_usd = state["approved_size_usd"]
     equity   = state["portfolio_state"]["equity_usd"]
     max_size = equity * 0.50  # hard cap: 50% of equity per trade
@@ -1002,6 +1016,26 @@ def _node_risk_post_check(state: AgentState) -> AgentState:
 def _node_execute(state: AgentState) -> AgentState:
     """Node 5: Execute order via execution.place_order() — Python controls this, not Claude."""
     cfg = get_agent_config()
+
+    # AUDIT-2026-05-03 (P6-LLM-3): final emergency-stop check the
+    # instant before the order lands. Belt-and-suspenders on top of
+    # the pre-risk and post-risk checks — closes the residual TOCTOU
+    # window between _check_post_risk returning True and execution
+    # actually firing. If a kill-switch flip lands in this final ms-
+    # scale window, we still abort.
+    if is_emergency_stop():
+        state["execution_result"] = {
+            "ok": False,
+            "mode": "aborted_emergency_stop",
+            "pair": state["pair"],
+            "error": "Emergency stop activated immediately before order placement — aborting",
+        }
+        state["cycle_notes"].append("EMERGENCY STOP — order aborted at execute boundary")
+        logger.warning(
+            "[agent] Emergency stop fired between post-risk and execute — order aborted for %s",
+            state["pair"],
+        )
+        return state
 
     if cfg["dry_run"]:
         state["execution_result"] = {
