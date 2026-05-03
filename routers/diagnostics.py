@@ -153,13 +153,23 @@ def _build_gates() -> list[dict]:
                         f"threshold {cooldown_s}s · live state not tracked",
                         limit=cooldown_s)
 
-    # Gate 5 — Trade-size cap (configured threshold; the gate fires
-    # inside agent._check_post_risk at order time, not at status-read
-    # time, so the most we can report here is the configured limit).
+    # Gate 5 — Trade-size cap.
+    # AUDIT-2026-05-03 (P2 — option a): flipped from `_ok` → `_unmeasured`
+    # for consistency with gates 4 and 6 and per the `feedback_empty_states`
+    # memory ("truthful empty states"). Gate 5 IS enforced at order time
+    # inside agent._check_post_risk, but at status-read time we cannot
+    # answer "is the cap currently being honored?" — only "what value is
+    # configured?". Reporting `_ok` falsely implied real-time monitoring;
+    # `_unmeasured` is the honest signal that lets the frontend render a
+    # yellow "configured but not status-tracked" pill rather than a
+    # misleading green check. Gate 4 set this precedent (cooldown after
+    # loss is also enforcement-only, not status-tracked).
     max_trade_pct = float(cfg.get("agent_max_trade_size_pct", 10.0))
-    gate5 = _ok("Trade-size cap",
-                f"{max_trade_pct:.0f}% configured cap · enforced at order time",
-                value=max_trade_pct, limit=max_trade_pct)
+    gate5 = _unmeasured(
+        "Trade-size cap",
+        f"{max_trade_pct:.0f}% configured cap · enforced at order time, not status-tracked",
+        limit=max_trade_pct,
+    )
 
     # Gate 6 — Allowlist (TIER1 ∪ TIER2)
     # AUDIT-2026-05-02 (MEDIUM bug fix): previous implementation reported

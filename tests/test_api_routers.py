@@ -727,13 +727,22 @@ def test_diagnostics_circuit_breakers_smoke(client):
         "Emergency stop flag",
     ]
     assert [g["label"] for g in body["gates"]] == expected_labels
-    # Cooldown is the canonical "unmeasured" gate (live state not tracked
-    # in the agent pipeline yet); regression-guard against a future
-    # change that silently flips it back to fake-green.
+    # Cooldown is one of the canonical "unmeasured" gates (live state not
+    # tracked in the agent pipeline yet); regression-guard against a
+    # future change that silently flips it back to fake-green.
     g4 = body["gates"][3]
     assert g4["label"] == "Cooldown after loss"
     assert g4["status"] == "unmeasured"
-    # Operational composite must reflect the unmeasured gate.
+    # AUDIT-2026-05-03 (P2): gate 5 (Trade-size cap) is also `unmeasured`
+    # — it's enforced at order time inside agent._check_post_risk but
+    # the cap-honoured-or-not state cannot be computed from the
+    # diagnostics-read path. Was misleadingly `_ok` previously; that
+    # showed a green check next to a check that had no real-time signal.
+    g5 = body["gates"][4]
+    assert g5["label"] == "Trade-size cap"
+    assert g5["status"] == "unmeasured", \
+        "Gate 5 must be 'unmeasured' (enforced at order time, not status-tracked) — see P2 in deferred-fixes-proposals.md"
+    # Operational composite must reflect the unmeasured gates.
     assert body["all_operational"] is False
     assert body["has_unmeasured"] is True
 
