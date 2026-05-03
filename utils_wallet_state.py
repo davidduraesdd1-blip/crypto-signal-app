@@ -23,11 +23,15 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from utils_format import format_usd
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +143,20 @@ def reserve(address: str, app: str, amount_usd: float, note: str = "",
     reservation_id. Reservations auto-expire after 15 minutes so a
     crashed/forgotten reservation can't lock funds forever.
     """
-    if amount_usd <= 0 or not address:
+    # AUDIT-2026-05-03 (MEDIUM W-3): reject NaN / Inf amounts. Without
+    # this, `float("nan") <= 0` is False and the gate passes; the NaN
+    # then poisons every downstream sum (active_reservations_usd,
+    # available_usd, has_capacity) so the wallet state is unrecoverable
+    # without manual JSON edits.
+    if not address or not math.isfinite(amount_usd) or amount_usd <= 0:
         return ""
-    _res_id = f"{app}:{int(_now())}:{hash(note) & 0xFFFFFF:06x}"
+    # AUDIT-2026-05-03 (MEDIUM W-2): use uuid suffix instead of 24-bit
+    # `hash(note) & 0xFFFFFF`. Two reservations from the same app within
+    # the same second with identical note strings would have collided on
+    # `reservation_id`, and `release()` would then delete the wrong one.
+    # uuid4 hex[:8] gives ~4 billion buckets per second-pair instead of
+    # ~16 million across all (note, second) pairs.
+    _res_id = f"{app}:{int(_now())}:{uuid.uuid4().hex[:8]}"
     with _LOCK:
         state = _prune_expired(_load_state())
         _list = state.setdefault(address.lower(), [])
@@ -207,12 +222,20 @@ def has_capacity(address: str, total_wallet_usd: float, amount_usd: float) -> tu
     Returns (ok, reason). Used by each app's portfolio_executor to gate
     execution when another app has already reserved the funds.
     """
-    if amount_usd <= 0:
+    # AUDIT-2026-05-03 (MEDIUM W-3): same NaN/Inf guard as reserve(). A
+    # NaN amount used to short-circuit through `nan <= 0 == False` and
+    # then `nan > avail == False`, returning (True, "") — i.e. a NaN
+    # request silently passed the capacity check.
+    if not math.isfinite(amount_usd) or amount_usd <= 0:
         return True, ""
     avail = available_usd(address, total_wallet_usd)
     if amount_usd > avail:
+        # AUDIT-2026-05-03 (LOW W-5): route USD display through
+        # `format_usd` so the unit convention matches every other dollar
+        # value rendered by the apps (was hard-coded `{:,.0f}` here only).
         return False, (
-            f"Only ${avail:,.0f} available — ${active_reservations_usd(address):,.0f} "
+            f"Only {format_usd(avail, decimals=0)} available — "
+            f"{format_usd(active_reservations_usd(address), decimals=0)} "
             f"is currently reserved by another app's in-flight plan. "
             f"Wait for that to settle or release reservations manually."
         )

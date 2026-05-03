@@ -14,18 +14,48 @@ Philosophy:
 
 from __future__ import annotations
 
+import logging
 import math
 
 
+logger = logging.getLogger(__name__)
+
 _EM_DASH = "—"
+
+
+def _coerce_numeric_string(s: str) -> str:
+    """Strip common decoration from numeric strings before float() parsing.
+
+    AUDIT-2026-05-03 (HIGH bug fix F-1): handles values like `"7,200"` or
+    `" 7200 "` that came from a CSV / user paste. Without this, the
+    surrounding `_is_missing` swallowed the ValueError and `format_usd`
+    silently rendered "—" for valid values, masking the upstream type bug.
+    """
+    return s.replace(",", "").replace("_", "").replace(" ", "").strip()
 
 
 def _is_missing(v) -> bool:
     """Return True if v should render as em-dash."""
     if v is None:
         return True
-    if isinstance(v, str) and v.strip() in ("", "N/A", "None", "nan", "NaN", "—"):
-        return True
+    if isinstance(v, str):
+        stripped = v.strip()
+        if stripped in ("", "N/A", "None", "nan", "NaN", "—"):
+            return True
+        # Try the cleaned form so well-formed comma/underscore numerics
+        # are NOT classified as missing.
+        try:
+            f = float(_coerce_numeric_string(stripped))
+            if math.isnan(f) or math.isinf(f):
+                return True
+            return False
+        except (TypeError, ValueError):
+            # Genuinely non-numeric string ("abc") is treated as missing —
+            # safer to render em-dash than to leak the raw string into the
+            # UI. This is a behavior change from the prior version which
+            # returned False here; the new contract is stricter and
+            # surfaces obvious upstream-type-bug cases as em-dash earlier.
+            return True
     try:
         f = float(v)
         if math.isnan(f) or math.isinf(f):
@@ -47,17 +77,33 @@ def format_usd(value, decimals: int = 2, compact: bool = False) -> str:
         format_usd(15_950, compact=True)  → "$15.95K"
         format_usd(2_126_140)      → "$2,126,140.00"
         format_usd(2_126_140, compact=True) → "$2.13M"
+        format_usd("7,200")        → "$7,200.00"   (AUDIT-2026-05-03 F-1)
         format_usd(None)           → "—"
     """
     if _is_missing(value):
         return _EM_DASH
     try:
-        v = float(value)
+        # AUDIT-2026-05-03 (HIGH F-1): coerce decoration on numeric strings
+        # before float() so `format_usd("7,200")` returns "$7,200.00"
+        # instead of silently rendering em-dash.
+        if isinstance(value, str):
+            v = float(_coerce_numeric_string(value))
+        else:
+            v = float(value)
     except (TypeError, ValueError):
         return _EM_DASH
     # Audit aba91f63: guard against negative `decimals` which would raise
     # ValueError in the f-string. Clamp to 0..6.
+    # AUDIT-2026-05-03 (MEDIUM F-3): log when the clamp actually fires so
+    # silent decimals truncation no longer masks bugs where `decimals`
+    # came from user input.
+    _orig_decimals = decimals
     decimals = max(0, min(6, int(decimals)))
+    if decimals != _orig_decimals:
+        logger.debug(
+            "[format_usd] decimals clamped %r → %d (valid range 0..6)",
+            _orig_decimals, decimals,
+        )
     sign = "-" if v < 0 else ""
     av = abs(v)
     if compact:

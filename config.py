@@ -16,7 +16,14 @@ ZERION_API_KEY: str | None = os.environ.get("ZERION_API_KEY", "")
 # ─── Anthropic / AI master switch ────────────────────────────────────────────
 # Reads from ANTHROPIC_ENABLED env var if set; defaults to True so AI features
 # are live when an API key is present. Set env var to "false" to disable.
-ANTHROPIC_ENABLED: bool = os.environ.get("ANTHROPIC_ENABLED", "true").lower() not in ("false", "0", "no")
+# AUDIT-2026-05-03 (MEDIUM C-2): strip whitespace before lower-casing so
+# `ANTHROPIC_ENABLED=" false "` (e.g. from a shell expansion / dashboard
+# trailing-space) reads as disabled rather than enabled. Same defensive
+# pattern used by routers/deps.py for CRYPTO_SIGNAL_ALLOW_UNAUTH.
+ANTHROPIC_ENABLED: bool = (
+    os.environ.get("ANTHROPIC_ENABLED", "true").strip().lower()
+    not in ("false", "0", "no")
+)
 
 # ─── LLM Model Constants ──────────────────────────────────────────────────────
 # Centralised model names — update here to change everywhere.
@@ -110,6 +117,19 @@ TIER2_COINGECKO_IDS: dict[str, str] = {
 TIER2_DEFAULT_WEIGHTS: dict[str, float] = {
     pair: 1.0 / len(TIER2_PAIRS) for pair in TIER2_PAIRS
 }
+
+# AUDIT-2026-05-03 (LOW C-3): import-time consistency assertion to catch
+# the next "added a pair to TIER2_PAIRS, forgot to update CoinGecko IDs"
+# regression at import rather than at first scan-time crash. The earlier
+# P1 fix called out exactly this drift class. TIER2_BINANCE_PAIRS is
+# intentionally a strict subset (some Tier 2 pairs aren't on Binance) so
+# we don't assert equality there — only on the CoinGecko ID map which
+# must cover every pair for the price-data fallback to work.
+assert set(TIER2_COINGECKO_IDS.keys()) == set(TIER2_PAIRS), (
+    "config.py drift: TIER2_COINGECKO_IDS keys do not match TIER2_PAIRS — "
+    f"missing in IDs: {set(TIER2_PAIRS) - set(TIER2_COINGECKO_IDS.keys())}, "
+    f"extra in IDs: {set(TIER2_COINGECKO_IDS.keys()) - set(TIER2_PAIRS)}"
+)
 
 # ─── Feature Flags ────────────────────────────────────────────────────────────
 # auto-enabled when the corresponding key is set — no code changes needed

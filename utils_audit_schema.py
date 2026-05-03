@@ -122,9 +122,22 @@ def serialize_event(event: dict) -> str:
     try:
         return json.dumps(event, default=str, separators=(",", ":"))
     except Exception as _err:
+        # AUDIT-2026-05-03 (LOW A-2): include the canonical envelope fields
+        # (schema_version, app, event_type, timestamp) plus a sentinel
+        # `__serialize_failed__` flag so downstream tooling can detect the
+        # fallback row and reconcile/exclude it. Previous behavior emitted a
+        # row with only event_id + error, which broke any consumer that
+        # filters or groups by `app` or `event_type`.
         logger.warning("[AuditSchema] serialize failed: %s", _err)
-        return json.dumps({"event_id": event.get("event_id"),
-                           "error": f"serialize_failed: {_err}"})
+        return json.dumps({
+            "schema_version":          1,
+            "event_id":                event.get("event_id"),
+            "app":                     event.get("app"),
+            "event_type":              event.get("event_type"),
+            "timestamp":               event.get("timestamp"),
+            "__serialize_failed__":    True,
+            "error":                   f"serialize_failed: {_err}",
+        })
 
 
 __all__ = [

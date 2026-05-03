@@ -61,6 +61,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_MINUTES = 30
 _scan_lock = threading.Lock()
 
+# AUDIT-2026-05-03 (HIGH bug fix S-1): scheduler must re-read interval
+# on every tick so live edits to autoscan_interval_minutes via the
+# Settings page take effect without a process restart. We hold a
+# module-level reference to the live scheduler + the current interval
+# so run_scan_job can detect drift and reschedule itself.
+_scheduler: "BlockingScheduler | None" = None
+_current_interval_minutes: int = DEFAULT_INTERVAL_MINUTES
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -78,7 +86,9 @@ def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
             return s_m <= now_m < e_m
         return now_m >= s_m or now_m < e_m   # overnight e.g. 22:00–06:00
     except Exception as _e:
-        logging.debug("[Scheduler] quiet_hours parse error: %s", _e)
+        # AUDIT-2026-05-03 (LOW S-5): use the named module logger for parity
+        # with the rest of the file (was `logging.debug` — module-level).
+        logger.debug("[Scheduler] quiet_hours parse error: %s", _e)
         return False
 
 
@@ -101,9 +111,19 @@ def run_scan_job() -> None:
         return
 
     try:
-        # Quiet hours check
+        # AUDIT-2026-05-03 (MEDIUM perf fix S-4): load alerts config once
+        # at the top of the job and reuse for quiet-hours, the alerts
+        # channels, and the interval re-read. Was calling
+        # load_alerts_config() twice (line 106 + 152) despite the
+        # explicit "load once, reuse" comment on what's now line 173.
         try:
             cfg = _alerts.load_alerts_config()
+        except Exception as _e:
+            logger.warning("[Scheduler] Failed to load alerts config (continuing with empty): %s", _e)
+            cfg = {}
+
+        # Quiet hours check
+        try:
             if cfg.get("autoscan_quiet_hours_enabled"):
                 now_str = datetime.now(timezone.utc).strftime("%H:%M")
                 qs = cfg.get("autoscan_quiet_start", "22:00")
@@ -136,7 +156,17 @@ def run_scan_job() -> None:
 
         # ── Update paper positions ────────────────────────────────────────────
         try:
-            prices = {r["pair"]: r.get("price_usd", 0) for r in results if r.get("price_usd")}
+            # AUDIT-2026-05-03 (LOW S-6): defensive accessors. The previous
+            # `{r["pair"]: r.get("price_usd", 0) for r in results if r.get("price_usd")}`
+            # raised KeyError if a result row was missing the pair key, and
+            # the truthy filter `if r.get("price_usd")` silently dropped
+            # legitimate `0.0` prices (failed-fetch edge case where 0 is the
+            # actual fetched value vs missing).
+            prices = {
+                r.get("pair"): r["price_usd"]
+                for r in results
+                if r.get("pair") and r.get("price_usd") is not None
+            }
             if prices:
                 model.update_positions(prices)
                 # P6: Auto-close any paper positions older than 14 days at current prices
@@ -147,23 +177,40 @@ def run_scan_job() -> None:
             logger.warning("[Scheduler] Position update error (non-critical): %s", _pe)
 
         # ── Send alerts ───────────────────────────────────────────────────────
-        # Load config once, reuse across all 4 alert channels
+        # AUDIT-2026-05-03 (MEDIUM perf S-4): reuse the cfg loaded at the top
+        # of run_scan_job rather than reloading. Was a redundant disk read.
         try:
-            _alerts_cfg = _alerts.load_alerts_config()
-        except Exception as _e:
-            logger.warning("[Scheduler] Failed to load alerts config: %s", _e)
-            _alerts_cfg = {}
-        try:
-            _alerts.send_scan_email_alerts(results, _alerts_cfg)
+            _alerts.send_scan_email_alerts(results, cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Email alert failed (non-critical): %s", _e)
         try:
-            _alerts.check_watchlist_alerts(results, _alerts_cfg)
+            _alerts.check_watchlist_alerts(results, cfg)
         except Exception as _e:
             logger.warning("[Scheduler] Watchlist alert failed (non-critical): %s", _e)
 
         logger.info("SCAN COMPLETE — %d pair(s) processed", len(results))
         logger.info("=" * 60)
+
+        # AUDIT-2026-05-03 (HIGH bug S-1): re-read interval from the live
+        # config and reschedule the autoscan job if the operator changed it
+        # via the Settings page. This closes the "config edits never take
+        # effect until process restart" gap. Done at the bottom of the job
+        # so the change applies to the NEXT trigger, not this one.
+        try:
+            global _current_interval_minutes
+            new_interval = int(cfg.get("autoscan_interval_minutes", _current_interval_minutes))
+            if _scheduler is not None and new_interval != _current_interval_minutes and new_interval > 0:
+                _scheduler.reschedule_job(
+                    "autoscan",
+                    trigger=IntervalTrigger(minutes=new_interval),
+                )
+                logger.info(
+                    "[Scheduler] Interval reschedule: %d → %d minutes (live config edit)",
+                    _current_interval_minutes, new_interval,
+                )
+                _current_interval_minutes = new_interval
+        except Exception as _re_err:
+            logger.warning("[Scheduler] Interval reschedule failed (non-fatal): %s", _re_err)
 
     except Exception as e:
         logger.exception("[Scheduler] Scan failed: %s", e)
@@ -212,10 +259,11 @@ def start_scheduler() -> None:
     """Start the blocking scheduler — runs forever until Ctrl+C."""
     _resume_from_db()
 
-    interval_minutes = _get_interval()
-    logger.info("[Scheduler] Auto-scan interval: %d minutes", interval_minutes)
+    global _scheduler, _current_interval_minutes
+    _current_interval_minutes = _get_interval()
+    logger.info("[Scheduler] Auto-scan interval: %d minutes", _current_interval_minutes)
 
-    scheduler = BlockingScheduler(
+    _scheduler = BlockingScheduler(
         job_defaults={
             "coalesce":          True,
             "max_instances":     1,
@@ -224,11 +272,11 @@ def start_scheduler() -> None:
         timezone="UTC",
     )
 
-    scheduler.add_job(
+    _scheduler.add_job(
         run_scan_job,
-        trigger=IntervalTrigger(minutes=interval_minutes),
+        trigger=IntervalTrigger(minutes=_current_interval_minutes),
         id="autoscan",
-        name=f"Crypto Signal Auto-Scan (every {interval_minutes}m)",
+        name=f"Crypto Signal Auto-Scan (every {_current_interval_minutes}m)",
     )
 
     logger.info("[Scheduler] Running standalone. Press Ctrl+C to stop.")
@@ -241,7 +289,7 @@ def start_scheduler() -> None:
     _t.join(timeout=1800)  # 30-minute hard cap; scheduler proceeds regardless
 
     try:
-        scheduler.start()
+        _scheduler.start()
     except KeyboardInterrupt:
         logger.info("[Scheduler] Stopped by user.")
 
