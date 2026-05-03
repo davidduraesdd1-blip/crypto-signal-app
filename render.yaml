@@ -1,0 +1,87 @@
+# Render IaC blueprint for the crypto-signal-app FastAPI service.
+#
+# Phase D D2: this file documents the deploy David configured by hand
+# in the Render dashboard, so the configuration lives in git and a
+# fresh Render account can recreate the deploy with one click via
+# https://render.com/deploy?repo=<repo-url>.
+#
+# When committed, Render reads this on every push and reconciles the
+# live service against it (the dashboard becomes a UI on top of git
+# state, not the source of truth). Env vars marked `sync: false` must
+# still be set in the Render dashboard — render.yaml never carries
+# secret values.
+#
+# Spec: https://render.com/docs/yaml-spec
+# Plan: docs/redesign/2026-05-02_phase-d-streamlit-retirement.md (§6 D2)
+
+services:
+  - type: web
+    name: crypto-signal-api
+    runtime: python
+    plan: free                          # $0/mo, 512 MB RAM, 0.1 CPU, sleeps after 15 min idle
+    region: oregon                      # US West — matches David's manual config
+    branch: phase-d/next-fastapi-cutover
+    autoDeploy: true                    # redeploy on every push to the branch
+    healthCheckPath: /health            # used by Render's load balancer + Cron-job.org keep-alive ping
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+
+    envVars:
+      # Phase D D1: temporary auth bypass so the new routers are reachable
+      # without an X-API-Key. Flip to `false` and set a real api_key in
+      # alerts_config.json (or via /settings/) once D4 wires the Next.js
+      # frontend with key handling. Tracked: D6 security pass.
+      - key: CRYPTO_SIGNAL_ALLOW_UNAUTH
+        value: "true"
+
+      # Disable Anthropic LLM at process start; AI Assistant endpoints
+      # gracefully return source="unavailable" without a key. Real key
+      # goes in via dashboard env var (sync: false) when David is ready
+      # to spend on Claude tokens.
+      - key: ANTHROPIC_ENABLED
+        value: "false"
+
+      - key: ANTHROPIC_API_KEY
+        sync: false                     # set in Render dashboard, never in git
+
+      # Demo mode keeps any non-essential network calls quiet during
+      # cold-start so /health reliably returns within Render's 60s
+      # health-check window. Match the conftest.py default.
+      - key: DEMO_MODE
+        value: "true"
+
+      # Pin Python version to match Streamlit Cloud (Python 3.11). Also
+      # honored via runtime.txt at repo root (`python-3.11`). Both kept
+      # so neither tool surprises us on a future redeploy.
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # External-data API keys — set in Render dashboard, never in git.
+      # Each one auto-enables a feature in config.py when present; the
+      # absence path is graceful per CLAUDE.md §10 fallback chains.
+      - key: CRYPTOPANIC_API_KEY
+        sync: false
+      - key: SUPERGROK_COINGECKO_API_KEY
+        sync: false
+      - key: COINMARKETCAP_API_KEY
+        sync: false
+      - key: ETHERSCAN_API_KEY
+        sync: false
+      - key: ZERION_API_KEY
+        sync: false
+      - key: SUPERGROK_SENTRY_DSN
+        sync: false
+      - key: CRYPTORANK_API_KEY
+        sync: false
+
+      # Live trading credentials (OKX) — set in Render dashboard only
+      # when David flips live_trading_enabled. Until then, paper-trade
+      # path runs without these; api.py startup auth-check guards the
+      # combination "live_trading + no api_key".
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_PASSPHRASE
+        sync: false
