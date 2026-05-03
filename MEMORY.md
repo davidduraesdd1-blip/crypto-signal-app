@@ -4,6 +4,44 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-05-02 (even later) — D3 mockups complete, D4 plan drafted
+
+**D3 status:** All 13 mockups accepted in v0 across 8 routes (Home,
+Signals, Regimes, On-Chain, Backtester+Arb, Alerts+History, AI
+Assistant, Settings+3 sub-pages). Iteration count: most pages
+accepted on iter 1; AI Assistant required 2 iterations for Stop
+button color, slider thumbs/help lines, decisions-log gate
+narrative, and Pipeline Architecture footer comments. v0 chat is
+warm with full project context.
+
+**D5 polish prompt drafted** (single batch covering: bright `--accent`
+→ `--accent-soft` swap on active sidebar/level/timeframe/pagination
+states, plus Streamlit secrets-path copy → Render env vars +
+.env.local). User to fire in v0, then push polished output as one
+commit, then cancel v0 Team subscription.
+
+**D4 code-wire plan drafted:**
+`docs/redesign/2026-05-02_phase-d-d4-code-wire-plan.md` — 12 sections
+covering TanStack Query v5 lib choice, endpoint→page binding map,
+§12 cache windows mapped to staleTime/gcTime, truthful empty-state
+patterns per `feedback_empty_states.md` memory, sub-phase split
+(D4a plumbing → D4b reads → D4c mutations → D4d test). Surfaces
+4 endpoint gaps to defer to a D-extension batch (PUT
+/settings/trading, POST /exchange/test-connection, GET
+/circuit-breakers, GET /db-health) — none block cutover.
+
+**Carry-over polish noted but not blocking D4:**
+- Decisions-log row coherence on /ai-assistant (rationale↔decision
+  ↔status pairings) — iter 3 was queued but skipped to keep moving;
+  D4 wiring will use real backend data so this self-resolves.
+
+**Resume point:** when polish ships, single commit + tag
+`d3-mockups-polished-2026-05-XX`, cancel v0 Team, then D4 execution
+starts per the new plan doc. Branch unchanged
+(`phase-d/next-fastapi-cutover`).
+
+---
+
 ## 2026-05-02 (later) — Phase D approved + handed off to Code
 
 **Approvals locked** (David, via AskUserQuestion):
