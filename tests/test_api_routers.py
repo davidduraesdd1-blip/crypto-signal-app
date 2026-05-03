@@ -553,6 +553,152 @@ def test_exchange_test_connection_with_keys_returns_result(client, monkeypatch):
     assert body["balance_usdt"] == 123.45
 
 
+# ── /execute/order OrderRequest validation (AUDIT-2026-05-03 P3) ────────────
+
+
+def test_place_order_rejects_unknown_direction(client, monkeypatch):
+    """`direction="moonshot"` must fail at 422 before reaching execution.
+    The prior model accepted any string and the engine crashed on
+    `direction.upper()` interpolation downstream.
+    """
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "place_order",
+                        lambda **kw: {"ok": True, "filled": True})
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "moonshot",
+        "size_usd": 100.0,
+        "order_type": "market",
+    })
+    assert r.status_code == 422
+
+
+def test_place_order_normalizes_lowercase_direction(client, monkeypatch):
+    """The field_validator coerces lowercase input to canonical
+    uppercase before enum match. Preserves the prior caller pattern
+    of passing direction `"buy"` without breaking the contract.
+    """
+    captured: dict = {}
+    import execution as exec_module
+    def _fake_place(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "direction": kwargs["direction"]}
+    monkeypatch.setattr(exec_module, "place_order", _fake_place)
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "buy",  # lowercase
+        "size_usd": 100.0,
+        "order_type": "market",
+    })
+    assert r.status_code == 200, r.text
+    assert captured["direction"] == "BUY", \
+        "direction should be canonicalized to uppercase before reaching execution"
+
+
+def test_place_order_rejects_oversize(client, monkeypatch):
+    """Size cap of $10,000 (default) protects against a runaway frontend
+    bug or a malicious caller from punching a $1M order through.
+    """
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "place_order",
+                        lambda **kw: {"ok": True})
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "BUY",
+        "size_usd": 1_000_000.0,  # way above default $10K cap
+        "order_type": "market",
+    })
+    assert r.status_code == 422
+
+
+def test_place_order_rejects_negative_size(client, monkeypatch):
+    """Negative or zero size has no meaningful order semantics."""
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "place_order",
+                        lambda **kw: {"ok": True})
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "BUY",
+        "size_usd": -100.0,
+        "order_type": "market",
+    })
+    assert r.status_code == 422
+
+
+def test_place_order_rejects_unknown_order_type(client, monkeypatch):
+    """`order_type` must be 'market' or 'limit'."""
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "place_order",
+                        lambda **kw: {"ok": True})
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "BUY",
+        "size_usd": 100.0,
+        "order_type": "twap",
+    })
+    assert r.status_code == 422
+
+
+def test_place_order_limit_requires_limit_price(client, monkeypatch):
+    """A limit order without `limit_price` would either crash deeper or
+    silently fall back to a market fill on OKX. The model_validator
+    surfaces this as a 422 at the API boundary.
+    """
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "place_order",
+                        lambda **kw: {"ok": True})
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "BUY",
+        "size_usd": 100.0,
+        "order_type": "limit",
+        # limit_price intentionally omitted
+    })
+    assert r.status_code == 422
+    assert "limit_price" in r.json()["detail"][0].get("msg", "") + r.text
+
+
+def test_place_order_limit_requires_positive_limit_price(client, monkeypatch):
+    """`limit_price <= 0` is rejected even when present."""
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "place_order",
+                        lambda **kw: {"ok": True})
+    r = client.post("/execute/order", json={
+        "pair": "BTC/USDT",
+        "direction": "BUY",
+        "size_usd": 100.0,
+        "order_type": "limit",
+        "limit_price": -50.0,
+    })
+    assert r.status_code == 422
+
+
+def test_place_order_happy_path(client, monkeypatch):
+    """Valid limit order with all fields populated round-trips through
+    the validation gate and reaches execution.place_order with
+    canonical values.
+    """
+    captured: dict = {}
+    import execution as exec_module
+    def _fake_place(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "filled": True, "fill_price": 50_000.0}
+    monkeypatch.setattr(exec_module, "place_order", _fake_place)
+    r = client.post("/execute/order", json={
+        "pair": "BTCUSDT",  # un-normalized; api.py._normalize_pair handles it
+        "direction": "STRONG buy",  # mixed case + extra whitespace
+        "size_usd": 250.0,
+        "order_type": "LIMIT",  # uppercase; field_validator canonicalizes
+        "limit_price": 49_500.0,
+        "current_price": 50_100.0,
+    })
+    assert r.status_code == 200, r.text
+    assert captured["pair"] == "BTC/USDT"
+    assert captured["direction"] == "STRONG BUY"
+    assert captured["order_type"] == "limit"
+    assert captured["limit_price"] == 49_500.0
+
+
 # ── Diagnostics (D-ext) ──────────────────────────────────────────────────────
 
 def test_diagnostics_circuit_breakers_smoke(client):

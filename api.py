@@ -42,7 +42,7 @@ import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import alerts
 import crypto_model_core as model
@@ -312,13 +312,79 @@ class TradingViewWebhook(BaseModel):
     message: Optional[str] = Field(None, description="Free-text alert message")
 
 
+# AUDIT-2026-05-03 (P3 — input-validation slice of C-3): canonical
+# vocabularies for OrderRequest fields. The full C-3 (allowlist + size
+# cap + SL/TP validation) is being applied as P4 in a follow-up commit;
+# this commit covers only the input-validation gate that fails fast at
+# 422 before the order even reaches execution.place_order.
+_ALLOWED_DIRECTIONS = {"BUY", "SELL", "STRONG BUY", "STRONG SELL"}
+_ALLOWED_ORDER_TYPES = {"market", "limit"}
+
+# 10_000 USD per-order ceiling. Conservative — the existing
+# `agent_max_trade_size_usd` config is $1000, so this leaves a 10× safety
+# margin for manual orders. Operators can raise it via env var if a
+# larger manual order is needed (P4 will surface this as a config field
+# rather than a hard constant).
+_MAX_ORDER_SIZE_USD = float(os.environ.get("CRYPTO_SIGNAL_MAX_ORDER_USD", "10000"))
+
+
 class OrderRequest(BaseModel):
-    pair:          str            = Field(..., description="e.g. BTC/USDT or BTCUSDT")
-    direction:     str            = Field(..., description="BUY | SELL | STRONG BUY | STRONG SELL")
-    size_usd:      float          = Field(..., description="Notional USD order size", gt=0)
-    order_type:    str            = Field("market", description="market | limit")
-    limit_price:   Optional[float] = Field(None, description="Price for limit orders")
-    current_price: Optional[float] = Field(None, description="Hint for paper fill / contract-qty calc")
+    pair:          str            = Field(..., min_length=3, max_length=32,
+                                          description="e.g. BTC/USDT or BTCUSDT")
+    direction:     str            = Field(..., description=
+                                          f"One of: {', '.join(sorted(_ALLOWED_DIRECTIONS))}")
+    size_usd:      float          = Field(..., gt=0, le=_MAX_ORDER_SIZE_USD,
+                                          description=f"Notional USD order size (0 < x ≤ {_MAX_ORDER_SIZE_USD})")
+    order_type:    str            = Field("market", description=
+                                          f"One of: {', '.join(sorted(_ALLOWED_ORDER_TYPES))}")
+    limit_price:   Optional[float] = Field(None, gt=0,
+                                           description="Price for limit orders (must be > 0 when order_type=limit)")
+    current_price: Optional[float] = Field(None, gt=0,
+                                           description="Hint for paper fill / contract-qty calc (must be > 0 when set)")
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _normalize_direction(cls, v):
+        """Accept lowercase + extra whitespace; the enum check is on the
+        canonical uppercase form. Preserves the prior-call-site pattern
+        `payload.direction.upper()` while making the contract explicit
+        at validation time.
+        """
+        if not isinstance(v, str):
+            return v
+        normalized = v.strip().upper()
+        if normalized not in _ALLOWED_DIRECTIONS:
+            raise ValueError(
+                f"direction {v!r} not in {sorted(_ALLOWED_DIRECTIONS)}"
+            )
+        return normalized
+
+    @field_validator("order_type", mode="before")
+    @classmethod
+    def _normalize_order_type(cls, v):
+        """Accept MARKET / Market / market; canonical lowercase is what
+        ccxt expects downstream.
+        """
+        if not isinstance(v, str):
+            return v
+        normalized = v.strip().lower()
+        if normalized not in _ALLOWED_ORDER_TYPES:
+            raise ValueError(
+                f"order_type {v!r} not in {sorted(_ALLOWED_ORDER_TYPES)}"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _limit_orders_require_limit_price(self):
+        """A limit order with no `limit_price` is meaningless and would
+        either crash deeper in execution.py or fall back to a market
+        fill on OKX — neither is what the caller asked for.
+        """
+        if self.order_type == "limit" and (self.limit_price is None or self.limit_price <= 0):
+            raise ValueError(
+                "order_type='limit' requires limit_price > 0"
+            )
+        return self
 
 
 # ─── Routes — System ──────────────────────────────────────────────────────────
@@ -865,9 +931,13 @@ def place_order(payload: OrderRequest):
         pair = _normalize_pair(payload.pair)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    # AUDIT-2026-05-03 (P3): payload.direction and payload.order_type are
+    # already canonical (uppercase + lowercase respectively) thanks to
+    # the field_validators on OrderRequest, so no further normalization
+    # is needed here. The prior `.upper()` call is redundant.
     result = exec_engine.place_order(
         pair          = pair,
-        direction     = payload.direction.upper(),
+        direction     = payload.direction,
         size_usd      = payload.size_usd,
         order_type    = payload.order_type,
         limit_price   = payload.limit_price,
