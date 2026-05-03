@@ -2,27 +2,38 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useExecutionStatus } from "@/hooks/use-execution-status";
+import { useRefreshAll } from "@/hooks/use-refresh-all";
 
 type Level = "Beginner" | "Intermediate" | "Advanced";
 
 interface TopbarProps {
   crumbs?: string;
   currentPage?: string;
+  /** Optional override — if not provided, the AGENT pill polls
+   * /execution/status every 5s for live state (D4b wiring). */
   agentRunning?: boolean;
 }
 
-export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning = true }: TopbarProps) {
+export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning }: TopbarProps) {
   const [level, setLevel] = useState<Level>("Intermediate");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  // AUDIT-2026-05-03 (D4b): live AGENT pill state from /execution/status.
+  // Falls back to the prop when caller passed an explicit override.
+  const execQuery = useExecutionStatus({ polling: true });
+  const liveAgentRunning =
+    agentRunning ?? Boolean(execQuery.data?.agent_running ?? execQuery.data?.live_trading);
+
+  // AUDIT-2026-05-03 (D4b): global "Refresh All Data" button —
+  // invalidates every active query + force-refetches the on-page ones
+  // per CLAUDE.md §12 master-template requirement.
+  const { refresh, isFetching } = useRefreshAll();
 
   const toggleTheme = () => {
     const newTheme = theme === "dark" ? "light" : "dark";
     setTheme(newTheme);
     document.documentElement.classList.toggle("light", newTheme === "light");
-  };
-
-  const handleRefresh = () => {
-    // Mock refresh action
   };
 
   return (
@@ -39,18 +50,21 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
       <div
         className={cn(
           "hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-wide md:inline-flex",
-          agentRunning
+          liveAgentRunning
             ? "bg-success/10 text-success"
             : "bg-info/10 text-info"
         )}
+        title={execQuery.isError ? "Status unavailable — check /execution/status" : undefined}
       >
         <span
           className={cn(
             "h-1.5 w-1.5 rounded-full",
-            agentRunning ? "animate-pulse bg-success" : "bg-info"
+            liveAgentRunning ? "animate-pulse bg-success" : "bg-info"
           )}
         />
-        <span>Agent · {agentRunning ? "Running" : "Stopped"}</span>
+        <span>
+          Agent · {execQuery.isLoading && agentRunning === undefined ? "—" : liveAgentRunning ? "Running" : "Stopped"}
+        </span>
       </div>
 
       {/* Level group - hidden on mobile */}
@@ -70,13 +84,19 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
         ))}
       </div>
 
-      {/* Refresh button */}
+      {/* Refresh button — wired to invalidate-all-queries + refetch-active */}
       <button
-        onClick={handleRefresh}
-        className="inline-flex min-h-[36px] min-w-[44px] items-center gap-2 rounded-lg border border-border-default bg-bg-1 px-2.5 py-1.5 text-[13px] text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary md:px-2.5"
+        onClick={refresh}
+        disabled={isFetching}
+        className={cn(
+          "inline-flex min-h-[36px] min-w-[44px] items-center gap-2 rounded-lg border border-border-default bg-bg-1 px-2.5 py-1.5 text-[13px] text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary md:px-2.5",
+          isFetching && "opacity-60 cursor-wait",
+        )}
+        aria-label="Refresh all data"
+        title="Stale-mark every query and re-fetch the on-page ones"
       >
-        <span>↻</span>
-        <span className="hidden md:inline">Refresh</span>
+        <span className={cn(isFetching && "animate-spin")}>↻</span>
+        <span className="hidden md:inline">{isFetching ? "Refreshing…" : "Refresh"}</span>
       </button>
 
       {/* Theme toggle */}
