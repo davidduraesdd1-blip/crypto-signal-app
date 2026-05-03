@@ -167,7 +167,9 @@ export default function AlertsPage() {
                 className="h-9 text-[13px]"
               />
               <p className="text-[11.5px] text-text-muted">
-                Stored encrypted in .streamlit/secrets.toml
+                Stored encrypted via Render env vars (production) or
+                <code className="mx-1 rounded bg-bg-2 px-1 font-mono">.env.local</code>
+                (local dev). Never written to git.
               </p>
             </div>
 

@@ -8,26 +8,37 @@ import { KpiCard } from "@/components/kpi-card";
 import { ArbSpreadTable, type ArbSpread } from "@/components/arb-spread-table";
 import { FundingCarryTable, type FundingCarry } from "@/components/funding-carry-table";
 import { Button } from "@/components/ui/button";
+import { useBacktestArbitrage } from "@/hooks/use-backtester";
+import { formatNumber, formatPct, isMissing } from "@/lib/format";
+import type { ArbitrageOpportunity } from "@/lib/api-types";
 
-// Mock data
-const arbKpis = [
-  { label: "Pairs Scanned", value: "25", subtitle: "across 4 exchanges" },
-  { label: "Opportunities", value: "7", subtitle: "net spread ≥ 0.40%", valueColor: "success" as const },
-  { label: "Marginal", value: "9", subtitle: "net spread 0.10–0.40%", valueColor: "default" as const },
-  { label: "No Arb", value: "9", subtitle: "net spread < 0.10%" },
-];
+// AUDIT-2026-05-03 (D4b): Backtester · Arbitrage page partially wired:
+// - Spot Price Spread table → useBacktestArbitrage (when endpoint
+//   exists; gracefully shows empty state on 404)
+// - KPI strip (Pairs Scanned / Opportunities / Marginal / No Arb)
+//   derived from the same response
+// FundingCarryTable stays v0 mock — no /funding-carry endpoint yet
+// (would need pairwise funding-rate diffs across exchanges, which
+// extends data_feeds.py).
 
-const spreads: ArbSpread[] = [
-  { pair: "XRP/USDT", buyOn: "Bybit", sellOn: "Coinbase", buyPrice: "2.836", sellPrice: "2.852", netSpread: "0.56%", signal: "opportunity" },
-  { pair: "SOL/USDT", buyOn: "Kraken", sellOn: "OKX", buyPrice: "192.10", sellPrice: "193.18", netSpread: "0.51%", signal: "opportunity" },
-  { pair: "AVAX/USDT", buyOn: "Coinbase", sellOn: "Bybit", buyPrice: "41.62", sellPrice: "41.83", netSpread: "0.46%", signal: "opportunity" },
-  { pair: "LINK/USDT", buyOn: "OKX", sellOn: "Kraken", buyPrice: "21.96", sellPrice: "22.06", netSpread: "0.42%", signal: "opportunity" },
-  { pair: "ETH/USDT", buyOn: "Bybit", sellOn: "Coinbase", buyPrice: "3,838", sellPrice: "3,850", netSpread: "0.31%", signal: "marginal" },
-  { pair: "DOT/USDT", buyOn: "Kraken", sellOn: "Bybit", buyPrice: "7.142", sellPrice: "7.158", netSpread: "0.22%", signal: "marginal" },
-  { pair: "BTC/USDT", buyOn: "Coinbase", sellOn: "OKX", buyPrice: "104,260", sellPrice: "104,291", netSpread: "0.03%", signal: "none" },
-];
+/** Map ArbitrageOpportunity → ArbSpread with signal classification */
+function rowToSpread(opp: ArbitrageOpportunity): ArbSpread {
+  const netPct = opp.net_spread_pct ?? 0;
+  const signal: "opportunity" | "marginal" | "none" =
+    netPct >= 0.4 ? "opportunity" : netPct >= 0.1 ? "marginal" : "none";
+  return {
+    pair: String(opp.pair ?? "—"),
+    buyOn: String(opp.buy_exchange ?? "—"),
+    sellOn: String(opp.sell_exchange ?? "—"),
+    buyPrice: isMissing(opp.buy_price) ? "—" : formatNumber(opp.buy_price as number, 3),
+    sellPrice: isMissing(opp.sell_price) ? "—" : formatNumber(opp.sell_price as number, 3),
+    netSpread: isMissing(netPct) ? "—" : formatPct(netPct, 2),
+    signal,
+  };
+}
 
 const carries: FundingCarry[] = [
+  // TODO(D-ext): GET /funding-carry — needs cross-exchange funding-rate diffs
   { pair: "BTC/USDT", okx8h: "+ 0.018%", bybit8h: "− 0.012%", delta: "+ 0.030%", strategy: "Long Bybit · Short OKX", annualized: "+ 32.9%" },
   { pair: "ETH/USDT", okx8h: "+ 0.024%", bybit8h: "+ 0.008%", delta: "+ 0.016%", strategy: "Long Bybit · Short OKX", annualized: "+ 17.5%" },
   { pair: "SOL/USDT", okx8h: "+ 0.041%", bybit8h: "− 0.018%", delta: "+ 0.059%", strategy: "Long Bybit · Short OKX", annualized: "+ 64.7%" },
@@ -37,6 +48,33 @@ const carries: FundingCarry[] = [
 
 export default function ArbitragePage() {
   const router = useRouter();
+  const arbQuery = useBacktestArbitrage();
+  const opportunities = arbQuery.data?.opportunities ?? [];
+  const spreads: ArbSpread[] = opportunities.map(rowToSpread);
+
+  // Derive KPI counts from the live spread classifications
+  const arbKpis = (() => {
+    const pairs = spreads.length;
+    const ops = spreads.filter((s) => s.signal === "opportunity").length;
+    const marginal = spreads.filter((s) => s.signal === "marginal").length;
+    const none = spreads.filter((s) => s.signal === "none").length;
+    return [
+      { label: "Pairs Scanned", value: formatNumber(pairs), subtitle: "live engine" },
+      {
+        label: "Opportunities",
+        value: formatNumber(ops),
+        subtitle: "net spread ≥ 0.40%",
+        valueColor: "success" as const,
+      },
+      {
+        label: "Marginal",
+        value: formatNumber(marginal),
+        subtitle: "net spread 0.10–0.40%",
+        valueColor: "default" as const,
+      },
+      { label: "No Arb", value: formatNumber(none), subtitle: "net spread < 0.10%" },
+    ];
+  })();
 
   return (
     <AppShell crumbs="Research / Backtester" currentPage="Arbitrage">
@@ -92,7 +130,17 @@ export default function ArbitragePage() {
         <span className="text-xs text-text-muted">cross-exchange · ranked by net spread · click any row for routing detail</span>
       </div>
       <div className="mb-5">
-        <ArbSpreadTable spreads={spreads} />
+        {spreads.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border-default p-6 text-center text-sm text-muted-foreground">
+            {arbQuery.isLoading
+              ? "Scanning cross-exchange spreads…"
+              : arbQuery.isError
+                ? "Couldn't load arbitrage opportunities — endpoint may not be implemented yet."
+                : "No spreads above the 0.10% threshold right now — try widening the universe."}
+          </div>
+        ) : (
+          <ArbSpreadTable spreads={spreads} />
+        )}
       </div>
 
       {/* Beginner-level story card preview */}
