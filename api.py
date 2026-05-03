@@ -341,6 +341,12 @@ class OrderRequest(BaseModel):
                                            description="Price for limit orders (must be > 0 when order_type=limit)")
     current_price: Optional[float] = Field(None, gt=0,
                                            description="Hint for paper fill / contract-qty calc (must be > 0 when set)")
+    # AUDIT-2026-05-03 (P4-C-4): optional caller-provided idempotency key.
+    # A retry with the same value returns the cached result rather than
+    # placing a duplicate order. Sanitized to alphanumeric and truncated
+    # to 32 chars by execution._sanitize_clord_id (OKX clOrdId limit).
+    client_order_id: Optional[str] = Field(None, max_length=64,
+                                           description="Caller-provided idempotency key. Same value on retry = cached result, no duplicate order.")
 
     @field_validator("direction", mode="before")
     @classmethod
@@ -936,12 +942,13 @@ def place_order(payload: OrderRequest):
     # the field_validators on OrderRequest, so no further normalization
     # is needed here. The prior `.upper()` call is redundant.
     result = exec_engine.place_order(
-        pair          = pair,
-        direction     = payload.direction,
-        size_usd      = payload.size_usd,
-        order_type    = payload.order_type,
-        limit_price   = payload.limit_price,
-        current_price = payload.current_price,
+        pair             = pair,
+        direction        = payload.direction,
+        size_usd         = payload.size_usd,
+        order_type       = payload.order_type,
+        limit_price      = payload.limit_price,
+        current_price    = payload.current_price,
+        client_order_id  = payload.client_order_id,
     )
     return _serialize(result)
 

@@ -259,6 +259,204 @@ def test_update_alerts_config_returns_updated_cfg(tmp_path, monkeypatch):
     assert alerts_module.load_alerts_config()["min_confidence"] == 80
 
 
+# ── P4: execution-layer architectural CRITICALs (C-3 / C-4 / C-5 / C-6) ────
+
+
+def _patch_alerts_for_paper_mode(monkeypatch):
+    """Shared fixture pattern: alerts_config returns a paper-mode cfg with
+    enough fields to satisfy the new P4 validation block without
+    triggering circuit breakers, allowlist misses, etc.
+    """
+    import alerts as alerts_module
+    monkeypatch.setattr(alerts_module, "load_alerts_config", lambda: {
+        "live_trading_enabled": False,
+        "okx_api_key": "",
+        "okx_secret": "",
+        "okx_passphrase": "",
+        "default_order_type": "market",
+        "trading_pairs": [],
+        "agent_max_trade_size_usd": 1000.0,
+        "agent_portfolio_size_usd": 10_000.0,
+    })
+    # Stub circuit breaker to never trip in tests unless explicitly overridden
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "check_circuit_breaker",
+                        lambda **kw: {"triggered": False, "reason": ""})
+
+
+def test_place_order_rejects_pair_not_in_allowlist(monkeypatch):
+    """C-3: a pair not in MUST_HAVE ∪ TIER1 ∪ TIER2 ∪ trading_pairs is
+    refused before any side effect."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    # Stub _log_to_db so the test doesn't write to the real DB
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    out = exec_module.place_order(
+        pair="ZZZ/USDT",  # not in any list
+        direction="BUY",
+        size_usd=100.0,
+    )
+    assert out["ok"] is False
+    assert "allowlist" in out["error"].lower()
+
+
+def test_place_order_must_have_pair_always_allowed(monkeypatch):
+    """CLAUDE.md §13 must-have coins (XRP, XLM, XDC, HBAR, SHX, ZBCN, CC,
+    BTC, ETH) are always allowed regardless of user config."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    out = exec_module.place_order(
+        pair="CC/USDT",
+        direction="BUY",
+        size_usd=100.0,
+        current_price=0.50,
+    )
+    assert out["ok"] is True, out.get("error")
+
+
+def test_place_order_size_cap(monkeypatch):
+    """C-3: size_usd above agent_max_trade_size_usd is refused."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    out = exec_module.place_order(
+        pair="BTC/USDT",
+        direction="BUY",
+        size_usd=5000.0,  # above the $1000 default cap
+        current_price=50_000.0,
+    )
+    assert out["ok"] is False
+    assert "cap" in out["error"].lower()
+
+
+def test_place_order_circuit_breaker_blocks(monkeypatch):
+    """C-5: a tripped circuit breaker fails place_order before any
+    side effect."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    monkeypatch.setattr(exec_module, "check_circuit_breaker",
+                        lambda **kw: {"triggered": True, "reason": "Daily loss limit"})
+    out = exec_module.place_order(
+        pair="BTC/USDT",
+        direction="BUY",
+        size_usd=100.0,
+        current_price=50_000.0,
+    )
+    assert out["ok"] is False
+    assert "Circuit breaker" in out["error"]
+
+
+def test_place_order_circuit_breaker_failure_is_fail_closed(monkeypatch):
+    """C-5: if check_circuit_breaker itself raises, place_order
+    fails-closed rather than silently bypassing the gate."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    def _broken_cb(**kw):
+        raise RuntimeError("telemetry pipeline down")
+    monkeypatch.setattr(exec_module, "check_circuit_breaker", _broken_cb)
+    out = exec_module.place_order(
+        pair="BTC/USDT",
+        direction="BUY",
+        size_usd=100.0,
+        current_price=50_000.0,
+    )
+    assert out["ok"] is False
+    assert "telemetry" in out["error"].lower() or "circuit breaker" in out["error"].lower()
+
+
+def test_place_order_idempotent_replay(monkeypatch):
+    """C-4: a retry with the same client_order_id returns the cached
+    result and sets idempotent_replay=True — no duplicate paper trade
+    is recorded."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    db_calls = []
+    monkeypatch.setattr(exec_module, "_log_to_db",
+                        lambda r: db_calls.append(r))
+    cid = "test-retry-deadbeef"
+    out1 = exec_module.place_order(
+        pair="BTC/USDT", direction="BUY", size_usd=100.0,
+        current_price=50_000.0, client_order_id=cid,
+    )
+    out2 = exec_module.place_order(
+        pair="BTC/USDT", direction="BUY", size_usd=100.0,
+        current_price=50_000.0, client_order_id=cid,
+    )
+    assert out1["ok"] is True
+    assert out2["ok"] is True
+    assert out2["idempotent_replay"] is True
+    assert out1["order_id"] == out2["order_id"]
+    # Only one DB log row — the retry hit the cache, not the engine.
+    assert len(db_calls) == 1, (
+        f"idempotent retry should not double-log: got {len(db_calls)} log rows"
+    )
+
+
+def test_place_order_validation_failure_not_cached(monkeypatch):
+    """C-4: validation failures (e.g. allowlist miss) are NOT cached,
+    so the caller can fix the input and retry with the same cid."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    cid = "fix-after-fail-cafebabe"
+    bad = exec_module.place_order(
+        pair="ZZZ/USDT", direction="BUY", size_usd=100.0,
+        client_order_id=cid,
+    )
+    assert bad["ok"] is False
+    # Now retry with a valid pair using the same cid — should NOT
+    # short-circuit to the cached bad result.
+    good = exec_module.place_order(
+        pair="BTC/USDT", direction="BUY", size_usd=100.0,
+        current_price=50_000.0, client_order_id=cid,
+    )
+    assert good["ok"] is True
+    assert good.get("idempotent_replay") is False
+
+
+def test_place_order_short_side_slippage_sign(monkeypatch):
+    """C-6: SELL effective_usd should be size * (1 - slip) - fee, not
+    the buy formula size * (1 + slip) + fee that the prior code used
+    symmetrically. We compare BUY and SELL effective_usd at the same
+    size; SELL should be lower than BUY by 2 × (slip × size) approximately
+    + 2 × fee."""
+    _patch_alerts_for_paper_mode(monkeypatch)
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "_log_to_db", lambda r: None)
+    # Force deterministic slippage so the comparison is exact.
+    monkeypatch.setattr(exec_module, "_simulate_slippage", lambda s: 0.001)
+    monkeypatch.setattr(exec_module, "_simulate_exchange_fee", lambda s: s * 0.001)
+
+    buy = exec_module.place_order(
+        pair="BTC/USDT", direction="BUY", size_usd=1000.0,
+        current_price=50_000.0,
+    )
+    sell = exec_module.place_order(
+        pair="BTC/USDT", direction="SELL", size_usd=1000.0,
+        current_price=50_000.0,
+    )
+    assert buy["ok"] and sell["ok"]
+    # BUY:  1000 * (1 + 0.001) + 1.0 = 1002.0  (cost)
+    # SELL: 1000 * (1 - 0.001) - 1.0 = 998.0   (proceeds)
+    assert abs(buy["effective_usd"] - 1002.0) < 0.001, buy["effective_usd"]
+    assert abs(sell["effective_usd"] - 998.0)  < 0.001, sell["effective_usd"]
+    # Sanity: SELL proceeds are strictly less than BUY cost.
+    assert sell["effective_usd"] < buy["effective_usd"]
+
+
+def test_sanitize_clord_id():
+    """C-4 helper: alphanumeric only, max 32 chars, empty for empty input."""
+    import execution as exec_module
+    assert exec_module._sanitize_clord_id("") == ""
+    assert exec_module._sanitize_clord_id(None) == ""
+    assert exec_module._sanitize_clord_id("abc-123_def!@#") == "abc123def"
+    long_id = "a" * 100
+    assert len(exec_module._sanitize_clord_id(long_id)) == 32
+
+
 # ── S-1: scheduler interval globals exposed for live reschedule ─────────────
 
 def test_scheduler_exposes_interval_globals():

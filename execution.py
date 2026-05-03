@@ -80,6 +80,94 @@ def _simulate_exchange_fee(size_usd: float) -> float:
     """Simulate CEX taker fee: 0.1% (Binance/OKX standard taker rate)."""
     return size_usd * 0.001
 
+
+# ── AUDIT-2026-05-03 (P4) — execution-layer architectural CRITICALs ─────────
+# Closes C-3 (pair allowlist + size cap), C-4 (idempotency via clOrdId),
+# C-5 (circuit_breaker called from place_order), C-6 (short-side slippage
+# sign-flip — applied at the formula site below, not here).
+
+# CLAUDE.md §13 must-have coins. Always allowed regardless of user config
+# so the family-office mandate is never blocked by a forgotten allowlist
+# entry. BTC + ETH added as universally-allowed core.
+_MUST_HAVE_PAIRS = frozenset({
+    "BTC/USDT", "ETH/USDT",
+    "XRP/USDT", "XLM/USDT", "XDC/USDT",
+    "HBAR/USDT", "SHX/USDT", "ZBCN/USDT", "CC/USDT",
+})
+
+# C-4 idempotency cache: client_order_id → (timestamp, result). TTL
+# bounds memory growth in long-running processes; 5 min covers the
+# realistic retry window for network blips, LLM round-trips, and
+# double-clicks on the manual-execute UI.
+_IDEMPOTENCY_TTL_SECONDS = 300
+_idempotency_cache: dict = {}
+_idempotency_lock = threading.Lock()
+
+
+def _build_allowed_pairs() -> set:
+    """C-3 allowlist source. Combines:
+    - CLAUDE.md §13 must-haves (frozen, always allowed)
+    - config.py TIER1_PAIRS + TIER2_PAIRS (curated universe)
+    - alerts_config['trading_pairs'] (user-configured Settings page)
+
+    Strict-deny on miss: a pair not in this combined set causes
+    place_order to return ok=False with a clear error before any
+    order side effect.
+    """
+    allowed = set(_MUST_HAVE_PAIRS)
+    try:
+        import config as _config
+        allowed.update(getattr(_config, "TIER1_PAIRS", []))
+        allowed.update(getattr(_config, "TIER2_PAIRS", []))
+    except Exception as exc:
+        logger.warning("[Exec] config TIER pairs unreadable: %s", exc)
+    try:
+        cfg = _alerts.load_alerts_config()
+        user_pairs = cfg.get("trading_pairs") or []
+        if isinstance(user_pairs, list):
+            allowed.update(p for p in user_pairs if isinstance(p, str))
+    except Exception as exc:
+        logger.warning("[Exec] alerts_config trading_pairs unreadable: %s", exc)
+    return allowed
+
+
+def _idempotency_lookup(cid: str):
+    """Return cached result for `cid` if still within TTL, else None.
+    Prunes expired entries opportunistically on every lookup."""
+    if not cid:
+        return None
+    now = time.time()
+    with _idempotency_lock:
+        expired = [k for k, (ts, _) in _idempotency_cache.items()
+                   if now - ts > _IDEMPOTENCY_TTL_SECONDS]
+        for k in expired:
+            _idempotency_cache.pop(k, None)
+        cached = _idempotency_cache.get(cid)
+        if cached:
+            ts, result = cached
+            if now - ts <= _IDEMPOTENCY_TTL_SECONDS:
+                return result
+        return None
+
+
+def _idempotency_store(cid: str, result: dict) -> None:
+    """Cache `result` for `cid` to short-circuit retries."""
+    if not cid:
+        return
+    with _idempotency_lock:
+        _idempotency_cache[cid] = (time.time(), result)
+
+
+def _sanitize_clord_id(cid) -> str:
+    """OKX clOrdId requirements: alphanumeric + length 1-32. Caller-
+    provided ids are sanitized + truncated; empty input returns empty
+    string so the live path falls back to OKX's auto-generated id."""
+    if not cid:
+        return ""
+    cleaned = "".join(c for c in str(cid) if c.isalnum())
+    return cleaned[:32]
+
+
 try:
     import ccxt
     _CCXT_AVAILABLE = True
@@ -227,6 +315,7 @@ def place_order(
     limit_price: Optional[float] = None,
     current_price: Optional[float] = None,
     expected_price: Optional[float] = None,
+    client_order_id: Optional[str] = None,  # AUDIT-2026-05-03 (P4-C-4)
 ) -> dict:
     """
     Place a buy or sell order.
@@ -242,55 +331,126 @@ def place_order(
 
     Parameters
     ----------
-    pair          : "BTC/USDT" style
-    direction     : "BUY" | "STRONG BUY" | "SELL" | "STRONG SELL"
-    size_usd      : notional USD value of the order
-    order_type    : "market" | "limit"
-    limit_price   : price for limit orders (ignored for market)
-    current_price : used as paper fill price and contract-qty calculation fallback
+    pair             : "BTC/USDT" style
+    direction        : "BUY" | "STRONG BUY" | "SELL" | "STRONG SELL"
+    size_usd         : notional USD value of the order
+    order_type       : "market" | "limit"
+    limit_price      : price for limit orders (ignored for market)
+    current_price    : used as paper fill price and contract-qty calculation fallback
+    client_order_id  : optional caller-provided id for idempotency (C-4).
+                       Caller-controlled retries with the same id return
+                       the cached result; the live path also passes the
+                       sanitized id to OKX as `clOrdId` so duplicate
+                       submissions are deduped exchange-side.
 
     Returns
     -------
     dict with keys: ok, mode, pair, direction, side, size_usd,
-                    order_type, price, order_id, error, placed_at
+                    order_type, price, order_id, error, placed_at,
+                    client_order_id (if provided), idempotent_replay (bool)
     """
     cfg    = get_exec_config()
     live   = cfg["live_trading"]
+
+    # ── AUDIT-2026-05-03 (P4-C-4): idempotency — short-circuit retries ──────
+    _cid = _sanitize_clord_id(client_order_id)
+    if _cid:
+        cached = _idempotency_lookup(_cid)
+        if cached is not None:
+            logger.info(
+                "[EXEC] idempotent retry hit for cid=%s — returning cached result", _cid
+            )
+            replay = dict(cached)
+            replay["idempotent_replay"] = True
+            return replay
+
+    _placed_at = datetime.now(timezone.utc).isoformat()
+    _mode = "live" if live else "paper"
+
+    def _fail(error_msg: str, side_value: Optional[str] = None) -> dict:
+        """Build a uniform failure response. Caches under cid if provided
+        so the same retry doesn't repeatedly flap through validation."""
+        out = {
+            "ok": False, "mode": _mode,
+            "pair": pair, "direction": direction, "side": side_value,
+            "size_usd": size_usd, "order_type": order_type,
+            "price": current_price, "order_id": None,
+            "error": error_msg,
+            "placed_at": _placed_at,
+            "client_order_id": _cid or None,
+            "idempotent_replay": False,
+        }
+        # Don't cache validation-fail responses — the caller may fix the
+        # input and retry with the same cid (legitimate). Only cache on
+        # success path below.
+        return out
+
     _dir_upper = direction.upper()
     if not any(v in _dir_upper for v in ("BUY", "SELL")):
-        return {
-            "ok": False, "mode": "live" if cfg["live_trading"] else "paper",
-            "pair": pair, "direction": direction, "side": None,
-            "size_usd": size_usd, "order_type": order_type,
-            "price": current_price, "order_id": None,
-            "error": f"Invalid direction: {direction!r}. Must contain BUY or SELL.",
-            "placed_at": datetime.now(timezone.utc).isoformat(),
-        }
+        return _fail(f"Invalid direction: {direction!r}. Must contain BUY or SELL.")
     if size_usd <= 0:
-        return {
-            "ok": False, "mode": "live" if cfg["live_trading"] else "paper",
-            "pair": pair, "direction": direction, "side": None,
-            "size_usd": size_usd, "order_type": order_type,
-            "price": current_price, "order_id": None,
-            "error": f"Invalid size_usd={size_usd}: must be > 0.",
-            "placed_at": datetime.now(timezone.utc).isoformat(),
-        }
+        return _fail(f"Invalid size_usd={size_usd}: must be > 0.")
+
+    # ── AUDIT-2026-05-03 (P4-C-3): pair allowlist (strict-deny on miss) ────
+    if pair not in _build_allowed_pairs():
+        return _fail(
+            f"Pair {pair!r} not in allowlist (CLAUDE.md §13 must-haves + "
+            f"TIER1 + TIER2 + alerts_config.trading_pairs). Add it via "
+            f"PUT /settings/trading or expand TIER1/TIER2 in config.py."
+        )
+
+    # ── AUDIT-2026-05-03 (P4-C-3): per-order size cap ──────────────────────
+    _max_size_usd = float(cfg.get("agent_max_trade_size_usd") or 1000.0)
+    if size_usd > _max_size_usd:
+        return _fail(
+            f"size_usd ${size_usd:,.2f} exceeds per-order cap ${_max_size_usd:,.2f} "
+            f"(alerts_config.agent_max_trade_size_usd). Lower the order size or "
+            f"raise the cap via PUT /settings/execution."
+        )
+
+    # ── AUDIT-2026-05-03 (P4-C-5): circuit breaker called from place_order ─
+    # The prior comment claimed this was "already enforced inside place_order"
+    # — it was not. Manual single-leg orders, agent-driven orders, and
+    # auto_execute_signals all bypassed the breaker. A tripped breaker
+    # was silently ignored. Now every order path passes through here.
+    try:
+        _portfolio = float(cfg.get("agent_portfolio_size_usd") or 10_000.0)
+        _cb = check_circuit_breaker(portfolio_size_usd=_portfolio)
+        if _cb.get("triggered"):
+            return _fail(
+                f"Circuit breaker active: {_cb.get('reason') or 'drawdown limit hit'}. "
+                f"Resolve via Settings · Dev Tools or wait for the window to reset."
+            )
+    except Exception as _cb_err:
+        # Fail-closed on breaker errors so a broken telemetry path can't
+        # accidentally enable trading: a truly broken breaker is still
+        # safer than silently bypassing it.
+        logger.warning("[EXEC] circuit_breaker check failed: %s — failing closed", _cb_err)
+        return _fail(
+            f"Circuit breaker check failed ({_cb_err}). Aborting fail-closed; "
+            f"resolve the underlying telemetry error before retrying."
+        )
+
     side   = "buy" if "BUY" in _dir_upper else "sell"
     symbol = _to_swap_symbol(pair)
 
     result: dict = {
-        "ok":           False,
-        "mode":         "live" if live else "paper",
-        "pair":         pair,
-        "direction":    direction,
-        "side":         side,
-        "size_usd":     size_usd,
-        "order_type":   order_type,
-        "price":        current_price,
-        "order_id":     None,
-        "error":        None,
-        "placed_at":    datetime.now(timezone.utc).isoformat(),
-        "slippage_pct": None,
+        "ok":               False,
+        "mode":             "live" if live else "paper",
+        "pair":             pair,
+        "direction":        direction,
+        "side":             side,
+        "size_usd":         size_usd,
+        "order_type":       order_type,
+        "price":            current_price,
+        "order_id":         None,
+        "error":            None,
+        "placed_at":        _placed_at,
+        "slippage_pct":     None,
+        # AUDIT-2026-05-03 (P4-C-4): echo the (sanitized) caller-provided
+        # idempotency id so the caller can confirm what was registered.
+        "client_order_id":  _cid or None,
+        "idempotent_replay": False,
     }
 
     # ── PAPER MODE ────────────────────────────────────────────────────────────
@@ -317,7 +477,20 @@ def place_order(
         _fee_usd      = _simulate_exchange_fee(size_usd)
         _slip_mult    = (1 + _slippage) if side.upper() == "BUY" else (1 - _slippage)
         fill_price    = current_price * _slip_mult
-        effective_usd = size_usd * (1 + _slippage) + _fee_usd
+        # AUDIT-2026-05-03 (P4-C-6): sign-flip slippage AND fee for SELL.
+        # Previously: effective_usd = size_usd * (1 + slip) + fee for both
+        # buy and sell. That overstated SELL proceeds — a buyer's-favor
+        # short fill instead of the seller's actual price impact.
+        # Correct semantics:
+        #   BUY:  cost     = size * (1 + slip) + fee   ← total dollars out
+        #   SELL: proceeds = size * (1 - slip) - fee   ← total dollars in
+        # Both `effective_usd` values are positive (cost or proceeds);
+        # the sign of slip + fee flips together to match the side.
+        # NOTE: this affects paper-mode P&L attribution; the §22 regression
+        # diff against the 2023-2026 fixture set is queued for D7 to
+        # quantify the magnitude of this correction on aggregate metrics.
+        _slip_sign    = +1 if side == "buy" else -1
+        effective_usd = size_usd * (1 + _slip_sign * _slippage) + _slip_sign * _fee_usd
         result["ok"]       = True
         result["order_id"] = f"PAPER-{uuid.uuid4().hex[:12]}-{pair.replace('/', '')}"
         result["price"]    = fill_price
@@ -329,6 +502,11 @@ def place_order(
             side.upper(), pair, size_usd, fill_price, _slippage * 100,
         )
         _log_to_db(result)
+        # AUDIT-2026-05-03 (P4-C-4): cache successful paper result so a
+        # client retry with the same cid returns the cached fill rather
+        # than placing a duplicate paper-trade row in the DB.
+        if result.get("ok"):
+            _idempotency_store(_cid, result)
         return result
 
     # ── LIVE MODE ─────────────────────────────────────────────────────────────
@@ -394,11 +572,19 @@ def place_order(
                 f"(size_usd={size_usd}, price={price_now}, ct_size={ct_size})"
             )
 
+        # AUDIT-2026-05-03 (P4-C-4): pass sanitized clOrdId to OKX so
+        # exchange-side dedup catches a network-retry-induced duplicate
+        # even if the in-process idempotency cache missed it (e.g. the
+        # FastAPI worker was restarted between the original submit and
+        # the retry). Empty `_params` falls back to OKX's auto-generated
+        # id, preserving the prior contract for callers who don't supply
+        # client_order_id.
+        _params = {"clOrdId": _cid} if _cid else {}
         if order_type == "market":
-            order = ex.create_market_order(symbol, side, qty)
+            order = ex.create_market_order(symbol, side, qty, params=_params)
         else:
             p = float(limit_price or price_now)
-            order = ex.create_limit_order(symbol, side, qty, p)
+            order = ex.create_limit_order(symbol, side, qty, p, params=_params)
 
         result["ok"]       = True
         result["order_id"] = str(order.get("id", "unknown"))
@@ -420,6 +606,12 @@ def place_order(
         logger.error("[EXEC] Order failed %s: %s", pair, exc)
 
     _log_to_db(result)
+    # AUDIT-2026-05-03 (P4-C-4): cache successful live result so a client
+    # retry with the same cid returns the cached order_id rather than
+    # placing a duplicate live order. Failed orders are NOT cached so
+    # the caller can retry after fixing the underlying issue.
+    if result.get("ok"):
+        _idempotency_store(_cid, result)
     return result
 
 
