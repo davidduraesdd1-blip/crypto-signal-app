@@ -4,6 +4,60 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-05-02 (later) — Phase D batch D2 landed
+
+D2 (Render deploy of FastAPI + keep-alive) shipped on
+`phase-d/next-fastapi-cutover`. Live at
+**https://crypto-signal-app-1fsi.onrender.com**.
+
+- Render free tier: 512MB RAM, 0.1 CPU, $0/mo, autodeploy from
+  `phase-d/next-fastapi-cutover`, region oregon.
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn api:app --host 0.0.0.0 --port $PORT`
+- Env: `CRYPTO_SIGNAL_ALLOW_UNAUTH=true` (D1 temporary; flip at D6
+  once Next.js handles the X-API-Key); `ANTHROPIC_ENABLED=false`;
+  `DEMO_MODE=true`; `PYTHON_VERSION=3.11`.
+- IaC: `render.yaml` committed (834601f) — fresh Render account can
+  reproduce the deploy in one click; secret env vars marked
+  `sync: false` (set in dashboard, never in git).
+- Keep-alive: cron-job.org (David's account) pings `/health` every
+  10 min — eliminates the 50s cold-start the free-tier doc warns
+  about. First ping scheduled 2026-05-02 18:50 PT.
+
+**14 endpoints smoke-tested live, all 200:**
+- `/health` returned in 263ms (warm); 29 of 33 OKX pairs live, 4
+  stale (FLR/XDC/SHX/ZBCN — not on OKX, expected fallback per §10).
+- `/openapi.json` confirms 36 total endpoints (22 existing + 14 new
+  D1 paths / 15 operations).
+- `/onchain/dashboard?pair=BTC-USDT` returned **real Binance data**
+  in 4.4s: sopr=1.005, mvrv_z=-0.51, hash_ribbon=CAPITULATION,
+  puell_signal=ACCUMULATION. Engine wrap is end-to-end live.
+- Empty payloads on `/home/summary`, `/regimes/`, `/ai/decisions`
+  are correct (no scan has run on this fresh Render instance —
+  populates on first scan).
+
+**Cost so far:** $0/mo. (Render free tier indefinite, cron-job.org
+free tier indefinite, GitHub free.)
+
+**Next blocking action — David:** D3 (interactive, ~2-3 days).
+Subscribe to v0.dev Premium ($20/mo, cancellable end of D3),
+then drive v0 to convert the 13 mockups in
+`docs/mockups/sibling-family-crypto-signal-*.html` into Next.js +
+Tailwind + shadcn/ui components. Export each generated page to
+the `web/` directory via v0's GitHub panel as PRs against
+`phase-d/next-fastapi-cutover`. Once all 8 pages are in `web/app/`,
+ping me — D4 (Code wires Tanstack Query against the live FastAPI)
+runs autonomously after.
+
+Streamlit fallback unchanged at
+https://cryptosignal-ddb1.streamlit.app/. Tag baseline
+`redesign-ui-2026-05-shipped` -> 20587d2 still the rollback point.
+
+### D2 commits
+- 834601f chore(phase-d-2): add render.yaml infra-as-code blueprint
+
+---
+
 ## 2026-05-02 (later) — Phase D batch D1 landed
 
 D1 (FastAPI gap-fill, 6 new routers) shipped on
