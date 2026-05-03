@@ -81,6 +81,16 @@ def _make_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # AUDIT-2026-05-03 (P7-DB-2): SQLITE_BUSY retry. Three concurrent
+    # writers hit this DB (FastAPI worker, agent loop, Streamlit during
+    # the 30-day overlap). Without busy_timeout, a write that arrives
+    # while another thread holds the write lock fails immediately with
+    # SQLITE_BUSY — that's the "random rare 500" we sometimes see on
+    # the live deploy. With busy_timeout=5000ms, SQLite retries the
+    # write internally for up to 5 seconds before giving up. The
+    # connection-level `timeout=30` above bounds the overall wait at
+    # 30s per call; busy_timeout governs the in-driver retry cadence.
+    conn.execute("PRAGMA busy_timeout=5000")
     # PERF: 64 MB page cache (default is ~2 MB) — major speedup for repeated queries
     conn.execute("PRAGMA cache_size=-65536")
     # PERF: 256 MB memory-mapped I/O — bypasses read() syscalls for sequential scans
@@ -423,9 +433,36 @@ def init_db():
             _ALLOWED_MIGRATE_TABLES = {"feedback_log", "backtest_trades", "paper_trades",
                                        "positions", "execution_log", "daily_signals",
                                        "alerts_log"}  # C6 (2026-04-30) extension
+            # AUDIT-2026-05-03 (P7-DB-3): col + col_def validation. The
+            # tbl whitelist already exists; the `col` and `col_def` are
+            # f-string-interpolated into the ALTER TABLE on line 441.
+            # All current call sites use string literals, but a future
+            # refactor that pulls col from a config / env / API would
+            # silently become a SQL injection vector. Belt-and-suspenders
+            # regex guard rejects anything outside the SQLite identifier /
+            # type-spec character class. This costs nothing at runtime
+            # (regex match on ~50 lit-string calls during DB init).
+            import re as _re_db
+            _COL_NAME_RE = _re_db.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+            # col_def can be e.g. "REAL", "INTEGER", "TEXT NOT NULL DEFAULT 0",
+            # "TEXT", "REAL DEFAULT NULL". Allow alphanumeric, underscore,
+            # space, parentheses (for VARCHAR(N)), single-quote (for default
+            # string literals). Bound length to a sane 256.
+            _COL_DEF_RE = _re_db.compile(r"^[A-Za-z0-9_ ()',\.\-]{1,256}$")
+
             def _add_col(tbl, col, col_def):
                 if tbl not in _ALLOWED_MIGRATE_TABLES:
                     raise ValueError(f"[DB] _add_col: table '{tbl}' not in migration whitelist")
+                if not _COL_NAME_RE.match(col):
+                    raise ValueError(
+                        f"[DB] _add_col: column name {col!r} must match "
+                        f"^[A-Za-z_][A-Za-z0-9_]*$ (SQLite identifier rules)"
+                    )
+                if not _COL_DEF_RE.match(col_def):
+                    raise ValueError(
+                        f"[DB] _add_col: col_def {col_def!r} contains chars "
+                        f"outside the safe-type-spec character class"
+                    )
                 existing = [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
                 if col not in existing:
                     conn.execute(f'ALTER TABLE "{tbl}" ADD COLUMN "{col}" {col_def}')

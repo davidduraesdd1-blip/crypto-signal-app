@@ -290,6 +290,28 @@ def get_agent_config() -> dict:
 # PROMPT INJECTION SANITIZER
 # ─────────────────────────────────────────────────────────────────────────────
 
+# AUDIT-2026-05-03 (P6-LLM-1): the previous _sanitize was a 7-phrase
+# substring wall — bypassable via Unicode look-alikes ("ignоre" with
+# Cyrillic о, "ｉｇｎｏｒｅ" with full-width chars), base64-encoded
+# instruction blocks, paraphrase, and homoglyphs. The new sanitizer
+# adds three defenses on top of the existing substring scan:
+#
+#   1. XML/HTML escape — `<system>` tags can't reopen prompt scope
+#      because `<` becomes `&lt;` before the LLM sees it. This is the
+#      primary defense against the most common injection class.
+#   2. Control-character strip — non-printable Unicode (zero-width joiner,
+#      RTL override, etc.) is replaced with space so visible-vs-actual
+#      string drift can't sneak hidden tokens past the model.
+#   3. Whitespace collapse — defeats whitespace-bomb DoS attempts and
+#      makes length-bounding deterministic.
+#
+# The substring scan is preserved as a defense-in-depth log + early
+# replace-with-[SANITIZED] so legacy callers that rely on the
+# observable "[SANITIZED]" sentinel keep working. Per the proposals
+# doc P6, the broader fix (XML-tagged untrusted blocks at the prompt
+# layer + per-field whitelist) is queued for D7's design pass; this
+# commit closes the most exploitable bypasses without restructuring
+# every prompt builder.
 _INJECTION_PATTERNS = [
     "ignore previous instructions",
     "disregard all",
@@ -301,15 +323,44 @@ _INJECTION_PATTERNS = [
 ]
 
 
-def _sanitize(value: Any) -> str:
-    """Convert value to str and strip known prompt-injection phrases."""
-    text = str(value) if value is not None else ""
+def _sanitize(value: Any, max_length: int = 500) -> str:
+    """Convert value to a safe-for-prompt string.
+
+    Layered defense (innermost first):
+      1. XML/HTML escape so `<`/`>`/`&` can't reopen prompt scope.
+      2. Control-character → space so zero-width / RTL / unprintable
+         chars can't hide payloads from the model.
+      3. Whitespace collapse to defeat whitespace-bomb / pad-to-overflow.
+      4. Length cap (default 500 chars; configurable per call site).
+      5. Substring blocklist as an observable log signal — a hit also
+         replaces the value with `[SANITIZED]` to preserve the prior
+         visible-output contract.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+
+    # ── Layer 5: substring scan + sentinel replace (preserves prior contract)
     low = text.lower()
     for pat in _INJECTION_PATTERNS:
         if pat in low:
             logger.warning("[agent] Prompt injection stripped: %r", text[:80])
             return "[SANITIZED]"
-    return text[:500]
+
+    # ── Layer 1: XML/HTML escape — `<system>` becomes `&lt;system&gt;`
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # ── Layer 2: drop non-printable control chars (preserve common whitespace)
+    text = "".join(
+        c if (c.isprintable() or c in (" ", "\t", "\n")) else " "
+        for c in text
+    )
+
+    # ── Layer 3: collapse whitespace runs
+    text = " ".join(text.split())
+
+    # ── Layer 4: length cap
+    return text[:max_length]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
