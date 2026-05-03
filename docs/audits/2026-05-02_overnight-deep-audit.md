@@ -72,12 +72,18 @@ _(Aggregated by severity. Filled in as audit progresses.)_
 
 ### CRITICAL
 
-**C-1 — Live FastAPI deploy is publicly unauthenticated.**
+**C-1 — Live FastAPI deploy is publicly unauthenticated.** ✅ **RESOLVED 2026-05-03**
 - File: `render.yaml:35-36` + `routers/deps.py:58-67`
 - Category: security
 - Description: `CRYPTO_SIGNAL_ALLOW_UNAUTH=true` is set in production on Render with no `api_key` configured in `alerts_config.json`. Live curl confirms `GET https://crypto-signal-app-1fsi.onrender.com/settings/` returns 200 with the full config dict, and `GET /diagnostics/circuit-breakers` returns 200. With this state, any internet caller can also `PUT /settings/execution {live_trading_enabled: true}` and `POST /execute/order` (free for now because OKX keys are empty — but the next time David enters keys via the existing Settings page, those keys would become hot for any caller).
 - Fix: Two-pronged. (a) Defense-in-depth on the response side — the `_REDACTED_KEYS` set in `routers/settings.py` is incomplete vs the actual `alerts_config` schema (see C-2). (b) Operator action required by David in the morning: set an `api_key` via the live `PUT /settings/dev-tools` (with `CRYPTO_SIGNAL_ALLOW_UNAUTH=true` allowing a one-shot write), then flip `CRYPTO_SIGNAL_ALLOW_UNAUTH=false` in Render dashboard to enforce the key on all subsequent requests. Until David acts, the existing comment ("Tracked: D6 security pass") understates the urgency.
-- Fix-status this run: PARTIAL — applied (b) defense-in-depth fix to `_REDACTED_KEYS`; flagged (a) for David in the morning summary.
+- Fix-status (overnight audit): PARTIAL — applied (b) defense-in-depth fix to `_REDACTED_KEYS`; flagged (a) for David in the morning summary.
+- **2026-05-03 update — fully closed.** Commit `376e26d` added `CRYPTO_SIGNAL_API_KEY` env-var fallback in both `routers/deps.py` and `api.py` (Render's ephemeral filesystem made the alerts_config.json approach unworkable; env vars persist across deploys). David set `CRYPTO_SIGNAL_API_KEY` (43-char URL-safe base64) and flipped `CRYPTO_SIGNAL_ALLOW_UNAUTH` to `false` in the Render dashboard. Verified live with the 4-test curl matrix:
+  - `GET /health` (no key) → 200 (public, intentional)
+  - `GET /signals` (no key) → 401 `{"detail":"Invalid or missing API key"}`
+  - `GET /signals` (wrong key) → 401
+  - `GET /signals` (correct key) → 200
+- Memory: `phase_d_render_auth_hardening_2026_05_03.md`.
 
 **C-2 — Sensitive `alerts_config` fields not in the redaction allowlist.**
 - File: `routers/settings.py:33-38`
@@ -183,7 +189,7 @@ Test result: **348 passed, 1 skipped** (was 347 before the new test was added). 
 
 | ID | Severity | Domain | Summary |
 |---|---|---|---|
-| C-1 | CRITICAL | security | Live deploy is publicly unauthenticated due to `CRYPTO_SIGNAL_ALLOW_UNAUTH=true` in Render env + empty `api_key` in alerts_config. Defense-in-depth fix #4 above mitigates leak risk; full closure needs David to set the key in prod and flip the env var. |
+| ~~C-1~~ | ~~CRITICAL~~ | security | ✅ **RESOLVED 2026-05-03** — env-var fallback shipped in `376e26d`; `CRYPTO_SIGNAL_API_KEY` set in Render dashboard; `CRYPTO_SIGNAL_ALLOW_UNAUTH=false`. Verified live (4-test curl matrix passes). See finding above for full detail. |
 | C-3 | CRITICAL | financial | `place_order()` lacks pair allowlist, size cap, SL/TP validation. Architectural change touching the order-placement contract. |
 | C-4 | CRITICAL | financial | `place_order()` not idempotent (no `clientOrderId`). Network retries / LLM retries / double-clicks can place duplicate live orders. Needs ccxt OKX integration testing. |
 | C-5 | CRITICAL | financial | Circuit breaker not called from `place_order` despite the comment claiming otherwise; also two parallel implementations (execution.check_circuit_breaker + circuit_breakers.check_all). Needs consolidation pass. |
@@ -236,3 +242,44 @@ Queued for D6 security pass. Catalogued in this audit doc for reference; no urge
 
 - **2026-05-02 (late evening) — audit started**, restore tag created
   (`pre-overnight-audit-2026-05-02`).
+- **2026-05-02 (late evening) — 12 fixes shipped** under `ad6182b`; 348/1
+  pytest green; restore tag held intact.
+- **2026-05-03 (morning) — C-1 closed.** Env-var fallback for
+  `CRYPTO_SIGNAL_API_KEY` added in `376e26d`; David configured Render
+  dashboard env vars; live curl matrix verifies enforcement.
+- **2026-05-03 (afternoon) — fresh §4 audit pass on Phase D new code.**
+  Extended audit on `routers/deps.py`, the 6 new routers, `render.yaml`,
+  and `tests/test_api_routers.py` — surface area added by Phase D-1
+  through D-1-ext that landed AFTER the overnight audit closed.
+
+  **6 fixes applied + 4 new regression tests; 354 passed / 1 skipped /
+  0 regressions:**
+
+  | # | Severity | File:line | Summary |
+  |---|---|---|---|
+  | 13 | HIGH | `render.yaml:36-46` | IaC default flipped from `CRYPTO_SIGNAL_ALLOW_UNAUTH: "true"` to `"false"`. Defense-in-depth: a fresh `render.com/deploy?repo=...` recreate or a dashboard reset would have reopened the C-1 bypass. Dashboard runtime value (also `false` post-2026-05-03) wins; YAML now matches. |
+  | 14 | MEDIUM | `routers/alerts.py:74-86` | POST `/alerts/configure` normalizes `pair` via `normalize_pair` before persisting — `BTCUSDT` / `BTC-USDT` / `BTC_USDT` / `BTC/USDT-SWAP` collapse to `BTC/USDT` so downstream `check_watchlist_alerts` lookups don't miss. ValueError surfaces as 422. |
+  | 15 | LOW | `routers/ai_assistant.py:30-44, 60-69` | POST `/ai/ask` body now Pydantic-validated: `confidence ∈ [0, 100]`, `signal ∈ {BUY, SELL, STRONG BUY, STRONG SELL, NEUTRAL, HOLD}`, `pair` length 3-32, `indicators` capped at 64 keys, `question` capped at 2000 chars. Bad inputs fail at 422 before they reach the LLM call (mitigation lane for LLM-2 prompt-injection until the design-pass rewrite). |
+  | 16 | LOW | `routers/deps.py:14, 23` | Removed unused `import logging` + `logger = logging.getLogger(...)` (auth keystone has no log emissions). |
+  | 17 | LOW | `routers/utils.py:62-66` | `normalize_pair` quote vocabulary extended from {USDT, USDC, BTC, ETH, BNB} to {FDUSD, TUSD, BUSD, USDT, USDC, USDD, DAI, BTC, ETH, BNB, SOL, EUR, GBP, JPY, USD} — longest-first so `BTCFDUSD` doesn't collide with the `USD` short suffix. |
+  | 18 | LOW | `routers/exchange.py:46-58` | 503 error guidance is now backend-agnostic: points to env vars + `PUT /settings/execution` rather than a Streamlit UI path that doesn't exist post-D8. |
+
+  **New regression tests (4):**
+  - `test_alerts_create_normalizes_pair` — POST with `ETHUSDT` round-trips as `ETH/USDT`
+  - `test_alerts_create_rejects_unparseable_pair` — `pair="!!!"` returns 422
+  - `test_ai_ask_rejects_out_of_range_confidence` — `confidence=250.0` returns 422
+  - `test_ai_ask_rejects_unknown_signal` — `signal="MOON"` returns 422 with the rejected token echoed back
+
+  **Found-but-deferred (need David sign-off / frontend coordination):**
+  - `routers/settings.py` PUTs accept `dict[str, Any]` with no per-key
+    type/range validation. Malformed PUT (e.g. `min_confidence_threshold: "abc"`)
+    silently writes garbage that crashes the next scan. Fix needs Pydantic
+    models per group + frontend coordination on accepted shape.
+  - `routers/alerts.py` _load → modify → _save sequence has a read-modify-write
+    race on concurrent POSTs. The `alerts` module's locking is the right
+    place to fix; needs a concurrency design pass.
+  - `routers/diagnostics.py` gate 5 (Trade-size cap) returns `_ok` while gates
+    4 + 6 return `_unmeasured` — semantic inconsistency the overnight audit's
+    "gates 4/5/6" claim glosses over. Defensible (gate 5 IS enforced at order
+    time, just not measurable at status-read time) but worth a deliberate
+    UX call vs the consistency principle.

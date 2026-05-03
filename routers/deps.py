@@ -11,7 +11,6 @@ api.py routes and the new routers.
 from __future__ import annotations
 
 import hmac
-import logging
 import os
 import threading
 import time
@@ -19,8 +18,6 @@ import time
 from fastapi import Header, HTTPException
 
 import alerts
-
-logger = logging.getLogger(__name__)
 
 
 _api_key_cache: dict = {"key": None, "ts": 0.0}

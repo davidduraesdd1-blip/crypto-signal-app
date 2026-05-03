@@ -186,6 +186,40 @@ def test_alerts_create_invalid_payload_returns_422(client, stub_alerts_config):
     assert r.status_code == 422
 
 
+def test_alerts_create_normalizes_pair(client, stub_alerts_config):
+    """AUDIT-2026-05-03: pair input must collapse to canonical BASE/QUOTE
+    before persisting so the downstream `check_watchlist_alerts` lookup
+    matches regardless of how the frontend formatted the input.
+    """
+    payload = {
+        "pair": "ETHUSDT",  # concatenated form, no separator
+        "condition": "price_above",
+        "threshold": 3000.0,
+        "channels": ["email"],
+        "note": "normalize-pair regression test",
+    }
+    r = client.post("/alerts/configure", json=payload)
+    assert r.status_code == 200, r.text
+    rule = r.json()["rule"]
+    assert rule["pair"] == "ETH/USDT", f"pair not normalized: {rule['pair']!r}"
+
+
+def test_alerts_create_rejects_unparseable_pair(client, stub_alerts_config):
+    """AUDIT-2026-05-03: an unparseable pair raises ValueError in
+    normalize_pair which the route surfaces as 422 with the original
+    input echoed back, so the frontend can render a useful validation
+    error.
+    """
+    payload = {
+        "pair": "!!!",
+        "condition": "price_above",
+        "threshold": 1.0,
+        "channels": ["email"],
+    }
+    r = client.post("/alerts/configure", json=payload)
+    assert r.status_code == 422
+
+
 # ── AI Assistant ─────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -221,6 +255,36 @@ def test_ai_decisions_smoke(client):
     body = r.json()
     assert "decisions" in body and isinstance(body["decisions"], list)
     assert body["count"] == len(body["decisions"])
+
+
+def test_ai_ask_rejects_out_of_range_confidence(client, stub_llm):
+    """AUDIT-2026-05-03: confidence is bounded [0, 100]. An out-of-range
+    value fails fast at 422 instead of reaching the LLM call where it
+    would be interpolated into the prompt verbatim.
+    """
+    payload = {
+        "pair": "BTC/USDT",
+        "signal": "BUY",
+        "confidence": 250.0,  # impossible
+        "indicators": {},
+    }
+    r = client.post("/ai/ask", json=payload)
+    assert r.status_code == 422
+
+
+def test_ai_ask_rejects_unknown_signal(client, stub_llm):
+    """AUDIT-2026-05-03: signal must be one of the canonical
+    BUY/SELL/STRONG BUY/STRONG SELL/NEUTRAL/HOLD vocabulary.
+    """
+    payload = {
+        "pair": "BTC/USDT",
+        "signal": "MOON",  # not in allowed set
+        "confidence": 70.0,
+        "indicators": {},
+    }
+    r = client.post("/ai/ask", json=payload)
+    assert r.status_code == 422
+    assert "MOON" in r.json()["detail"] or "Unknown signal" in r.json()["detail"]
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────

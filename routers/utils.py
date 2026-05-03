@@ -58,6 +58,16 @@ def serialize(obj: Any) -> Any:
     return clean_scalar(obj)
 
 
+# AUDIT-2026-05-03 (LOW): broadened the quote vocabulary so concatenated
+# inputs like `BTCFDUSD` or `ETHDAI` from less-tidy upstream sources still
+# normalize. Order matters — longest first so `FDUSD` is detected before
+# falling back to a shorter `USD` suffix on `BTCUSDT`-shaped inputs.
+_QUOTE_VOCAB = (
+    "FDUSD", "TUSD", "BUSD", "USDT", "USDC", "USDD", "DAI",
+    "BTC", "ETH", "BNB", "SOL", "EUR", "GBP", "JPY", "USD",
+)
+
+
 def normalize_pair(raw: str) -> str:
     """Accept BTCUSDT, BTC-USDT, BTC_USDT, BTC/USDT, BTC-USDT-SWAP → BTC/USDT.
 
@@ -71,7 +81,7 @@ def normalize_pair(raw: str) -> str:
             break
     s = s.replace("_", "/").replace("-", "/")
     if "/" not in s:
-        for quote in ("USDT", "USDC", "BTC", "ETH", "BNB"):
+        for quote in _QUOTE_VOCAB:
             if s.endswith(quote) and len(s) > len(quote):
                 s = s[: -len(quote)] + "/" + quote
                 break

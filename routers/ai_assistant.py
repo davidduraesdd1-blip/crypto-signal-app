@@ -30,12 +30,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# AUDIT-2026-05-03 (LOW input validation): canonical signal vocabulary
+# matches the engine's BUY/HOLD/SELL output rule (CLAUDE.md §9). Bad
+# input fails fast at 422 instead of reaching the LLM call where it
+# would be interpolated into the prompt verbatim.
+_ALLOWED_SIGNALS = {"BUY", "SELL", "STRONG BUY", "STRONG SELL", "NEUTRAL", "HOLD"}
+
+
 class AskRequest(BaseModel):
-    pair:       str             = Field(..., description="Trading pair, e.g. BTC/USDT")
-    signal:     str             = Field(..., description="Direction call: BUY / SELL / STRONG BUY / STRONG SELL / NEUTRAL")
-    confidence: float           = Field(..., description="Confidence pct, 0-100")
-    indicators: dict[str, Any]  = Field(default_factory=dict, description="Indicator snapshot (rsi, macd, adx, ...)")
-    question:   Optional[str]   = Field(default=None, description="Optional free-text follow-up question")
+    pair:       str             = Field(..., min_length=3, max_length=32, description="Trading pair, e.g. BTC/USDT")
+    signal:     str             = Field(..., description=f"Direction call (one of: {', '.join(sorted(_ALLOWED_SIGNALS))})")
+    confidence: float           = Field(..., ge=0.0, le=100.0, description="Confidence pct, 0-100")
+    indicators: dict[str, Any]  = Field(default_factory=dict, max_length=64, description="Indicator snapshot (rsi, macd, adx, ...)")
+    question:   Optional[str]   = Field(default=None, max_length=2000, description="Optional free-text follow-up question")
 
 
 @router.post(
@@ -55,11 +62,18 @@ async def ask_ai(req: AskRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    signal_norm = req.signal.upper().strip()
+    if signal_norm not in _ALLOWED_SIGNALS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown signal {req.signal!r}. Allowed: {sorted(_ALLOWED_SIGNALS)}",
+        )
+
     try:
         text = await asyncio.to_thread(
             llm_analysis.generate_signal_story,
             normalized,
-            req.signal.upper(),
+            signal_norm,
             float(req.confidence),
             req.indicators,
         )
@@ -70,14 +84,14 @@ async def ask_ai(req: AskRequest):
     if not text:
         return serialize({
             "pair":     normalized,
-            "signal":   req.signal.upper(),
+            "signal":   signal_norm,
             "text":     "",
             "source":   "unavailable",
         })
 
     return serialize({
         "pair":     normalized,
-        "signal":   req.signal.upper(),
+        "signal":   signal_norm,
         "text":     text,
         "source":   "llm_analysis.generate_signal_story",
     })

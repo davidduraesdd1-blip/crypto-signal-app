@@ -44,11 +44,17 @@ def test_connection():
     """
     status = exec_engine.get_status()
     if not status.get("keys_configured", False):
+        # AUDIT-2026-05-03 (LOW UX): error guidance now points to the
+        # backend-agnostic surface (env vars / settings PUT) so the
+        # message is correct regardless of whether the operator is
+        # using the Streamlit UI or the Next.js frontend.
         raise HTTPException(
             status_code=503,
             detail=(
-                "OKX API keys are not configured. Set them in Settings · "
-                "Execution before testing the connection."
+                "OKX API keys are not configured. Set OKX_API_KEY, "
+                "OKX_API_SECRET, OKX_PASSPHRASE in the environment "
+                "(or via PUT /settings/execution) before testing the "
+                "connection."
             ),
         )
     try:

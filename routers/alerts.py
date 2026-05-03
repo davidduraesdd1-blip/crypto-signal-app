@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 import alerts as alerts_module
 
 from .deps import require_api_key
-from .utils import serialize
+from .utils import normalize_pair, serialize
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +65,21 @@ def list_alert_rules():
 )
 def create_alert_rule(rule: AlertRuleIn):
     """Persist a new alert rule. Server-assigned `id` is returned in
-    the response so the frontend can DELETE by id later."""
+    the response so the frontend can DELETE by id later.
+
+    AUDIT-2026-05-03: pair is normalized to canonical `BASE/QUOTE` form
+    before persisting so downstream `check_watchlist_alerts` lookups
+    match regardless of how the frontend formatted the input
+    (`BTCUSDT`, `BTC-USDT`, `BTC_USDT`, `BTC/USDT-SWAP` all collapse
+    to `BTC/USDT`).
+    """
+    try:
+        normalized_pair = normalize_pair(rule.pair)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     rules = _load_rules()
     new_rule = rule.model_dump()
+    new_rule["pair"] = normalized_pair
     new_rule["id"] = uuid.uuid4().hex
     rules.append(new_rule)
     _save_rules(rules)
