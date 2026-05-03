@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { AgentStatusCard } from "@/components/agent-status-card";
@@ -9,7 +10,7 @@ import { DecisionsTable } from "@/components/decisions-table";
 import { PipelineDiagram } from "@/components/pipeline-diagram";
 import { AgentConfigCard } from "@/components/agent-config-card";
 import { EmergencyStopCard } from "@/components/emergency-stop-card";
-import { useAiDecisions } from "@/hooks/use-ai";
+import { useAiDecisions, useAskAi } from "@/hooks/use-ai";
 import { useExecutionStatus } from "@/hooks/use-execution-status";
 import type { AiDecision } from "@/lib/api-types";
 
@@ -161,6 +162,16 @@ export default function AIAssistantPage() {
         <EmergencyStopCard />
       </section>
 
+      {/* Ask Claude — D4d wiring of POST /ai/ask */}
+      <section className="mb-6">
+        <h2 className="mb-1 text-lg font-semibold text-text-primary">Ask Claude</h2>
+        <p className="mb-4 text-[12px] text-text-muted">
+          plain-English follow-up on a recent signal · responses cached 30 min
+          per (pair, signal) bucket
+        </p>
+        <AskClaudeCard />
+      </section>
+
       {/* Recent Decisions */}
       <section className="mb-6">
         <h2 className="mb-1 text-lg font-semibold text-text-primary">Recent Decisions</h2>
@@ -189,5 +200,128 @@ export default function AIAssistantPage() {
         <PipelineDiagram />
       </section>
     </AppShell>
+  );
+}
+
+/** AUDIT-2026-05-03 (D4d): Ask Claude card — small input + result
+ * pane wired to POST /ai/ask via useAskAi mutation. The pair/signal/
+ * confidence fields are simple text inputs because the engine
+ * sanitizes them server-side via the per-field whitelist landed in
+ * P6-LLM-1+LLM-2 (commits 40a473e, 1c28a20). Indicators are typed
+ * free-form for now; D-extension can wire a ticker-picker dropdown
+ * once a /signals enriched endpoint surfaces the most-recent
+ * indicator snapshot per pair. */
+function AskClaudeCard() {
+  const ask = useAskAi();
+  const [pair, setPair] = useState("BTC/USDT");
+  const [signal, setSignal] = useState("BUY");
+  const [confidence, setConfidence] = useState("78");
+  const [question, setQuestion] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const conf = parseFloat(confidence);
+    if (Number.isNaN(conf)) return;
+    ask.mutate({
+      pair,
+      signal,
+      confidence: conf,
+      indicators: {},
+      question: question || null,
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-border-default bg-bg-1 p-4">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="space-y-1.5">
+            <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+              Pair
+            </label>
+            <input
+              type="text"
+              value={pair}
+              onChange={(e) => setPair(e.target.value)}
+              className="min-h-[36px] w-full rounded-md border border-border-default bg-bg-2 px-3 py-1.5 font-mono text-sm text-text-primary"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+              Signal
+            </label>
+            <select
+              value={signal}
+              onChange={(e) => setSignal(e.target.value)}
+              className="min-h-[36px] w-full rounded-md border border-border-default bg-bg-2 px-3 py-1.5 text-sm text-text-primary"
+            >
+              <option>BUY</option>
+              <option>SELL</option>
+              <option>STRONG BUY</option>
+              <option>STRONG SELL</option>
+              <option>NEUTRAL</option>
+              <option>HOLD</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+              Confidence %
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={confidence}
+              onChange={(e) => setConfidence(e.target.value)}
+              className="min-h-[36px] w-full rounded-md border border-border-default bg-bg-2 px-3 py-1.5 font-mono text-sm text-text-primary"
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+            Question (optional)
+          </label>
+          <input
+            type="text"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="e.g. why is confidence dropping vs yesterday?"
+            className="min-h-[36px] w-full rounded-md border border-border-default bg-bg-2 px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={ask.isPending}
+          className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-accent-brand px-4 py-2 text-sm font-semibold text-bg-0 transition-colors hover:bg-accent-brand/90 disabled:opacity-60 disabled:cursor-wait"
+        >
+          <span className={cn(ask.isPending && "animate-spin")}>✨</span>
+          <span>{ask.isPending ? "Asking…" : "Ask Claude"}</span>
+        </button>
+      </form>
+
+      {ask.isError && (
+        <div className="mt-3 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm text-danger">
+          Ask failed — {String(ask.error?.message ?? "unknown error")}
+        </div>
+      )}
+      {ask.data && (
+        <div
+          className={cn(
+            "mt-3 rounded-lg border p-3 text-sm",
+            ask.data.source === "unavailable"
+              ? "border-warning/30 bg-warning/5 text-warning"
+              : "border-info/30 bg-info/5 text-text-primary",
+          )}
+        >
+          {ask.data.source === "unavailable" ? (
+            <span>
+              AI Assistant unavailable — fallback rule-based explanation only.
+            </span>
+          ) : (
+            <span className="leading-relaxed">{ask.data.text}</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

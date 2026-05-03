@@ -62,7 +62,7 @@ const REQUIRED_ENDPOINTS: Array<[string, string]> = [
   ["POST", "/exchange/test-connection"],
   ["GET", "/diagnostics/circuit-breakers"],
   ["GET", "/diagnostics/database"],
-  ["GET", "/execution/status"],
+  ["GET", "/execute/status"],
   ["POST", "/execute/order"],
 ];
 

@@ -11,6 +11,7 @@ import { CompositeScore } from "@/components/composite-score";
 import { IndicatorTile, IndicatorGrid } from "@/components/indicator-tile";
 import { SignalHistory } from "@/components/signal-history";
 import { useSignals, useSignalDetail } from "@/hooks/use-signals";
+import { useTriggerScan } from "@/hooks/use-scan";
 import {
   directionToSignalType,
   formatNumber,
@@ -99,6 +100,9 @@ export default function SignalsPage() {
 
   // Derive the coin list from /signals top-N rows
   const signalsQuery = useSignals();
+  // D4d: scan trigger button — invalidates signals + home + scan-status
+  // queries on success so the page re-fetches the freshly-scanned data.
+  const triggerScan = useTriggerScan();
   const allRows = signalsQuery.data?.results ?? [];
   const coins = allRows.slice(0, 5).map((r) => r.pair.split("/")[0]);
   const extraCoinsCount = Math.max(0, allRows.length - 5);
@@ -218,23 +222,52 @@ export default function SignalsPage() {
         title="Signal detail"
         subtitle="Layer-by-layer composite signal breakdown for a single coin."
       >
-        {coins.length > 0 ? (
-          <CoinPicker
-            coins={coins}
-            activeIndex={activeCoinIdx}
-            extraCount={extraCoinsCount}
-            onSelect={setActiveCoinIdx}
-          />
-        ) : (
-          <div className="text-xs text-text-muted">
-            {signalsQuery.isLoading
-              ? "Loading coins…"
-              : signalsQuery.isError
-                ? "Couldn't load coins"
-                : "Run a scan to populate"}
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {coins.length > 0 ? (
+            <CoinPicker
+              coins={coins}
+              activeIndex={activeCoinIdx}
+              extraCount={extraCoinsCount}
+              onSelect={setActiveCoinIdx}
+            />
+          ) : (
+            <div className="text-xs text-text-muted">
+              {signalsQuery.isLoading
+                ? "Loading coins…"
+                : signalsQuery.isError
+                  ? "Couldn't load coins"
+                  : "Run a scan to populate"}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => triggerScan.mutate()}
+            disabled={triggerScan.isPending}
+            className="inline-flex min-h-[36px] items-center gap-1.5 rounded-md border border-accent-brand bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent-brand transition-colors hover:bg-accent-brand/10 disabled:opacity-60 disabled:cursor-wait"
+            title="Trigger a fresh scan; results invalidate the signals + home caches"
+          >
+            <span>{triggerScan.isPending ? "⟳" : "▶"}</span>
+            <span>{triggerScan.isPending ? "Scanning…" : "Scan now"}</span>
+          </button>
+        </div>
       </PageHeader>
+
+      {/* Scan trigger feedback */}
+      {triggerScan.isError && (
+        <div className="mb-3 rounded-lg border border-danger/30 bg-danger/5 p-2 text-xs text-danger">
+          Scan trigger failed — {String(triggerScan.error?.message ?? "unknown error")}
+        </div>
+      )}
+      {triggerScan.isSuccess && triggerScan.data?.status === "started" && (
+        <div className="mb-3 rounded-lg border border-success/30 bg-success/5 p-2 text-xs text-success">
+          Scan started — results refresh automatically when complete (~30-60s)
+        </div>
+      )}
+      {triggerScan.isSuccess && triggerScan.data?.status === "already_running" && (
+        <div className="mb-3 rounded-lg border border-warning/30 bg-warning/5 p-2 text-xs text-warning">
+          A scan is already running — wait for it to finish before triggering another
+        </div>
+      )}
 
       {/* Hero signal card */}
       <div className="mb-5">

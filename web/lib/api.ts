@@ -312,7 +312,11 @@ export const getDatabaseHealth = (signal?: AbortSignal) =>
 // ─── Execution ──────────────────────────────────────────────────────────────
 
 export const getExecutionStatus = (signal?: AbortSignal) =>
-  apiFetch<ExecutionStatus>("/execution/status", { signal });
+  // AUDIT-2026-05-03 (D4d contract drift fix): the FastAPI route is
+  // `/execute/status` (singular "execute"), not `/execution/status`.
+  // The api-contract drift-guard test caught this on the first run
+  // — fixing the TS client side to match the live deploy.
+  apiFetch<ExecutionStatus>("/execute/status", { signal });
 
 export const placeOrder = (input: PlaceOrderInput) =>
   apiFetch<PlaceOrderResponse>("/execute/order", { method: "POST", body: input });
