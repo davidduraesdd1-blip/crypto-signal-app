@@ -44,20 +44,36 @@ export function formatNumber(value: number | null | undefined, decimals = 0): st
   return Number(value).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-/** Format a percentage. 12.3 → "12.3%". Accepts both fraction (0.123)
- * and percent (12.3) per utils_format.py contract — values whose
- * absolute magnitude is ≤ 1.5 are treated as fractions and multiplied
- * by 100. signed=true prepends +/-. */
+/** Format a percentage value. The FastAPI side emits change_24h_pct
+ * etc. as already-percent values (e.g. 2.14 for 2.14%, NOT 0.0214).
+ *
+ * AUDIT-2026-05-03 (D4 audit, HIGH formatPct fix): the prior magnitude
+ * heuristic (`if abs(v) ≤ 1.5: multiply by 100`) silently rendered a
+ * real flat-day "+0.8%" change as "+80.0%". The Python utils_format.py
+ * contract uses the same heuristic, but the API actually emits percent
+ * values for every endpoint we read — so the heuristic was unsafe.
+ *
+ * Now: always treats `value` as already-percent. Callers with fraction
+ * data must multiply by 100 themselves OR use `formatPctFromFraction`.
+ */
 export function formatPct(value: number | null | undefined, decimals = 1, signed = false): string {
   if (isMissing(value)) return EM_DASH;
-  let v = Number(value);
-  if (Math.abs(v) <= 1.5) v = v * 100;
+  const v = Number(value);
   const d = Math.max(0, Math.min(4, decimals));
   const formatted = v.toFixed(d);
   if (signed && v >= 0 && !formatted.startsWith("-")) {
     return `+${formatted}%`;
   }
   return `${formatted}%`;
+}
+
+/** Format a fraction as percent — multiplies by 100 first.
+ * Use when the API endpoint returns a fraction (e.g. 0.0214 for 2.14%).
+ * Today no D4 endpoint requires this, but it's here so the explicit-
+ * contract path exists if a future endpoint emits fractions. */
+export function formatPctFromFraction(value: number | null | undefined, decimals = 1, signed = false): string {
+  if (isMissing(value)) return EM_DASH;
+  return formatPct(Number(value) * 100, decimals, signed);
 }
 
 /** Format a confidence score as "82% conf" / "61%" — drives hero card pills */

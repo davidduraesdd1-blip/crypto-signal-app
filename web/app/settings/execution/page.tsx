@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useSettings, useSaveSettings } from "@/hooks/use-settings";
@@ -76,10 +76,15 @@ export default function ExecutionSettingsPage() {
   const [slippageTolerance, setSlippageTolerance] = useState(0.5);
   const [autoExecConfidence, setAutoExecConfidence] = useState(80);
 
-  // Hydrate from API
+  // AUDIT-2026-05-03 (D4 audit, HIGH refetch-clobber fix): hydrate
+  // form once on first successful load. See trading/page.tsx for the
+  // full rationale.
+  const hydratedRef = useRef(false);
   useEffect(() => {
+    if (hydratedRef.current) return;
     const e = settingsQuery.data?.execution;
     if (!e) return;
+    hydratedRef.current = true;
     if (typeof e.live_trading_enabled === "boolean") setLiveMode(e.live_trading_enabled);
     if (typeof e.auto_execute === "boolean") setAutoExecute(e.auto_execute);
     if (typeof e.exchange === "string") setExchange(e.exchange);
@@ -356,7 +361,7 @@ export default function ExecutionSettingsPage() {
         )}
         {saveStatus === "ok" && saveMutation.isSuccess && rejected.length === 0 && (
           <div className="mb-4 rounded-lg border border-success/30 bg-success/5 p-3 text-sm text-success">
-            Saved · all values applied to alerts_config.json
+            Saved · all values applied
           </div>
         )}
         {saveStatus === "partial" && rejected.length > 0 && (

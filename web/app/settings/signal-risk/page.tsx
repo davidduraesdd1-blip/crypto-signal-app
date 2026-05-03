@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useSettings, useSaveSettings } from "@/hooks/use-settings";
 
@@ -121,10 +121,15 @@ export default function SignalRiskSettingsPage() {
   const [mtfAlignment, setMtfAlignment] = useState(60);
   const [regimeConfidence, setRegimeConfidence] = useState(55);
 
-  // Hydrate from API
+  // AUDIT-2026-05-03 (D4 audit, HIGH refetch-clobber fix): hydrate
+  // form once on first successful load. See trading/page.tsx for the
+  // full rationale.
+  const hydratedRef = useRef(false);
   useEffect(() => {
+    if (hydratedRef.current) return;
     const sr = settingsQuery.data?.signal_risk;
     if (!sr) return;
+    hydratedRef.current = true;
     if (typeof sr.min_confidence_threshold === "number") setMinConfidence(sr.min_confidence_threshold);
     if (typeof sr.high_conf_threshold === "number") setHighConfThreshold(sr.high_conf_threshold);
     if (typeof sr.min_alert_confidence === "number") setMinAlertConfidence(sr.min_alert_confidence);
@@ -288,7 +293,7 @@ export default function SignalRiskSettingsPage() {
       )}
       {saveStatus === "ok" && saveMutation.isSuccess && rejected.length === 0 && (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-sm text-success">
-          Saved · all values applied to alerts_config.json
+          Saved · all values applied
         </div>
       )}
       {saveStatus === "partial" && rejected.length > 0 && (

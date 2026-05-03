@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useSettings, useSaveSettings } from "@/hooks/use-settings";
 
@@ -40,10 +40,19 @@ export default function TradingSettingsPage() {
   const [regionalColors, setRegionalColors] = useState(false);
   const [compactWatchlist, setCompactWatchlist] = useState(false);
 
-  // Hydrate from API on first load
+  // AUDIT-2026-05-03 (D4 audit, HIGH refetch-clobber fix): `useRef`
+  // guard so the form is hydrated ONCE on first successful load, not
+  // on every refetch. Without this, a window-focus or after-mutation
+  // refetch would silently overwrite the user's in-progress edits.
+  // staleTime: Infinity defends today, but any future invalidation
+  // (e.g. after a different settings group is saved) would re-run the
+  // effect and clobber edits in this tab.
+  const hydratedRef = useRef(false);
   useEffect(() => {
+    if (hydratedRef.current) return;
     const t = settingsQuery.data?.trading;
     if (!t) return;
+    hydratedRef.current = true;
     if (Array.isArray(t.trading_pairs) && t.trading_pairs.length > 0) {
       setPairs(t.trading_pairs as string[]);
     }
@@ -300,7 +309,7 @@ export default function TradingSettingsPage() {
       )}
       {saveStatus === "ok" && saveMutation.isSuccess && rejected.length === 0 && (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-sm text-success">
-          Saved · all values applied to alerts_config.json
+          Saved · all values applied
         </div>
       )}
       {saveStatus === "partial" && rejected.length > 0 && (

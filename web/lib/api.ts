@@ -73,18 +73,30 @@ export class ApiError extends Error {
     this.detail = detail;
   }
 
+  /** AUDIT-2026-05-03 (D4 audit, HIGH): try/catch around stringify so
+   * a circular-ref `detail` object can't crash the categorizer. */
+  private detailText(): string {
+    try {
+      return JSON.stringify(this.detail).toLowerCase();
+    } catch {
+      try {
+        return String(this.detail).toLowerCase();
+      } catch {
+        return "";
+      }
+    }
+  }
+
   /** True for the geo-block category (per D4 plan §6 error taxonomy) */
   get isGeoBlocked(): boolean {
     if (this.status !== 403) return false;
-    const text = JSON.stringify(this.detail).toLowerCase();
-    return /binance.*us|geo[-_ ]?block/.test(text);
+    return /binance.*us|geo[-_ ]?block/.test(this.detailText());
   }
 
   /** True for the rate-limit category */
   get isRateLimited(): boolean {
     if (this.status === 429) return true;
-    const text = JSON.stringify(this.detail).toLowerCase();
-    return /rate.?limit|too.?many/.test(text);
+    return /rate.?limit|too.?many/.test(this.detailText());
   }
 
   /** True when the API key is missing or rejected */
@@ -152,10 +164,25 @@ async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T>
         detail = null;
       }
     }
-    const message =
-      typeof detail === "object" && detail && "detail" in detail
-        ? String((detail as { detail: unknown }).detail)
-        : `${method} ${path} failed with HTTP ${response.status}`;
+    // AUDIT-2026-05-03 (D4 audit, MEDIUM): handle the FastAPI
+    // validation-error shape `{detail: [{msg, type}, ...]}` so the
+    // message doesn't render as "[object Object],[object Object]".
+    const message = (() => {
+      if (typeof detail === "object" && detail && "detail" in detail) {
+        const d = (detail as { detail: unknown }).detail;
+        if (Array.isArray(d) && d.length > 0) {
+          const first = d[0] as { msg?: unknown; loc?: unknown };
+          if (first && typeof first.msg === "string") return first.msg;
+        }
+        if (typeof d === "string") return d;
+        try {
+          return JSON.stringify(d);
+        } catch {
+          return String(d);
+        }
+      }
+      return `${method} ${path} failed with HTTP ${response.status}`;
+    })();
     throw new ApiError(response.status, path, detail, message);
   }
 

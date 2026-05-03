@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -75,11 +75,20 @@ export default function AIAssistantPage() {
   const decisionsQuery = useAiDecisions(10);
   const execQuery = useExecutionStatus({ polling: true });
 
-  // AGENT pill state derived from /execution/status. The toggle on the
+  // AGENT pill state derived from /execute/status. The toggle on the
   // page (Start/Stop) is wired to local state for D4b — D4c hooks it
   // up to a real /agent/start | /agent/stop endpoint when those land.
+  //
+  // AUDIT-2026-05-03 (D4 audit, HIGH stale-closure fix): `useState`
+  // captures `apiAgentRunning` only at first render — when the query
+  // resolves later, `running` would stay at the stale `undefined ->
+  // false` value. Sync via useEffect so the local toggle reflects the
+  // server-side state on every refetch.
   const apiAgentRunning = Boolean(execQuery.data?.agent_running);
   const [running, setRunning] = useState(apiAgentRunning);
+  useEffect(() => {
+    setRunning(apiAgentRunning);
+  }, [apiAgentRunning]);
 
   // Map live decisions to the table shape; fall back to empty when
   // no decisions yet.

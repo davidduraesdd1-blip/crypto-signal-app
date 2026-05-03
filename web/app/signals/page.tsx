@@ -12,6 +12,7 @@ import { IndicatorTile, IndicatorGrid } from "@/components/indicator-tile";
 import { SignalHistory } from "@/components/signal-history";
 import { useSignals, useSignalDetail } from "@/hooks/use-signals";
 import { useTriggerScan } from "@/hooks/use-scan";
+import { ApiError } from "@/lib/api";
 import {
   directionToSignalType,
   formatNumber,
@@ -255,7 +256,18 @@ export default function SignalsPage() {
       {/* Scan trigger feedback */}
       {triggerScan.isError && (
         <div className="mb-3 rounded-lg border border-danger/30 bg-danger/5 p-2 text-xs text-danger">
-          Scan trigger failed — {String(triggerScan.error?.message ?? "unknown error")}
+          {(() => {
+            // AUDIT-2026-05-03 (D4 audit, HIGH): use ApiError
+            // discriminators for actionable error copy instead of
+            // raw Python detail strings.
+            const err = triggerScan.error;
+            if (err instanceof ApiError) {
+              if (err.isAuthError) return "Scan trigger failed — API key missing or invalid. Set NEXT_PUBLIC_API_KEY in Vercel/local .env.local.";
+              if (err.isRateLimited) return "Scan trigger rate-limited — wait a minute before retrying.";
+              if (err.isGeoBlocked) return "Scan trigger blocked from this region — provider geo-block.";
+            }
+            return `Scan trigger failed — ${String(err?.message ?? "unknown error")}`;
+          })()}
         </div>
       )}
       {triggerScan.isSuccess && triggerScan.data?.status === "started" && (

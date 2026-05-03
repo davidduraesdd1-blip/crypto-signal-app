@@ -18,8 +18,12 @@ export function useRefreshAll() {
   const isFetching = useIsFetching() > 0;
 
   const refresh = useCallback(() => {
+    // AUDIT-2026-05-03 (D4 audit, HIGH): drop the explicit
+    // refetchQueries() — invalidateQueries() ALREADY triggers a
+    // refetch of every active query as part of its contract. The
+    // explicit call was firing a second round of network requests
+    // for every mounted query (~30 requests on a typical page).
     qc.invalidateQueries();
-    qc.refetchQueries({ type: "active" });
   }, [qc]);
 
   return { refresh, isFetching };
