@@ -23,6 +23,7 @@ Schema:
 from __future__ import annotations
 
 import json
+import os
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -79,10 +80,31 @@ def make_event(
 
     Returns a dict with the unified schema (plus event_id + timestamp).
     """
+    # AUDIT-2026-05-03 (A-1): unknown app / event_type used to log at
+    # DEBUG level and accept silently — a typo (`"superGrok"` vs
+    # `"supergrok"`) bifurcated the cross-app audit ledger and broke
+    # reconciliation. Now: log at WARNING so the typo surfaces in
+    # normal log output, AND optionally enforce strict membership when
+    # `STRICT_AUDIT_SCHEMA=true` is set (recommended for the family-
+    # office reporting deploy where the ledger MUST be consistent).
+    # Default behavior is unchanged (accept-with-warning) so existing
+    # callers don't break — flip the env var when the family-office
+    # reporting stream goes hot.
+    _strict = os.environ.get("STRICT_AUDIT_SCHEMA", "").strip().lower() == "true"
     if app not in APP_NAMES:
-        logger.debug("[AuditSchema] unknown app=%r; accepting anyway", app)
+        if _strict:
+            raise ValueError(
+                f"[AuditSchema] unknown app={app!r} (allowed: {sorted(APP_NAMES)}). "
+                f"Set STRICT_AUDIT_SCHEMA=false to accept-with-warning instead."
+            )
+        logger.warning("[AuditSchema] unknown app=%r; accepting (set STRICT_AUDIT_SCHEMA=true to reject)", app)
     if event_type not in EVENT_TYPES:
-        logger.debug("[AuditSchema] unknown event_type=%r; accepting anyway", event_type)
+        if _strict:
+            raise ValueError(
+                f"[AuditSchema] unknown event_type={event_type!r} (allowed: {sorted(EVENT_TYPES)}). "
+                f"Set STRICT_AUDIT_SCHEMA=false to accept-with-warning instead."
+            )
+        logger.warning("[AuditSchema] unknown event_type=%r; accepting (set STRICT_AUDIT_SCHEMA=true to reject)", event_type)
     # Audit R6a: enforce canonical_risk_level range (1-5) at the schema
     # boundary. Silent acceptance of 0 or 7 would pollute the unified
     # event stream with nonsense levels that downstream consumers cannot

@@ -644,6 +644,132 @@ def test_node_execute_aborts_on_emergency_stop(monkeypatch):
     assert "Emergency stop" in out["execution_result"]["error"]
 
 
+# ── S-3: quiet-hours equal-start/end disambiguation ────────────────────────
+
+
+def test_quiet_hours_equal_start_end_returns_false(caplog):
+    """Equal start/end is now treated as 'never quiet' with a logged
+    warning (was: same-day branch always-False, overnight branch
+    always-True — caller couldn't tell which). The warning tells the
+    operator how to express 24h-quiet (23:59-00:00)."""
+    import logging as _logging
+    import scheduler
+    with caplog.at_level(_logging.WARNING, logger="scheduler"):
+        out = scheduler._in_quiet_hours("12:00", "00:00", "00:00")
+    assert out is False
+    assert any("ambiguous" in r.message for r in caplog.records)
+
+
+def test_quiet_hours_overnight_window_still_works():
+    """Regression-guard: 22:00-06:00 still correctly identifies 23:00
+    as quiet and 12:00 as not quiet."""
+    import scheduler
+    assert scheduler._in_quiet_hours("23:00", "22:00", "06:00") is True
+    assert scheduler._in_quiet_hours("12:00", "22:00", "06:00") is False
+
+
+def test_quiet_hours_same_day_window_still_works():
+    """Regression-guard: 09:00-17:00 still correctly identifies 12:00
+    as quiet and 18:00 as not quiet."""
+    import scheduler
+    assert scheduler._in_quiet_hours("12:00", "09:00", "17:00") is True
+    assert scheduler._in_quiet_hours("18:00", "09:00", "17:00") is False
+
+
+# ── C-1: COINGECKO_PRO_KEY separate from demo key ───────────────────────────
+
+
+def test_coingecko_pro_only_set_with_pro_key(monkeypatch):
+    """Demo key alone must NOT flag pro-mode — calling paid endpoints
+    with a free key returns 401."""
+    import importlib
+    import config
+    monkeypatch.delenv("COINGECKO_PRO_KEY", raising=False)
+    monkeypatch.delenv("SUPERGROK_COINGECKO_PRO_KEY", raising=False)
+    monkeypatch.setenv("SUPERGROK_COINGECKO_API_KEY", "demo-key")
+    importlib.reload(config)
+    assert config.FEATURES.get("coingecko_pro") is False
+
+
+def test_coingecko_pro_set_with_pro_key(monkeypatch):
+    """Pro key alone flags pro-mode."""
+    import importlib
+    import config
+    monkeypatch.setenv("COINGECKO_PRO_KEY", "pro-key")
+    monkeypatch.delenv("SUPERGROK_COINGECKO_API_KEY", raising=False)
+    importlib.reload(config)
+    assert config.FEATURES.get("coingecko_pro") is True
+
+
+def test_coingecko_pro_legacy_env_var_still_works(monkeypatch):
+    """Backward-compat: SUPERGROK_COINGECKO_PRO_KEY (the old name) still
+    enables pro-mode via the COINGECKO_PRO_KEY fallback chain."""
+    import importlib
+    import config
+    monkeypatch.delenv("COINGECKO_PRO_KEY", raising=False)
+    monkeypatch.setenv("SUPERGROK_COINGECKO_PRO_KEY", "legacy-pro-key")
+    importlib.reload(config)
+    assert config.FEATURES.get("coingecko_pro") is True
+
+
+# ── C-4: BRAND_NAME default placeholder ─────────────────────────────────────
+
+
+def test_brand_name_defaults_to_placeholder(monkeypatch):
+    """Default BRAND_NAME is the literal placeholder per CLAUDE.md §6.
+    Was 'Family Office · Signal Intelligence' — a real brand string
+    that would leak into screenshots."""
+    import importlib
+    import config
+    monkeypatch.delenv("SUPERGROK_BRAND_NAME", raising=False)
+    importlib.reload(config)
+    assert config.BRAND_NAME == "Crypto Signal App"
+
+
+def test_brand_name_overridable_via_env(monkeypatch):
+    """Env-var override still works for when the family-office identity
+    is locked in — 1-line rebrand contract preserved."""
+    import importlib
+    import config
+    monkeypatch.setenv("SUPERGROK_BRAND_NAME", "ACME Capital Partners")
+    importlib.reload(config)
+    assert config.BRAND_NAME == "ACME Capital Partners"
+
+
+# ── A-1: strict audit-schema enforcement opt-in ────────────────────────────
+
+
+def test_audit_schema_default_accepts_unknown_app_with_warning(monkeypatch, caplog):
+    """Default behavior unchanged — unknown app accepted with a
+    WARNING log (upgraded from DEBUG so typos are visible)."""
+    import logging as _logging
+    monkeypatch.delenv("STRICT_AUDIT_SCHEMA", raising=False)
+    from utils_audit_schema import make_event
+    with caplog.at_level(_logging.WARNING, logger="utils_audit_schema"):
+        ev = make_event(app="unknown_app", event_type="agent_decision")
+    assert ev["app"] == "unknown_app"
+    assert any("unknown app" in r.message for r in caplog.records)
+
+
+def test_audit_schema_strict_rejects_unknown_app(monkeypatch):
+    """STRICT_AUDIT_SCHEMA=true rejects unknown app — recommended for
+    family-office reporting deploy where ledger consistency matters."""
+    monkeypatch.setenv("STRICT_AUDIT_SCHEMA", "true")
+    from utils_audit_schema import make_event
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="unknown app"):
+        make_event(app="superGrok", event_type="agent_decision")
+
+
+def test_audit_schema_strict_rejects_unknown_event_type(monkeypatch):
+    """STRICT_AUDIT_SCHEMA=true rejects unknown event_type."""
+    monkeypatch.setenv("STRICT_AUDIT_SCHEMA", "true")
+    from utils_audit_schema import make_event
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="unknown event_type"):
+        make_event(app="supergrok", event_type="invented_type")
+
+
 # ── S-1: scheduler interval globals exposed for live reschedule ─────────────
 
 def test_scheduler_exposes_interval_globals():

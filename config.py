@@ -8,6 +8,16 @@ import os
 ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
 CRYPTOPANIC_API_KEY: str | None = os.environ.get("CRYPTOPANIC_API_KEY")
 COINGECKO_API_KEY: str | None = os.environ.get("SUPERGROK_COINGECKO_API_KEY")
+# AUDIT-2026-05-03 (C-1): SEPARATE pro-tier key from the demo / free key.
+# Was: `coingecko_pro` flag was True if EITHER COINGECKO_API_KEY or
+# SUPERGROK_COINGECKO_PRO_KEY was set. But COINGECKO_API_KEY (free demo
+# key) shouldn't enable pro-tier features — calling paid endpoints with
+# a free key returns 401. Now a dedicated `COINGECKO_PRO_KEY` gates pro
+# behavior; the free demo key continues to work for free-tier endpoints.
+COINGECKO_PRO_KEY: str | None = (
+    os.environ.get("COINGECKO_PRO_KEY")
+    or os.environ.get("SUPERGROK_COINGECKO_PRO_KEY")  # legacy name
+)
 SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN", "")
 COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 ETHERSCAN_API_KEY: str | None = os.environ.get("ETHERSCAN_API_KEY", "")
@@ -139,8 +149,11 @@ FEATURES: dict = {
     "anthropic_ai":      bool(ANTHROPIC_API_KEY),
     # News
     "cryptopanic_news":  bool(CRYPTOPANIC_API_KEY),
-    # Market data
-    "coingecko_pro":     bool(COINGECKO_API_KEY) or bool(os.environ.get("SUPERGROK_COINGECKO_PRO_KEY", "")),
+    # Market data — `coingecko_pro` only when a real pro-tier key is
+    # set. AUDIT-2026-05-03 (C-1): the demo / free key
+    # SUPERGROK_COINGECKO_API_KEY no longer flags pro-mode (would
+    # return 401 on paid endpoints). Use COINGECKO_PRO_KEY for pro.
+    "coingecko_pro":     bool(COINGECKO_PRO_KEY),
     # CMC global metrics — requires free API key
     "coinmarketcap":     bool(COINMARKETCAP_API_KEY),
     # Error monitoring
@@ -205,5 +218,12 @@ def feature_enabled(name: str) -> bool:
 # Set env vars to activate: SUPERGROK_BRAND_NAME="My App"  SUPERGROK_BRAND_LOGO_PATH="logo.png"
 # When unset (default), the app shows a clean placeholder header.
 # 2-line rebrand when ready — no restructuring required.
-BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "Family Office · Signal Intelligence")
+# AUDIT-2026-05-03 (C-4): default flipped from
+# "Family Office · Signal Intelligence" (a real brand string that would
+# leak into screenshots if the app ships before the family-office
+# identity is locked in) to the literal placeholder "Crypto Signal App"
+# per CLAUDE.md §6: "When unset: display a clean professional
+# placeholder header." Rebrand still 1-line — set SUPERGROK_BRAND_NAME
+# in env to override.
+BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "Crypto Signal App")
 BRAND_LOGO_PATH: str = os.environ.get("SUPERGROK_BRAND_LOGO_PATH", "")

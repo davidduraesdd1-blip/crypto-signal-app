@@ -74,7 +74,19 @@ _current_interval_minutes: int = DEFAULT_INTERVAL_MINUTES
 
 def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
     """Return True if now_str (HH:MM UTC) falls in the [start, end) quiet window.
-    Handles overnight wrap (e.g. 22:00–06:00)."""
+    Handles overnight wrap (e.g. 22:00–06:00).
+
+    AUDIT-2026-05-03 (S-3): equal start/end is ambiguous — does the
+    user mean "always quiet" (24h block) or "never quiet" (zero-length
+    window)? The same-day branch returned always-False, the overnight
+    branch returned always-True. Operators configuring 24h quiet via
+    00:00-00:00 silently got scans. Now we log a clear warning and
+    treat equal start/end as `never quiet` (the safer default — at
+    worst the operator misses a quiet window and gets a notification;
+    at best they fix the config). Document `23:59-00:00` as the
+    canonical 24h-quiet shape in the warning so the operator knows
+    the fix.
+    """
     try:
         h, m   = map(int, now_str.split(":"))
         sh, sm = map(int, start_str.split(":"))
@@ -82,7 +94,16 @@ def _in_quiet_hours(now_str: str, start_str: str, end_str: str) -> bool:
         now_m = h * 60 + m
         s_m   = sh * 60 + sm
         e_m   = eh * 60 + em
-        if s_m <= e_m:            # same-day window e.g. 09:00–17:00
+        # AUDIT-2026-05-03 (S-3): explicit equal-start/end handling
+        if s_m == e_m:
+            logger.warning(
+                "[Scheduler] quiet_hours start==end (%s) is ambiguous — "
+                "treating as 'never quiet'. For a 24h quiet window use "
+                "23:59-00:00; for none, leave start_str=end_str like this.",
+                start_str,
+            )
+            return False
+        if s_m < e_m:            # same-day window e.g. 09:00–17:00
             return s_m <= now_m < e_m
         return now_m >= s_m or now_m < e_m   # overnight e.g. 22:00–06:00
     except Exception as _e:
@@ -287,6 +308,23 @@ def start_scheduler() -> None:
     _t = threading.Thread(target=run_scan_job, daemon=True)
     _t.start()
     _t.join(timeout=1800)  # 30-minute hard cap; scheduler proceeds regardless
+    # AUDIT-2026-05-03 (S-2): the prior code silently passed the initial
+    # scan to a daemon thread and joined with a 30-minute hard cap. If
+    # the scan exceeded 30 min, the join returned with the thread STILL
+    # ALIVE (daemons aren't killed at join timeout) and the scheduler
+    # continued — but every interval trigger would log "Previous scan
+    # still running — skipping" because the scan still held the lock.
+    # The operator had no signal that the initial scan was actually
+    # stuck. Surface it now: if the thread is still alive after the
+    # timeout, log a loud warning so the operator can investigate
+    # rather than spending 15 min wondering why no scans run.
+    if _t.is_alive():
+        logger.warning(
+            "[Scheduler] Initial scan exceeded 30-min hard cap and is "
+            "still running — proceeding to interval scheduler. Subsequent "
+            "interval triggers will skip until this scan releases the lock. "
+            "Investigate the stuck pair via data/scheduler.log."
+        )
 
     try:
         _scheduler.start()
