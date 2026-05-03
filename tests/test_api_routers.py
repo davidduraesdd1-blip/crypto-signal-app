@@ -258,3 +258,109 @@ def test_settings_put_execution_smoke(client, stub_alerts_config):
     r = client.put("/settings/execution", json={"max_order_size_usd": 250.0})
     assert r.status_code == 200
     assert r.json()["applied"]["max_order_size_usd"] == 250.0
+
+
+# ── Settings · Trading (D-ext) ──────────────────────────────────────────────
+
+def test_settings_put_trading_smoke(client, stub_alerts_config):
+    r = client.put("/settings/trading", json={
+        "trading_pairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+        "active_timeframes": ["5m", "15m", "1h"],
+        "ta_exchange": "OKX",
+        "regional_color_convention": False,
+        "compact_watchlist_mode": True,
+        "ignored_unknown_key": "should be dropped",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["applied"]["ta_exchange"] == "OKX"
+    assert body["applied"]["compact_watchlist_mode"] is True
+    assert "ignored_unknown_key" not in body["applied"]
+
+
+def test_settings_get_includes_trading_group(client, stub_alerts_config):
+    stub_alerts_config["trading_pairs"] = ["BTC/USDT"]
+    stub_alerts_config["ta_exchange"] = "OKX"
+    r = client.get("/settings/")
+    assert r.status_code == 200
+    body = r.json()
+    assert "trading" in body, "Trading group must appear in GET /settings/"
+    assert body["trading"].get("ta_exchange") == "OKX"
+
+
+# ── Exchange (D-ext) ─────────────────────────────────────────────────────────
+
+def test_exchange_test_connection_no_keys_503(client, monkeypatch):
+    """Without configured keys, the endpoint returns 503 with operator guidance."""
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "get_status",
+                        lambda: {"keys_configured": False, "live_trading": False})
+    r = client.post("/exchange/test-connection")
+    assert r.status_code == 503
+    assert "OKX API keys" in r.json()["detail"]
+
+
+def test_exchange_test_connection_with_keys_returns_result(client, monkeypatch):
+    """With keys configured, returns the test_connection() result body."""
+    import execution as exec_module
+    monkeypatch.setattr(exec_module, "get_status",
+                        lambda: {"keys_configured": True, "live_trading": False})
+    monkeypatch.setattr(exec_module, "test_connection",
+                        lambda: {"ok": True, "balance_usdt": 123.45, "error": None})
+    r = client.post("/exchange/test-connection")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["balance_usdt"] == 123.45
+
+
+# ── Diagnostics (D-ext) ──────────────────────────────────────────────────────
+
+def test_diagnostics_circuit_breakers_smoke(client):
+    r = client.get("/diagnostics/circuit-breakers")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "all_operational" in body
+    assert isinstance(body["gates"], list)
+    assert body["gate_count"] == 7
+    assert len(body["gates"]) == 7
+    # Each gate has the canonical shape the frontend renders
+    for g in body["gates"]:
+        assert {"id", "label", "status", "detail"} <= set(g.keys())
+        assert g["status"] in {"ok", "warn", "breach"}
+    # Mockup-locked labels in mockup order
+    expected_labels = [
+        "Daily loss limit",
+        "Max drawdown",
+        "Concurrent positions",
+        "Cooldown after loss",
+        "Trade-size cap",
+        "Allowlist (TIER1 ∪ TIER2)",
+        "Emergency stop flag",
+    ]
+    assert [g["label"] for g in body["gates"]] == expected_labels
+
+
+def test_diagnostics_circuit_breakers_emergency_breach(client, monkeypatch):
+    import agent as agent_module
+    monkeypatch.setattr(agent_module, "is_emergency_stop", lambda: True)
+    r = client.get("/diagnostics/circuit-breakers")
+    assert r.status_code == 200
+    body = r.json()
+    g7 = body["gates"][6]
+    assert g7["label"] == "Emergency stop flag"
+    assert g7["status"] == "breach"
+    assert body["all_operational"] is False
+
+
+def test_diagnostics_database_smoke(client):
+    r = client.get("/diagnostics/database")
+    assert r.status_code == 200
+    body = r.json()
+    assert "tables" in body
+    assert "db_size_kb" in body
+    assert "db_size_mb" in body
+    # Mockup KPI strip needs these specific table counts
+    assert {"feedback_log", "signal_history", "backtest_trades", "paper_trades"} <= set(body["tables"].keys())
+    assert body["wal_mode"] is True

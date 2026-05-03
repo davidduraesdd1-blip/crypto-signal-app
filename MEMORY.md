@@ -4,6 +4,50 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-05-02 (D-ext) — D-extension endpoints landed
+
+Closed the 4 endpoint gaps surfaced by the D4 code-wire plan
+(`docs/redesign/2026-05-02_phase-d-d4-code-wire-plan.md` §3) so D4
+ships zero `TODO(D-ext)` stubs:
+
+- **PUT `/settings/trading`** — Trading tab persistence (pairs,
+  timeframes, TA exchange, display preferences). Extends
+  `routers/settings.py`; partial-update pattern matches the existing
+  signal-risk/dev-tools/execution PUTs. GET `/settings/` now returns
+  a `trading` group too.
+- **POST `/exchange/test-connection`** — Wraps existing
+  `execution.test_connection()` for the "Test OKX Connection" button.
+  Returns 503 with operator guidance when keys are unset (frontend
+  renders soft warning, not stack trace) per `feedback_empty_states`.
+  New router `routers/exchange.py` mounted at `/exchange`.
+- **GET `/diagnostics/circuit-breakers`** — Synthesizes the 7-gate
+  Level-C agent safety status from `agent.get_agent_config()` +
+  `execution.check_circuit_breaker()` + `agent.is_emergency_stop()`.
+  Mockup labels exact, in mockup order. Powers the Settings · Dev
+  Tools card.
+- **GET `/diagnostics/database`** — SQLite WAL-mode row counts +
+  size, powers the 5-col KPI strip on Settings · Dev Tools. Wraps
+  existing `database.get_db_stats()`.
+
+New router `routers/diagnostics.py` mounted at `/diagnostics`.
+
+**Test count:** 26 passes (19 D1 + 7 D-ext) on `tests/test_api_routers.py`.
+Full suite **347 pass / 1 skip** — no regressions.
+
+**Mockup audit notes (informational only — already correct):**
+- Mockup labels for the 7 gates locked verbatim into the response
+  payload, so the frontend renders the same strings the user
+  approved during D3.
+- Cooldown gate currently always reports "inactive" — the agent
+  pipeline doesn't yet log the cooldown timestamp. Noted as a
+  follow-up; not blocking.
+- Database health uses the existing `get_db_stats()` whitelist of 13
+  table names. The mockup's "18 table counts" expander is rendered
+  by the frontend with a "show all" affordance; the API returns the
+  curated 8 most-relevant tables for the KPI strip.
+
+---
+
 ## 2026-05-02 (later) — Phase D batch D2 landed
 
 D2 (Render deploy of FastAPI + keep-alive) shipped on

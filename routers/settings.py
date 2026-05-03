@@ -62,6 +62,15 @@ _EXECUTION_KEYS = {
     "slippage_tolerance_pct",
 }
 
+_TRADING_KEYS = {
+    "trading_pairs",
+    "active_timeframes",
+    "ta_exchange",
+    "custom_pair",
+    "regional_color_convention",
+    "compact_watchlist_mode",
+}
+
 
 def _redact(cfg: dict[str, Any]) -> dict[str, Any]:
     out = dict(cfg)
@@ -98,10 +107,25 @@ def get_settings():
     cfg = alerts_module.load_alerts_config()
     redacted = _redact(cfg)
     return serialize({
+        "trading":     {k: redacted.get(k) for k in _TRADING_KEYS     if k in redacted},
         "signal_risk": {k: redacted.get(k) for k in _SIGNAL_RISK_KEYS if k in redacted},
         "dev_tools":   {k: redacted.get(k) for k in _DEV_TOOLS_KEYS   if k in redacted},
         "execution":   {k: redacted.get(k) for k in _EXECUTION_KEYS   if k in redacted},
         "all":         redacted,
+    })
+
+
+@router.put(
+    "/trading",
+    summary="Update Trading settings (partial)",
+    dependencies=[Depends(require_api_key)],
+)
+def put_trading(patch: dict[str, Any]):
+    updated = _apply_partial(_TRADING_KEYS, patch)
+    return serialize({
+        "status":  "ok",
+        "applied": {k: v for k, v in patch.items() if k in _TRADING_KEYS},
+        "current": {k: updated.get(k) for k in _TRADING_KEYS if k in updated},
     })
 
 

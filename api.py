@@ -890,10 +890,14 @@ from routers import onchain as _onchain_router
 from routers import alerts as _alerts_router_module
 from routers import ai_assistant as _ai_router
 from routers import settings as _settings_router
+from routers import exchange as _exchange_router       # D-ext: test-connection
+from routers import diagnostics as _diagnostics_router # D-ext: 7-gate + db-health
 
-app.include_router(_home_router.router,            prefix="",          tags=["Home"])
-app.include_router(_regimes_router.router,         prefix="/regimes",  tags=["Regimes"])
-app.include_router(_onchain_router.router,         prefix="/onchain",  tags=["On-Chain"])
-app.include_router(_alerts_router_module.router,   prefix="/alerts",   tags=["Alerts"])
-app.include_router(_ai_router.router,              prefix="/ai",       tags=["AI Assistant"])
-app.include_router(_settings_router.router,        prefix="/settings", tags=["Settings"])
+app.include_router(_home_router.router,            prefix="",             tags=["Home"])
+app.include_router(_regimes_router.router,         prefix="/regimes",     tags=["Regimes"])
+app.include_router(_onchain_router.router,         prefix="/onchain",     tags=["On-Chain"])
+app.include_router(_alerts_router_module.router,   prefix="/alerts",      tags=["Alerts"])
+app.include_router(_ai_router.router,              prefix="/ai",          tags=["AI Assistant"])
+app.include_router(_settings_router.router,        prefix="/settings",    tags=["Settings"])
+app.include_router(_exchange_router.router,        prefix="/exchange",    tags=["Exchange"])
+app.include_router(_diagnostics_router.router,     prefix="/diagnostics", tags=["Diagnostics"])
