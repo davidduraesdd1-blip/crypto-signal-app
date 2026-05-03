@@ -1,6 +1,41 @@
 "use client";
 
 import { useState } from "react";
+import { useCircuitBreakers, useDatabaseHealth } from "@/hooks/use-diagnostics";
+import { formatNumber } from "@/lib/format";
+import type { CircuitBreakerGate } from "@/lib/api-types";
+
+// AUDIT-2026-05-03 (D4b): Settings · Dev Tools page wired:
+// - Circuit-breaker 7-gate card → useCircuitBreakers (live)
+// - Database 5-col KPI strip → useDatabaseHealth (live)
+// Sidebar tools / API config / endpoint reference stay as v0 mock —
+// they're operator-action UIs that don't have backing endpoints, or
+// the contents are static (build info, secrets copy, start command).
+
+/** Map FastAPI gate status to display string + color class. */
+function gateDisplay(gate: CircuitBreakerGate): { name: string; status: string; color: string } {
+  const symbol =
+    gate.status === "ok"
+      ? "✓"
+      : gate.status === "warn"
+        ? "⚠"
+        : gate.status === "breach"
+          ? "✗"
+          : "○"; // unmeasured
+  const color =
+    gate.status === "ok"
+      ? "text-success"
+      : gate.status === "warn"
+        ? "text-warning"
+        : gate.status === "breach"
+          ? "text-danger"
+          : "text-text-muted"; // unmeasured = neutral
+  return {
+    name: `Gate ${gate.id} · ${gate.label}`,
+    status: `${symbol} ${gate.detail}`,
+    color,
+  };
+}
 
 const sidebarTools = [
   {
@@ -41,23 +76,8 @@ const sidebarTools = [
   },
 ];
 
-const gates = [
-  { name: "Gate 1 · Daily loss limit", status: "✓ within 5% cap" },
-  { name: "Gate 2 · Max drawdown", status: "✓ 8.2% / 15% cap" },
-  { name: "Gate 3 · Concurrent positions", status: "✓ 2 / 6 max" },
-  { name: "Gate 4 · Cooldown after loss", status: "✓ inactive" },
-  { name: "Gate 5 · Trade-size cap", status: "✓ 10% · enforced" },
-  { name: "Gate 6 · Allowlist (TIER1 ∪ TIER2)", status: "✓ all pairs valid" },
-  { name: "Gate 7 · Emergency stop flag", status: "✓ inactive" },
-];
-
-const dbStats = [
-  { label: "Feedback log", value: "14,832", sub: "rows" },
-  { label: "Signal history", value: "142,910", sub: "rows · 2023-01 →" },
-  { label: "Backtest trades", value: "8,924", sub: "rows · 482 unique runs" },
-  { label: "Paper trades", value: "3,847", sub: "rows" },
-  { label: "DB size", value: "182,940", sub: "KB · 178 MB" },
-];
+// gates + dbStats are now derived from live hooks inside the page
+// component — see useCircuitBreakers() + useDatabaseHealth() below.
 
 const endpoints = [
   { method: "GET", path: "/health", auth: "—" },
@@ -78,6 +98,61 @@ const endpoints = [
 
 export default function DevToolsSettingsPage() {
   const [showAllTables, setShowAllTables] = useState(false);
+  const cbQuery = useCircuitBreakers();
+  const dbQuery = useDatabaseHealth();
+
+  // Derive gate display rows from /diagnostics/circuit-breakers
+  const gates = (cbQuery.data?.gates ?? []).map(gateDisplay);
+  const allOperational = cbQuery.data?.all_operational ?? false;
+  const hasUnmeasured = cbQuery.data?.has_unmeasured ?? false;
+  const lastCheck = cbQuery.data?.last_check ?? "—";
+
+  // Header pill copy reflects all_operational + has_unmeasured per
+  // the P-19 honest-UI contract (gate 4 + gate 5 are _unmeasured by
+  // design; the pill should not show solid green when any gate is
+  // unmeasured).
+  const headerPillText = (() => {
+    if (cbQuery.isLoading) return "Loading…";
+    if (cbQuery.isError) return "Status unavailable";
+    if (allOperational) return `All ${gates.length} gates operational`;
+    if (hasUnmeasured) return `${gates.length - gates.filter((g) => g.color === "text-text-muted").length} of ${gates.length} measured`;
+    return "Gate breach — investigate";
+  })();
+  const headerPillClass = (() => {
+    if (cbQuery.isError) return "bg-danger/10 text-danger";
+    if (allOperational) return "bg-success/10 text-success";
+    if (hasUnmeasured) return "bg-warning/10 text-warning";
+    return "bg-danger/10 text-danger";
+  })();
+
+  // Derive 5-col KPI strip from /diagnostics/database
+  const dbStats = (() => {
+    const d = dbQuery.data;
+    if (!d) {
+      return [
+        { label: "Feedback log", value: "—", sub: "loading" },
+        { label: "Signal history", value: "—", sub: "loading" },
+        { label: "Backtest trades", value: "—", sub: "loading" },
+        { label: "Paper trades", value: "—", sub: "loading" },
+        { label: "DB size", value: "—", sub: "loading" },
+      ];
+    }
+    return [
+      { label: "Feedback log", value: formatNumber(d.tables.feedback_log), sub: "rows" },
+      { label: "Signal history", value: formatNumber(d.tables.signal_history), sub: "rows" },
+      {
+        label: "Backtest trades",
+        value: formatNumber(d.tables.backtest_trades),
+        sub: `rows · ${d.backtest_unique_runs} unique runs`,
+      },
+      { label: "Paper trades", value: formatNumber(d.tables.paper_trades), sub: "rows" },
+      {
+        label: "DB size",
+        value: formatNumber(d.db_size_kb),
+        sub: `KB · ${formatNumber(d.db_size_mb, 1)} MB`,
+      },
+    ];
+  })();
 
   return (
     <div className="space-y-6">
@@ -132,27 +207,44 @@ export default function DevToolsSettingsPage() {
               breach
             </p>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success">
-            <span className="h-1.5 w-1.5 rounded-full bg-success" />
-            All 7 gates operational
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${headerPillClass}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current" />
+            {headerPillText}
           </span>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-2">
-          {gates.map((gate) => (
-            <div
-              key={gate.name}
-              className="flex items-center justify-between rounded-lg bg-bg-2 px-3 py-2 font-mono text-xs"
-            >
-              <span className="text-text-secondary">{gate.name}</span>
-              <span className="text-success">{gate.status}</span>
-            </div>
-          ))}
-        </div>
+        {gates.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border-default p-6 text-center text-sm text-muted-foreground">
+            {cbQuery.isLoading
+              ? "Loading circuit breakers…"
+              : cbQuery.isError
+                ? "Couldn't load circuit breakers — try refreshing in 30 seconds."
+                : "No gates configured."}
+          </div>
+        ) : (
+          <div className="grid gap-2 md:grid-cols-2">
+            {gates.map((gate) => (
+              <div
+                key={gate.name}
+                className="flex items-center justify-between rounded-lg bg-bg-2 px-3 py-2 font-mono text-xs"
+              >
+                <span className="text-text-secondary">{gate.name}</span>
+                <span className={gate.color}>{gate.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         <p className="mt-4 text-[11px] text-text-muted">
-          Last check: 2026-04-29 14:32:14 UTC · Resume count (lifetime): 0 · No
-          halts in current session
+          Last check: {lastCheck}
+          {hasUnmeasured && (
+            <>
+              {" · "}
+              <span className="text-warning">
+                Some gates are not status-tracked at read-time (enforced at order time)
+              </span>
+            </>
+          )}
         </p>
       </div>
 

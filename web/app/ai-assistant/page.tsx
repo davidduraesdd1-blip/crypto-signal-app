@@ -9,105 +9,81 @@ import { DecisionsTable } from "@/components/decisions-table";
 import { PipelineDiagram } from "@/components/pipeline-diagram";
 import { AgentConfigCard } from "@/components/agent-config-card";
 import { EmergencyStopCard } from "@/components/emergency-stop-card";
+import { useAiDecisions } from "@/hooks/use-ai";
+import { useExecutionStatus } from "@/hooks/use-execution-status";
+import type { AiDecision } from "@/lib/api-types";
 
-// Mock data
+// AUDIT-2026-05-03 (D4b): AI Assistant page wired:
+// - AGENT · RUNNING pill (running flag) via useExecutionStatus polling
+// - Recent Decisions table via useAiDecisions(limit=10)
+// AgentMetricStrip + AgentConfigCard + EmergencyStopCard + Pipeline
+// stay as mocks until the FastAPI side surfaces aggregate counters
+// (cycles, last-cycle-age, restart count) — those are derived from
+// agent_log + execution_log and need a /agent/summary endpoint.
+
+/** Map FastAPI AiDecision row → DecisionsTable entry shape. */
+function rowToDecision(r: AiDecision): {
+  time: string;
+  pair: string;
+  decision: "approve" | "reject" | "skip";
+  confidence: number;
+  rationale: string;
+  status: "executed" | "pending" | "dry-run" | "override";
+} {
+  const dir = String(r.direction ?? "").toUpperCase();
+  const conf = Math.round(r.confidence_avg_pct ?? 0);
+
+  let decision: "approve" | "reject" | "skip" = "skip";
+  if (dir.includes("BUY")) decision = "approve";
+  else if (dir.includes("SELL")) decision = "reject";
+
+  let rationale = `Direction: ${dir || "—"}, confidence ${conf}%`;
+  if (typeof r.rationale === "string") rationale = r.rationale;
+
+  // Heuristic status: if confidence >= 75 we'd expect it to have
+  // executed; otherwise it's pending or dry-run. Real executed-status
+  // comes from joining agent_log with execution_log — for D4b we use
+  // this proxy.
+  const status: "executed" | "pending" | "dry-run" | "override" =
+    conf >= 75 && (dir.includes("BUY") || dir.includes("SELL"))
+      ? "executed"
+      : conf >= 60
+        ? "pending"
+        : "dry-run";
+
+  return {
+    time: String(r.timestamp ?? "—"),
+    pair: String(r.pair ?? "—"),
+    decision,
+    confidence: conf,
+    rationale,
+    status,
+  };
+}
+
+// Mock metrics + fallback table data — kept until /agent/summary lands
+// (returns total_cycles + last_cycle_age + last_pair + last_decision).
 const metrics = [
-  { label: "Total Cycles", value: "8,924", subtext: "since 2026-04-12" },
-  { label: "Last Cycle", value: "42s ago", subtext: "interval 60s" },
-  { label: "Last Pair", value: "SOL/USDT", subtext: "timeframe 1h" },
-  {
-    label: "Last Decision",
-    value: "🟢 Approve",
-    subtext: "size 2.4% · conf 81%",
-    highlight: "success" as const,
-  },
-];
-
-const decisions = [
-  {
-    time: "2026-05-02 14:32:18",
-    pair: "BTC/USDT",
-    decision: "approve" as const,
-    confidence: 84,
-    rationale: "Composite 84% > threshold 75% · bull regime · funding favorable",
-    status: "executed" as const,
-  },
-  {
-    time: "2026-05-02 14:31:14",
-    pair: "ETH/USDT",
-    decision: "skip" as const,
-    confidence: 52,
-    rationale: "Pre-gate: composite 52% < min_confidence 75%",
-    status: "dry-run" as const,
-  },
-  {
-    time: "2026-05-02 14:30:11",
-    pair: "SOL/USDT",
-    decision: "reject" as const,
-    confidence: 81,
-    rationale: "Post-gate: proposed size 11.2% > max_trade_size 10% cap",
-    status: "pending" as const,
-  },
-  {
-    time: "2026-05-02 14:29:08",
-    pair: "XRP/USDT",
-    decision: "skip" as const,
-    confidence: 78,
-    rationale: "Pre-gate: cooldown active (14:18 −1.4% loss · 1,800s pause)",
-    status: "pending" as const,
-  },
-  {
-    time: "2026-05-02 14:28:05",
-    pair: "AVAX/USDT",
-    decision: "reject" as const,
-    confidence: 76,
-    rationale: "Pre-gate: drawdown 8.2% approaching 15% cap · manual review queued",
-    status: "override" as const,
-  },
-  {
-    time: "2026-05-02 14:27:02",
-    pair: "BTC/USDT",
-    decision: "approve" as const,
-    confidence: 89,
-    rationale: "Composite 89% · all 4 layers bullish · position opened at 2.1% size",
-    status: "executed" as const,
-  },
-  {
-    time: "2026-05-02 14:26:00",
-    pair: "ETH/USDT",
-    decision: "skip" as const,
-    confidence: 71,
-    rationale: "Pre-gate: concurrent positions 6/6 · entry blocked until slot opens",
-    status: "pending" as const,
-  },
-  {
-    time: "2026-05-02 14:24:57",
-    pair: "SOL/USDT",
-    decision: "reject" as const,
-    confidence: 82,
-    rationale: "Claude: high conviction but funding −0.08% · waiting for funding reset",
-    status: "dry-run" as const,
-  },
-  {
-    time: "2026-05-02 14:23:54",
-    pair: "BNB/USDT",
-    decision: "skip" as const,
-    confidence: 55,
-    rationale: "Pre-gate: composite 55% < min_confidence 75%",
-    status: "dry-run" as const,
-  },
-  {
-    time: "2026-05-02 14:22:51",
-    pair: "DOGE/USDT",
-    decision: "skip" as const,
-    confidence: 63,
-    rationale: "Pre-gate: daily P&L −4.8% approaching −5% limit · halting new entries",
-    status: "pending" as const,
-  },
+  { label: "Total Cycles", value: "—", subtext: "TODO(D-ext)" },
+  { label: "Last Cycle", value: "—", subtext: "TODO(D-ext)" },
+  { label: "Last Pair", value: "—", subtext: "TODO(D-ext)" },
+  { label: "Last Decision", value: "—", subtext: "TODO(D-ext)" },
 ];
 
 export default function AIAssistantPage() {
-  const [running, setRunning] = useState(true);
+  const decisionsQuery = useAiDecisions(10);
+  const execQuery = useExecutionStatus({ polling: true });
+
+  // AGENT pill state derived from /execution/status. The toggle on the
+  // page (Start/Stop) is wired to local state for D4b — D4c hooks it
+  // up to a real /agent/start | /agent/stop endpoint when those land.
+  const apiAgentRunning = Boolean(execQuery.data?.agent_running);
+  const [running, setRunning] = useState(apiAgentRunning);
+
+  // Map live decisions to the table shape; fall back to empty when
+  // no decisions yet.
+  const decisions = (decisionsQuery.data?.decisions ?? []).map(rowToDecision);
+  const totalDecisions = decisionsQuery.data?.count ?? decisions.length;
 
   return (
     <AppShell crumbs="Research" currentPage="AI Assistant" agentRunning={running}>
@@ -191,7 +167,17 @@ export default function AIAssistantPage() {
         <p className="mb-4 text-[12px] text-text-muted">
           last 10 cycles · click any row for full Claude rationale + signal snapshot
         </p>
-        <DecisionsTable decisions={decisions} total={8924} />
+        {decisions.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border-default p-6 text-center text-sm text-muted-foreground">
+            {decisionsQuery.isLoading
+              ? "Loading recent decisions…"
+              : decisionsQuery.isError
+                ? "Couldn't load decisions — try refreshing in 30 seconds."
+                : "No agent decisions yet — start the agent to begin recording."}
+          </div>
+        ) : (
+          <DecisionsTable decisions={decisions} total={totalDecisions} />
+        )}
       </section>
 
       {/* Pipeline Architecture */}
