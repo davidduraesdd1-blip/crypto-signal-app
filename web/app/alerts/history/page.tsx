@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { SegmentedControl } from "@/components/segmented-control";
@@ -88,6 +89,7 @@ function rowToEntry(row: AlertLogRow): {
 }
 
 export default function AlertsHistoryPage() {
+  const router = useRouter();
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 10;
   const logQuery = useAlertLog(100);  // Server returns up to 100, paginate client-side for now
@@ -114,9 +116,9 @@ export default function AlertsHistoryPage() {
           ]}
           value="history"
           onChange={(v) => {
-            if (v === "configure") {
-              window.location.href = "/alerts";
-            }
+            // AUDIT-2026-05-03 (D4 audit, MEDIUM): router.push instead
+            // of full page reload — preserves TanStack Query cache.
+            if (v === "configure") router.push("/alerts");
           }}
         />
       </div>

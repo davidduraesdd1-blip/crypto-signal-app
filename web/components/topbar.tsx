@@ -1,11 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useExecutionStatus } from "@/hooks/use-execution-status";
 import { useRefreshAll } from "@/hooks/use-refresh-all";
 
 type Level = "Beginner" | "Intermediate" | "Advanced";
+
+// AUDIT-2026-05-03 (D4 audit, MEDIUM): user level must persist across
+// pages per CLAUDE.md §7. localStorage key chosen to match the pattern
+// used by next-themes for theme so future migration to a context-based
+// store can co-locate them. Beginner-default for new users per §7.
+const LEVEL_STORAGE_KEY = "crypto-signal-app:user-level";
+const DEFAULT_LEVEL: Level = "Intermediate";
+
+function readPersistedLevel(): Level {
+  if (typeof window === "undefined") return DEFAULT_LEVEL;
+  try {
+    const v = window.localStorage.getItem(LEVEL_STORAGE_KEY);
+    if (v === "Beginner" || v === "Intermediate" || v === "Advanced") return v;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_LEVEL;
+}
 
 interface TopbarProps {
   crumbs?: string;
@@ -16,10 +35,36 @@ interface TopbarProps {
 }
 
 export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning }: TopbarProps) {
-  const [level, setLevel] = useState<Level>("Intermediate");
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  // AUDIT-2026-05-03 (D4 audit, MEDIUM): level state persisted via
+  // localStorage per CLAUDE.md §7. Initial state reads synchronously
+  // on the client (SSR returns DEFAULT_LEVEL); useEffect syncs the
+  // hydrated client value back into state if the SSR fallback diverged.
+  const [level, setLevelState] = useState<Level>(() => readPersistedLevel());
+  useEffect(() => {
+    // Re-read after hydration in case SSR returned the default.
+    const persisted = readPersistedLevel();
+    if (persisted !== level) setLevelState(persisted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const setLevel = (next: Level) => {
+    setLevelState(next);
+    try {
+      window.localStorage.setItem(LEVEL_STORAGE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  };
 
-  // AUDIT-2026-05-03 (D4b): live AGENT pill state from /execution/status.
+  // AUDIT-2026-05-03 (D4 audit, MEDIUM): use next-themes useTheme()
+  // instead of hand-managing the .light class on <html>. The
+  // ThemeProvider in app-providers.tsx owns the class via
+  // attribute="class"; the prior local state would desync on every
+  // reload (always reverted to dark) and bypass next-themes'
+  // localStorage persistence.
+  const { theme, setTheme } = useTheme();
+  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
+
+  // AUDIT-2026-05-03 (D4b): live AGENT pill state from /execute/status.
   // Falls back to the prop when caller passed an explicit override.
   const execQuery = useExecutionStatus({ polling: true });
   const liveAgentRunning =
@@ -29,12 +74,6 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
   // invalidates every active query + force-refetches the on-page ones
   // per CLAUDE.md §12 master-template requirement.
   const { refresh, isFetching } = useRefreshAll();
-
-  const toggleTheme = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-    document.documentElement.classList.toggle("light", newTheme === "light");
-  };
 
   return (
     <header className="sticky top-0 z-10 flex h-[var(--topbar-h)] items-center gap-4 border-b border-border-default bg-bg-0 px-6 md:gap-4 md:px-6">
@@ -104,7 +143,7 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
         onClick={toggleTheme}
         className="inline-flex min-h-[36px] min-w-[44px] items-center gap-2 rounded-lg border border-border-default bg-bg-1 px-2.5 py-1.5 text-[13px] text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary md:px-2.5"
       >
-        <span>{theme === "dark" ? "☾" : "☀"}</span>
+        <span>{theme === "light" ? "☀" : "☾"}</span>
         <span className="hidden md:inline">Theme</span>
       </button>
     </header>

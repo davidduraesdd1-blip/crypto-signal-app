@@ -52,8 +52,34 @@ function rowToDecision(r: AiDecision): {
         ? "pending"
         : "dry-run";
 
+  // AUDIT-2026-05-03 (D4 audit, LOW): format ISO timestamp as
+  // "14:32:18" / "May 03, 14:32" instead of the raw
+  // "2026-05-03T14:32:18..." that landed in the table.
+  const timeStr = (() => {
+    if (!r.timestamp) return "—";
+    try {
+      const d = new Date(r.timestamp);
+      const today = new Date();
+      const sameDay =
+        d.getFullYear() === today.getFullYear() &&
+        d.getMonth() === today.getMonth() &&
+        d.getDate() === today.getDate();
+      return sameDay
+        ? d.toLocaleTimeString("en-US", { hour12: false })
+        : d.toLocaleString("en-US", {
+            month: "short",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+    } catch {
+      return String(r.timestamp);
+    }
+  })();
+
   return {
-    time: String(r.timestamp ?? "—"),
+    time: timeStr,
     pair: String(r.pair ?? "—"),
     decision,
     confidence: conf,

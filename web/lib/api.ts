@@ -271,8 +271,11 @@ export const getOnchainMetric = (
   pair: TradingPair = "BTC/USDT",
   signal?: AbortSignal,
 ) =>
+  // AUDIT-2026-05-03 (D4 audit, LOW): encodeURIComponent on `metric`
+  // too — defends against future widening of the OnchainMetricKey
+  // union to a free-form string.
   apiFetch<OnchainMetric>(
-    `/onchain/${metric}?pair=${encodeURIComponent(pair)}`,
+    `/onchain/${encodeURIComponent(metric)}?pair=${encodeURIComponent(pair)}`,
     { signal },
   );
 

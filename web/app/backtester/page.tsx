@@ -15,7 +15,6 @@ import {
   useBacktestTrades,
 } from "@/hooks/use-backtester";
 import {
-  directionToSignalType,
   formatNumber,
   formatPct,
   isMissing,

@@ -105,7 +105,23 @@ export default function DevToolsSettingsPage() {
   const gates = (cbQuery.data?.gates ?? []).map(gateDisplay);
   const allOperational = cbQuery.data?.all_operational ?? false;
   const hasUnmeasured = cbQuery.data?.has_unmeasured ?? false;
-  const lastCheck = cbQuery.data?.last_check ?? "—";
+  // AUDIT-2026-05-03 (D4 audit, LOW): format the ISO timestamp as a
+  // local time-of-day string so the operator sees "14:32:14" instead
+  // of the raw "2026-05-03T15:54:35.985949+00:00" output.
+  const lastCheck = (() => {
+    const iso = cbQuery.data?.last_check;
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleTimeString("en-US", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    } catch {
+      return iso;
+    }
+  })();
 
   // Header pill copy reflects all_operational + has_unmeasured per
   // the P-19 honest-UI contract (gate 4 + gate 5 are _unmeasured by
@@ -388,9 +404,9 @@ CRYPTO_SIGNAL_API_KEY=<paste-from-render-dashboard>`}
                 </tr>
               </thead>
               <tbody className="font-mono">
-                {endpoints.map((ep, idx) => (
+                {endpoints.map((ep) => (
                   <tr
-                    key={idx}
+                    key={`${ep.method}-${ep.path}`}
                     className="border-b border-border-default last:border-0"
                   >
                     <td className="py-2 pr-4">

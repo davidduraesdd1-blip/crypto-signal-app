@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { SegmentedControl } from "@/components/segmented-control";
@@ -79,6 +79,7 @@ const channels = [
 ];
 
 export default function AlertsPage() {
+  const router = useRouter();
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [threshold, setThreshold] = useState(75);
   const [types, setTypes] = useState(alertTypes);
@@ -105,9 +106,9 @@ export default function AlertsPage() {
           ]}
           value="configure"
           onChange={(v) => {
-            if (v === "history") {
-              window.location.href = "/alerts/history";
-            }
+            // AUDIT-2026-05-03 (D4 audit, MEDIUM): router.push instead
+            // of full page reload — preserves TanStack Query cache.
+            if (v === "history") router.push("/alerts/history");
           }}
         />
       </div>

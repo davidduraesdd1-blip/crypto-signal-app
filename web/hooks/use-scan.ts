@@ -17,10 +17,14 @@ export function useScanStatus(options: { polling?: boolean } = {}) {
     queryFn: ({ signal }) => getScanStatus(signal),
     staleTime: STALE_TIME.SIGNALS,
     gcTime: GC_TIME.SIGNALS,
-    // While a scan is running, refresh status every 5s so the
-    // progress bar updates. Otherwise, the §12 5-min stale-time
-    // applies and we don't poll.
-    refetchInterval: polling ? 5_000 : false,
+    // AUDIT-2026-05-03 (D4 audit, MEDIUM): adaptive polling — only
+    // re-fetch every 5s while a scan is actually running. Otherwise
+    // honor the §12 5-min stale-time and don't poll. Without this,
+    // every page mounting a scan-status hook burned 720 requests/hour
+    // even when no scan was active.
+    refetchInterval: polling
+      ? (query) => (query.state.data?.running ? 5_000 : false)
+      : false,
   });
 }
 
