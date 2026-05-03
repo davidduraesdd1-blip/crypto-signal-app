@@ -3,6 +3,12 @@
 # dependencies
 /node_modules
 
+# Lockfile policy — pnpm is canonical (v0 generates pnpm-lock.yaml).
+# Vercel auto-detects the lockfile; mixing two confuses it. Don't commit
+# package-lock.json or yarn.lock from local dev — only pnpm-lock.yaml.
+package-lock.json
+yarn.lock
+
 # next.js
 /.next/
 /out/
