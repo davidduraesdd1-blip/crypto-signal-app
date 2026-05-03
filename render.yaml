@@ -28,12 +28,21 @@ services:
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
 
     envVars:
-      # Phase D D1: temporary auth bypass so the new routers are reachable
-      # without an X-API-Key. Flip to `false` and set a real api_key in
-      # alerts_config.json (or via /settings/) once D4 wires the Next.js
-      # frontend with key handling. Tracked: D6 security pass.
+      # AUDIT-2026-05-03 (CRITICAL C-1): the live deploy was publicly
+      # unauthenticated overnight because this was true and no api_key
+      # was configured. Once you set CRYPTO_SIGNAL_API_KEY (below) in
+      # the Render dashboard, change this to "false" and the API will
+      # require X-API-Key on every protected endpoint.
       - key: CRYPTO_SIGNAL_ALLOW_UNAUTH
         value: "true"
+
+      # AUDIT-2026-05-03 (CRITICAL C-1): production API key — read by
+      # routers/deps.py and api.py before falling back to
+      # alerts_config.json. Rendering's file system is ephemeral, so
+      # this env var is the only persistent key home. Set in dashboard
+      # only — never commit a value here.
+      - key: CRYPTO_SIGNAL_API_KEY
+        sync: false
 
       # Disable Anthropic LLM at process start; AI Assistant endpoints
       # gracefully return source="unavailable" without a key. Real key

@@ -235,6 +235,58 @@ def test_settings_get_redacts_secrets(client, stub_alerts_config):
     assert "secret-deadbeef" not in r.text
 
 
+def test_api_key_env_var_takes_precedence_over_config(monkeypatch):
+    """AUDIT-2026-05-03 (CRITICAL C-1 fix): CRYPTO_SIGNAL_API_KEY env
+    var must be honored as the primary auth source so the production
+    Render deploy has a persistent key home (Render's file system is
+    ephemeral and resets on every push). Falls back to alerts_config.json
+    only when the env var is unset.
+    """
+    # Clear the 30s caches in both modules so this test sees fresh state
+    from routers import deps as deps_module
+    import api as api_module
+
+    canary_env_key = "env-key-2026-05-03-overnight-fix"
+    canary_cfg_key = "config-key-should-be-ignored"
+
+    monkeypatch.setattr(deps_module, "_api_key_cache",
+                        {"key": None, "ts": 0.0})
+    monkeypatch.setattr(api_module, "_api_key_cache",
+                        {"key": None, "ts": 0.0})
+    monkeypatch.setenv("CRYPTO_SIGNAL_API_KEY", canary_env_key)
+
+    import alerts as alerts_module
+    monkeypatch.setattr(alerts_module, "load_alerts_config",
+                        lambda: {"api_key": canary_cfg_key})
+
+    # Both auth paths must resolve to the env-var value, not the config
+    assert deps_module._get_configured_api_key() == canary_env_key
+    assert api_module._get_configured_api_key() == canary_env_key
+
+
+def test_api_key_falls_back_to_config_when_env_unset(monkeypatch):
+    """When CRYPTO_SIGNAL_API_KEY is absent or empty, fall back to the
+    alerts_config.json path so local dev + Streamlit UI keep working.
+    """
+    from routers import deps as deps_module
+    import api as api_module
+
+    canary_cfg_key = "config-key-from-alerts-json"
+
+    monkeypatch.setattr(deps_module, "_api_key_cache",
+                        {"key": None, "ts": 0.0})
+    monkeypatch.setattr(api_module, "_api_key_cache",
+                        {"key": None, "ts": 0.0})
+    monkeypatch.delenv("CRYPTO_SIGNAL_API_KEY", raising=False)
+
+    import alerts as alerts_module
+    monkeypatch.setattr(alerts_module, "load_alerts_config",
+                        lambda: {"api_key": canary_cfg_key})
+
+    assert deps_module._get_configured_api_key() == canary_cfg_key
+    assert api_module._get_configured_api_key() == canary_cfg_key
+
+
 def test_settings_get_redacts_unlisted_secrets_by_suffix(client, stub_alerts_config):
     """AUDIT-2026-05-02 (CRITICAL C-2): the redaction list previously had
     drift vs the live alerts_config schema. This regression-guards the

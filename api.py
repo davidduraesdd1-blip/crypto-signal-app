@@ -141,11 +141,24 @@ _api_key_lock = threading.Lock()
 
 
 def _get_configured_api_key() -> str:
+    """Read the configured API key, env var first then alerts_config.json.
+
+    AUDIT-2026-05-03 (CRITICAL C-1 fix): mirror routers/deps.py — read
+    `CRYPTO_SIGNAL_API_KEY` from env first so the production Render
+    deploy can rotate keys via dashboard env var (Render's file system
+    is ephemeral, so a file-based key would disappear on every push).
+    Falls back to the existing alerts_config.json path for local dev
+    and Streamlit-UI compatibility.
+    """
     with _api_key_lock:
         if time.time() - _api_key_cache["ts"] < _API_KEY_CACHE_TTL:
             return _api_key_cache["key"] or ""
-    cfg = alerts.load_alerts_config()
-    key = cfg.get("api_key", "")
+    env_key = (os.environ.get("CRYPTO_SIGNAL_API_KEY") or "").strip()
+    if env_key:
+        key = env_key
+    else:
+        cfg = alerts.load_alerts_config()
+        key = cfg.get("api_key", "")
     with _api_key_lock:
         _api_key_cache["key"] = key
         _api_key_cache["ts"] = time.time()   # timestamp after I/O for accurate TTL

@@ -31,15 +31,28 @@ _api_key_lock = threading.Lock()
 def _get_configured_api_key() -> str:
     """Read the configured API key with a 30s cache.
 
-    Independent cache from api.py — both refresh against the same
-    alerts_config.json file, so keys set via the existing Settings
-    page propagate to both within the TTL window.
+    Resolution order:
+      1. `CRYPTO_SIGNAL_API_KEY` env var — used in production on Render
+         where the file system is ephemeral (every deploy resets
+         alerts_config.json, so a file-based key would silently
+         disappear).
+      2. `api_key` field in alerts_config.json — used in local dev and
+         backwards compatibility with the existing Streamlit UI.
+
+    AUDIT-2026-05-03 (CRITICAL C-1 fix): the env-var path was added so
+    David can rotate the production key through the Render dashboard
+    without committing secrets or pushing code. Both paths feed the
+    same 30s cache + same hmac.compare_digest contract.
     """
     with _api_key_lock:
         if time.time() - _api_key_cache["ts"] < _API_KEY_CACHE_TTL:
             return _api_key_cache["key"] or ""
-    cfg = alerts.load_alerts_config()
-    key = cfg.get("api_key", "")
+    env_key = (os.environ.get("CRYPTO_SIGNAL_API_KEY") or "").strip()
+    if env_key:
+        key = env_key
+    else:
+        cfg = alerts.load_alerts_config()
+        key = cfg.get("api_key", "")
     with _api_key_lock:
         _api_key_cache["key"] = key
         _api_key_cache["ts"] = time.time()
