@@ -11,19 +11,43 @@
 | Severity | Count | Categories |
 |---|---|---|
 | CRITICAL | **0** | — |
-| HIGH | **2** | Lighthouse a11y color-contrast (all 4 routes) + missing button/label/select names (/ai-assistant) |
+| HIGH | **0** | (was 2 — T4 a11y bundle CLOSED in `25e83ac` + `9674552`) |
 | MEDIUM | **2** | npm audit (next/postcss, false-positive) + 2× console 404s on `/` |
 | LOW | 0 | — |
 
-**D8-blocking decision:** the 2 HIGH findings are **pre-existing items from
-`2026-05-03_phase-d-deep-dive-audit.md` ("T4 a11y bundle" held)**. They are not
-new regressions introduced by D4/D5. David + Cowork to decide:
-*ship D8 with known a11y debt and fix in T4*, or *block D8 until T4 lands*.
-Per the checklist's literal rule ("block D8 only on >MEDIUM") and per
-CLAUDE.md §8 ("WCAG AA contrast minimums at all times") these technically
-block. **Recommendation: ship D8, schedule T4 as the first post-cutover
-sprint.** Reason: every finding listed below was already known on 2026-05-03;
-no D5 deploy made anything worse; cutover blocks no fix.
+## T4 a11y bundle — CLOSED (2026-05-04 PM)
+
+Per Cowork's 2026-05-04 PM decision ("block D8 on T4 fix"), the two HIGH
+findings landed in two commits:
+
+- **`25e83ac` fix(a11y): T4 bundle** — single-token CSS fix (dark
+  `--text-muted` from `var(--gray-5)` `#5d5d6e` → `var(--gray-6)` `#8a8a9d`,
+  contrast 3.06:1 → 5.84:1 on bg-0 and 2.89:1 → 5.49:1 on bg-1) plus 7
+  `useId()`-based label↔control associations on /ai-assistant
+  (AgentConfigCard's 3 InputFields + ToggleField, AskClaudeCard's 3 inputs
+  + 1 select).
+- **`9674552` fix(a11y): T4 residuals on /settings/dev-tools** — surfaced
+  on Lighthouse re-run: heading-order (h1→h3 skipped h2; bumped 4 section
+  h3→h2 and inner h4→h3) + 3 inline inputs without label association
+  (API Key, Host, Port). All fixed via `useId()`.
+
+**Final Lighthouse scores (Vercel preview, headless Chrome, post-fix):**
+
+| Route | Perf | A11y | BP | SEO | A11y delta |
+|---|---|---|---|---|---|
+| `/` | 95 | **100** | 96 | 100 | +5 |
+| `/signals` | 92 | **100** | 96 | 100 | +5 |
+| `/settings/dev-tools` | 91 | **100** | 96 | 100 | +12 |
+| `/ai-assistant` | 96 | **100** | 96 | 100 | +22 |
+
+Every Cowork D8 gate criterion now met: Accessibility = 100 on every
+route, Perf ≥ 90, BP ≥ 90, SEO ≥ 90.
+
+D6 verdict: **PASS** for D8 cutover. The 2 remaining MEDIUM findings
+(npm next/postcss false-positive + 2 console 404s on `/`) are
+non-blocking per the checklist rule "block D8 only on findings >MEDIUM";
+the 2 console 404s likely resolve once the backtest endpoint is hit
+(Task 2).
 
 ---
 
@@ -158,27 +182,20 @@ HTTP/2 404
 
 ---
 
-## D8 gate verdict
+## D8 gate verdict (post-T4)
 
 | Criterion | Status |
 |---|---|
 | npm audit: 0 high/critical | ✅ |
 | Semgrep: 0 critical, ≤ 3 high | ✅ (0 of each) |
-| Lighthouse Performance ≥ 90 every route | ✅ (94–96) |
-| Lighthouse Accessibility = 100 every route | ❌ (78–95; pre-existing T4 a11y debt) |
+| Lighthouse Performance ≥ 90 every route | ✅ (91–96) |
+| Lighthouse Accessibility = 100 every route | ✅ (100 / 100 / 100 / 100) |
 | CORS allowlist verified | ✅ |
 | Bundle size targets | ✅ |
 | Source-map not exposed | ✅ |
 | Manual walk (Chrome/Safari/Firefox + mobile) | ⏳ pending — David's task |
 
-**Recommendation to David:** approve D8 cutover with the explicit caveat
-that T4 a11y bundle (color-contrast token + 7 missing aria-labels on
-/ai-assistant) is the first post-cutover sprint. Single-token CSS fix
-clears ~95% of the a11y failures across all routes.
-
-If David wants Accessibility = 100 *before* D8 merge: T4 fix is a
-half-day of focused work — feasible to land in 2026-05-05 and then
-re-run Lighthouse before merging on 2026-05-06.
+**D8 unblocked.** Awaiting David's go/no-go after manual cross-browser walk.
 
 ---
 
