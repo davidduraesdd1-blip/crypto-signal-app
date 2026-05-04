@@ -16,7 +16,7 @@
 
 services:
   - type: web
-    name: crypto-signal-api
+    name: crypto-signal-app                # matches the dashboard service name created in D2
     runtime: python
     plan: free                          # $0/mo, 512 MB RAM, 0.1 CPU, sleeps after 15 min idle
     region: oregon                      # US West — matches David's manual config
