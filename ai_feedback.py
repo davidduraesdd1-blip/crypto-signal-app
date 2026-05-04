@@ -408,7 +408,12 @@ def calibrate_alert_thresholds() -> dict:
 
     Returns a summary dict for UI display.
     """
-    from alerts import load_alerts_config, save_alerts_config
+    # AUDIT-2026-05-03 (Tier 5 F-AI-1 MEDIUM): wrap the load → mutate → save
+    # via `update_alerts_config` so calibration runs under the same module-
+    # level RLock that P1 added to user-driven Settings PUTs. Without this,
+    # a calibration cycle racing with a Settings save can lose either
+    # writer's changes (read-modify-write race).
+    from alerts import load_alerts_config, update_alerts_config
 
     conn = db._get_conn()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).isoformat()
@@ -443,17 +448,20 @@ def calibrate_alert_thresholds() -> dict:
     p75_conf = confident_vals[p75_idx]
     p75_conf = max(_MIN_CONF_FLOOR, min(_MIN_CONF_CEILING, p75_conf))
 
-    config     = load_alerts_config()
-    old_thresh = float(config.get("min_confidence", 70))
-
+    # Compute the new threshold off a snapshot read (no contention here —
+    # the actual atomic update happens inside the updater fn below).
+    old_thresh = float(load_alerts_config().get("min_confidence", 70))
     new_thresh = round(old_thresh * (1 - _SMOOTH_FACTOR) + p75_conf * _SMOOTH_FACTOR, 1)
     new_thresh = max(_MIN_CONF_FLOOR, min(_MIN_CONF_CEILING, new_thresh))
 
-    config["min_confidence"]          = new_thresh
-    config["_calibrated_at"]          = datetime.now(timezone.utc).isoformat()
-    config["_calibration_samples"]    = len(confident_vals)
-    config["_raw_p75_confidence"]     = round(p75_conf, 1)
-    save_alerts_config(config)
+    def _apply_calibration(cfg: dict) -> dict:
+        cfg["min_confidence"] = new_thresh
+        cfg["_calibrated_at"] = datetime.now(timezone.utc).isoformat()
+        cfg["_calibration_samples"] = len(confident_vals)
+        cfg["_raw_p75_confidence"] = round(p75_conf, 1)
+        return cfg
+
+    update_alerts_config(_apply_calibration)
 
     delta     = new_thresh - old_thresh
     direction = "raised" if delta > 0.5 else ("lowered" if delta < -0.5 else "unchanged")

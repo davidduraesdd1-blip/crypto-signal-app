@@ -492,10 +492,13 @@ def get_funding_rate(pair: str) -> dict:
     except Exception as _e:
         logging.debug("Bybit funding rate fetch error for %s: %s", pair, _e)
 
-    result = _empty_result("Funding N/A (spot pair or geo-blocked)", now)
-    with _FUNDING_CACHE_LOCK:
-        _BINANCE_FUNDING_CACHE[pair] = result
-    return result
+    # AUDIT-2026-05-03 (Tier 3 DF-A HIGH): do NOT write the empty/error
+    # result into the cache — when OKX + Bybit both transiently fail
+    # (rate-limit, 429, network blip), persisting the N/A row poisons the
+    # cache for the full TTL window even after the upstreams recover. The
+    # caller already gracefully handles `signal == "N/A"`, so returning a
+    # fresh empty each time costs nothing and lets the next call retry.
+    return _empty_result("Funding N/A (spot pair or geo-blocked)", now)
 
 
 # ──────────────────────────────────────────────

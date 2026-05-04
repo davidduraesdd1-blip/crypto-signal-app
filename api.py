@@ -28,7 +28,6 @@ Alert message (JSON):
 from __future__ import annotations
 
 import hmac
-import html as _html
 import logging
 import os
 import threading
@@ -43,7 +42,7 @@ import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import alerts
 import crypto_model_core as model
@@ -97,8 +96,48 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost", "http://localhost:8501", "http://127.0.0.1:8501"],
-    allow_methods=["GET", "POST"],
+    # Phase D D1: include Next.js local dev (3000) so the new FastAPI
+    # routers can be hit from `npm run dev` while the Streamlit fallback
+    # stays addressable on 8501. Vercel preview + production domains are
+    # admitted via the regex (matches https://*.vercel.app and
+    # https://crypto-signal-app.vercel.app once Vercel assigns it).
+    # AUDIT-2026-05-03 (Tier 1 HIGH): dropped bare `http://localhost` —
+    # without a port it matches any localhost service (incl. unrelated apps
+    # the user happens to run), broadening the CORS surface beyond what the
+    # 8501/3000 entries already cover. Streamlit + Next.js dev are explicit.
+    allow_origins=[
+        "http://localhost:8501", "http://127.0.0.1:8501",
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        # Production domains added explicitly once Vercel deploy lands in D5
+    ],
+    # AUDIT-2026-05-02 (HIGH security fix): previous regex
+    # `https://([a-z0-9-]+\.)*vercel\.app` matched ANY subdomain of
+    # vercel.app (including every other Vercel customer's preview deploy),
+    # which means a malicious site at attacker.vercel.app could prompt-
+    # inject a victim's browser into issuing authenticated calls if the
+    # X-API-Key was ever placed in a fetchable surface. Tightened to the
+    # owner-prefixed Vercel pattern only.
+    #
+    # AUDIT-2026-05-04 (overnight, post-D5-deploy): the v0-created Vercel
+    # project assigned the canonical URL
+    # `v0-davidduraesdd1-blip-crypto-signa.vercel.app` (per-deploy hashes
+    # take the form `v0-davidduraesdd1-blip-crypto-signal-<hash>.vercel.app`
+    # and `v0-davidduraesdd1-blip-git-<hash>-davidduraesdd1-<id>-projects
+    # .vercel.app`). The previous regex only matched
+    # `crypto-signal-app(...)?` and rejected every v0-prefixed URL, so the
+    # browser blocked every API call from the live Vercel frontend.
+    # Broadened to: any vercel.app subdomain that contains the literal
+    # owner identifier `davidduraesdd1-blip`. That preserves the
+    # owner-prefix-only security property (a different Vercel customer
+    # cannot impersonate David) while admitting all four real URL shapes
+    # this project produces.
+    allow_origin_regex=(
+        r"^https://"
+        r"(crypto-signal-app(-[a-z0-9-]+-davidduraesdd1-blip)?"
+        r"|[a-z0-9-]*davidduraesdd1-blip[a-z0-9-]*)"
+        r"\.vercel\.app$"
+    ),
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # PUT/DELETE added for D1 routers
     allow_headers=["X-API-Key", "Content-Type"],
     allow_credentials=False,  # SEC-HIGH-02: explicit
 )
@@ -124,11 +163,24 @@ _api_key_lock = threading.Lock()
 
 
 def _get_configured_api_key() -> str:
+    """Read the configured API key, env var first then alerts_config.json.
+
+    AUDIT-2026-05-03 (CRITICAL C-1 fix): mirror routers/deps.py — read
+    `CRYPTO_SIGNAL_API_KEY` from env first so the production Render
+    deploy can rotate keys via dashboard env var (Render's file system
+    is ephemeral, so a file-based key would disappear on every push).
+    Falls back to the existing alerts_config.json path for local dev
+    and Streamlit-UI compatibility.
+    """
     with _api_key_lock:
         if time.time() - _api_key_cache["ts"] < _API_KEY_CACHE_TTL:
             return _api_key_cache["key"] or ""
-    cfg = alerts.load_alerts_config()
-    key = cfg.get("api_key", "")
+    env_key = (os.environ.get("CRYPTO_SIGNAL_API_KEY") or "").strip()
+    if env_key:
+        key = env_key
+    else:
+        cfg = alerts.load_alerts_config()
+        key = cfg.get("api_key", "")
     with _api_key_lock:
         _api_key_cache["key"] = key
         _api_key_cache["ts"] = time.time()   # timestamp after I/O for accurate TTL
@@ -282,13 +334,85 @@ class TradingViewWebhook(BaseModel):
     message: Optional[str] = Field(None, description="Free-text alert message")
 
 
+# AUDIT-2026-05-03 (P3 — input-validation slice of C-3): canonical
+# vocabularies for OrderRequest fields. The full C-3 (allowlist + size
+# cap + SL/TP validation) is being applied as P4 in a follow-up commit;
+# this commit covers only the input-validation gate that fails fast at
+# 422 before the order even reaches execution.place_order.
+_ALLOWED_DIRECTIONS = {"BUY", "SELL", "STRONG BUY", "STRONG SELL"}
+_ALLOWED_ORDER_TYPES = {"market", "limit"}
+
+# 10_000 USD per-order ceiling. Conservative — the existing
+# `agent_max_trade_size_usd` config is $1000, so this leaves a 10× safety
+# margin for manual orders. Operators can raise it via env var if a
+# larger manual order is needed (P4 will surface this as a config field
+# rather than a hard constant).
+_MAX_ORDER_SIZE_USD = float(os.environ.get("CRYPTO_SIGNAL_MAX_ORDER_USD", "10000"))
+
+
 class OrderRequest(BaseModel):
-    pair:          str            = Field(..., description="e.g. BTC/USDT or BTCUSDT")
-    direction:     str            = Field(..., description="BUY | SELL | STRONG BUY | STRONG SELL")
-    size_usd:      float          = Field(..., description="Notional USD order size", gt=0)
-    order_type:    str            = Field("market", description="market | limit")
-    limit_price:   Optional[float] = Field(None, description="Price for limit orders")
-    current_price: Optional[float] = Field(None, description="Hint for paper fill / contract-qty calc")
+    pair:          str            = Field(..., min_length=3, max_length=32,
+                                          description="e.g. BTC/USDT or BTCUSDT")
+    direction:     str            = Field(..., description=
+                                          f"One of: {', '.join(sorted(_ALLOWED_DIRECTIONS))}")
+    size_usd:      float          = Field(..., gt=0, le=_MAX_ORDER_SIZE_USD,
+                                          description=f"Notional USD order size (0 < x ≤ {_MAX_ORDER_SIZE_USD})")
+    order_type:    str            = Field("market", description=
+                                          f"One of: {', '.join(sorted(_ALLOWED_ORDER_TYPES))}")
+    limit_price:   Optional[float] = Field(None, gt=0,
+                                           description="Price for limit orders (must be > 0 when order_type=limit)")
+    current_price: Optional[float] = Field(None, gt=0,
+                                           description="Hint for paper fill / contract-qty calc (must be > 0 when set)")
+    # AUDIT-2026-05-03 (P4-C-4): optional caller-provided idempotency key.
+    # A retry with the same value returns the cached result rather than
+    # placing a duplicate order. Sanitized to alphanumeric and truncated
+    # to 32 chars by execution._sanitize_clord_id (OKX clOrdId limit).
+    client_order_id: Optional[str] = Field(None, max_length=64,
+                                           description="Caller-provided idempotency key. Same value on retry = cached result, no duplicate order.")
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _normalize_direction(cls, v):
+        """Accept lowercase + extra whitespace; the enum check is on the
+        canonical uppercase form. Preserves the prior-call-site pattern
+        `payload.direction.upper()` while making the contract explicit
+        at validation time.
+        """
+        if not isinstance(v, str):
+            return v
+        normalized = v.strip().upper()
+        if normalized not in _ALLOWED_DIRECTIONS:
+            raise ValueError(
+                f"direction {v!r} not in {sorted(_ALLOWED_DIRECTIONS)}"
+            )
+        return normalized
+
+    @field_validator("order_type", mode="before")
+    @classmethod
+    def _normalize_order_type(cls, v):
+        """Accept MARKET / Market / market; canonical lowercase is what
+        ccxt expects downstream.
+        """
+        if not isinstance(v, str):
+            return v
+        normalized = v.strip().lower()
+        if normalized not in _ALLOWED_ORDER_TYPES:
+            raise ValueError(
+                f"order_type {v!r} not in {sorted(_ALLOWED_ORDER_TYPES)}"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _limit_orders_require_limit_price(self):
+        """A limit order with no `limit_price` is meaningless and would
+        either crash deeper in execution.py or fall back to a market
+        fill on OKX — neither is what the caller asked for.
+        """
+        if self.order_type == "limit" and (self.limit_price is None or self.limit_price <= 0):
+            raise ValueError(
+                "order_type='limit' requires limit_price > 0"
+            )
+        return self
 
 
 # ─── Routes — System ──────────────────────────────────────────────────────────
@@ -660,9 +784,27 @@ def tradingview_webhook(
     # requests.post) is safe here and will not block the event loop.
 
     # API-03: enforce authentication — this was accepted but never validated
+    # AUDIT-2026-05-02 (HIGH security fix): previously failed OPEN when
+    # _expected was empty — any caller could write to alerts_log + trigger
+    # downstream agent paths. Now mirrors require_api_key fail-closed
+    # contract: 503 if no key is configured (unless the local-dev
+    # CRYPTO_SIGNAL_ALLOW_UNAUTH escape hatch is set). Constant-time
+    # compare prevents timing attacks on key guessing.
     _expected = _get_configured_api_key()
-    _provided = x_api_key or token
-    if _expected and not hmac.compare_digest(_provided, _expected):
+    _provided = x_api_key or token or ""
+    if not _expected:
+        if os.environ.get("CRYPTO_SIGNAL_ALLOW_UNAUTH", "").strip().lower() == "true":
+            pass  # local dev bypass — explicit env var only
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Webhook auth unavailable: API key not configured. "
+                    "Set 'api_key' via the Settings page before exposing "
+                    "this webhook URL publicly."
+                ),
+            )
+    elif not hmac.compare_digest(_provided, _expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     try:
@@ -817,13 +959,18 @@ def place_order(payload: OrderRequest):
         pair = _normalize_pair(payload.pair)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    # AUDIT-2026-05-03 (P3): payload.direction and payload.order_type are
+    # already canonical (uppercase + lowercase respectively) thanks to
+    # the field_validators on OrderRequest, so no further normalization
+    # is needed here. The prior `.upper()` call is redundant.
     result = exec_engine.place_order(
-        pair          = pair,
-        direction     = payload.direction.upper(),
-        size_usd      = payload.size_usd,
-        order_type    = payload.order_type,
-        limit_price   = payload.limit_price,
-        current_price = payload.current_price,
+        pair             = pair,
+        direction        = payload.direction,
+        size_usd         = payload.size_usd,
+        order_type       = payload.order_type,
+        limit_price      = payload.limit_price,
+        current_price    = payload.current_price,
+        client_order_id  = payload.client_order_id,
     )
     return _serialize(result)
 
@@ -864,3 +1011,33 @@ def get_alerts_log(limit: int = 100):
         "count": len(df),
         "alerts": _serialize(df.tail(limit).to_dict(orient="records")),
     }
+
+
+# ─── Phase D D1 — Next.js frontend gap-fill routers ────────────────────────────
+# Six new routers wrapping the existing engine for the Next.js + Tailwind
+# frontend (Vercel). Mounted last so they layer on top of the existing
+# /signals, /backtest, /weights, /scan, /execute, /alerts/log surface
+# without disturbing it.
+#
+# Plan:  docs/redesign/2026-05-02_phase-d-streamlit-retirement.md
+# Audit: docs/redesign/2026-05-02_d1-api-audit.md
+
+from routers import home as _home_router
+from routers import regimes as _regimes_router
+from routers import onchain as _onchain_router
+from routers import alerts as _alerts_router_module
+from routers import ai_assistant as _ai_router
+from routers import settings as _settings_router
+from routers import exchange as _exchange_router       # D-ext: test-connection
+from routers import diagnostics as _diagnostics_router # D-ext: 7-gate + db-health
+from routers import backtest as _backtest_router       # D-ext: summary/trades/runs (added 2026-05-04 — closes Backtester page 404 on live)
+
+app.include_router(_home_router.router,            prefix="",             tags=["Home"])
+app.include_router(_regimes_router.router,         prefix="/regimes",     tags=["Regimes"])
+app.include_router(_onchain_router.router,         prefix="/onchain",     tags=["On-Chain"])
+app.include_router(_alerts_router_module.router,   prefix="/alerts",      tags=["Alerts"])
+app.include_router(_ai_router.router,              prefix="/ai",          tags=["AI Assistant"])
+app.include_router(_settings_router.router,        prefix="/settings",    tags=["Settings"])
+app.include_router(_exchange_router.router,        prefix="/exchange",    tags=["Exchange"])
+app.include_router(_diagnostics_router.router,     prefix="/diagnostics", tags=["Diagnostics"])
+app.include_router(_backtest_router.router,        prefix="/backtest",    tags=["Backtest"])

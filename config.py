@@ -8,6 +8,16 @@ import os
 ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
 CRYPTOPANIC_API_KEY: str | None = os.environ.get("CRYPTOPANIC_API_KEY")
 COINGECKO_API_KEY: str | None = os.environ.get("SUPERGROK_COINGECKO_API_KEY")
+# AUDIT-2026-05-03 (C-1): SEPARATE pro-tier key from the demo / free key.
+# Was: `coingecko_pro` flag was True if EITHER COINGECKO_API_KEY or
+# SUPERGROK_COINGECKO_PRO_KEY was set. But COINGECKO_API_KEY (free demo
+# key) shouldn't enable pro-tier features — calling paid endpoints with
+# a free key returns 401. Now a dedicated `COINGECKO_PRO_KEY` gates pro
+# behavior; the free demo key continues to work for free-tier endpoints.
+COINGECKO_PRO_KEY: str | None = (
+    os.environ.get("COINGECKO_PRO_KEY")
+    or os.environ.get("SUPERGROK_COINGECKO_PRO_KEY")  # legacy name
+)
 SENTRY_DSN: str | None = os.environ.get("SUPERGROK_SENTRY_DSN", "")
 COINMARKETCAP_API_KEY: str | None = os.environ.get("COINMARKETCAP_API_KEY")
 ETHERSCAN_API_KEY: str | None = os.environ.get("ETHERSCAN_API_KEY", "")
@@ -16,7 +26,14 @@ ZERION_API_KEY: str | None = os.environ.get("ZERION_API_KEY", "")
 # ─── Anthropic / AI master switch ────────────────────────────────────────────
 # Reads from ANTHROPIC_ENABLED env var if set; defaults to True so AI features
 # are live when an API key is present. Set env var to "false" to disable.
-ANTHROPIC_ENABLED: bool = os.environ.get("ANTHROPIC_ENABLED", "true").lower() not in ("false", "0", "no")
+# AUDIT-2026-05-03 (MEDIUM C-2): strip whitespace before lower-casing so
+# `ANTHROPIC_ENABLED=" false "` (e.g. from a shell expansion / dashboard
+# trailing-space) reads as disabled rather than enabled. Same defensive
+# pattern used by routers/deps.py for CRYPTO_SIGNAL_ALLOW_UNAUTH.
+ANTHROPIC_ENABLED: bool = (
+    os.environ.get("ANTHROPIC_ENABLED", "true").strip().lower()
+    not in ("false", "0", "no")
+)
 
 # ─── LLM Model Constants ──────────────────────────────────────────────────────
 # Centralised model names — update here to change everywhere.
@@ -111,6 +128,19 @@ TIER2_DEFAULT_WEIGHTS: dict[str, float] = {
     pair: 1.0 / len(TIER2_PAIRS) for pair in TIER2_PAIRS
 }
 
+# AUDIT-2026-05-03 (LOW C-3): import-time consistency assertion to catch
+# the next "added a pair to TIER2_PAIRS, forgot to update CoinGecko IDs"
+# regression at import rather than at first scan-time crash. The earlier
+# P1 fix called out exactly this drift class. TIER2_BINANCE_PAIRS is
+# intentionally a strict subset (some Tier 2 pairs aren't on Binance) so
+# we don't assert equality there — only on the CoinGecko ID map which
+# must cover every pair for the price-data fallback to work.
+assert set(TIER2_COINGECKO_IDS.keys()) == set(TIER2_PAIRS), (
+    "config.py drift: TIER2_COINGECKO_IDS keys do not match TIER2_PAIRS — "
+    f"missing in IDs: {set(TIER2_PAIRS) - set(TIER2_COINGECKO_IDS.keys())}, "
+    f"extra in IDs: {set(TIER2_COINGECKO_IDS.keys()) - set(TIER2_PAIRS)}"
+)
+
 # ─── Feature Flags ────────────────────────────────────────────────────────────
 # auto-enabled when the corresponding key is set — no code changes needed
 FEATURES: dict = {
@@ -119,8 +149,11 @@ FEATURES: dict = {
     "anthropic_ai":      bool(ANTHROPIC_API_KEY),
     # News
     "cryptopanic_news":  bool(CRYPTOPANIC_API_KEY),
-    # Market data
-    "coingecko_pro":     bool(COINGECKO_API_KEY) or bool(os.environ.get("SUPERGROK_COINGECKO_PRO_KEY", "")),
+    # Market data — `coingecko_pro` only when a real pro-tier key is
+    # set. AUDIT-2026-05-03 (C-1): the demo / free key
+    # SUPERGROK_COINGECKO_API_KEY no longer flags pro-mode (would
+    # return 401 on paid endpoints). Use COINGECKO_PRO_KEY for pro.
+    "coingecko_pro":     bool(COINGECKO_PRO_KEY),
     # CMC global metrics — requires free API key
     "coinmarketcap":     bool(COINMARKETCAP_API_KEY),
     # Error monitoring
@@ -185,5 +218,12 @@ def feature_enabled(name: str) -> bool:
 # Set env vars to activate: SUPERGROK_BRAND_NAME="My App"  SUPERGROK_BRAND_LOGO_PATH="logo.png"
 # When unset (default), the app shows a clean placeholder header.
 # 2-line rebrand when ready — no restructuring required.
-BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "Family Office · Signal Intelligence")
+# AUDIT-2026-05-03 (C-4): default flipped from
+# "Family Office · Signal Intelligence" (a real brand string that would
+# leak into screenshots if the app ships before the family-office
+# identity is locked in) to the literal placeholder "Crypto Signal App"
+# per CLAUDE.md §6: "When unset: display a clean professional
+# placeholder header." Rebrand still 1-line — set SUPERGROK_BRAND_NAME
+# in env to override.
+BRAND_NAME: str = os.environ.get("SUPERGROK_BRAND_NAME", "Crypto Signal App")
 BRAND_LOGO_PATH: str = os.environ.get("SUPERGROK_BRAND_LOGO_PATH", "")

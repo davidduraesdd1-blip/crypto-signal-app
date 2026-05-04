@@ -127,13 +127,40 @@ def _pivot_lows(series: pd.Series, n: int = 3) -> pd.Series:
     (e.g. close.index[mask]) raises "Cannot index by location index with a
     non-integer key". fillna(False) makes all edge elements False so callers
     receive a clean boolean mask guaranteed to contain no NaN values.
+
+    AUDIT-2026-05-03 (P5-LA-1 — CRITICAL look-ahead-bias fix): the last
+    `n` bars are explicitly suppressed even though the centered-rolling
+    expression naturally gives them NaN/False already on the leading
+    edge. The reason: in a streaming / live context, the last bar is
+    `t = now`, and the centered rolling at `t` would need bars
+    `[now+1, ..., now+n]` to confirm — bars that don't exist yet. In a
+    backtest, those bars DO exist (we have post-2026 data when running
+    against a 2024 bar), and the divergence detector would peek `n`
+    bars forward for every candidate pivot. That made backtest
+    performance systematically optimistic vs live alpha.
+
+    Closed-bar contract: a pivot at index `t` is only flagged if
+    `t + n` is also in the series — i.e. the right-hand side of the
+    centered window has actually been observed. Equivalent fixes
+    elsewhere: LA-3 (MACD divergence shift(-1)) and LA-4 (AVWAP anchor).
     """
-    return (series == series.rolling(window=2 * n + 1, center=True).min()).fillna(False)
+    pivots = (series == series.rolling(window=2 * n + 1, center=True).min()).fillna(False)
+    if n > 0 and len(pivots) >= n:
+        # Mark the last n bars as "not yet confirmed" — they may be
+        # pivots once n more bars arrive, but we cannot know now.
+        pivots.iloc[-n:] = False
+    return pivots
 
 
 def _pivot_highs(series: pd.Series, n: int = 3) -> pd.Series:
-    """Return boolean mask of pivot highs (highest in ±n bars). See _pivot_lows."""
-    return (series == series.rolling(window=2 * n + 1, center=True).max()).fillna(False)
+    """Return boolean mask of pivot highs (highest in ±n bars). See _pivot_lows.
+
+    AUDIT-2026-05-03 (P5-LA-1): same closed-bar fix as _pivot_lows.
+    """
+    pivots = (series == series.rolling(window=2 * n + 1, center=True).max()).fillna(False)
+    if n > 0 and len(pivots) >= n:
+        pivots.iloc[-n:] = False
+    return pivots
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

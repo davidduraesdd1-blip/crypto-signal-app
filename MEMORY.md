@@ -4,6 +4,209 @@ Session continuity log. Newest entries on top. See master-template §16.
 
 ---
 
+## 2026-05-02 (overnight audit) — Deep audit landed, 12 fixes shipped
+
+David requested a comprehensive overnight audit before going to bed.
+Spawned 7 parallel deep-audit agents covering Tier 1 (security +
+financial), Tier 2 (math), Tier 3 (data feeds), Tier 4 (Streamlit
+read-only), and Tier 5 (misc). Results aggregated into
+`docs/audits/2026-05-02_overnight-deep-audit.md`.
+
+**Total findings:** ~160 — roughly 22 CRITICAL, 51 HIGH, 53 MEDIUM,
+34 LOW. Restore tag created at `pre-overnight-audit-2026-05-02`
+before any code change.
+
+**Shipped this run** (all 12 under one commit, 348 tests pass, 0
+regressions):
+- HIGH security: TradingView webhook fail-CLOSED on missing key
+- HIGH security: CORS regex tightened from `*.vercel.app` (any Vercel
+  customer) to owner-prefix-only
+- CRITICAL security: `_REDACTED_KEYS` expanded + suffix-match
+  defense-in-depth + regression test (was missing okx_secret,
+  email_pass, lunarcrush_key, coinglass_key, cryptoquant_key,
+  glassnode_key, etc.)
+- HIGH financial: `fee_usd` plumbed through to DB (was silently
+  dropped from execution_log)
+- HIGH financial / math: `check_circuit_breaker` compounds % returns
+  instead of summing (sum() is mathematically wrong on >1 trade)
+- HIGH race: Module-private `_slip_rng` for slippage; eliminates
+  cross-module RNG cross-contamination
+- MEDIUM error-handling: Onchain `_safe_fetch` returns explicit None
+  + error string instead of misleading fake-neutral 1.0/0.0/false
+- MEDIUM bug: Regimes summary now uses canonical HMM labels
+  (Bull/Bear/Sideways/Transition) seeded at zero + dynamic-bucket
+  fallback; legacy "Trending/Ranging/Neutral" kept as zero back-compat
+- MEDIUM bug: Diagnostics gates 4/5/6 no longer fail-open green;
+  new `unmeasured` status; removed misleading `resume_count: 0` /
+  `session_halts: 0` placeholders
+- LOW dead-code: removed unused `import html as _html` + unused
+  `SettingsPatch` model
+
+**Deferred to David's review tomorrow morning** (architectural or
+§22-regression-affecting):
+- **C-1 live deploy auth bypass** — David must set `api_key` in
+  production via `PUT /settings/dev-tools` then flip
+  `CRYPTO_SIGNAL_ALLOW_UNAUTH=false` in Render dashboard. Defense-in-
+  depth redaction fix mitigates leak risk meanwhile.
+- **C-3/C-4/C-5/C-6 execution-layer architectural** — allowlist +
+  size cap + SL/TP validation, idempotency via clientOrderId,
+  circuit breaker bypass on every order path, short-side slippage
+  math. Each touches the order-placement contract; needs sign-off
+  + paired §22 backtest diff.
+- **4 LOOK-AHEAD-BIAS math CRITICALs** in
+  `top_bottom_detector.py` (centered pivots), `crypto_model_core.py`
+  (MACD divergence shift(-1)), and AVWAP anchors. Per §22, need
+  backtest regression diff against 2023-2026 universe before
+  shipping. Documented + queued for dedicated batch.
+- **3 LLM trust-boundary CRITICALs** — prompt-injection sanitizer is
+  a 7-phrase substring wall (trivially bypassed); emergency stop
+  TOCTOU window during ~45s Claude round-trip; LLM_analysis.py has
+  zero sanitization on prompts. Needs design-pass + threat-model
+  review.
+- **4 DB concurrency CRITICALs** — default `isolation_level=""` +
+  pooled connections + missing `PRAGMA busy_timeout`. Concurrency
+  rewrite needs a dedicated test plan.
+
+**Streamlit (Tier 4):** 0 immediate fixes needed, all 11 findings
+deferred to D8 cutover archive. Phase D §6 retirement plan unchanged.
+
+**Math (Tier 2):** No changes shipped this run (per §22 regression-
+diff requirement). 4 CRITICAL look-ahead findings catalogued.
+
+**Restore point:** if any of the 12 shipped fixes regresses something
+overnight, `git checkout pre-overnight-audit-2026-05-02` returns the
+branch to the D-ext baseline (commit `23f6fd7`).
+
+**Next session:** read this entry → audit doc → queue the deferred
+CRITICAL items as approved-batch decisions for David in the morning.
+
+---
+
+## 2026-05-02 (D-ext) — D-extension endpoints landed
+
+Closed the 4 endpoint gaps surfaced by the D4 code-wire plan
+(`docs/redesign/2026-05-02_phase-d-d4-code-wire-plan.md` §3) so D4
+ships zero `TODO(D-ext)` stubs:
+
+- **PUT `/settings/trading`** — Trading tab persistence (pairs,
+  timeframes, TA exchange, display preferences). Extends
+  `routers/settings.py`; partial-update pattern matches the existing
+  signal-risk/dev-tools/execution PUTs. GET `/settings/` now returns
+  a `trading` group too.
+- **POST `/exchange/test-connection`** — Wraps existing
+  `execution.test_connection()` for the "Test OKX Connection" button.
+  Returns 503 with operator guidance when keys are unset (frontend
+  renders soft warning, not stack trace) per `feedback_empty_states`.
+  New router `routers/exchange.py` mounted at `/exchange`.
+- **GET `/diagnostics/circuit-breakers`** — Synthesizes the 7-gate
+  Level-C agent safety status from `agent.get_agent_config()` +
+  `execution.check_circuit_breaker()` + `agent.is_emergency_stop()`.
+  Mockup labels exact, in mockup order. Powers the Settings · Dev
+  Tools card.
+- **GET `/diagnostics/database`** — SQLite WAL-mode row counts +
+  size, powers the 5-col KPI strip on Settings · Dev Tools. Wraps
+  existing `database.get_db_stats()`.
+
+New router `routers/diagnostics.py` mounted at `/diagnostics`.
+
+**Test count:** 26 passes (19 D1 + 7 D-ext) on `tests/test_api_routers.py`.
+Full suite **347 pass / 1 skip** — no regressions.
+
+**Mockup audit notes (informational only — already correct):**
+- Mockup labels for the 7 gates locked verbatim into the response
+  payload, so the frontend renders the same strings the user
+  approved during D3.
+- Cooldown gate currently always reports "inactive" — the agent
+  pipeline doesn't yet log the cooldown timestamp. Noted as a
+  follow-up; not blocking.
+- Database health uses the existing `get_db_stats()` whitelist of 13
+  table names. The mockup's "18 table counts" expander is rendered
+  by the frontend with a "show all" affordance; the API returns the
+  curated 8 most-relevant tables for the KPI strip.
+
+---
+
+## 2026-05-02 (later) — Phase D batch D2 landed
+
+D2 (Render deploy of FastAPI + keep-alive) shipped on
+`phase-d/next-fastapi-cutover`. Live at
+**https://crypto-signal-app-1fsi.onrender.com**.
+
+- Render free tier: 512MB RAM, 0.1 CPU, $0/mo, autodeploy from
+  `phase-d/next-fastapi-cutover`, region oregon.
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn api:app --host 0.0.0.0 --port $PORT`
+- Env: `CRYPTO_SIGNAL_ALLOW_UNAUTH=true` (D1 temporary; flip at D6
+  once Next.js handles the X-API-Key); `ANTHROPIC_ENABLED=false`;
+  `DEMO_MODE=true`; `PYTHON_VERSION=3.11`.
+- IaC: `render.yaml` committed (834601f) — fresh Render account can
+  reproduce the deploy in one click; secret env vars marked
+  `sync: false` (set in dashboard, never in git).
+- Keep-alive: cron-job.org (David's account) pings `/health` every
+  10 min — eliminates the 50s cold-start the free-tier doc warns
+  about. First ping scheduled 2026-05-02 18:50 PT.
+
+**14 endpoints smoke-tested live, all 200:**
+- `/health` returned in 263ms (warm); 29 of 33 OKX pairs live, 4
+  stale (FLR/XDC/SHX/ZBCN — not on OKX, expected fallback per §10).
+- `/openapi.json` confirms 36 total endpoints (22 existing + 14 new
+  D1 paths / 15 operations).
+- `/onchain/dashboard?pair=BTC-USDT` returned **real Binance data**
+  in 4.4s: sopr=1.005, mvrv_z=-0.51, hash_ribbon=CAPITULATION,
+  puell_signal=ACCUMULATION. Engine wrap is end-to-end live.
+- Empty payloads on `/home/summary`, `/regimes/`, `/ai/decisions`
+  are correct (no scan has run on this fresh Render instance —
+  populates on first scan).
+
+**Cost so far:** $0/mo. (Render free tier indefinite, cron-job.org
+free tier indefinite, GitHub free.)
+
+**Next blocking action — David:** D3 (interactive, ~2-3 days).
+Subscribe to v0.dev Premium ($20/mo, cancellable end of D3),
+then drive v0 to convert the 13 mockups in
+`docs/mockups/sibling-family-crypto-signal-*.html` into Next.js +
+Tailwind + shadcn/ui components. Export each generated page to
+the `web/` directory via v0's GitHub panel as PRs against
+`phase-d/next-fastapi-cutover`. Once all 8 pages are in `web/app/`,
+ping me — D4 (Code wires Tanstack Query against the live FastAPI)
+runs autonomously after.
+
+Streamlit fallback unchanged at
+https://cryptosignal-ddb1.streamlit.app/. Tag baseline
+`redesign-ui-2026-05-shipped` -> 20587d2 still the rollback point.
+
+### D2 commits
+- 834601f chore(phase-d-2): add render.yaml infra-as-code blueprint
+
+---
+
+## 2026-05-02 (later) — Phase D batch D1 landed
+
+D1 (FastAPI gap-fill, 6 new routers) shipped on
+`phase-d/next-fastapi-cutover` off `main`. Existing 22 endpoints in
+`api.py` untouched; 6 new routers add 15 endpoints for Home,
+Regimes, On-Chain, Alerts CRUD, AI Assistant, Settings.
+
+- 9 new modules: `routers/{__init__,utils,deps,home,regimes,onchain,
+  alerts,ai_assistant,settings}.py`
+- `api.py` minimal-touch: 6 `include_router` calls + CORS extended for
+  `localhost:3000` (Next.js dev) + `*.vercel.app` regex (preview/prod)
+  + PUT/DELETE methods (alerts/configure DELETE, settings PUTs)
+- 19 new smoke tests in `tests/test_api_routers.py` (TestClient-based,
+  network-hermetic via monkeypatch on `fetch_onchain_metrics`,
+  `generate_signal_story`, `save_alerts_config`)
+- pytest **340 passed, 1 skipped** in 40s (baseline 321 + 19 new = 340)
+- §4 regression diff NOT required at D1 (presentation/transport only;
+  composite_signal output unchanged) — runs at D7 per plan §6.
+
+**Next blocking action — David:** D2 start. Create a free Render
+account at https://render.com (no credit card), then provide the
+deploy hook URL so Code can wire `render.yaml` + Cron-job.org
+keep-alive. Streamlit fallback unchanged at
+https://cryptosignal-ddb1.streamlit.app/.
+
+---
+
 ## 2026-05-02 (later) — Phase D approved + handed off to Code
 
 **Approvals locked** (David, via AskUserQuestion):

@@ -24,6 +24,23 @@ logger = logging.getLogger(__name__)
 
 _ALERTS_CONFIG_FILE = "alerts_config.json"
 
+# AUDIT-2026-05-03 (P1 — MEDIUM bug fix): config-file lock for the
+# load → modify → save sequence in callers. Atomic-rename in
+# save_alerts_config protects against crash-mid-write but NOT against
+# two concurrent writers each loading, modifying different keys, and
+# both calling save: the second save overwrites the first's changes.
+#
+# RLock chosen over Lock so re-entrant calls within the same thread are
+# safe (e.g. update_alerts_config's updater_fn calling load_alerts_config
+# transitively for read-only purposes).
+#
+# Scope: in-process only. Cross-process (FastAPI worker + agent loop +
+# Streamlit during the 30-day overlap) requires a `filelock`-style
+# advisory lock — deferred until D8 when Streamlit retires and the
+# cross-process surface shrinks to FastAPI + agent (both now sharing
+# this in-process lock if they import alerts from the same process).
+_config_lock = threading.RLock()
+
 # ── Alert deduplication — 4-hour cooldown per pair+direction ─────────────────
 # Prevents the same high-confidence signal from firing an alert every 15 minutes.
 # Key: (pair, direction), Value: unix timestamp of last alert sent.
@@ -123,39 +140,77 @@ def load_alerts_config():
     _SENSITIVE_ENV_MAP. Env value wins; falling back to the JSON file
     preserves backward compatibility with existing installs.
     """
-    config = dict(_DEFAULTS)
-    if os.path.exists(_ALERTS_CONFIG_FILE):
-        try:
-            with open(_ALERTS_CONFIG_FILE, "r", encoding="utf-8") as f:
-                config.update(json.load(f))
-        except Exception as e:
-            logging.error("[alerts] Failed to load config from %s: %s", _ALERTS_CONFIG_FILE, e)
-    # Env-var override for sensitive creds (P1 audit fix)
-    for _cfg_key, _env_name in _SENSITIVE_ENV_MAP.items():
-        _env_val = (os.environ.get(_env_name) or "").strip()
-        if _env_val:
-            config[_cfg_key] = _env_val
-    return config
+    # AUDIT-2026-05-03 (P1): hold the lock during file IO so a concurrent
+    # save_alerts_config doesn't read a half-written file. Atomic rename
+    # in save still guards against torn writes; this lock guards against
+    # the load-modify-save sequence at the caller level (see
+    # update_alerts_config below for the canonical transactional API).
+    with _config_lock:
+        config = dict(_DEFAULTS)
+        if os.path.exists(_ALERTS_CONFIG_FILE):
+            try:
+                with open(_ALERTS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    config.update(json.load(f))
+            except Exception as e:
+                logging.error("[alerts] Failed to load config from %s: %s", _ALERTS_CONFIG_FILE, e)
+        # Env-var override for sensitive creds (P1 audit fix)
+        for _cfg_key, _env_name in _SENSITIVE_ENV_MAP.items():
+            _env_val = (os.environ.get(_env_name) or "").strip()
+            if _env_val:
+                config[_cfg_key] = _env_val
+        return config
 
 
 def save_alerts_config(config: dict):
     """Persist alert config to disk atomically (BUG-M08: avoids corrupt file on crash)."""
     import os, tempfile
-    try:
-        # Write to a temp file in the same directory, then atomically rename
-        dir_ = os.path.dirname(os.path.abspath(_ALERTS_CONFIG_FILE)) or "."
-        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp", delete=False, encoding="utf-8") as tmp:
-            json.dump(config, tmp, indent=2)
-            tmp_path = tmp.name
-        # BUG-ALERTS01: restrict permissions before rename so API keys aren't
-        # world-readable in the temp file even briefly (chmod is no-op on Windows).
+    # AUDIT-2026-05-03 (P1): hold the lock so a concurrent load doesn't
+    # see a torn state. Combined with the lock in load_alerts_config and
+    # update_alerts_config, this gives in-process race-freedom on the
+    # full load → modify → save sequence.
+    with _config_lock:
         try:
-            os.chmod(tmp_path, 0o600)
-        except Exception:
-            pass
-        os.replace(tmp_path, _ALERTS_CONFIG_FILE)
-    except Exception as e:
-        logging.error("[alerts] Failed to save config: %s", e)
+            # Write to a temp file in the same directory, then atomically rename
+            dir_ = os.path.dirname(os.path.abspath(_ALERTS_CONFIG_FILE)) or "."
+            with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp", delete=False, encoding="utf-8") as tmp:
+                json.dump(config, tmp, indent=2)
+                tmp_path = tmp.name
+            # BUG-ALERTS01: restrict permissions before rename so API keys aren't
+            # world-readable in the temp file even briefly (chmod is no-op on Windows).
+            try:
+                os.chmod(tmp_path, 0o600)
+            except Exception:
+                pass
+            os.replace(tmp_path, _ALERTS_CONFIG_FILE)
+        except Exception as e:
+            logging.error("[alerts] Failed to save config: %s", e)
+
+
+def update_alerts_config(updater_fn):
+    """Atomically load → update → save under the module-level RLock.
+
+    AUDIT-2026-05-03 (P1 — MEDIUM bug fix): the canonical transactional
+    API for callers who need to modify the config. Closes the
+    read-modify-write race where two concurrent POSTs could each load
+    the same baseline, modify different keys, and both save — the
+    second save overwriting the first's changes.
+
+    The `updater_fn` receives the loaded config dict and must return
+    the modified dict (in-place mutation + return is idiomatic; a new
+    dict also works). The lock is held during the entire sequence so
+    concurrent callers serialize.
+
+    Example:
+        def _set_signal_risk(cfg):
+            cfg["min_confidence_threshold"] = 65
+            return cfg
+        update_alerts_config(_set_signal_risk)
+    """
+    with _config_lock:
+        cfg = load_alerts_config()
+        cfg = updater_fn(cfg)
+        save_alerts_config(cfg)
+        return cfg
 
 
 def _fmt_price(val) -> str:

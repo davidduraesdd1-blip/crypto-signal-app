@@ -1,0 +1,182 @@
+# Render IaC blueprint for the crypto-signal-app FastAPI service.
+#
+# Phase D D2: this file documents the deploy David configured by hand
+# in the Render dashboard, so the configuration lives in git and a
+# fresh Render account can recreate the deploy with one click via
+# https://render.com/deploy?repo=<repo-url>.
+#
+# When committed, Render reads this on every push and reconciles the
+# live service against it (the dashboard becomes a UI on top of git
+# state, not the source of truth). Env vars marked `sync: false` must
+# still be set in the Render dashboard — render.yaml never carries
+# secret values.
+#
+# Spec: https://render.com/docs/yaml-spec
+# Plan: docs/redesign/2026-05-02_phase-d-streamlit-retirement.md (§6 D2)
+
+services:
+  - type: web
+    name: crypto-signal-api
+    runtime: python
+    plan: free                          # $0/mo, 512 MB RAM, 0.1 CPU, sleeps after 15 min idle
+    region: oregon                      # US West — matches David's manual config
+    branch: phase-d/next-fastapi-cutover
+    autoDeploy: true                    # redeploy on every push to the branch
+    healthCheckPath: /health            # used by Render's load balancer + Cron-job.org keep-alive ping
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+
+    # Persistent disk — covers crypto_model.db AND data/scheduler.log via the
+    # shared `data/` parent. Both processes (web + worker) mount the same disk
+    # so the worker's writes are durable and the web side reads the same file.
+    # 1 GB is well above current footprint; expand later via dashboard.
+    disk:
+      name: crypto-signal-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+    envVars:
+      # AUDIT-2026-05-03 (CRITICAL C-1 — RESOLVED 2026-05-03):
+      # IaC-default-secure: `false` so a fresh deploy or a dashboard
+      # reset never reopens the C-1 bypass. The dashboard value (also
+      # `false` post-2026-05-03) wins at runtime; this YAML entry
+      # exists so a `render.com/deploy?repo=...` one-click recreate
+      # starts in the closed state. To re-enable for local dev, set
+      # CRYPTO_SIGNAL_ALLOW_UNAUTH=true in the local environment only
+      # (never via render.yaml or the production dashboard). Pair with
+      # CRYPTO_SIGNAL_API_KEY below — that's the durable auth source.
+      - key: CRYPTO_SIGNAL_ALLOW_UNAUTH
+        value: "false"
+
+      # AUDIT-2026-05-03 (CRITICAL C-1): production API key — read by
+      # routers/deps.py and api.py before falling back to
+      # alerts_config.json. Rendering's file system is ephemeral, so
+      # this env var is the only persistent key home. Set in dashboard
+      # only — never commit a value here.
+      - key: CRYPTO_SIGNAL_API_KEY
+        sync: false
+
+      # Disable Anthropic LLM at process start; AI Assistant endpoints
+      # gracefully return source="unavailable" without a key. Real key
+      # goes in via dashboard env var (sync: false) when David is ready
+      # to spend on Claude tokens.
+      - key: ANTHROPIC_ENABLED
+        value: "false"
+
+      - key: ANTHROPIC_API_KEY
+        sync: false                     # set in Render dashboard, never in git
+
+      # Demo mode keeps any non-essential network calls quiet during
+      # cold-start so /health reliably returns within Render's 60s
+      # health-check window. Match the conftest.py default.
+      - key: DEMO_MODE
+        value: "true"
+
+      # Pin Python version to match Streamlit Cloud (Python 3.11). Also
+      # honored via runtime.txt at repo root (`python-3.11`). Both kept
+      # so neither tool surprises us on a future redeploy.
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # External-data API keys — set in Render dashboard, never in git.
+      # Each one auto-enables a feature in config.py when present; the
+      # absence path is graceful per CLAUDE.md §10 fallback chains.
+      - key: CRYPTOPANIC_API_KEY
+        sync: false
+      - key: SUPERGROK_COINGECKO_API_KEY
+        sync: false
+      - key: COINMARKETCAP_API_KEY
+        sync: false
+      - key: ETHERSCAN_API_KEY
+        sync: false
+      - key: ZERION_API_KEY
+        sync: false
+      - key: SUPERGROK_SENTRY_DSN
+        sync: false
+      - key: CRYPTORANK_API_KEY
+        sync: false
+
+      # Live trading credentials (OKX) — set in Render dashboard only
+      # when David flips live_trading_enabled. Until then, paper-trade
+      # path runs without these; api.py startup auth-check guards the
+      # combination "live_trading + no api_key".
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_PASSPHRASE
+        sync: false
+
+  # ─── Worker service — Outcome C closure (Cowork 2026-05-04) ──────────────
+  # Runs the existing scheduler.py as a long-lived worker process. The
+  # alternative was extending /scan/trigger to call the full run_scan_job
+  # pipeline (currently a strict subset — see
+  # docs/audits/2026-05-04_scheduler-inventory.md). $7/mo is the right
+  # tradeoff vs. recreating that critical path inside an HTTP handler and
+  # shipping a freshly-rewritten code path through D8 cutover.
+  #
+  # The worker mounts the SAME persistent disk as the web service so:
+  #   - both processes read/write the same crypto_model.db (WAL mode + the
+  #     5s busy_timeout in database.py:81-93 handles cross-process
+  #     contention without explicit app-level retry)
+  #   - data/scheduler.log survives redeploys
+  #
+  # Cost: $7/mo (Render Starter worker tier as of 2026-05-04). Documented in
+  # README.md → Deployment.
+  - type: worker
+    name: crypto-signal-scheduler
+    runtime: python
+    plan: starter                       # $7/mo, 512 MB RAM, dedicated worker
+    region: oregon                      # match web service for disk affinity
+    branch: phase-d/next-fastapi-cutover
+    autoDeploy: true
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scheduler.py   # default = blocking scheduler loop
+
+    # MUST match the web service mount path so both processes write the same
+    # SQLite file. Render treats `name` as the disk identity — using the same
+    # name attaches the SAME volume to both services.
+    disk:
+      name: crypto-signal-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+    envVars:
+      # Worker calls Python directly, so it needs every secret the web
+      # service uses (alerts.py loads SMTP creds, model loads exchange API
+      # keys, etc.). Pin all sync:false keys to the same Render env group as
+      # the web service so a single dashboard edit updates both.
+      - key: CRYPTO_SIGNAL_ALLOW_UNAUTH
+        value: "false"
+      - key: CRYPTO_SIGNAL_API_KEY
+        sync: false
+      - key: ANTHROPIC_ENABLED
+        value: "false"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEMO_MODE
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: CRYPTOPANIC_API_KEY
+        sync: false
+      - key: SUPERGROK_COINGECKO_API_KEY
+        sync: false
+      - key: COINMARKETCAP_API_KEY
+        sync: false
+      - key: ETHERSCAN_API_KEY
+        sync: false
+      - key: ZERION_API_KEY
+        sync: false
+      - key: SUPERGROK_SENTRY_DSN
+        sync: false
+      - key: CRYPTORANK_API_KEY
+        sync: false
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_PASSPHRASE
+        sync: false
