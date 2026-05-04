@@ -20,7 +20,7 @@ services:
     runtime: python
     plan: free                          # $0/mo, 512 MB RAM, 0.1 CPU, sleeps after 15 min idle
     region: oregon                      # US West — matches David's manual config
-    branch: phase-d/next-fastapi-cutover
+    branch: main                        # post-D8 cutover (2026-05-04): production lives on main
     autoDeploy: true                    # redeploy on every push to the branch
     healthCheckPath: /health            # used by Render's load balancer + Cron-job.org keep-alive ping
 
@@ -129,7 +129,7 @@ services:
     runtime: python
     plan: starter                       # $7/mo, 512 MB RAM, dedicated worker
     region: oregon                      # match web service for disk affinity
-    branch: phase-d/next-fastapi-cutover
+    branch: main                        # post-D8 cutover (2026-05-04): production lives on main
     autoDeploy: true
 
     buildCommand: pip install -r requirements.txt

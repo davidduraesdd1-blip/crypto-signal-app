@@ -4,8 +4,8 @@ Composite signal engine + Next.js dashboard for crypto + DeFi signals.
 Layered indicator stack (technical + macro + sentiment + on-chain) feeding
 a single BUY / HOLD / SELL output per pair.
 
-**Status (2026-05-03):** Phase D ~95% complete — Streamlit retiring,
-Next.js + FastAPI cutover in progress on `phase-d/next-fastapi-cutover`.
+**Status (2026-05-04):** Phase D **CLOSED** — Streamlit retired to 30-day
+fallback, Next.js + FastAPI is the primary stack, production lives on `main`.
 
 ---
 
@@ -48,7 +48,7 @@ Next.js + FastAPI cutover in progress on `phase-d/next-fastapi-cutover`.
 | FastAPI (production) | https://crypto-signal-app-1fsi.onrender.com | `X-API-Key` header required on protected routes |
 | FastAPI `/health` | https://crypto-signal-app-1fsi.onrender.com/health | public |
 | Streamlit (legacy) | https://cryptosignal-ddb1.streamlit.app | session-state |
-| Next.js (Vercel) | landing in D5 — deploy guide: `docs/redesign/2026-05-03_d5-vercel-deploy-guide.md` | `NEXT_PUBLIC_API_KEY` env var → forwarded as `X-API-Key` |
+| Next.js (Vercel — **primary**) | https://v0-davidduraesdd1-blip-crypto-signa.vercel.app | `NEXT_PUBLIC_API_KEY` env var → forwarded as `X-API-Key` |
 
 ---
 
@@ -144,10 +144,10 @@ pnpm test:contract      # → contract test only
 | D2 — Render deploy | ✅ closed | Live API + auth verified |
 | D3 — v0 mockups exported | ✅ closed | `web/` directory + 15 routes |
 | D4 — Wire frontend to FastAPI | ✅ closed | TanStack hooks + 3 form mutations + contract test |
-| D5 — Vercel deploy | ⏳ paste-ready | `docs/redesign/2026-05-03_d5-vercel-deploy-guide.md` |
-| D6 — Security + perf pass | ⏳ checklist ready | `docs/redesign/2026-05-03_d6-security-perf-checklist.md` |
+| D5 — Vercel deploy | ✅ closed | https://v0-davidduraesdd1-blip-crypto-signa.vercel.app |
+| D6 — Security + perf pass | ✅ closed | All routes Lighthouse a11y 100; `docs/redesign/2026-05-04_d6-security-perf-results.md` |
 | D7 — §22 regression diff | ✅ compliance reviewed | `docs/signal-regression/2026-05-03-d7-section22-compliance-review.md` |
-| D8 — Cutover | ⏳ pending D5+D6 | merge phase-d → main, 30-day Streamlit overlap |
+| D8 — Cutover | ✅ closed 2026-05-04 | merge `be4afb3` → main; render.yaml flipped to `main`; 30-day Streamlit overlap active |
 
 Master plan: `docs/redesign/2026-05-02_phase-d-streamlit-retirement.md`
 
