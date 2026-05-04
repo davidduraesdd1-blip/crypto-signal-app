@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -252,6 +252,11 @@ function AskClaudeCard() {
   const [signal, setSignal] = useState("BUY");
   const [confidence, setConfidence] = useState("78");
   const [question, setQuestion] = useState("");
+  // AUDIT-2026-05-04 (T4 a11y): label↔control association IDs.
+  const pairId = useId();
+  const signalId = useId();
+  const confId = useId();
+  const questionId = useId();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -271,10 +276,11 @@ function AskClaudeCard() {
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="grid gap-3 md:grid-cols-3">
           <div className="space-y-1.5">
-            <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+            <label htmlFor={pairId} className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
               Pair
             </label>
             <input
+              id={pairId}
               type="text"
               value={pair}
               onChange={(e) => setPair(e.target.value)}
@@ -282,10 +288,11 @@ function AskClaudeCard() {
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+            <label htmlFor={signalId} className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
               Signal
             </label>
             <select
+              id={signalId}
               value={signal}
               onChange={(e) => setSignal(e.target.value)}
               className="min-h-[36px] w-full rounded-md border border-border-default bg-bg-2 px-3 py-1.5 text-sm text-text-primary"
@@ -299,10 +306,11 @@ function AskClaudeCard() {
             </select>
           </div>
           <div className="space-y-1.5">
-            <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+            <label htmlFor={confId} className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
               Confidence %
             </label>
             <input
+              id={confId}
               type="number"
               min="0"
               max="100"
@@ -313,10 +321,11 @@ function AskClaudeCard() {
           </div>
         </div>
         <div className="space-y-1.5">
-          <label className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
+          <label htmlFor={questionId} className="text-[11.5px] font-medium uppercase tracking-[0.05em] text-text-muted">
             Question (optional)
           </label>
           <input
+            id={questionId}
             type="text"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}

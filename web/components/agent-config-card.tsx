@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface SliderFieldProps {
@@ -45,10 +45,14 @@ interface InputFieldProps {
 }
 
 function InputField({ label, value, help }: InputFieldProps) {
+  // AUDIT-2026-05-04 (T4 a11y): label↔input association via useId so
+  // Lighthouse axe-core "label" rule passes on every InputField instance.
+  const id = useId();
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium text-text-primary">{label}</label>
+      <label htmlFor={id} className="text-sm font-medium text-text-primary">{label}</label>
       <input
+        id={id}
         type="text"
         defaultValue={value}
         className="min-h-[44px] w-full rounded-lg border border-border-default bg-bg-2 px-3 py-2 font-mono text-sm text-text-primary"
@@ -73,6 +77,10 @@ function ToggleField({ label, checked, sublabel }: ToggleFieldProps) {
         {sublabel && <p className="text-[11px] text-text-muted">{sublabel}</p>}
       </div>
       <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={`${label} — ${on ? "on" : "off"}`}
         onClick={() => setOn(!on)}
         className={cn(
           "relative h-6 w-11 shrink-0 rounded-full transition-colors",

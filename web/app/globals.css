@@ -49,7 +49,14 @@
   --bg-3: var(--gray-3);
   --text-primary: var(--gray-8);
   --text-secondary: var(--gray-6);
-  --text-muted: var(--gray-5);
+  /* AUDIT-2026-05-04 (T4 a11y bundle): #5d5d6e (gray-5) failed WCAG AA on
+     dark backgrounds — 3.06:1 on bg-0 (#0a0a0f) and 2.89:1 on bg-1
+     (#121218) per Lighthouse axe-core. Lifted to #8a8a9d (gray-6) which
+     gives 5.84:1 / 5.49:1 — safely above the 4.5:1 AA threshold for
+     normal text. The semantic split between secondary/muted collapses
+     in dark mode, but that matches shadcn's single-tier muted-foreground
+     pattern and clears 23+42 contrast failures across all routes. */
+  --text-muted: var(--gray-6);
   --border: var(--gray-3);
   --border-strong: var(--gray-4);
 
