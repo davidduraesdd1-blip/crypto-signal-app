@@ -109,3 +109,34 @@ def get_backtest_summary():
         logger.warning("[backtest] /summary read failed: %s", exc)
         df = None
     return serialize(_summary_from_trades(df))
+
+
+@router.get(
+    "/arbitrage",
+    summary="Recent arbitrage opportunities (spot + funding-carry)",
+    dependencies=[Depends(require_api_key)],
+)
+def get_backtest_arbitrage(limit: int = 50):
+    """Returns the most recent rows from `arb_opportunities`. Empty list
+    when no scan has populated the table yet — matches the
+    `ArbitrageList` shape the frontend (web/lib/api-types.ts:484)
+    expects."""
+    try:
+        df = db_module.get_arb_opportunities_df(limit=max(1, min(int(limit), 500)))
+    except Exception as exc:
+        logger.warning("[backtest] /arbitrage read failed: %s", exc)
+        return serialize({"count": 0, "opportunities": []})
+
+    if df is None or df.empty:
+        return serialize({"count": 0, "opportunities": []})
+
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        d = row.to_dict()
+        cleaned = {
+            k: (None if isinstance(v, float) and math.isnan(v) else v)
+            for k, v in d.items()
+        }
+        rows.append(cleaned)
+
+    return serialize({"count": len(rows), "opportunities": rows})
