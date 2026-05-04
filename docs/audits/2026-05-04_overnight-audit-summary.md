@@ -23,10 +23,31 @@ return 200. Open this URL when you're up.
 preflights — the old regex on api.py only admitted
 `crypto-signal-app(...)?.vercel.app` and rejected every URL Vercel
 actually assigned. Fixed in commit `53ac7f5` and pushed; Render
-auto-deploys from `phase-d/next-fastapi-cutover` so this is live by
-the time you read this. If "loading…" is still showing in the morning,
-hard-refresh the page (Ctrl+F5) — your browser may have cached the
-preflight failure.
+auto-deployed from `phase-d/next-fastapi-cutover`.
+
+**End-to-end verified live before I signed off** (timestamp inside the
+verification block below):
+
+```
+$ curl -X OPTIONS \
+    -H "Origin: https://v0-davidduraesdd1-blip-crypto-signa.vercel.app" \
+    -H "Access-Control-Request-Method: GET" \
+    -i https://crypto-signal-app-1fsi.onrender.com/signals
+HTTP/1.1 200 OK
+access-control-allow-origin: https://v0-davidduraesdd1-blip-crypto-signa.vercel.app
+access-control-allow-headers: Accept, Accept-Language, Content-Language, Content-Type, X-API-Key
+access-control-allow-methods: GET, POST, PUT, DELETE
+
+$ curl -H "Origin: https://v0-davidduraesdd1-blip-crypto-signa.vercel.app" \
+       -H "X-API-Key: <key>" \
+       https://crypto-signal-app-1fsi.onrender.com/signals
+{"count":0,"results":[]}
+```
+
+If "loading…" is still showing on the live page in the morning, hard-
+refresh (Ctrl+F5) — your browser may have cached last night's failed
+preflight. After that the watchlist + KPI strip + all 8 routes should
+populate with real data.
 
 ---
 
