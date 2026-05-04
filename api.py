@@ -1030,6 +1030,7 @@ from routers import ai_assistant as _ai_router
 from routers import settings as _settings_router
 from routers import exchange as _exchange_router       # D-ext: test-connection
 from routers import diagnostics as _diagnostics_router # D-ext: 7-gate + db-health
+from routers import backtest as _backtest_router       # D-ext: summary/trades/runs (added 2026-05-04 — closes Backtester page 404 on live)
 
 app.include_router(_home_router.router,            prefix="",             tags=["Home"])
 app.include_router(_regimes_router.router,         prefix="/regimes",     tags=["Regimes"])
@@ -1039,3 +1040,4 @@ app.include_router(_ai_router.router,              prefix="/ai",          tags=[
 app.include_router(_settings_router.router,        prefix="/settings",    tags=["Settings"])
 app.include_router(_exchange_router.router,        prefix="/exchange",    tags=["Exchange"])
 app.include_router(_diagnostics_router.router,     prefix="/diagnostics", tags=["Diagnostics"])
+app.include_router(_backtest_router.router,        prefix="/backtest",    tags=["Backtest"])
