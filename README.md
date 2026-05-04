@@ -184,6 +184,20 @@ open https://cryptosignal-ddb1.streamlit.app
 #   NEXT_PUBLIC_API_KEY  = <same as CRYPTO_SIGNAL_API_KEY in Render env>
 ```
 
+## Render services + costs
+
+| Service | Plan | Cost/mo | Purpose |
+|---|---|---|---|
+| `crypto-signal-api` (web) | Free | $0 | FastAPI uvicorn — sleeps after 15min idle |
+| `crypto-signal-scheduler` (worker) | Starter | **$7** | Long-lived `python scheduler.py` — runs the full autoscan pipeline (run_scan + append_to_master + feedback loop + position updates + alerts). |
+| Persistent disk `crypto-signal-data` | 1 GB | included | Mounted at `/opt/render/project/src/data` on **both** services — covers `crypto_model.db` and `data/scheduler.log`. |
+
+The worker tier closes Cowork's 2026-05-04 Outcome C decision — see
+`docs/audits/2026-05-04_scheduler-inventory.md` for the rationale.
+Cross-process SQLite contention is handled via WAL mode +
+`PRAGMA busy_timeout=5000` in `database.py:81-93`; no app-level retry
+needed.
+
 ---
 
 ## License + ownership
