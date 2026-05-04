@@ -441,12 +441,19 @@ def _parse_okx_item(item: dict, now: float) -> dict | None:
 def get_funding_rate(pair: str) -> dict:
     """
     Fetch the current funding rate for a pair.
-    Priority: OKX (US-accessible) → Binance → Bybit.
+
+    AUDIT-2026-05-04 (D8 follow-up): reorder Bybit → OKX. OKX is
+    geo-blocked from Render Oregon datacenter IPs (post-cutover logs
+    show ConnectionResetError(104) on every funding-rate fetch),
+    silently degrading the Layer 3 sentiment input to None for the full
+    cache window. Bybit's public funding endpoint works cleanly from
+    Render and has parity coverage on the BTC/ETH/major-alt pairs we
+    actually use; OKX stays as fallback for environments where it works.
 
     Returns dict with keys:
       - funding_rate_pct: float  (e.g. 0.01 for 0.01%)
       - signal: "BULLISH" | "BEARISH" | "NEUTRAL" | "N/A"
-      - source: "okx" | "binance" | "bybit" | None
+      - source: "bybit" | "okx" | None
       - error: str | None
     """
     now = time.time()
@@ -458,24 +465,7 @@ def get_funding_rate(pair: str) -> dict:
     symbol = _binance_symbol(pair)
     inst_id = _okx_inst_id(pair)
 
-    # 1. OKX (US-accessible, good coverage)
-    try:
-        resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
-        if resp.status_code == 429:
-            logging.debug("OKX funding rate: rate limited (429) for %s", pair)
-        elif resp.status_code == 200:
-            data = resp.json()
-            items = data.get("data", [])
-            if items and data.get("code") == "0":
-                parsed = _parse_okx_item(items[0], now)
-                if parsed:
-                    with _FUNDING_CACHE_LOCK:
-                        _BINANCE_FUNDING_CACHE[pair] = parsed
-                    return parsed
-    except Exception as _e:
-        logging.debug("OKX funding rate fetch error for %s: %s", pair, _e)
-
-    # 2. Bybit (no US geo-block — replaces fapi.binance.com)
+    # 1. Bybit (Render-friendly, no geo-block)
     try:
         resp = _SESSION.get(_BYBIT_TICKERS_URL, params={"category": "linear", "symbol": symbol}, timeout=6)
         if resp.status_code == 429:
@@ -491,6 +481,23 @@ def get_funding_rate(pair: str) -> dict:
                     return parsed
     except Exception as _e:
         logging.debug("Bybit funding rate fetch error for %s: %s", pair, _e)
+
+    # 2. OKX (geo-blocked from Render Oregon — kept for Streamlit Cloud parity)
+    try:
+        resp = _SESSION.get(_OKX_FUNDING_URL, params={"instId": inst_id}, timeout=6)
+        if resp.status_code == 429:
+            logging.debug("OKX funding rate: rate limited (429) for %s", pair)
+        elif resp.status_code == 200:
+            data = resp.json()
+            items = data.get("data", [])
+            if items and data.get("code") == "0":
+                parsed = _parse_okx_item(items[0], now)
+                if parsed:
+                    with _FUNDING_CACHE_LOCK:
+                        _BINANCE_FUNDING_CACHE[pair] = parsed
+                    return parsed
+    except Exception as _e:
+        logging.debug("OKX funding rate fetch error for %s: %s", pair, _e)
 
     # AUDIT-2026-05-03 (Tier 3 DF-A HIGH): do NOT write the empty/error
     # result into the cache — when OKX + Bybit both transiently fail
@@ -914,10 +921,25 @@ _OI_CACHE: dict = {}
 _OI_TTL = 120  # 2-minute cache
 
 
+def _classify_oi(oi_usd: float) -> str:
+    """Map open-interest USD to HIGH/NORMAL/LOW signal band."""
+    if oi_usd > 500_000_000:
+        return 'HIGH'
+    if oi_usd < 50_000_000:
+        return 'LOW'
+    return 'NORMAL'
+
+
 def get_open_interest(pair: str) -> dict:
     """
-    Fetch open interest from OKX (free, no key, US-accessible).
-    OKX returns oiUsd directly so no mark-price conversion needed.
+    Fetch open interest with a Bybit-primary, OKX-fallback chain.
+
+    AUDIT-2026-05-04 (D8 follow-up): OKX is geo-blocked from Render
+    Oregon datacenter IPs, so trying OKX first wastes a TCP retry on
+    every fetch and silently returns N/A. Bybit's public OI endpoint
+    is Render-friendly and reports the same metric (open-interest in
+    USD); OKX stays as fallback for environments where it works.
+
     Returns {'oi_usd': float, 'signal': str, 'error': str | None}
     signal: 'HIGH' (>$500M) | 'NORMAL' | 'LOW' (<$50M) | 'N/A'
     """
@@ -927,6 +949,64 @@ def get_open_interest(pair: str) -> dict:
         if cached and (now - cached.get('_ts', 0)) < _OI_TTL:
             return cached
 
+    # 1. Bybit (Render-friendly, no geo-block). Bybit's /v5/market/open-interest
+    # endpoint requires intervalTime; we ask for the most recent 5-min bucket
+    # (limit=1) and treat it as "current" — same semantic as OKX's /open-interest
+    # snapshot. openInterest is contract-count, but Bybit also exposes
+    # openInterestValue in USD which matches OKX's oiUsd.
+    symbol = _binance_symbol(pair)  # BTCUSDT / ETHUSDT
+    try:
+        resp = _SESSION.get(
+            "https://api.bybit.com/v5/market/open-interest",
+            params={
+                'category':     'linear',
+                'symbol':       symbol,
+                'intervalTime': '5min',
+                'limit':        1,
+            },
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get('result', {}).get('list', [])
+            if items and data.get('retCode') == 0:
+                # Bybit returns openInterest as contract count; we need USD.
+                # The tickers endpoint already has lastPrice, but we don't want
+                # a second call here. Bybit's open-interest list also exposes
+                # `openInterestValue` (USD) in some responses; fall back to
+                # contract-count × tick price approximation if absent.
+                try:
+                    oi_usd = float(items[0].get('openInterestValue', 0) or 0)
+                    if oi_usd <= 0:
+                        # No USD field — multiply contracts by index price via
+                        # tickers (single extra call, cached server-side).
+                        _t = _SESSION.get(
+                            _BYBIT_TICKERS_URL,
+                            params={"category": "linear", "symbol": symbol},
+                            timeout=4,
+                        )
+                        if _t.status_code == 200:
+                            _t_items = _t.json().get('result', {}).get('list', [])
+                            if _t_items:
+                                _last = float(_t_items[0].get('lastPrice', 0) or 0)
+                                _oi_contracts = float(items[0].get('openInterest', 0) or 0)
+                                oi_usd = _last * _oi_contracts
+                except (ValueError, TypeError):
+                    oi_usd = 0.0
+                if oi_usd > 0:
+                    result = {
+                        'oi_usd': round(oi_usd, 0),
+                        'signal': _classify_oi(oi_usd),
+                        'error': None,
+                        '_ts': now,
+                    }
+                    with _OI_CACHE_LOCK:
+                        _OI_CACHE[pair] = result
+                    return result
+    except Exception as _e:
+        logging.debug("Bybit OI fetch failed for %s: %s", pair, _e)
+
+    # 2. OKX (geo-blocked from Render Oregon — kept for Streamlit Cloud parity)
     inst_id = _okx_inst_id(pair)
     try:
         resp = _SESSION.get(
@@ -942,18 +1022,17 @@ def get_open_interest(pair: str) -> dict:
                     oi_usd = float(items[0].get('oiUsd', 0))
                 except (ValueError, TypeError):
                     oi_usd = 0.0
-                if oi_usd > 500_000_000:
-                    signal = 'HIGH'
-                elif oi_usd < 50_000_000:
-                    signal = 'LOW'
-                else:
-                    signal = 'NORMAL'
-                result = {'oi_usd': round(oi_usd, 0), 'signal': signal, 'error': None, '_ts': now}
+                result = {
+                    'oi_usd': round(oi_usd, 0),
+                    'signal': _classify_oi(oi_usd),
+                    'error': None,
+                    '_ts': now,
+                }
                 with _OI_CACHE_LOCK:
                     _OI_CACHE[pair] = result
                 return result
     except Exception as e:
-        logging.debug("OI fetch failed for %s: %s", pair, e)
+        logging.debug("OKX OI fetch failed for %s: %s", pair, e)
 
     result = {'oi_usd': 0.0, 'signal': 'N/A', 'error': 'OI unavailable', '_ts': now}
     with _OI_CACHE_LOCK:
