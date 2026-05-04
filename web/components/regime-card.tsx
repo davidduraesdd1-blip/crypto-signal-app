@@ -67,10 +67,15 @@ export function RegimeCard({
   const config = stateConfig[state];
 
   return (
-    <div
+    // AUDIT-2026-05-04 (overnight a11y): div onClick → button. Card was
+    // not keyboard-reachable; users on TAB navigation skipped right past
+    // the regime selector. text-left + w-full keep the v0 layout intact.
+    <button
+      type="button"
       onClick={onClick}
+      aria-pressed={selected}
       className={cn(
-        "relative flex min-h-[44px] cursor-pointer flex-col gap-1.5 rounded-xl border border-l-[3px] bg-bg-1 p-4 transition-all",
+        "relative flex min-h-[44px] w-full cursor-pointer flex-col gap-1.5 rounded-xl border border-l-[3px] bg-bg-1 p-4 text-left transition-all",
         config.borderColor,
         "hover:bg-bg-2",
         selected && "bg-bg-2 outline outline-1 outline-accent-brand"
@@ -98,6 +103,6 @@ export function RegimeCard({
       <div className="mt-1 text-[11px] text-text-muted">
         since {since} · {durationDays}d{durationDays > 7 ? " stable" : ""}
       </div>
-    </div>
+    </button>
   );
 }

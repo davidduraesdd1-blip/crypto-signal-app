@@ -107,10 +107,20 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
       </div>
 
       {/* Level group - hidden on mobile */}
-      <div className="hidden items-center gap-0 rounded-lg border border-border-default bg-bg-1 p-0.5 md:inline-flex">
+      {/* AUDIT-2026-05-04 (overnight a11y): radiogroup semantics so the
+          three-level toggle (CLAUDE.md §7 core UX) reads as a grouped
+          choice instead of three plain buttons. */}
+      <div
+        role="radiogroup"
+        aria-label="User experience level"
+        className="hidden items-center gap-0 rounded-lg border border-border-default bg-bg-1 p-0.5 md:inline-flex"
+      >
         {(["Beginner", "Intermediate", "Advanced"] as Level[]).map((l) => (
           <button
             key={l}
+            type="button"
+            role="radio"
+            aria-checked={level === l}
             onClick={() => setLevel(l)}
             className={cn(
               "min-h-[32px] min-w-[44px] rounded-md px-2.5 py-1 text-xs font-medium text-text-muted transition-colors",
@@ -139,11 +149,18 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
       </button>
 
       {/* Theme toggle */}
+      {/* AUDIT-2026-05-04 (overnight a11y): on mobile the visible label is
+          hidden, leaving only the ☀/☾ glyph — without aria-label the
+          button has no accessible name. aria-pressed signals current
+          theme state. */}
       <button
+        type="button"
         onClick={toggleTheme}
+        aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+        aria-pressed={theme === "dark"}
         className="inline-flex min-h-[36px] min-w-[44px] items-center gap-2 rounded-lg border border-border-default bg-bg-1 px-2.5 py-1.5 text-[13px] text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary md:px-2.5"
       >
-        <span>{theme === "light" ? "☀" : "☾"}</span>
+        <span aria-hidden="true">{theme === "light" ? "☀" : "☾"}</span>
         <span className="hidden md:inline">Theme</span>
       </button>
     </header>

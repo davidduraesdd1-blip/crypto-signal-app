@@ -23,8 +23,14 @@ export function ToggleSwitch({
           <div className="mt-0.5 text-[11.5px] text-text-muted">{sublabel}</div>
         )}
       </div>
+      {/* AUDIT-2026-05-04 (overnight a11y): explicit role + aria-checked
+          + aria-label so screen readers announce a toggle state, not an
+          unlabeled button. */}
       <button
         type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label={label}
         onClick={onToggle}
         className={cn(
           "relative inline-flex h-6 w-[42px] cursor-pointer items-center rounded-full transition-colors",

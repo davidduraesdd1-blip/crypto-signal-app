@@ -1,6 +1,6 @@
 /**
  * web/hooks/use-execution-status.ts
- * @endpoint GET /execution/status
+ * @endpoint GET /execute/status
  *
  * Drives the AGENT · RUNNING pill in the topbar — polls every 5s to
  * keep the live indicator current. Per CLAUDE.md §12 cache window for

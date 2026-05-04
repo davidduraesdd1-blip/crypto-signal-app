@@ -116,9 +116,27 @@ app.add_middleware(
     # which means a malicious site at attacker.vercel.app could prompt-
     # inject a victim's browser into issuing authenticated calls if the
     # X-API-Key was ever placed in a fetchable surface. Tightened to the
-    # owner-prefixed Vercel preview pattern only. Update the literal
-    # owner segment when the production domain is assigned in D5.
-    allow_origin_regex=r"^https://crypto-signal-app(-[a-z0-9-]+-davidduraesdd1-blip)?\.vercel\.app$",
+    # owner-prefixed Vercel pattern only.
+    #
+    # AUDIT-2026-05-04 (overnight, post-D5-deploy): the v0-created Vercel
+    # project assigned the canonical URL
+    # `v0-davidduraesdd1-blip-crypto-signa.vercel.app` (per-deploy hashes
+    # take the form `v0-davidduraesdd1-blip-crypto-signal-<hash>.vercel.app`
+    # and `v0-davidduraesdd1-blip-git-<hash>-davidduraesdd1-<id>-projects
+    # .vercel.app`). The previous regex only matched
+    # `crypto-signal-app(...)?` and rejected every v0-prefixed URL, so the
+    # browser blocked every API call from the live Vercel frontend.
+    # Broadened to: any vercel.app subdomain that contains the literal
+    # owner identifier `davidduraesdd1-blip`. That preserves the
+    # owner-prefix-only security property (a different Vercel customer
+    # cannot impersonate David) while admitting all four real URL shapes
+    # this project produces.
+    allow_origin_regex=(
+        r"^https://"
+        r"(crypto-signal-app(-[a-z0-9-]+-davidduraesdd1-blip)?"
+        r"|[a-z0-9-]*davidduraesdd1-blip[a-z0-9-]*)"
+        r"\.vercel\.app$"
+    ),
     allow_methods=["GET", "POST", "PUT", "DELETE"],  # PUT/DELETE added for D1 routers
     allow_headers=["X-API-Key", "Content-Type"],
     allow_credentials=False,  # SEC-HIGH-02: explicit

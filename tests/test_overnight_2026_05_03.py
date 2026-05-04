@@ -6,6 +6,10 @@ Locks in:
 - Tier 1 MEDIUM: settings GET emits Cache-Control no-store
 - Tier 3 HIGH: data_feeds.get_funding_rate does not poison the cache
   with empty/N/A results (already in 47a6f90; explicit assertion here)
+- Tier 1 HIGH: api.py CORS allow_origins drops bare `http://localhost`
+- Tier 1 HIGH: api.py CORS regex admits the v0-prefixed Vercel URL
+- Tier 5 MEDIUM: ai_feedback.calibrate_alert_thresholds wraps via
+  update_alerts_config (RLock-protected)
 """
 
 from __future__ import annotations
@@ -146,3 +150,111 @@ def test_funding_rate_does_not_cache_empty_result():
     finally:
         data_feeds._BINANCE_FUNDING_CACHE.clear()
         data_feeds._BINANCE_FUNDING_CACHE.update(saved_cache)
+
+
+# ─── Tier 1: CORS allowlist + regex ──────────────────────────────────────────
+
+
+def test_cors_allow_origins_drops_bare_localhost():
+    """The 47a6f90 fix removed the port-less `http://localhost` entry from
+    allow_origins. The 8501 (Streamlit) and 3000 (Next.js) ports remain.
+    Locks in the narrowing so a future regen of api.py from a v0/older
+    template can't silently re-add the over-broad entry."""
+    import re
+    api_text = open(
+        os.path.join(os.path.dirname(__file__), "..", "api.py"),
+        encoding="utf-8",
+    ).read()
+
+    # The CORSMiddleware allow_origins block.
+    block = re.search(r"allow_origins=\[(.+?)\]", api_text, re.DOTALL)
+    assert block, "could not locate allow_origins literal in api.py"
+    origins = block.group(1)
+
+    # Bare `http://localhost"` (no port, with closing quote) must NOT appear.
+    assert '"http://localhost"' not in origins, (
+        'allow_origins re-introduced bare port-less "http://localhost" — '
+        "this matches every localhost service the user runs and was "
+        "explicitly removed in commit 47a6f90"
+    )
+    # The two scoped dev origins remain.
+    assert '"http://localhost:8501"' in origins
+    assert '"http://localhost:3000"' in origins
+
+
+def test_cors_regex_admits_v0_vercel_urls_and_blocks_attackers():
+    """The CORS regex was broadened to admit v0-prefixed Vercel URLs (the
+    v0 project assigned `v0-davidduraesdd1-blip-crypto-signa.vercel.app`,
+    which the original `crypto-signal-app(...)?` regex rejected). Verify
+    real URLs match + adversarial ones don't."""
+    import re
+    os.environ["CRYPTO_SIGNAL_ALLOW_UNAUTH"] = "true"
+    try:
+        from api import app as fastapi_app
+    finally:
+        os.environ.pop("CRYPTO_SIGNAL_ALLOW_UNAUTH", None)
+
+    # Pull the live regex out of the CORSMiddleware kwargs.
+    cors_mw = next(
+        m for m in fastapi_app.user_middleware if m.cls.__name__ == "CORSMiddleware"
+    )
+    pattern = cors_mw.kwargs["allow_origin_regex"]
+    assert "vercel" in pattern
+
+    admit = [
+        "https://v0-davidduraesdd1-blip-crypto-signa.vercel.app",
+        "https://v0-davidduraesdd1-blip-crypto-signal-cap56cwr8.vercel.app",
+        "https://v0-davidduraesdd1-blip-git-9788da-davidduraesdd1-3056s-projects.vercel.app",
+        "https://crypto-signal-app.vercel.app",
+        "https://crypto-signal-app-abc-davidduraesdd1-blip.vercel.app",
+    ]
+    block = [
+        "https://attacker.vercel.app",
+        "https://crypto-signal-app-some-other-user.vercel.app",
+        "https://malicious-davidduraesdd1-bli.vercel.app",
+    ]
+    for url in admit:
+        assert re.match(pattern, url), f"regex must admit live URL: {url!r}"
+    for url in block:
+        assert not re.match(pattern, url), f"regex must reject attacker URL: {url!r}"
+
+
+# ─── Tier 5: ai_feedback calibration uses RLock-wrapped helper ──────────────
+
+
+def test_calibrate_alert_thresholds_uses_update_alerts_config():
+    """The P1 fix added `alerts.update_alerts_config` as the canonical
+    transactional API for any caller modifying the config. Calibration was
+    bypassing it (load + save directly), reintroducing the read-modify-
+    write race when calibration runs concurrently with a Settings PUT.
+    47a6f90 wrapped it. Lock that in."""
+    import ai_feedback
+    import alerts as alerts_module
+    from datetime import datetime, timezone, timedelta
+
+    # Build enough fake DB rows to clear the _MIN_CALIBRATION_SAMPLES gate.
+    fake_rows = [(70.0 + i * 0.1,) for i in range(ai_feedback._MIN_CALIBRATION_SAMPLES + 5)]
+
+    class _FakeConn:
+        def execute(self, sql, params):
+            class _Result:
+                def fetchall(_self):
+                    return fake_rows
+            return _Result()
+        def close(self):
+            pass
+
+    with patch.object(ai_feedback.db, "_get_conn", return_value=_FakeConn()), \
+         patch.object(alerts_module, "update_alerts_config", wraps=alerts_module.update_alerts_config) as spy_update, \
+         patch.object(alerts_module, "load_alerts_config", return_value={"min_confidence": 70.0}), \
+         patch.object(alerts_module, "save_alerts_config") as spy_save:
+        result = ai_feedback.calibrate_alert_thresholds()
+
+    assert result.get("calibrated") is True
+    # update_alerts_config must have been called (RLock path).
+    assert spy_update.call_count == 1, (
+        "calibration must go through update_alerts_config to serialize "
+        "with Settings PUTs under the P1 RLock"
+    )
+    # save_alerts_config is called only inside update_alerts_config (once).
+    assert spy_save.call_count == 1

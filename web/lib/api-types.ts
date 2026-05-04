@@ -374,7 +374,7 @@ export interface DatabaseHealth {
 
 // ─── Execution ──────────────────────────────────────────────────────────────
 
-/** @endpoint GET /execution/status — drives the AGENT pill in topbar */
+/** @endpoint GET /execute/status — drives the AGENT pill in topbar */
 export interface ExecutionStatus {
   live_trading: boolean;
   keys_configured: boolean;

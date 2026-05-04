@@ -98,7 +98,11 @@
   --bg-3: #e8e9ed;
   --text-primary: #0f1014;
   --text-secondary: #545660;
-  --text-muted: #8b8d96;
+  /* AUDIT-2026-05-04 (overnight a11y): #8b8d96 on #ffffff was ~3.28:1
+     contrast — fails WCAG AA (4.5:1 for normal text). Darkened to
+     #65676f (~5.0:1). Pairs with --bg-1 (#ffffff) and --bg-2 (#f5f5f7)
+     above the AA threshold across the surfaces text-muted is used on. */
+  --text-muted: #65676f;
   --border: #e8e9ed;
   --border-strong: #d1d3d9;
   --accent-soft: rgba(34, 211, 111, 0.14);
