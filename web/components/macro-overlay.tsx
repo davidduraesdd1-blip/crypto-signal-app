@@ -17,10 +17,14 @@ interface MacroOverlayProps {
   indicators: MacroIndicator[];
 }
 
+// AUDIT-2026-05-03 (Tier 4 HIGH): `bg-semantic-*` classes don't exist
+// in app/globals.css — the actual tokens are `--color-success`/`-danger`/
+// `-warning` exposing as `bg-success`/`bg-danger`/`bg-warning`. Without
+// this fix every sentiment dot rendered transparent.
 const sentimentDot: Record<Sentiment, string> = {
-  bull: "bg-semantic-success",
-  bear: "bg-semantic-danger",
-  neutral: "bg-semantic-warning",
+  bull: "bg-success",
+  bear: "bg-danger",
+  neutral: "bg-warning",
 };
 
 export function MacroOverlay({ regime, confidence, indicators }: MacroOverlayProps) {
@@ -48,7 +52,11 @@ export function MacroOverlay({ regime, confidence, indicators }: MacroOverlayPro
             <span
               className={cn(
                 "truncate font-mono text-xs",
-                ind.changeDirection === "up" ? "text-semantic-success" : "text-semantic-danger"
+                // AUDIT-2026-05-03 (Tier 4 HIGH): `text-semantic-*` is not a
+                // Tailwind utility — only `text-success`/`text-danger` are
+                // exposed via @theme inline. The prior classes rendered as
+                // default text color, masking direction.
+                ind.changeDirection === "up" ? "text-success" : "text-danger"
               )}
             >
               {ind.changeDirection === "up" ? "+" : ""}

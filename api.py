@@ -101,8 +101,12 @@ app.add_middleware(
     # stays addressable on 8501. Vercel preview + production domains are
     # admitted via the regex (matches https://*.vercel.app and
     # https://crypto-signal-app.vercel.app once Vercel assigns it).
+    # AUDIT-2026-05-03 (Tier 1 HIGH): dropped bare `http://localhost` —
+    # without a port it matches any localhost service (incl. unrelated apps
+    # the user happens to run), broadening the CORS surface beyond what the
+    # 8501/3000 entries already cover. Streamlit + Next.js dev are explicit.
     allow_origins=[
-        "http://localhost", "http://localhost:8501", "http://127.0.0.1:8501",
+        "http://localhost:8501", "http://127.0.0.1:8501",
         "http://localhost:3000", "http://127.0.0.1:3000",
         # Production domains added explicitly once Vercel deploy lands in D5
     ],

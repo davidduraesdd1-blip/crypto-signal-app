@@ -54,7 +54,11 @@ export function EquityCurve({ dateRange }: EquityCurveProps) {
           Composite signal
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-0.5 w-3.5 border-t-2 border-dashed border-gray-6" />
+          {/* AUDIT-2026-05-03 (Tier 4 HIGH): Tailwind has no `border-gray-6`
+              utility — only --color-text-secondary is exposed via @theme
+              inline (mapped to --gray-6). Without this fix the legend
+              dash rendered with no border color. */}
+          <span className="inline-block h-0.5 w-3.5 border-t-2 border-dashed border-text-secondary" />
           BTC buy-and-hold
         </span>
       </div>

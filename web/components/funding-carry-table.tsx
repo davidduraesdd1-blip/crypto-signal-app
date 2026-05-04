@@ -14,11 +14,14 @@ interface FundingCarryTableProps {
   footer?: string;
 }
 
+// AUDIT-2026-05-03 (Tier 4 HIGH): the prior implementation had broken
+// operator precedence — `rate.startsWith("+") || rate.startsWith("−") === false`
+// evaluates as `startsWith("+") || (startsWith("−") === false)`, which is true
+// for any non-`−` string, then the inner `includes("−")` check could never
+// fire (we already filtered them out). Net result: every value rendered green.
+// Also accept ASCII `-` since some upstream sources use it instead of U+2212.
 function rateClass(rate: string): string {
-  if (rate.startsWith("+") || rate.startsWith("−") === false) {
-    return rate.includes("−") ? "text-danger" : "text-success";
-  }
-  return rate.startsWith("−") ? "text-danger" : "text-success";
+  return rate.startsWith("−") || rate.startsWith("-") ? "text-danger" : "text-success";
 }
 
 export function FundingCarryTable({ carries, footer }: FundingCarryTableProps) {
