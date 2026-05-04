@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useCircuitBreakers, useDatabaseHealth } from "@/hooks/use-diagnostics";
 import { formatNumber } from "@/lib/format";
 import type { CircuitBreakerGate } from "@/lib/api-types";
@@ -100,6 +100,13 @@ export default function DevToolsSettingsPage() {
   const [showAllTables, setShowAllTables] = useState(false);
   const cbQuery = useCircuitBreakers();
   const dbQuery = useDatabaseHealth();
+  // AUDIT-2026-05-04 (T4 a11y residuals): label↔input IDs for the three
+  // inline form controls in the API config card. Lighthouse axe-core
+  // flagged Host + Port; API Key (type=password) wasn't flagged but we
+  // associate it for consistency.
+  const apiKeyId = useId();
+  const hostId = useId();
+  const portId = useId();
 
   // Derive gate display rows from /diagnostics/circuit-breakers
   const gates = (cbQuery.data?.gates ?? []).map(gateDisplay);
@@ -176,9 +183,9 @@ export default function DevToolsSettingsPage() {
       <div className="rounded-xl border border-border-default bg-bg-1 p-4">
         <div className="mb-1 flex items-center gap-2">
           <span>🧰</span>
-          <h3 className="text-sm font-semibold text-text-primary">
+          <h2 className="text-sm font-semibold text-text-primary">
             Sidebar tools
-          </h3>
+          </h2>
         </div>
         <p className="mb-4 text-[11px] text-text-muted">
           relocated from the legacy left rail in the 2026-04 redesign · still
@@ -214,9 +221,9 @@ export default function DevToolsSettingsPage() {
           <div>
             <div className="mb-1 flex items-center gap-2">
               <span>🛑</span>
-              <h3 className="text-sm font-semibold text-text-primary">
+              <h2 className="text-sm font-semibold text-text-primary">
                 Circuit breakers · Level-C 7-gate safety
-              </h3>
+              </h2>
             </div>
             <p className="text-[11px] text-text-muted">
               protects the agent from runaway loss · halts fire on any gate
@@ -268,9 +275,9 @@ export default function DevToolsSettingsPage() {
       <div className="rounded-xl border border-border-default bg-bg-1 p-4">
         <div className="mb-1 flex items-center gap-2">
           <span>🗄️</span>
-          <h3 className="text-sm font-semibold text-text-primary">
+          <h2 className="text-sm font-semibold text-text-primary">
             Database health
-          </h3>
+          </h2>
         </div>
         <p className="mb-4 text-[11px] text-text-muted">
           SQLite WAL-mode · row counts and disk usage · auto-vacuum nightly
@@ -304,9 +311,9 @@ export default function DevToolsSettingsPage() {
       <div className="rounded-xl border border-border-default bg-bg-1 p-4">
         <div className="mb-1 flex items-center gap-2">
           <span>🚀</span>
-          <h3 className="text-sm font-semibold text-text-primary">
+          <h2 className="text-sm font-semibold text-text-primary">
             REST API server
-          </h3>
+          </h2>
         </div>
         <p className="mb-4 text-[11px] text-text-muted">
           FastAPI + Uvicorn · 14 endpoints for external integrations and
@@ -317,10 +324,11 @@ export default function DevToolsSettingsPage() {
           {/* Left: Config */}
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-text-primary">
+              <label htmlFor={apiKeyId} className="text-sm font-medium text-text-primary">
                 API Key
               </label>
               <input
+                id={apiKeyId}
                 type="password"
                 placeholder="●●●● (saved)"
                 className="min-h-[44px] w-full rounded-lg border border-border-default bg-bg-2 px-3 py-2 font-mono text-sm text-text-primary"
@@ -328,20 +336,22 @@ export default function DevToolsSettingsPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-text-primary">
+                <label htmlFor={hostId} className="text-sm font-medium text-text-primary">
                   Host
                 </label>
                 <input
+                  id={hostId}
                   type="text"
                   defaultValue="0.0.0.0"
                   className="min-h-[44px] w-full rounded-lg border border-border-default bg-bg-2 px-3 py-2 font-mono text-sm text-text-primary"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-text-primary">
+                <label htmlFor={portId} className="text-sm font-medium text-text-primary">
                   Port
                 </label>
                 <input
+                  id={portId}
                   type="text"
                   defaultValue="8000"
                   className="min-h-[44px] w-full rounded-lg border border-border-default bg-bg-2 px-3 py-2 font-mono text-sm text-text-primary"
@@ -391,9 +401,9 @@ CRYPTO_SIGNAL_API_KEY=<paste-from-render-dashboard>`}
 
         {/* Endpoint reference */}
         <div className="mt-6">
-          <h4 className="mb-3 text-sm font-medium text-text-primary">
+          <h3 className="mb-3 text-sm font-medium text-text-primary">
             Endpoint reference (14)
-          </h4>
+          </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
