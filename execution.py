@@ -100,6 +100,12 @@ _MUST_HAVE_PAIRS = frozenset({
 # realistic retry window for network blips, LLM round-trips, and
 # double-clicks on the manual-execute UI.
 _IDEMPOTENCY_TTL_SECONDS = 300
+# AUDIT-2026-05-03 (Tier 1 MEDIUM overnight): hard cap on the cache to
+# defend against pathological growth if TTL pruning ever falls behind
+# (e.g. an LLM loop generating ~thousands of unique client_order_ids
+# faster than the 5-min TTL clears). When the cap is hit, the oldest
+# half is evicted in O(n).
+_IDEMPOTENCY_MAX_ENTRIES = 10_000
 _idempotency_cache: dict = {}
 _idempotency_lock = threading.Lock()
 
@@ -155,6 +161,14 @@ def _idempotency_store(cid: str, result: dict) -> None:
     if not cid:
         return
     with _idempotency_lock:
+        # AUDIT-2026-05-03 (Tier 1 MEDIUM overnight): enforce the hard
+        # cap. Insertion order in dict is preserved (Py 3.7+), so the
+        # first half is the oldest. Evicting half (not just one) keeps
+        # this O(n) amortized to O(1) per insert.
+        if len(_idempotency_cache) >= _IDEMPOTENCY_MAX_ENTRIES:
+            keys = list(_idempotency_cache.keys())
+            for k in keys[: len(keys) // 2]:
+                _idempotency_cache.pop(k, None)
         _idempotency_cache[cid] = (time.time(), result)
 
 
@@ -197,7 +211,12 @@ def get_exec_config() -> dict:
         "okx_api_key":        api_key,
         "okx_secret":         secret,
         "okx_passphrase":     passphrase,
-        "default_order_type": (cfg.get("default_order_type", "") or "").strip() or "market",
+        # AUDIT-2026-05-03 (Tier 1 MEDIUM overnight): lowercase normalize.
+        # The settings PUT validator accepts both "market" and "MARKET"
+        # (case-insensitive enum), but ccxt expects lowercase at the
+        # exchange API. Normalizing on read keeps the stored value
+        # whatever the user typed while sending only lowercase downstream.
+        "default_order_type": (cfg.get("default_order_type", "") or "").strip().lower() or "market",
         "keys_configured":    bool(api_key and secret and passphrase),
     }
 

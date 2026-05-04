@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 import alerts as alerts_module
 
@@ -283,7 +283,13 @@ def _apply_partial(
     summary="Current settings snapshot (sensitive values redacted)",
     dependencies=[Depends(require_api_key)],
 )
-def get_settings():
+def get_settings(response: Response):
+    # AUDIT-2026-05-03 (Tier 1 MEDIUM overnight): explicit Cache-Control
+    # no-store. Settings include redacted secrets (●●●●●●●●) and live
+    # config — no intermediate proxy, CDN, or browser back-button cache
+    # should retain the response. Defense in depth alongside the redaction.
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     cfg = alerts_module.load_alerts_config()
     redacted = _redact(cfg)
     return serialize({
