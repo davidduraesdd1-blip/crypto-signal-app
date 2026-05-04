@@ -188,15 +188,18 @@ open https://cryptosignal-ddb1.streamlit.app
 
 | Service | Plan | Cost/mo | Purpose |
 |---|---|---|---|
-| `crypto-signal-api` (web) | Free | $0 | FastAPI uvicorn — sleeps after 15min idle |
-| `crypto-signal-scheduler` (worker) | Starter | **$7** | Long-lived `python scheduler.py` — runs the full autoscan pipeline (run_scan + append_to_master + feedback loop + position updates + alerts). |
-| Persistent disk `crypto-signal-data` | 1 GB | included | Mounted at `/opt/render/project/src/data` on **both** services — covers `crypto_model.db` and `data/scheduler.log`. |
+| `crypto-signal-app` (web) | Starter | **$7** | FastAPI uvicorn + in-process scheduler daemon thread (full autoscan pipeline: run_scan + append_to_master + feedback loop + position updates + alerts). No idle sleep. |
+| Persistent disk `crypto-signal-data` | 1 GB | included | Mounted at `/opt/render/project/src/data` — covers `crypto_model.db` and `data/scheduler.log`. |
 
-The worker tier closes Cowork's 2026-05-04 Outcome C decision — see
-`docs/audits/2026-05-04_scheduler-inventory.md` for the rationale.
-Cross-process SQLite contention is handled via WAL mode +
-`PRAGMA busy_timeout=5000` in `database.py:81-93`; no app-level retry
-needed.
+**Architecture note (D8 cutover, 2026-05-04):** Cowork's original Outcome C
+plan was a separate worker service running `scheduler.py` with a shared
+disk. **Render persistent disks attach to a single service**, so that plan
+was structurally invalid. The scheduler now runs as a daemon thread
+inside uvicorn (gated by `CRYPTO_SIGNAL_AUTOSTART_SCHEDULER=true` —
+see `api.py:78-103`), keeping the same single $7/mo Cowork approved.
+Single-process design also eliminates the cross-process SQLite contention
+that the original plan would have required. Rationale and inventory in
+`docs/audits/2026-05-04_scheduler-inventory.md`.
 
 ---
 

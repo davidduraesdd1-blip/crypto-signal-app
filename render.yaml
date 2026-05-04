@@ -18,7 +18,16 @@ services:
   - type: web
     name: crypto-signal-app                # matches the dashboard service name created in D2
     runtime: python
-    plan: free                          # $0/mo, 512 MB RAM, 0.1 CPU, sleeps after 15 min idle
+    # AUDIT-2026-05-04 (D8 Path A — Render disk constraint):
+    # Render persistent disks attach to a single service, so the
+    # original Outcome C plan (separate worker tier with shared disk)
+    # is invalid. Path A: single Starter web service runs both uvicorn
+    # AND the scheduler (as a daemon thread inside the uvicorn process,
+    # via api.py's CRYPTO_SIGNAL_AUTOSTART_SCHEDULER hook). Same $7/mo
+    # Cowork already approved, simpler architecture, no cross-process
+    # SQLite contention. Starter tier doesn't sleep, so the scheduler
+    # keeps ticking 24/7.
+    plan: starter                       # $7/mo, 512 MB RAM, no idle sleep, supports persistent disks
     region: oregon                      # US West — matches David's manual config
     branch: main                        # post-D8 cutover (2026-05-04): production lives on main
     autoDeploy: true                    # redeploy on every push to the branch
@@ -56,6 +65,15 @@ services:
       # only — never commit a value here.
       - key: CRYPTO_SIGNAL_API_KEY
         sync: false
+
+      # AUDIT-2026-05-04 (D8 Path A): when true, api.py spawns a daemon
+      # thread on import that runs scheduler.start_scheduler() — same
+      # autoscan + feedback loop + position updates + alerts that the
+      # original BlockingScheduler did, but in-process so a single
+      # Starter web tier ($7/mo) covers everything. Tests + local dev
+      # leave this unset so they don't spawn the thread.
+      - key: CRYPTO_SIGNAL_AUTOSTART_SCHEDULER
+        value: "true"
 
       # Disable Anthropic LLM at process start; AI Assistant endpoints
       # gracefully return source="unavailable" without a key. Real key
@@ -108,75 +126,9 @@ services:
       - key: OKX_PASSPHRASE
         sync: false
 
-  # ─── Worker service — Outcome C closure (Cowork 2026-05-04) ──────────────
-  # Runs the existing scheduler.py as a long-lived worker process. The
-  # alternative was extending /scan/trigger to call the full run_scan_job
-  # pipeline (currently a strict subset — see
-  # docs/audits/2026-05-04_scheduler-inventory.md). $7/mo is the right
-  # tradeoff vs. recreating that critical path inside an HTTP handler and
-  # shipping a freshly-rewritten code path through D8 cutover.
-  #
-  # The worker mounts the SAME persistent disk as the web service so:
-  #   - both processes read/write the same crypto_model.db (WAL mode + the
-  #     5s busy_timeout in database.py:81-93 handles cross-process
-  #     contention without explicit app-level retry)
-  #   - data/scheduler.log survives redeploys
-  #
-  # Cost: $7/mo (Render Starter worker tier as of 2026-05-04). Documented in
-  # README.md → Deployment.
-  - type: worker
-    name: crypto-signal-scheduler
-    runtime: python
-    plan: starter                       # $7/mo, 512 MB RAM, dedicated worker
-    region: oregon                      # match web service for disk affinity
-    branch: main                        # post-D8 cutover (2026-05-04): production lives on main
-    autoDeploy: true
-
-    buildCommand: pip install -r requirements.txt
-    startCommand: python scheduler.py   # default = blocking scheduler loop
-
-    # MUST match the web service mount path so both processes write the same
-    # SQLite file. Render treats `name` as the disk identity — using the same
-    # name attaches the SAME volume to both services.
-    disk:
-      name: crypto-signal-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
-
-    envVars:
-      # Worker calls Python directly, so it needs every secret the web
-      # service uses (alerts.py loads SMTP creds, model loads exchange API
-      # keys, etc.). Pin all sync:false keys to the same Render env group as
-      # the web service so a single dashboard edit updates both.
-      - key: CRYPTO_SIGNAL_ALLOW_UNAUTH
-        value: "false"
-      - key: CRYPTO_SIGNAL_API_KEY
-        sync: false
-      - key: ANTHROPIC_ENABLED
-        value: "false"
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: DEMO_MODE
-        value: "true"
-      - key: PYTHON_VERSION
-        value: "3.11"
-      - key: CRYPTOPANIC_API_KEY
-        sync: false
-      - key: SUPERGROK_COINGECKO_API_KEY
-        sync: false
-      - key: COINMARKETCAP_API_KEY
-        sync: false
-      - key: ETHERSCAN_API_KEY
-        sync: false
-      - key: ZERION_API_KEY
-        sync: false
-      - key: SUPERGROK_SENTRY_DSN
-        sync: false
-      - key: CRYPTORANK_API_KEY
-        sync: false
-      - key: OKX_API_KEY
-        sync: false
-      - key: OKX_API_SECRET
-        sync: false
-      - key: OKX_PASSPHRASE
-        sync: false
+# Worker service intentionally removed (was: crypto-signal-scheduler).
+# Render's persistent disks attach to a single service, so the original
+# Outcome C plan (worker + shared disk) was structurally invalid. The
+# scheduler now runs as a daemon thread inside uvicorn — gated by the
+# CRYPTO_SIGNAL_AUTOSTART_SCHEDULER env var on the web service above.
+# Architecture rationale: docs/audits/2026-05-04_scheduler-inventory.md.

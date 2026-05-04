@@ -81,6 +81,37 @@ try:
 except Exception as _ws_err:
     logger.warning("WebSocket feed startup failed (non-fatal): %s", _ws_err)
 
+# AUDIT-2026-05-04 (D8 cutover, Path A): in-process scheduler.
+# Render persistent disks attach to a single service, so the original
+# Outcome C plan (separate worker tier with shared disk) is impossible.
+# Path A runs scheduler.py's BlockingScheduler in a daemon thread inside
+# uvicorn — same single $7/mo Starter tier, single disk, single SQLite
+# connection pool. Eliminates cross-process WAL contention entirely
+# while keeping scheduler.py / run_scan_job unchanged.
+#
+# Gated by CRYPTO_SIGNAL_AUTOSTART_SCHEDULER=true so tests + local dev
+# don't spawn the scheduler thread on import. render.yaml sets it on
+# the production web service.
+if os.environ.get("CRYPTO_SIGNAL_AUTOSTART_SCHEDULER", "").strip().lower() == "true":
+    try:
+        import threading as _scheduler_threading
+        import scheduler as _bg_scheduler
+
+        def _run_scheduler_in_background():
+            try:
+                _bg_scheduler.start_scheduler()  # blocks inside this daemon thread
+            except Exception as _bg_err:
+                logger.exception("[Scheduler] Background thread crashed: %s", _bg_err)
+
+        _scheduler_threading.Thread(
+            target=_run_scheduler_in_background,
+            name="autoscan-scheduler",
+            daemon=True,
+        ).start()
+        logger.info("[Scheduler] Autostart enabled — running in daemon thread inside uvicorn")
+    except Exception as _sched_err:
+        logger.warning("[Scheduler] Autostart failed (non-fatal): %s", _sched_err)
+
 # ─── App setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
