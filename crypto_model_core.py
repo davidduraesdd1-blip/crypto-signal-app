@@ -492,29 +492,16 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
     except Exception as e:
         _e_msg = str(e)
         # REST fallback chain: Kraken doesn't list tier-2 alts (TRX, XLM, SUI, TAO, etc.)
-        # 1st: OKX V5 (www.okx.com) — confirmed accessible from US Streamlit Cloud servers.
-        # 2nd: Gate.io v4 (api.gateio.ws) — covers tokens OKX doesn't list (e.g. TAO/Bittensor).
-        # Binance returns HTTP 451 from US IPs; Bybit times out from US.
+        # AUDIT-2026-05-04 (D8 follow-up — David efficiency directive): reorder
+        # to Gate.io → OKX. OKX REST is geo-blocked from Render's Oregon
+        # datacenter IPs (logs show ConnectionResetError(104) on every OKX call),
+        # so trying OKX first wastes a full TCP retry cycle on every fetch
+        # before falling through. Gate.io v4 (api.gateio.ws) is Render-friendly
+        # and has wider coverage anyway. Binance returns HTTP 451 from US IPs;
+        # Bybit times out from US datacenters, so neither is in this fast path.
         if "does not have market symbol" in _e_msg or "market symbol" in _e_msg.lower():
             import data_feeds as _dff
-            # --- OKX fallback ---
-            try:
-                _okx_sym = pair.replace('/', '-')  # BTC/USDT → BTC-USDT
-                _klines = _dff.fetch_okx_klines(_okx_sym, timeframe, limit)
-                if _klines:
-                    df = pd.DataFrame(
-                        [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in _klines],
-                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
-                    )
-                    df = df.astype({'open': float, 'high': float, 'low': float,
-                                    'close': float, 'volume': float})
-                    df['timestamp'] = pd.to_datetime(df['timestamp'].astype('int64'), unit='ms')
-                    with _OHLCV_CACHE_LOCK:
-                        _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
-                    return df
-            except Exception as _oe:
-                logging.debug("OKX REST fallback %s %s: %s", pair, timeframe, str(_oe)[:80])
-            # --- Gate.io fallback (tokens not listed on OKX, e.g. TAO) ---
+            # --- Gate.io fallback (Render-friendly, wide coverage incl. TAO) ---
             try:
                 _gateio_sym = pair.replace('/', '_').replace('-', '_')  # BTC/USDT → BTC_USDT
                 _klines = _dff.fetch_gateio_klines(_gateio_sym, timeframe, limit)
@@ -531,6 +518,23 @@ def robust_fetch_ohlcv(ex, pair, timeframe, limit=None):
                     return df
             except Exception as _ge:
                 logging.debug("Gate.io REST fallback %s %s: %s", pair, timeframe, str(_ge)[:80])
+            # --- OKX fallback (last resort — geo-blocked from Render Oregon) ---
+            try:
+                _okx_sym = pair.replace('/', '-')  # BTC/USDT → BTC-USDT
+                _klines = _dff.fetch_okx_klines(_okx_sym, timeframe, limit)
+                if _klines:
+                    df = pd.DataFrame(
+                        [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in _klines],
+                        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+                    )
+                    df = df.astype({'open': float, 'high': float, 'low': float,
+                                    'close': float, 'volume': float})
+                    df['timestamp'] = pd.to_datetime(df['timestamp'].astype('int64'), unit='ms')
+                    with _OHLCV_CACHE_LOCK:
+                        _OHLCV_CACHE[_key] = {'df': df, 'ts': _now}
+                    return df
+            except Exception as _oe:
+                logging.debug("OKX REST fallback %s %s: %s", pair, timeframe, str(_oe)[:80])
         logging.debug("OHLCV failed %s %s: %s", pair, timeframe, _e_msg[:60])
         return pd.DataFrame()
 
@@ -545,12 +549,23 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
     """
     Fetch OHLCV for charting with a 6-exchange fallback chain.
     Returns ccxt-format raw list: [[ts_ms, open, high, low, close, volume], ...]
-    Fallback order (all US-accessible):
+
+    AUDIT-2026-05-04 (D8 follow-up — David efficiency directive): reordered
+    so the highest-success-rate Render-friendly endpoints come first. OKX
+    is geo-blocked from Render Oregon datacenter IPs (logs show
+    ConnectionResetError(104) on every call), so it's demoted from
+    position #2 to #5 — the chain still tries it before CoinGecko's
+    last-resort daily-only path, but no longer wastes round-trip latency
+    on every fetch when 99%+ of pairs have already resolved via Kraken
+    or Gate.io.
+
+    Fallback order (efficient + accurate + Render-friendly):
       1. Kraken (ccxt)  — BTC, ETH, XRP, ADA, LTC, LINK, DOGE, SOL, ...
-      2. OKX REST       — wide coverage, confirmed US-accessible
-      3. Gate.io REST   — very wide coverage, covers XDC, SHX, ZBCN, TAO, etc.
-      4. Bybit REST     — direct API (not ccxt), covers CC and others
-      5. MEXC REST      — covers CC, XDC, SHX, ZBCN and hundreds of alts
+      2. Gate.io REST   — very wide coverage including XDC, SHX, ZBCN, TAO
+      3. Bybit REST     — direct API (not ccxt), covers CC and others
+      4. MEXC REST      — covers CC, XDC, SHX, ZBCN and hundreds of alts
+      5. OKX REST       — geo-blocked from Render Oregon; kept as a fallback
+                          for environments where it works (e.g. Streamlit Cloud)
       6. CoinGecko OHLCV — last resort, free tier ≤ 30 days
     """
     import data_feeds as _df
@@ -565,16 +580,7 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
     except Exception as _e:
         logging.debug("[chart_ohlcv] Kraken %s %s: %s", pair, timeframe, _e)
 
-    # ── 2. OKX REST ───────────────────────────────────────────────────────
-    try:
-        _okx_sym = pair.replace('/', '-')   # BTC/USDT → BTC-USDT
-        _rows = _df.fetch_okx_klines(_okx_sym, timeframe, limit)
-        if _rows:
-            return _rows
-    except Exception as _e:
-        logging.debug("[chart_ohlcv] OKX %s %s: %s", pair, timeframe, _e)
-
-    # ── 3. Gate.io REST ───────────────────────────────────────────────────
+    # ── 2. Gate.io REST ───────────────────────────────────────────────────
     try:
         _gate_sym = pair.replace('/', '_')  # BTC/USDT → BTC_USDT
         _rows = _df.fetch_gateio_klines(_gate_sym, timeframe, limit)
@@ -583,7 +589,7 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
     except Exception as _e:
         logging.debug("[chart_ohlcv] Gate.io %s %s: %s", pair, timeframe, _e)
 
-    # ── 4. Bybit REST (direct API — not ccxt) ─────────────────────────────
+    # ── 3. Bybit REST (direct API — not ccxt) ─────────────────────────────
     try:
         _bybit_sym = pair.replace('/', '')  # BTC/USDT → BTCUSDT
         _rows = _df.fetch_bybit_klines(_bybit_sym, timeframe, limit)
@@ -592,7 +598,7 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
     except Exception as _e:
         logging.debug("[chart_ohlcv] Bybit %s %s: %s", pair, timeframe, _e)
 
-    # ── 5. MEXC REST ──────────────────────────────────────────────────────
+    # ── 4. MEXC REST ──────────────────────────────────────────────────────
     try:
         _mexc_sym = pair.replace('/', '')   # CC/USDT → CCUSDT
         _rows = _df.fetch_mexc_klines(_mexc_sym, timeframe, limit)
@@ -600,6 +606,15 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
             return _rows
     except Exception as _e:
         logging.debug("[chart_ohlcv] MEXC %s %s: %s", pair, timeframe, _e)
+
+    # ── 5. OKX REST (geo-blocked from Render Oregon — last exchange before CoinGecko) ─
+    try:
+        _okx_sym = pair.replace('/', '-')   # BTC/USDT → BTC-USDT
+        _rows = _df.fetch_okx_klines(_okx_sym, timeframe, limit)
+        if _rows:
+            return _rows
+    except Exception as _e:
+        logging.debug("[chart_ohlcv] OKX %s %s: %s", pair, timeframe, _e)
 
     # ── 6. CoinGecko OHLCV (last resort — max 30 days on free tier) ───────
     try:

@@ -138,11 +138,26 @@ with regime state and 3-5 bullet "why."
 
 ## SECTION 10 — DATA SOURCES & FALLBACK CHAINS
 
-Crypto OHLCV:
-  Primary:   ccxt library → OKX (highest quality free)
-  Secondary: ccxt → Kraken
-  Tertiary:  CoinGecko (daily-only fallback)
-  Upgrade path: Kaiko, Cryptocompare paid
+Crypto OHLCV (post-D8 cutover, Render Oregon-tuned chain):
+  1. Kraken (ccxt)        — primary; BTC/ETH/major pairs, US-friendly, fast
+  2. Gate.io REST         — wide coverage incl. tier-2 alts (TRX, XLM, SUI,
+                            TAO, XDC, SHX, ZBCN); Render-friendly
+  3. Bybit REST           — direct API (not ccxt); covers CC and others
+  4. MEXC REST            — long-tail alts not on Kraken/Gate.io
+  5. OKX REST             — geo-blocked from Render Oregon (kept for
+                            Streamlit Cloud environments where it works)
+  6. CoinGecko OHLCV      — last resort, free tier ≤ 30 days, daily-only
+
+  Reorder rationale (2026-05-04): OKX was originally position #2 but
+  Render Oregon datacenter IPs are geo-blocked by OKX (logs show
+  ConnectionResetError(104) on every call). Demoting OKX past Gate.io,
+  Bybit, MEXC saves a full TCP retry cycle on every OHLCV fetch when
+  Kraken doesn't list the pair (~70%+ of tier-2 alt requests).
+
+  Code: crypto_model_core.py:494-540 (`_fetch_ohlcv`) and 544-660
+  (`fetch_chart_ohlcv`).
+  Upgrade path: Kaiko, Cryptocompare paid (re-enable OKX too if a future
+  deploy moves to a non-blocked region).
 
 Fear & Greed:
   Primary:   alternative.me API (free, unlimited)
