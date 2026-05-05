@@ -126,9 +126,20 @@ _DEFAULTS = {
 # the environment and clear the JSON values.
 _SENSITIVE_ENV_MAP = {
     "okx_api_key":    "OKX_API_KEY",
-    "okx_secret":     "OKX_SECRET",
+    # AUDIT-2026-05-04 (B2): canonical env var name is OKX_API_SECRET
+    # (matches render.yaml, .env.example, frontend, operator docs).
+    # Legacy OKX_SECRET is still accepted via _SENSITIVE_ENV_FALLBACKS
+    # below for backward-compat with deploys from before this fix.
+    "okx_secret":     "OKX_API_SECRET",
     "okx_passphrase": "OKX_PASSPHRASE",
     "email_pass":     "EMAIL_APP_PASSWORD",
+}
+
+# AUDIT-2026-05-04 (B2): legacy env var names — checked if the canonical
+# name in _SENSITIVE_ENV_MAP isn't set. Lets a deploy with the older
+# OKX_SECRET keep working while documentation moves to OKX_API_SECRET.
+_SENSITIVE_ENV_FALLBACKS = {
+    "okx_secret":     "OKX_SECRET",
 }
 
 
@@ -153,9 +164,16 @@ def load_alerts_config():
                     config.update(json.load(f))
             except Exception as e:
                 logging.error("[alerts] Failed to load config from %s: %s", _ALERTS_CONFIG_FILE, e)
-        # Env-var override for sensitive creds (P1 audit fix)
+        # Env-var override for sensitive creds (P1 audit fix).
+        # AUDIT-2026-05-04 (B2): also check legacy fallback names (e.g.
+        # OKX_SECRET as the older alias for OKX_API_SECRET) so a deploy
+        # with the old env var name keeps working until it's rotated.
         for _cfg_key, _env_name in _SENSITIVE_ENV_MAP.items():
             _env_val = (os.environ.get(_env_name) or "").strip()
+            if not _env_val:
+                _legacy_name = _SENSITIVE_ENV_FALLBACKS.get(_cfg_key)
+                if _legacy_name:
+                    _env_val = (os.environ.get(_legacy_name) or "").strip()
             if _env_val:
                 config[_cfg_key] = _env_val
         return config

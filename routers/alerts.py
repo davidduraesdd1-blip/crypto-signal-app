@@ -35,10 +35,33 @@ class AlertRuleIn(BaseModel):
 
 
 def _load_rules() -> list[dict[str, Any]]:
+    """AUDIT-2026-05-04 (B1): canonical key is `watchlist` — matches the
+    default config in alerts.py:115 and the consumer in
+    alerts.check_watchlist_alerts (alerts.py:476). Earlier router code
+    wrote to `watchlist_alerts` which the consumer never read, so every
+    rule created via the Next.js Alerts page was silently dead. Migrate
+    on read: if a stale `watchlist_alerts` entry exists from a pre-fix
+    deploy, merge it into `watchlist` and drop the duplicate key.
+    """
     cfg = alerts_module.load_alerts_config()
-    rules = cfg.get("watchlist_alerts") or []
+    rules = cfg.get("watchlist") or []
     if not isinstance(rules, list):
-        return []
+        rules = []
+    legacy = cfg.get("watchlist_alerts") or []
+    if isinstance(legacy, list) and legacy:
+        # One-time merge — defensive against pre-2026-05-04 deploys.
+        seen_ids = {r.get("id") for r in rules if isinstance(r, dict)}
+        for r in legacy:
+            if isinstance(r, dict) and r.get("id") not in seen_ids:
+                rules.append(r)
+        def _migrate(c: dict[str, Any]) -> dict[str, Any]:
+            c["watchlist"] = rules
+            c.pop("watchlist_alerts", None)
+            return c
+        try:
+            alerts_module.update_alerts_config(_migrate)
+        except Exception as _e:
+            logger.warning("[alerts] migration of watchlist_alerts → watchlist failed (non-fatal): %s", _e)
     return rules
 
 
@@ -46,9 +69,10 @@ def _save_rules(rules: list[dict[str, Any]]):
     """AUDIT-2026-05-03 (P1): use update_alerts_config so the
     load → modify → save sequence runs under the module RLock.
     Concurrent POST/DELETE callers no longer race the rules list.
+    AUDIT-2026-05-04 (B1): write to canonical key `watchlist`.
     """
     def _updater(cfg: dict[str, Any]) -> dict[str, Any]:
-        cfg["watchlist_alerts"] = rules
+        cfg["watchlist"] = rules
         return cfg
     alerts_module.update_alerts_config(_updater)
 
@@ -93,11 +117,12 @@ def create_alert_rule(rule: AlertRuleIn):
     new_rule["id"] = uuid.uuid4().hex
 
     def _append_rule(cfg: dict[str, Any]) -> dict[str, Any]:
-        rules = cfg.get("watchlist_alerts") or []
+        # AUDIT-2026-05-04 (B1): canonical key is `watchlist`.
+        rules = cfg.get("watchlist") or []
         if not isinstance(rules, list):
             rules = []
         rules.append(new_rule)
-        cfg["watchlist_alerts"] = rules
+        cfg["watchlist"] = rules
         return cfg
 
     alerts_module.update_alerts_config(_append_rule)
@@ -118,14 +143,15 @@ def delete_alert_rule(rule_id: str):
     deletion_state: dict[str, Any] = {"found": False, "remaining": 0}
 
     def _delete_rule(cfg: dict[str, Any]) -> dict[str, Any]:
-        rules = cfg.get("watchlist_alerts") or []
+        # AUDIT-2026-05-04 (B1): canonical key is `watchlist`.
+        rules = cfg.get("watchlist") or []
         if not isinstance(rules, list):
             rules = []
         new_rules = [r for r in rules if r.get("id") != rule_id]
         if len(new_rules) == len(rules):
             # No-op write — preserves the existing config exactly.
             return cfg
-        cfg["watchlist_alerts"] = new_rules
+        cfg["watchlist"] = new_rules
         deletion_state["found"] = True
         deletion_state["remaining"] = len(new_rules)
         return cfg

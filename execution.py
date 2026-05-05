@@ -200,10 +200,16 @@ def get_exec_config() -> dict:
     """
     import os
     cfg = _alerts.load_alerts_config()
-    # Env vars take precedence — allows secret-free config files in production
-    api_key     = os.environ.get("OKX_API_KEY")     or cfg.get("okx_api_key", "")
-    secret      = os.environ.get("OKX_SECRET")      or cfg.get("okx_secret", "")
-    passphrase  = os.environ.get("OKX_PASSPHRASE")  or cfg.get("okx_passphrase", "")
+    # Env vars take precedence — allows secret-free config files in production.
+    # AUDIT-2026-05-04 (B2): accept both OKX_API_SECRET (the name used in
+    # render.yaml, .env.example, frontend, and operator-facing docs) and
+    # the legacy OKX_SECRET (older code path, alerts.py:129). Either one
+    # set in the environment unblocks live trading.
+    api_key     = os.environ.get("OKX_API_KEY")        or cfg.get("okx_api_key", "")
+    secret      = (os.environ.get("OKX_API_SECRET")
+                   or os.environ.get("OKX_SECRET")
+                   or cfg.get("okx_secret", ""))
+    passphrase  = os.environ.get("OKX_PASSPHRASE")     or cfg.get("okx_passphrase", "")
     return {
         "live_trading":       bool(cfg.get("live_trading_enabled", False)),
         "auto_execute":       bool(cfg.get("auto_execute_enabled", False)),

@@ -121,6 +121,10 @@ services:
       # combination "live_trading + no api_key".
       - key: OKX_API_KEY
         sync: false
+      # AUDIT-2026-05-04 (B2): canonical name is OKX_API_SECRET. The
+      # backend also accepts the legacy OKX_SECRET as a fallback (see
+      # alerts.py _SENSITIVE_ENV_FALLBACKS, execution.py:205) so deploys
+      # set with the older name keep working until rotated.
       - key: OKX_API_SECRET
         sync: false
       - key: OKX_PASSPHRASE
