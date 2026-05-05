@@ -51,13 +51,22 @@ import type {
 
 // ─── Environment / constants ────────────────────────────────────────────────
 
-// AUDIT-2026-05-04 (H4): in production builds, a missing NEXT_PUBLIC_API_BASE
-// would silently fall back to http://localhost:8000 — every page would render
-// as if working but every fetch would CORS-fail to a non-existent host. Hard
-// fail at build/load time in production so the misconfig is caught loudly.
-// Localhost fallback stays for `npm run dev`.
+// AUDIT-2026-05-04 (H4 — hardened 2026-05-05): in production builds, a missing
+// NEXT_PUBLIC_API_BASE would silently fall back to http://localhost:8000 —
+// every page would render as if working but every fetch would CORS-fail to a
+// non-existent host. Guard against that — but only in the BROWSER, not during
+// Next.js build/prerender. Throwing at module-load during SSR/prerender of the
+// /_not-found page broke the production build (verified Vercel build log
+// 2026-05-05: "Error occurred prerendering page '/_not-found'"). Move the
+// throw behind `typeof window !== "undefined"` so the build succeeds and the
+// runtime guard still fires the moment a misconfigured deploy serves a page
+// to a real user.
 const _RAW_API_BASE = process.env.NEXT_PUBLIC_API_BASE;
-if (!_RAW_API_BASE && process.env.NODE_ENV === "production") {
+if (
+  !_RAW_API_BASE &&
+  process.env.NODE_ENV === "production" &&
+  typeof window !== "undefined"
+) {
   throw new Error(
     "NEXT_PUBLIC_API_BASE is not set in this production build. The frontend " +
       "would silently issue cross-origin requests to localhost. Set the env var " +
@@ -68,10 +77,15 @@ const API_BASE: string = _RAW_API_BASE ?? "http://localhost:8000";
 
 /** Auth key from build-time env. Empty string = unauth attempt (server
  * will 401 unless CRYPTO_SIGNAL_ALLOW_UNAUTH=true on the API side).
- * AUDIT-2026-05-04 (H4): also hard-fail in production if missing — without
- * the key every protected endpoint returns 401 and the UI looks empty. */
+ * AUDIT-2026-05-04 (H4): also warn in production if missing — without
+ * the key every protected endpoint returns 401 and the UI looks empty.
+ * console.error doesn't break the build, so no browser-gate needed. */
 const _RAW_API_KEY = process.env.NEXT_PUBLIC_API_KEY;
-if (!_RAW_API_KEY && process.env.NODE_ENV === "production") {
+if (
+  !_RAW_API_KEY &&
+  process.env.NODE_ENV === "production" &&
+  typeof window !== "undefined"
+) {
   // eslint-disable-next-line no-console
   console.error(
     "[api] NEXT_PUBLIC_API_KEY is not set — every protected endpoint will 401. " +
