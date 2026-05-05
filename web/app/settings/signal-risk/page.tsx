@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useSettings, useSaveSettings } from "@/hooks/use-settings";
 
@@ -35,22 +35,28 @@ function SliderField({
   onChange?: (v: number) => void;
 }) {
   const fillPercent = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+  // AUDIT-2026-05-04 (H2 a11y): label↔input association via useId.
+  const id = useId();
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-text-primary">{label}</span>
+        <label htmlFor={id} className="text-sm font-medium text-text-primary">{label}</label>
         <span className="font-mono text-sm text-text-secondary">
           {value.toLocaleString()}
           {unit}
         </span>
       </div>
       <input
+        id={id}
         type="range"
         min={min}
         max={max}
         step={step}
         value={value}
         onChange={(e) => onChange?.(Number(e.target.value))}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
         className="w-full"
         style={{
           // Show the same gradient track via background-image so the
@@ -79,10 +85,13 @@ function InputField({
   onChange?: (v: string) => void;
   type?: string;
 }) {
+  // AUDIT-2026-05-04 (H2 a11y): label↔input association.
+  const id = useId();
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium text-text-primary">{label}</label>
+      <label htmlFor={id} className="text-sm font-medium text-text-primary">{label}</label>
       <input
+        id={id}
         type={type}
         value={value}
         onChange={(e) => onChange?.(e.target.value)}

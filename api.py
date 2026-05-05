@@ -92,25 +92,79 @@ except Exception as _ws_err:
 # Gated by CRYPTO_SIGNAL_AUTOSTART_SCHEDULER=true so tests + local dev
 # don't spawn the scheduler thread on import. render.yaml sets it on
 # the production web service.
+#
+# AUDIT-2026-05-04 (H5): single-flight guard. If uvicorn is ever started
+# with --workers > 1 (Render Standard tier supports it; default is 1),
+# each worker process imports api.py and would spawn its own scheduler
+# thread → duplicate scans, duplicate DB writes, duplicate alerts. We
+# use a file lock on the persistent disk so only one process per host
+# wins. The lock file lives next to crypto_model.db so it survives
+# redeploys and only one scheduler ever runs across all workers.
 if os.environ.get("CRYPTO_SIGNAL_AUTOSTART_SCHEDULER", "").strip().lower() == "true":
+    _scheduler_should_start = True
+    _scheduler_lock_handle = None
     try:
-        import threading as _scheduler_threading
-        import scheduler as _bg_scheduler
-
-        def _run_scheduler_in_background():
+        from pathlib import Path as _Path
+        import database as _db_for_lock
+        # Same parent dir as crypto_model.db, so the lock is on the
+        # persistent disk on Render and tied to host (not process).
+        _lock_path = _Path(_db_for_lock.DB_FILE).parent / "scheduler.lock"
+        _lock_handle = open(_lock_path, "w")
+        try:
+            # POSIX exclusive non-blocking lock. fcntl is unix-only;
+            # on Windows we fall through to msvcrt.locking which has
+            # similar semantics. Tests on local Windows dev never set
+            # the autostart flag, so the Windows branch is operator-only.
             try:
-                _bg_scheduler.start_scheduler()  # blocks inside this daemon thread
-            except Exception as _bg_err:
-                logger.exception("[Scheduler] Background thread crashed: %s", _bg_err)
+                import fcntl as _fcntl
+                _fcntl.flock(_lock_handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except ImportError:
+                import msvcrt as _msvcrt
+                _msvcrt.locking(_lock_handle.fileno(), _msvcrt.LK_NBLCK, 1)
+            # Acquired — keep the file handle alive for the process
+            # lifetime so the lock stays held.
+            _scheduler_lock_handle = _lock_handle
+            _lock_handle.write(str(os.getpid()))
+            _lock_handle.flush()
+            logger.info("[Scheduler] Acquired single-flight lock at %s (pid=%d)", _lock_path, os.getpid())
+        except (BlockingIOError, OSError) as _lock_err:
+            # Another worker already owns the scheduler — skip.
+            _scheduler_should_start = False
+            _lock_handle.close()
+            logger.info(
+                "[Scheduler] Lock at %s held by another worker — skipping autostart in pid=%d (%s)",
+                _lock_path, os.getpid(), _lock_err,
+            )
+    except Exception as _lock_setup_err:
+        # If lock setup fails entirely (e.g. disk not mounted), don't block
+        # the API from starting — but DON'T spawn the scheduler either,
+        # because we can't verify single-flight. Operator can investigate
+        # via /diagnostics.
+        _scheduler_should_start = False
+        logger.warning(
+            "[Scheduler] Single-flight lock setup failed — scheduler will NOT autostart this process: %s",
+            _lock_setup_err,
+        )
 
-        _scheduler_threading.Thread(
-            target=_run_scheduler_in_background,
-            name="autoscan-scheduler",
-            daemon=True,
-        ).start()
-        logger.info("[Scheduler] Autostart enabled — running in daemon thread inside uvicorn")
-    except Exception as _sched_err:
-        logger.warning("[Scheduler] Autostart failed (non-fatal): %s", _sched_err)
+    if _scheduler_should_start:
+        try:
+            import threading as _scheduler_threading
+            import scheduler as _bg_scheduler
+
+            def _run_scheduler_in_background():
+                try:
+                    _bg_scheduler.start_scheduler()  # blocks inside this daemon thread
+                except Exception as _bg_err:
+                    logger.exception("[Scheduler] Background thread crashed: %s", _bg_err)
+
+            _scheduler_threading.Thread(
+                target=_run_scheduler_in_background,
+                name="autoscan-scheduler",
+                daemon=True,
+            ).start()
+            logger.info("[Scheduler] Autostart enabled — running in daemon thread inside uvicorn")
+        except Exception as _sched_err:
+            logger.warning("[Scheduler] Autostart failed (non-fatal): %s", _sched_err)
 
 # ─── App setup ────────────────────────────────────────────────────────────────
 

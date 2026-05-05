@@ -9,30 +9,57 @@ interface SliderFieldProps {
   unit?: string;
   min: number;
   max: number;
+  step?: number;
   help?: string;
   fillPercent: number;
+  onChange?: (v: number) => void;
 }
 
-function SliderField({ label, value, unit = "%", min, max, help, fillPercent }: SliderFieldProps) {
+function SliderField({
+  label,
+  value,
+  unit = "%",
+  min,
+  max,
+  step = 1,
+  help,
+  fillPercent,
+  onChange,
+}: SliderFieldProps) {
+  // AUDIT-2026-05-04 (H3 — keyboard a11y): the previous SliderField was
+  // decorative <div>s with no real <input type="range">, so keyboard +
+  // screen-reader users couldn't operate it. Replaced with a native
+  // range input styled via background gradient. label↔input association
+  // via useId so axe-core "label" rule passes too.
+  const id = useId();
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-text-primary">{label}</span>
+        <label htmlFor={id} className="text-sm font-medium text-text-primary">{label}</label>
         <span className="font-mono text-sm text-text-secondary">
           {value.toLocaleString()}{unit}
         </span>
       </div>
-      <div className="relative h-2 w-full rounded-full bg-bg-2">
-        <div
-          className="absolute left-0 top-0 h-full rounded-full bg-accent-brand"
-          style={{ width: `${fillPercent}%` }}
-        />
-        {/* Thumb */}
-        <div
-          className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 border-accent-brand bg-bg-0 shadow-[0_0_0_3px_rgba(0,255,136,0.15)]"
-          style={{ left: `calc(${fillPercent}% - 7px)` }}
-        />
-      </div>
+      <input
+        id={id}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange?.(Number(e.target.value))}
+        aria-label={label}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        className="w-full"
+        style={{
+          background: `linear-gradient(to right, var(--accent-brand, #22d36f) 0%, var(--accent-brand, #22d36f) ${fillPercent}%, var(--bg-2, #1a1a22) ${fillPercent}%, var(--bg-2, #1a1a22) 100%)`,
+          height: "8px",
+          borderRadius: "9999px",
+          appearance: "none",
+        }}
+      />
       {help && <p className="text-[11px] text-text-muted">{help}</p>}
     </div>
   );

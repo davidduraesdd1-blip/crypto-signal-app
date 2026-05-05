@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useSettings, useSaveSettings } from "@/hooks/use-settings";
 
@@ -39,6 +39,15 @@ export default function TradingSettingsPage() {
   const [customPair, setCustomPair] = useState("");
   const [regionalColors, setRegionalColors] = useState(false);
   const [compactWatchlist, setCompactWatchlist] = useState(false);
+
+  // AUDIT-2026-05-04 (H2 a11y wave 2): label↔input association IDs for
+  // the 5 inline inputs in the Quick Setup + Trading Pairs + Timeframes
+  // cards. Same useId() pattern used in agent-config-card / signal-risk.
+  const portfolioId = useId();
+  const riskPctId = useId();
+  const apiKeyId = useId();
+  const customPairId = useId();
+  const taExchangeId = useId();
 
   // AUDIT-2026-05-03 (D4 audit, HIGH refetch-clobber fix): `useRef`
   // guard so the form is hydrated ONCE on first successful load, not
@@ -127,20 +136,22 @@ export default function TradingSettingsPage() {
         </p>
         <div className="mb-4 grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-text-primary">
+            <label htmlFor={portfolioId} className="text-sm font-medium text-text-primary">
               Portfolio Size USD
             </label>
             <input
+              id={portfolioId}
               type="text"
               defaultValue="10000"
               className="min-h-[44px] w-full rounded-lg border border-border-strong bg-bg-0 px-3 py-2 font-mono text-base text-text-primary"
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-text-primary">
+            <label htmlFor={riskPctId} className="text-sm font-medium text-text-primary">
               Risk per trade %
             </label>
             <input
+              id={riskPctId}
               type="text"
               defaultValue="2"
               className="min-h-[44px] w-full rounded-lg border border-border-strong bg-bg-0 px-3 py-2 font-mono text-base text-text-primary"
@@ -148,10 +159,11 @@ export default function TradingSettingsPage() {
           </div>
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-text-primary">
+          <label htmlFor={apiKeyId} className="text-sm font-medium text-text-primary">
             API Key
           </label>
           <input
+            id={apiKeyId}
             type="password"
             placeholder="●●●● (saved)"
             className="min-h-[44px] w-full rounded-lg border border-border-strong bg-bg-0 px-3 py-2 font-mono text-base text-text-primary"
@@ -211,10 +223,11 @@ export default function TradingSettingsPage() {
           </p>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-text-primary">
+            <label htmlFor={customPairId} className="text-sm font-medium text-text-primary">
               Custom pair (advanced)
             </label>
             <input
+              id={customPairId}
               type="text"
               value={customPair}
               onChange={(e) => setCustomPair(e.target.value)}
@@ -257,20 +270,24 @@ export default function TradingSettingsPage() {
           </p>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-text-primary">
+            <label htmlFor={taExchangeId} className="text-sm font-medium text-text-primary">
               TA exchange (OHLCV source)
             </label>
             <select
+              id={taExchangeId}
               value={taExchange}
               onChange={(e) => setTaExchange(e.target.value)}
               className="min-h-[44px] w-full rounded-lg border border-border-default bg-bg-2 px-3 py-2 text-sm text-text-primary"
             >
-              <option>OKX</option>
               <option>Kraken</option>
+              <option>Gate.io</option>
+              <option>Bybit</option>
+              <option>MEXC</option>
+              <option>OKX</option>
               <option>CoinGecko</option>
             </select>
             <p className="text-[11px] text-text-muted">
-              Fallback chain: OKX → Kraken → CoinGecko per master template §10
+              Fallback chain (post-D8 Render-Oregon-tuned): Kraken → Gate.io → Bybit → MEXC → OKX → CoinGecko · per CLAUDE.md §10
             </p>
           </div>
         </div>

@@ -51,12 +51,34 @@ import type {
 
 // ─── Environment / constants ────────────────────────────────────────────────
 
-const API_BASE: string =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+// AUDIT-2026-05-04 (H4): in production builds, a missing NEXT_PUBLIC_API_BASE
+// would silently fall back to http://localhost:8000 — every page would render
+// as if working but every fetch would CORS-fail to a non-existent host. Hard
+// fail at build/load time in production so the misconfig is caught loudly.
+// Localhost fallback stays for `npm run dev`.
+const _RAW_API_BASE = process.env.NEXT_PUBLIC_API_BASE;
+if (!_RAW_API_BASE && process.env.NODE_ENV === "production") {
+  throw new Error(
+    "NEXT_PUBLIC_API_BASE is not set in this production build. The frontend " +
+      "would silently issue cross-origin requests to localhost. Set the env var " +
+      "in your Vercel project (Settings → Environment Variables) and redeploy."
+  );
+}
+const API_BASE: string = _RAW_API_BASE ?? "http://localhost:8000";
 
 /** Auth key from build-time env. Empty string = unauth attempt (server
- * will 401 unless CRYPTO_SIGNAL_ALLOW_UNAUTH=true on the API side). */
-const API_KEY: string = process.env.NEXT_PUBLIC_API_KEY ?? "";
+ * will 401 unless CRYPTO_SIGNAL_ALLOW_UNAUTH=true on the API side).
+ * AUDIT-2026-05-04 (H4): also hard-fail in production if missing — without
+ * the key every protected endpoint returns 401 and the UI looks empty. */
+const _RAW_API_KEY = process.env.NEXT_PUBLIC_API_KEY;
+if (!_RAW_API_KEY && process.env.NODE_ENV === "production") {
+  // eslint-disable-next-line no-console
+  console.error(
+    "[api] NEXT_PUBLIC_API_KEY is not set — every protected endpoint will 401. " +
+      "Set it in your Vercel project env vars and redeploy."
+  );
+}
+const API_KEY: string = _RAW_API_KEY ?? "";
 
 // ─── Error envelope ─────────────────────────────────────────────────────────
 

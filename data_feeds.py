@@ -949,48 +949,32 @@ def get_open_interest(pair: str) -> dict:
         if cached and (now - cached.get('_ts', 0)) < _OI_TTL:
             return cached
 
-    # 1. Bybit (Render-friendly, no geo-block). Bybit's /v5/market/open-interest
-    # endpoint requires intervalTime; we ask for the most recent 5-min bucket
-    # (limit=1) and treat it as "current" — same semantic as OKX's /open-interest
-    # snapshot. openInterest is contract-count, but Bybit also exposes
-    # openInterestValue in USD which matches OKX's oiUsd.
+    # 1. Bybit (Render-friendly, no geo-block). Bybit's
+    # /v5/market/tickers exposes BOTH openInterest (contract count) and
+    # openInterestValue (USD) in a single call — simpler and faster than
+    # /v5/market/open-interest which only returns contract count and
+    # forces a second tickers lookup. AUDIT-2026-05-04 (H6): replaced
+    # the prior two-tier fetch with a single tickers call.
     symbol = _binance_symbol(pair)  # BTCUSDT / ETHUSDT
     try:
         resp = _SESSION.get(
-            "https://api.bybit.com/v5/market/open-interest",
-            params={
-                'category':     'linear',
-                'symbol':       symbol,
-                'intervalTime': '5min',
-                'limit':        1,
-            },
+            _BYBIT_TICKERS_URL,
+            params={"category": "linear", "symbol": symbol},
             timeout=6,
         )
         if resp.status_code == 200:
             data = resp.json()
             items = data.get('result', {}).get('list', [])
             if items and data.get('retCode') == 0:
-                # Bybit returns openInterest as contract count; we need USD.
-                # The tickers endpoint already has lastPrice, but we don't want
-                # a second call here. Bybit's open-interest list also exposes
-                # `openInterestValue` (USD) in some responses; fall back to
-                # contract-count × tick price approximation if absent.
+                row = items[0]
                 try:
-                    oi_usd = float(items[0].get('openInterestValue', 0) or 0)
+                    oi_usd = float(row.get('openInterestValue', 0) or 0)
                     if oi_usd <= 0:
-                        # No USD field — multiply contracts by index price via
-                        # tickers (single extra call, cached server-side).
-                        _t = _SESSION.get(
-                            _BYBIT_TICKERS_URL,
-                            params={"category": "linear", "symbol": symbol},
-                            timeout=4,
-                        )
-                        if _t.status_code == 200:
-                            _t_items = _t.json().get('result', {}).get('list', [])
-                            if _t_items:
-                                _last = float(_t_items[0].get('lastPrice', 0) or 0)
-                                _oi_contracts = float(items[0].get('openInterest', 0) or 0)
-                                oi_usd = _last * _oi_contracts
+                        # Fallback: contracts × lastPrice if openInterestValue
+                        # is missing (some pairs don't surface it).
+                        _last = float(row.get('lastPrice', 0) or 0)
+                        _contracts = float(row.get('openInterest', 0) or 0)
+                        oi_usd = _last * _contracts
                 except (ValueError, TypeError):
                     oi_usd = 0.0
                 if oi_usd > 0:
