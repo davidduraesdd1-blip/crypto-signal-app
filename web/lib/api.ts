@@ -263,8 +263,22 @@ export const getSignals = (
   return apiFetch<SignalsList>(`/signals${tail}`, { signal });
 };
 
+// AUDIT-2026-05-05: pair path-param encoding. Trading pairs like
+// "BTC/USDT" contain a "/", and even when URL-encoded as "%2F", Vercel
+// and Render's reverse proxies decode %2F back to / before the request
+// reaches the FastAPI route matcher. That splits /signals/BTC/USDT
+// into 3 segments which cannot match /signals/{pair} → 404.
+//
+// Backend accepts BTCUSDT / BTC-USDT / BTC_USDT / BTC/USDT all
+// equivalently (api.py:633), so we use the dash form for path params
+// to dodge the proxy-decoding issue. Query-param usage is unaffected
+// (see /onchain/dashboard?pair=...).
+function _pairPathSegment(pair: string): string {
+  return encodeURIComponent(pair.replace(/\//g, "-"));
+}
+
 export const getSignalForPair = (pair: TradingPair, signal?: AbortSignal) =>
-  apiFetch<SignalRow>(`/signals/${encodeURIComponent(pair)}`, { signal });
+  apiFetch<SignalRow>(`/signals/${_pairPathSegment(pair)}`, { signal });
 
 // ─── Regimes ────────────────────────────────────────────────────────────────
 
@@ -277,7 +291,7 @@ export const getRegimeHistory = (
   signal?: AbortSignal,
 ) =>
   apiFetch<RegimeHistory>(
-    `/regimes/${encodeURIComponent(pair)}/history?days=${days}`,
+    `/regimes/${_pairPathSegment(pair)}/history?days=${days}`,
     { signal },
   );
 
