@@ -453,6 +453,199 @@ export const getBacktestArbitrage = (signal?: AbortSignal) =>
   // FastAPI side; if it 404s the consumer hook surfaces an empty list.
   apiFetch<ArbitrageList>("/backtest/arbitrage", { signal });
 
+// ─── Macro (Everything-Live, 2026-05-06) ──────────────────────────────────
+
+export interface MacroStrip {
+  timestamp: string;
+  btc_dominance: { value: number | null; alt_season_label?: string | null; source?: string | null };
+  fear_greed:    { value: number | null; label?: string | null; bias?: number | null; signal?: string | null };
+  dxy:           { value: number | null; trend?: string | null };
+  vix:           { value: number | null; vix3m?: number | null; structure?: string | null };
+  ten_yr_yield:  { value: number | null; raw?: number | null; raw_10y?: number | null };
+  two_yr_yield?: { value: number | null };
+  yield_curve?:  string | null;
+  m2_yoy?:       number | null;
+  macro_signal:  { label: string | null; score: number | null };
+  btc_funding:   { value: number | null; signal?: string | null; source?: string | null };
+  hy_spreads:    { value: number | null };
+}
+export const getMacroStrip = (signal?: AbortSignal) =>
+  apiFetch<MacroStrip>("/macro/strip", { signal });
+
+// ─── Regime weights + timeline (Everything-Live, 2026-05-06) ───────────────
+
+export interface RegimeWeightsResponse {
+  columns: Array<{
+    regime: string;
+    weights: { technical: number | null; macro: number | null; sentiment: number | null; onchain: number | null };
+  }>;
+}
+export const getRegimeWeights = (signal?: AbortSignal) =>
+  apiFetch<RegimeWeightsResponse>("/regimes/weights", { signal });
+
+export interface RegimeTimelineSegment {
+  state: string;
+  start: string;
+  end: string;
+  duration_days: number;
+}
+export interface RegimeTimelineResponse {
+  pair: string;
+  days: number;
+  current_state: string | null;
+  since: string | null;
+  duration_days: number;
+  segments: RegimeTimelineSegment[];
+}
+export const getRegimeTimeline = (
+  pair: TradingPair,
+  days = 90,
+  signal?: AbortSignal,
+) =>
+  apiFetch<RegimeTimelineResponse>(
+    `/regimes/${_pairPathSegment(pair)}/timeline?days=${days}`,
+    { signal },
+  );
+
+// ─── Backtest extensions (Everything-Live, 2026-05-06) ─────────────────────
+
+export interface OptunaRun {
+  rank: number;
+  trial_id: number;
+  value: number | null;
+  state: string;
+  params: string;
+}
+export interface OptunaRunsResponse {
+  count: number;
+  runs: OptunaRun[];
+  source: string;
+  error?: string;
+}
+export const getOptunaRuns = (n = 10, signal?: AbortSignal) =>
+  apiFetch<OptunaRunsResponse>(`/backtest/optuna-runs?n=${n}`, { signal });
+
+export interface EquityPoint {
+  timestamp: string | null;
+  equity: number;
+  drawdown_pct: number;
+}
+export interface EquityCurveResponse {
+  points: EquityPoint[];
+  summary: {
+    n_trades: number;
+    start?: string | null;
+    end?: string | null;
+    total_pnl_pct?: number;
+    max_dd_pct?: number;
+    final_equity?: number;
+  };
+  error?: string;
+}
+export const getEquityCurve = (signal?: AbortSignal) =>
+  apiFetch<EquityCurveResponse>("/backtest/equity-curve", { signal });
+
+// ─── Alerts config (Everything-Live, 2026-05-06) ───────────────────────────
+
+export interface AlertConfigType {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+export interface AlertConfigChannel {
+  id: string;
+  icon: string;
+  name: string;
+  status: string;
+  connected: boolean;
+}
+export interface AlertConfigResponse {
+  alert_types: AlertConfigType[];
+  channels: AlertConfigChannel[];
+  confidence_threshold: number;
+  email_enabled: boolean;
+  email_address: string;
+}
+export interface AlertConfigPatchInput {
+  email_enabled?: boolean;
+  email_address?: string;
+  confidence_threshold?: number;
+  slack_webhook_url?: string;
+  telegram_bot_token?: string;
+  telegram_chat_id?: string;
+  browser_push_enabled?: boolean;
+  alert_types?: Record<string, boolean>;
+}
+export const getAlertConfig = (signal?: AbortSignal) =>
+  apiFetch<AlertConfigResponse>("/alerts/config", { signal });
+
+export const putAlertConfig = (patch: AlertConfigPatchInput) =>
+  apiFetch<AlertConfigResponse>("/alerts/config", { method: "PUT", body: patch });
+
+// ─── Agent control (Everything-Live, 2026-05-06) ───────────────────────────
+
+export interface AgentSummary extends ExecutionStatus {
+  cycles: number;
+  last_cycle: string | null;
+  last_cycle_age_s: number | null;
+  last_pair: string | null;
+  last_decision: string | null;
+}
+export const getAgentSummary = (signal?: AbortSignal) =>
+  apiFetch<AgentSummary>("/ai/agent/summary", { signal });
+
+export const startAgent = () =>
+  apiFetch<AgentSummary>("/ai/agent/start", { method: "POST" });
+
+export const stopAgent = () =>
+  apiFetch<AgentSummary>("/ai/agent/stop", { method: "POST" });
+
+// ─── Watchlist (Everything-Live, 2026-05-06) ───────────────────────────────
+
+export interface WatchlistItem {
+  pair: string;
+  ticker: string;
+  price: number | null;
+  change_24h_pct: number | null;
+  direction: string;
+  regime: string | null;
+  sparkline: number[];
+}
+export interface WatchlistResponse {
+  timestamp: string;
+  count: number;
+  items: WatchlistItem[];
+}
+export const getWatchlist = (n = 6, sparklineN = 24, signal?: AbortSignal) =>
+  apiFetch<WatchlistResponse>(
+    `/home/watchlist?n=${n}&sparkline_n=${sparklineN}`,
+    { signal },
+  );
+
+// ─── Whale events (Everything-Live, 2026-05-06) ────────────────────────────
+
+export interface WhaleEvent {
+  time: string;
+  coin: string;
+  direction: "inflow" | "outflow";
+  notes: string;
+  amount_usd: number;
+  amount_label: string;
+  source: string;
+}
+export interface WhaleEventsResponse {
+  count: number;
+  events: WhaleEvent[];
+  min_usd: number;
+  note: string;
+}
+export const getWhaleEvents = (minUsd = 10_000_000, signal?: AbortSignal) =>
+  apiFetch<WhaleEventsResponse>(
+    `/onchain/whale-events?min_usd=${minUsd}`,
+    { signal },
+  );
+
 // ─── Convenience: API_BASE for places that need the bare URL ────────────────
 
 export const apiBase = (): string => API_BASE;

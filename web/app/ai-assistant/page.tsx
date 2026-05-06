@@ -13,6 +13,7 @@ import { EmergencyStopCard } from "@/components/emergency-stop-card";
 import { BeginnerHint } from "@/components/beginner-hint";
 import { useAiDecisions, useAskAi } from "@/hooks/use-ai";
 import { useExecutionStatus } from "@/hooks/use-execution-status";
+import { useAgentSummary, useStartAgent, useStopAgent } from "@/hooks/use-agent";
 import type { AiDecision } from "@/lib/api-types";
 
 // AUDIT-2026-05-03 (D4b): AI Assistant page wired:
@@ -89,23 +90,52 @@ function rowToDecision(r: AiDecision): {
   };
 }
 
-// AUDIT-2026-05-05 (P0-8): user-visible "TODO(D-ext)" leaks scrubbed.
-// Mock metrics + fallback table data — kept until /agent/summary lands
-// (returns total_cycles + last_cycle_age + last_pair + last_decision).
-const metrics = [
-  { label: "Total Cycles", value: "—", subtext: "backfill pending" },
-  { label: "Last Cycle", value: "—", subtext: "backfill pending" },
-  { label: "Last Pair", value: "—", subtext: "backfill pending" },
-  { label: "Last Decision", value: "—", subtext: "backfill pending" },
-];
+// AUDIT-2026-05-06 (Everything-Live, item 7): static metrics array
+// replaced by useAgentSummary() inside the component.
 
 export default function AIAssistantPage() {
   const decisionsQuery = useAiDecisions(10);
   const execQuery = useExecutionStatus({ polling: true });
+  const agentQuery = useAgentSummary({ polling: true });
+  const startMutation = useStartAgent();
+  const stopMutation = useStopAgent();
 
-  // AGENT pill state derived from /execute/status. The toggle on the
-  // page (Start/Stop) is wired to local state for D4b — D4c hooks it
-  // up to a real /agent/start | /agent/stop endpoint when those land.
+  // Live agent metrics from /ai/agent/summary
+  const agentSummary = agentQuery.data;
+  const cycleCount = agentSummary?.cycles ?? 0;
+  const _ageHuman = (s: number | null | undefined): string => {
+    if (s == null) return "—";
+    if (s < 60) return `${Math.round(s)}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  };
+  const metrics = [
+    {
+      label: "Total Cycles",
+      value: cycleCount > 0 ? String(cycleCount) : "0",
+      subtext: cycleCount > 0 ? "from agent_log" : "no runs yet",
+    },
+    {
+      label: "Last Cycle",
+      value: _ageHuman(agentSummary?.last_cycle_age_s),
+      subtext: agentSummary?.last_cycle ? "agent_log timestamp" : "—",
+    },
+    {
+      label: "Last Pair",
+      value: agentSummary?.last_pair ?? "—",
+      subtext: agentSummary?.last_pair && agentSummary.last_pair !== "—" ? "from agent_log" : "—",
+    },
+    {
+      label: "Last Decision",
+      value: agentSummary?.last_decision ?? "—",
+      subtext: agentSummary?.last_decision && agentSummary.last_decision !== "—" ? "from agent_log" : "—",
+    },
+  ];
+
+  // AGENT pill state derived from /execute/status (auth source of truth).
+  // The Start/Stop toggle is now wired to /ai/agent/start + /ai/agent/stop
+  // (Everything-Live, item 7) — pre-fix it was local state only.
   //
   // AUDIT-2026-05-03 (D4 audit, HIGH stale-closure fix): `useState`
   // captures `apiAgentRunning` only at first render — when the query
@@ -117,6 +147,19 @@ export default function AIAssistantPage() {
   useEffect(() => {
     setRunning(apiAgentRunning);
   }, [apiAgentRunning]);
+
+  const handleStart = () => {
+    setRunning(true);  // optimistic
+    startMutation.mutate(undefined, {
+      onError: () => setRunning(apiAgentRunning),  // rollback on failure
+    });
+  };
+  const handleStop = () => {
+    setRunning(false);  // optimistic
+    stopMutation.mutate(undefined, {
+      onError: () => setRunning(apiAgentRunning),
+    });
+  };
 
   // Map live decisions to the table shape; fall back to empty when
   // no decisions yet.
@@ -145,9 +188,9 @@ export default function AIAssistantPage() {
       <section className="mb-6">
         <AgentStatusCard
           running={running}
-          cycle={47}
-          onStart={() => setRunning(true)}
-          onStop={() => setRunning(false)}
+          cycle={cycleCount}
+          onStart={handleStart}
+          onStop={handleStop}
         />
       </section>
 

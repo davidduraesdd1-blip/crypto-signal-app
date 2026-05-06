@@ -10,6 +10,9 @@ import { BacktestCard } from "@/components/backtest-card";
 import { BeginnerHint } from "@/components/beginner-hint";
 import { useHomeSummary } from "@/hooks/use-home-summary";
 import { useBacktestSummary } from "@/hooks/use-backtester";
+import { useMacroStrip } from "@/hooks/use-macro";
+import { useWatchlist } from "@/hooks/use-watchlist";
+import { useHealth } from "@/hooks/use-diagnostics";
 import {
   directionToSignalType,
   formatConfidence,
@@ -19,85 +22,30 @@ import {
   regimeToDisplay,
 } from "@/lib/format";
 
-// AUDIT-2026-05-03 (D4b): live wiring of Home page hero cards via
-// `/home/summary` and BacktestCard KPIs via `/backtest/summary`.
-// MacroStrip + Watchlist + DataSourceRow are still stubbed because
-// no consolidated /macro or /watchlist-with-sparkline endpoint exists
-// yet — those become D-extension follow-ups. The page silently falls
-// back to the mock arrays below if the API call returns empty/null,
-// so the visual contract holds even when the live deploy is cold.
+// AUDIT-2026-05-06 (Everything-Live): MacroStrip + Watchlist + DataSourceRow
+// were hardcoded mock literals pre-fix. Now wired to:
+//   - useMacroStrip()   → /macro/strip
+//   - useWatchlist()    → /home/watchlist (price + 24h delta + sparkline)
+//   - useHealth()       → /health (feed status drives DataSourceRow pills)
+// Hero cards + Backtest KPIs were already live (D4b).
 
-// ─── Stubbed sections (TODO(D-ext): wire when endpoints exist) ──────────────
+// ─── Build sparkline polyline from raw closes ──────────────────────────────
 
-const dataSources = [
-  // TODO(D-ext): GET /data-sources — for now show the three the home
-  // page actually depends on per the v0 mockup contract.
-  { name: "OKX", status: "live" as const },
-  { name: "Glassnode", status: "live" as const },
-  { name: "Google Trends", status: "cached" as const },
-];
-
-const macroItems = [
-  // TODO(D-ext): consolidated macro endpoint. Today the values come
-  // from disparate sources (BTC dominance via /signals, fear/greed
-  // via separate scraper, DXY via yfinance). Keep mock until a
-  // single endpoint exists.
-  { label: "BTC Dominance", value: "58.9%", sub: "+ 0.4 ppts · 7d" },
-  { label: "Fear & Greed", value: "72", sub: "Greed", subColor: "warning" as const },
-  { label: "DXY", value: "104.21", sub: "− 0.6% · 30d" },
-  { label: "Funding (BTC)", value: "+ 0.012%", sub: "8h avg" },
-  { label: "Regime (macro)", value: "Risk-on", sub: "confidence 76%", subColor: "accent" as const },
-];
-
-const watchlistItems = [
-  // TODO(D-ext): /signals enriched with sparkline points. The current
-  // /signals response doesn't carry per-pair price history needed for
-  // the inline sparklines. Keep mock until /signals/{pair}/sparkline
-  // (or similar) exists. Sparkline data is decorative — the rest of
-  // the watchlist (price, change) can be derived from /signals.
-  {
-    ticker: "BTC",
-    price: "$104,280",
-    change: "2.14%",
-    changeDirection: "up" as const,
-    sparklinePoints: "0,16 8,15 16,17 24,13 32,14 40,11 48,10 56,7 64,8 72,5 80,3",
-  },
-  {
-    ticker: "ETH",
-    price: "$3,844",
-    change: "1.08%",
-    changeDirection: "up" as const,
-    sparklinePoints: "0,14 8,13 16,11 24,12 32,10 40,8 48,9 56,11 64,8 72,7 80,6",
-  },
-  {
-    ticker: "SOL",
-    price: "$192.40",
-    change: "0.72%",
-    changeDirection: "down" as const,
-    sparklinePoints: "0,6 8,8 16,9 24,10 32,11 40,13 48,14 56,13 64,15 72,16 80,17",
-  },
-  {
-    ticker: "AVAX",
-    price: "$41.80",
-    change: "3.20%",
-    changeDirection: "up" as const,
-    sparklinePoints: "0,18 8,17 16,14 24,15 32,12 40,11 48,8 56,6 64,4 72,3 80,2",
-  },
-  {
-    ticker: "LINK",
-    price: "$22.04",
-    change: "0.91%",
-    changeDirection: "up" as const,
-    sparklinePoints: "0,12 8,14 16,11 24,13 32,10 40,11 48,9 56,8 64,9 72,7 80,6",
-  },
-  {
-    ticker: "NEAR",
-    price: "$5.82",
-    change: "1.44%",
-    changeDirection: "down" as const,
-    sparklinePoints: "0,8 8,9 16,10 24,9 32,11 40,12 48,13 56,14 64,13 72,15 80,16",
-  },
-];
+function _closesToPolyline(closes: number[], height = 22, width = 80): string {
+  if (!closes || closes.length < 2) return "";
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const stepX = width / (closes.length - 1);
+  return closes
+    .map((c, i) => {
+      const x = (i * stepX).toFixed(0);
+      // Invert Y so higher prices render higher on screen
+      const y = (height - ((c - min) / range) * height).toFixed(0);
+      return `${x},${y}`;
+    })
+    .join(" ");
+}
 
 // ─── Fallback hero cards (shown only if /home/summary returns empty) ────────
 
@@ -119,6 +67,120 @@ const fallbackHeroSignals: {
 export default function HomePage() {
   const homeQuery = useHomeSummary(5);
   const backtestQuery = useBacktestSummary();
+  const macroQuery = useMacroStrip();
+  const watchlistQuery = useWatchlist(6, 24);
+  const healthQuery = useHealth();
+
+  // ── Live MacroStrip from /macro/strip ────────────────────────────────────
+  const macroItems = (() => {
+    const m = macroQuery.data;
+    if (!m) {
+      // Loading / error — render placeholders rather than pretend live.
+      return [
+        { label: "BTC Dominance", value: "—", sub: "loading" },
+        { label: "Fear & Greed",  value: "—", sub: "loading" },
+        { label: "DXY",           value: "—", sub: "loading" },
+        { label: "Funding (BTC)", value: "—", sub: "loading" },
+        { label: "Regime (macro)", value: "—", sub: "loading" },
+      ];
+    }
+    const fg = m.fear_greed?.value;
+    const fgLabel = m.fear_greed?.label ?? "—";
+    const fgColor = (
+      fgLabel?.toLowerCase().includes("greed")
+        ? ("warning" as const)
+        : fgLabel?.toLowerCase().includes("fear")
+          ? ("accent" as const)
+          : undefined
+    );
+    const macroSig = m.macro_signal?.label ?? "—";
+    const macroNice = (
+      macroSig === "RISK_ON" ? "Risk-on"
+      : macroSig === "RISK_OFF" ? "Risk-off"
+      : macroSig === "MILD_RISK_ON" ? "Mild risk-on"
+      : macroSig === "MILD_RISK_OFF" ? "Mild risk-off"
+      : macroSig === "NEUTRAL" ? "Neutral"
+      : "—"
+    );
+    const score = m.macro_signal?.score;
+    const fundingPct = m.btc_funding?.value;
+    return [
+      {
+        label: "BTC Dominance",
+        value: m.btc_dominance?.value != null ? `${m.btc_dominance.value.toFixed(1)}%` : "—",
+        sub: m.btc_dominance?.alt_season_label ?? (m.btc_dominance?.source ?? "—"),
+      },
+      {
+        label: "Fear & Greed",
+        value: fg != null ? String(fg) : "—",
+        sub: fgLabel ?? "—",
+        ...(fgColor ? { subColor: fgColor } : {}),
+      },
+      {
+        label: "DXY",
+        value: m.dxy?.value != null ? m.dxy.value.toFixed(2) : "—",
+        sub: m.dxy?.trend ? m.dxy.trend.toLowerCase().replace("_", " ") : "—",
+      },
+      {
+        label: "Funding (BTC)",
+        value: fundingPct != null ? `${fundingPct >= 0 ? "+" : ""}${fundingPct.toFixed(3)}%` : "—",
+        sub: m.btc_funding?.signal?.toLowerCase() ?? "8h avg",
+      },
+      {
+        label: "Regime (macro)",
+        value: macroNice,
+        sub: score != null ? `score ${score}` : "—",
+        subColor: "accent" as const,
+      },
+    ];
+  })();
+
+  // ── Live watchlist from /home/watchlist ──────────────────────────────────
+  const watchlistItems = (() => {
+    const items = watchlistQuery.data?.items ?? [];
+    if (items.length === 0) return [] as Array<{
+      ticker: string; price: string; change: string;
+      changeDirection: "up" | "down"; sparklinePoints: string;
+    }>;
+    return items.map((it) => {
+      const change = it.change_24h_pct;
+      const dir: "up" | "down" = (change ?? 0) >= 0 ? "up" : "down";
+      return {
+        ticker: it.ticker,
+        price: it.price != null
+          ? (it.price >= 1000 ? `$${it.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `$${it.price.toFixed(2)}`)
+          : "—",
+        change: change != null ? `${Math.abs(change).toFixed(2)}%` : "—",
+        changeDirection: dir,
+        sparklinePoints: _closesToPolyline(it.sparkline ?? []),
+      };
+    });
+  })();
+
+  // ── DataSourceRow from /health ───────────────────────────────────────────
+  const dataSources = (() => {
+    const h = healthQuery.data as undefined | {
+      status?: string;
+      feeds?: { status?: string; pairs_live?: string[]; pairs_stale?: string[] };
+      scan?: { running?: boolean; timestamp?: string | null };
+    };
+    if (!h) {
+      return [
+        { name: "Render API", status: "cached" as const, statusLabel: "loading" },
+        { name: "WS feeds",   status: "cached" as const, statusLabel: "loading" },
+        { name: "Scanner",    status: "cached" as const, statusLabel: "loading" },
+      ];
+    }
+    const feedStatus = h.feeds?.status === "DEGRADED" ? "cached" : "live";
+    const stale = h.feeds?.pairs_stale?.length ?? 0;
+    const live = h.feeds?.pairs_live?.length ?? 0;
+    const scanLive = !h.scan?.running;
+    return [
+      { name: "Render API", status: "live" as const, statusLabel: h.status === "ok" ? "live" : (h.status ?? "live") },
+      { name: "WS feeds",   status: feedStatus as "live" | "cached", statusLabel: stale > 0 ? `${live} live · ${stale} stale` : `${live} live` },
+      { name: "Scanner",    status: (scanLive ? "live" : "cached") as "live" | "cached", statusLabel: h.scan?.timestamp ? "scan idle" : "no scan yet" },
+    ];
+  })();
 
   // Map /home/summary hero cards → SignalCard props
   const heroSignals = (() => {

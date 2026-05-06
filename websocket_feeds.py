@@ -35,6 +35,24 @@ _STALE_THRESHOLD   = 60   # seconds before a price is considered stale
 _WATCHDOG_INTERVAL = 30   # heartbeat check every 30 seconds
 _WATCHDOG_TIMEOUT  = 45   # force reconnect if no message in 45 seconds
 
+# AUDIT-2026-05-06 (Everything-Live, item 11): pairs not listed as OKX
+# SWAP perpetuals — these will never receive ws ticks and were causing
+# false-positive `pairs_stale` reports + a permanent DEGRADED health
+# status. They're declared as "must-have" in CLAUDE.md §13 but the
+# free OKX SWAP universe doesn't list them. Engine's REST OHLCV
+# fallback (crypto_model_core.fetch_chart_ohlcv → Gate.io / Bybit /
+# MEXC chain) covers them for scan/backtest purposes; only the
+# real-time tick stream is missing — accept that gracefully instead
+# of flagging it as a system-wide degradation.
+_REST_ONLY_PAIRS: frozenset[str] = frozenset({
+    "FLR/USDT", "XDC/USDT", "SHX/USDT", "ZBCN/USDT",
+})
+
+
+def is_rest_only(pair: str) -> bool:
+    """True for pairs intentionally excluded from the OKX SWAP WS subscription."""
+    return pair in _REST_ONLY_PAIRS
+
 # ── Shared state (thread-safe via _lock) ───────────────────────
 _lock   = threading.Lock()
 _prices: dict[str, dict] = {}
@@ -179,10 +197,15 @@ def _run_loop(pairs: list[str], session: int) -> None:
 
 # ── Public API ─────────────────────────────────────────────────
 def start(pairs: list[str]) -> None:
-    """Start the WebSocket feed (idempotent — safe to call on every Streamlit rerun)."""
+    """Start the WebSocket feed (idempotent — safe to call on every Streamlit rerun).
+
+    AUDIT-2026-05-06 (Everything-Live, item 11): filter out _REST_ONLY_PAIRS
+    so we don't waste subscription slots on pairs that will never tick.
+    """
     global _ws_thread, _running, _pairs_key, _ws_app, _session_id
     if not _WS_AVAILABLE:
         return
+    pairs = [p for p in pairs if not is_rest_only(p)]
     new_key = frozenset(pairs)
     ws_to_close = None
     with _lock:
@@ -259,7 +282,16 @@ def get_status() -> dict:
 
 
 def is_stale(pair: str) -> bool:
-    """True if no fresh tick received for `pair` within _STALE_THRESHOLD seconds."""
+    """True if no fresh tick received for `pair` within _STALE_THRESHOLD seconds.
+
+    AUDIT-2026-05-06 (Everything-Live, item 11): pairs in _REST_ONLY_PAIRS
+    return False because they're never expected to have a WS tick — they
+    only flow through REST OHLCV (Gate.io / Bybit / MEXC fallback). Pre-fix
+    these pairs permanently lit up `pairs_stale` and made /health report
+    DEGRADED forever.
+    """
+    if is_rest_only(pair):
+        return False
     return get_price(pair) is None
 
 

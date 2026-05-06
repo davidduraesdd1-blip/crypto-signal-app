@@ -14,6 +14,8 @@ import { BeginnerHint } from "@/components/beginner-hint";
 import {
   useBacktestSummary,
   useBacktestTrades,
+  useOptunaRuns,
+  useEquityCurve,
 } from "@/hooks/use-backtester";
 import {
   formatNumber,
@@ -29,14 +31,9 @@ import type { BacktestTrade } from "@/lib/api-types";
 // OptunaTable stays as v0 mock (no /backtest/optuna-runs endpoint —
 // optuna_studies.sqlite is read by Python but not exposed via API).
 
-const optunaRuns: OptunaRun[] = [
-  // TODO(D-ext): GET /backtest/optuna-runs (read from optuna_studies.sqlite)
-  { rank: 1, params: "rsi_period=14, macd=(12,26,9), regime_lb=30", sharpe: "4.12", returnPct: "+342.8%" },
-  { rank: 2, params: "rsi_period=10, macd=(8,21,9), regime_lb=30", sharpe: "3.98", returnPct: "+321.4%" },
-  { rank: 3, params: "rsi_period=14, macd=(12,26,9), regime_lb=45", sharpe: "3.84", returnPct: "+305.2%" },
-  { rank: 4, params: "rsi_period=20, macd=(12,26,9), regime_lb=30", sharpe: "3.72", returnPct: "+289.6%" },
-  { rank: 5, params: "rsi_period=14, macd=(10,21,7), regime_lb=20", sharpe: "3.58", returnPct: "+274.1%" },
-];
+// AUDIT-2026-05-06 (Everything-Live, item 4): the prior 5-row hardcoded
+// optunaRuns mock is replaced by useOptunaRuns() inside the component
+// — it reads optuna_studies.sqlite via /backtest/optuna-runs.
 
 /** Map BacktestTrade row → v0 TradesTable contract */
 function rowToTrade(t: BacktestTrade): Trade {
@@ -80,6 +77,8 @@ export default function BacktesterPage() {
   const router = useRouter();
   const summaryQuery = useBacktestSummary();
   const tradesQuery = useBacktestTrades(50);
+  const optunaQuery = useOptunaRuns(5);
+  const equityQuery = useEquityCurve();
 
   // Derive KPI strip from /backtest/summary
   const kpis = (() => {
@@ -132,6 +131,47 @@ export default function BacktesterPage() {
   const allTrades = (tradesQuery.data?.trades ?? []).map(rowToTrade);
   const recentTrades = allTrades.slice(0, 8);
   const tradesCount = tradesQuery.data?.count ?? 0;
+
+  // ── Optuna runs from /backtest/optuna-runs ────────────────────────────────
+  const optunaRuns: OptunaRun[] = (() => {
+    const rows = optunaQuery.data?.runs ?? [];
+    if (rows.length === 0) {
+      // Truthful empty-state — frontend mock is gone, this surfaces honestly.
+      return [];
+    }
+    return rows.map((r) => ({
+      rank:      r.rank,
+      params:    r.params || "(no params recorded)",
+      sharpe:    r.value != null ? r.value.toFixed(2) : "—",
+      returnPct: r.state || "—",
+    }));
+  })();
+  const optunaFooter = (() => {
+    const src = optunaQuery.data?.source;
+    const err = optunaQuery.data?.error;
+    if (err) return `No Optuna runs yet — ${err}`;
+    if (src === "optuna_studies.sqlite") {
+      return `Live · ${optunaQuery.data?.count ?? 0} completed trials · sorted by objective value desc`;
+    }
+    return "No tuning runs yet — run a hyperparameter sweep to populate.";
+  })();
+
+  // ── Equity curve from /backtest/equity-curve ──────────────────────────────
+  const equityPoints = (() => {
+    const pts = equityQuery.data?.points ?? [];
+    return pts.map((p) => p.equity);
+  })();
+  const equityDateRange = (() => {
+    const s = equityQuery.data?.summary;
+    if (!s || !s.start || !s.end) return "no equity data yet";
+    try {
+      const startStr = new Date(s.start).toLocaleDateString("en-US", { year: "numeric", month: "short" });
+      const endStr   = new Date(s.end).toLocaleDateString("en-US", { year: "numeric", month: "short" });
+      return `${startStr} → ${endStr}`;
+    } catch {
+      return `${s.n_trades ?? 0} trades`;
+    }
+  })();
 
   return (
     <AppShell crumbs="Research" currentPage="Backtester">
@@ -197,11 +237,15 @@ export default function BacktesterPage() {
 
       {/* Equity curve + Optuna */}
       <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-        <EquityCurve dateRange="2023-01 → 2026-04-23" />
-        <OptunaTable
-          runs={optunaRuns}
-          footer="TPE sampler · 2,400 trials · selected by best out-of-sample Sharpe."
-        />
+        <EquityCurve dateRange={equityDateRange} points={equityPoints} />
+        {optunaRuns.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border-default bg-bg-1 p-4 text-center text-xs text-text-muted">
+            <div className="mb-2 font-medium uppercase tracking-wider">Optuna studies</div>
+            {optunaFooter}
+          </div>
+        ) : (
+          <OptunaTable runs={optunaRuns} footer={optunaFooter} />
+        )}
       </div>
 
       {/* Trades table */}

@@ -66,6 +66,28 @@ export const queryKeys = {
     ["backtest", "trades", limit, offset] as const,
   backtestRuns: () => ["backtest", "runs"] as const,
   backtestArbitrage: () => ["backtest", "arbitrage"] as const,
+  optunaRuns: (n: number) => ["backtest", "optuna-runs", n] as const,
+  equityCurve: () => ["backtest", "equity-curve"] as const,
+
+  // Macro
+  macroStrip: () => ["macro", "strip"] as const,
+
+  // Regimes (extra)
+  regimeWeights: () => ["regimes", "weights"] as const,
+  regimeTimeline: (pair: TradingPair, days: number) =>
+    ["regimes", "timeline", pair, days] as const,
+
+  // Alerts (config)
+  alertConfig: () => ["alerts", "config"] as const,
+
+  // Agent
+  agentSummary: () => ["ai", "agent", "summary"] as const,
+
+  // Watchlist
+  watchlist: (n: number) => ["home", "watchlist", n] as const,
+
+  // Whale events
+  whaleEvents: (minUsd: number) => ["onchain", "whale-events", minUsd] as const,
 } as const;
 
 // ─── Stale-time presets (per CLAUDE.md §12 cache windows) ──────────────────

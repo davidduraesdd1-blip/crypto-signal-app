@@ -14,6 +14,8 @@ import {
   getBacktestRuns,
   getBacktestSummary,
   getBacktestTrades,
+  getOptunaRuns,
+  getEquityCurve,
 } from "@/lib/api";
 import { GC_TIME, queryKeys, STALE_TIME } from "@/lib/query-keys";
 
@@ -48,6 +50,24 @@ export function useBacktestArbitrage() {
   return useQuery({
     queryKey: queryKeys.backtestArbitrage(),
     queryFn: ({ signal }) => getBacktestArbitrage(signal),
+    staleTime: STALE_TIME.BACKTEST,
+    gcTime: GC_TIME.BACKTEST,
+  });
+}
+
+export function useOptunaRuns(n = 10) {
+  return useQuery({
+    queryKey: queryKeys.optunaRuns(n),
+    queryFn: ({ signal }) => getOptunaRuns(n, signal),
+    staleTime: STALE_TIME.BACKTEST,
+    gcTime: GC_TIME.BACKTEST,
+  });
+}
+
+export function useEquityCurve() {
+  return useQuery({
+    queryKey: queryKeys.equityCurve(),
+    queryFn: ({ signal }) => getEquityCurve(signal),
     staleTime: STALE_TIME.BACKTEST,
     gcTime: GC_TIME.BACKTEST,
   });

@@ -7,6 +7,7 @@ import { OnChainCard } from "@/components/onchain-card";
 import { WhaleActivity } from "@/components/whale-activity";
 import { BeginnerHint } from "@/components/beginner-hint";
 import { useOnchainDashboard } from "@/hooks/use-onchain-dashboard";
+import { useWhaleEvents } from "@/hooks/use-whale-events";
 import { formatNumber, isMissing } from "@/lib/format";
 import type { OnchainDashboard } from "@/lib/api-types";
 
@@ -27,17 +28,8 @@ const dataSources = [
   { name: "On-chain", status: "cached" as const, statusLabel: "cached · 1h" },
 ];
 
-const whaleEvents = [
-  // TODO(D-ext): GET /onchain/whale-events
-  { time: "14:32", coin: "BTC", direction: "outflow" as const, notes: "Coinbase Pro → cold storage · single TX", amountUSD: "$184.2M" },
-  { time: "12:18", coin: "BTC", direction: "inflow" as const, notes: "Unknown wallet → Binance · ladder of 3 transfers", amountUSD: "$94.6M" },
-  { time: "10:04", coin: "ETH", direction: "outflow" as const, notes: "OKX → Lido staking pool", amountUSD: "$72.8M" },
-  { time: "08:56", coin: "BTC", direction: "outflow" as const, notes: "Kraken → cold storage", amountUSD: "$48.1M" },
-  { time: "06:22", coin: "ETH", direction: "inflow" as const, notes: "DAO treasury → Coinbase Prime", amountUSD: "$36.4M" },
-  { time: "03:48", coin: "BTC", direction: "outflow" as const, notes: "Binance → unknown wallet · large transfer", amountUSD: "$28.9M" },
-  { time: "01:14", coin: "XRP", direction: "inflow" as const, notes: "Unknown wallet → Bitstamp · pre-listing flow", amountUSD: "$12.6M" },
-  { time: "22:36", coin: "BTC", direction: "inflow" as const, notes: "Cold storage → Coinbase Prime · institutional", amountUSD: "$10.8M" },
-];
+// AUDIT-2026-05-06 (Everything-Live, item 10): hardcoded whaleEvents
+// removed — derived live from /onchain/whale-events inside the component.
 
 /** Build the 4-indicator strip for one pair from the API dashboard payload. */
 function indicatorsFromDashboard(d: OnchainDashboard | undefined) {
@@ -116,6 +108,19 @@ export default function OnChainPage() {
   const btc = useOnchainDashboard("BTC/USDT");
   const eth = useOnchainDashboard("ETH/USDT");
   const xrp = useOnchainDashboard("XRP/USDT");
+  const whaleQuery = useWhaleEvents(10_000_000);
+
+  // ── Live whale events from /onchain/whale-events ─────────────────────────
+  const whaleEvents = (() => {
+    const events = whaleQuery.data?.events ?? [];
+    return events.map((e) => ({
+      time:      e.time,
+      coin:      e.coin,
+      direction: e.direction,
+      notes:     e.notes,
+      amountUSD: e.amount_label,
+    }));
+  })();
 
   const btcIndicators = indicatorsFromDashboard(btc.data);
   const ethIndicators = indicatorsFromDashboard(eth.data);
@@ -178,9 +183,22 @@ export default function OnChainPage() {
         />
       </div>
 
-      {/* Whale activity table */}
+      {/* Whale activity table — derived live from per-pair net flow */}
       <div className="mb-5">
-        <WhaleActivity events={whaleEvents} />
+        {whaleEvents.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border-default bg-bg-1 p-4 text-center text-xs text-text-muted">
+            <div className="mb-2 font-medium uppercase tracking-wider text-text-muted">
+              Whale activity · last 24h
+            </div>
+            {whaleQuery.isLoading
+              ? "Loading whale events…"
+              : whaleQuery.isError
+                ? "Couldn't load whale events — try refreshing in 30 seconds."
+                : `No flow events ≥ $10M USD-equivalent right now (BTC/ETH/XRP only — per-tx granularity needs paid Whale Alert tier).`}
+          </div>
+        ) : (
+          <WhaleActivity events={whaleEvents} />
+        )}
       </div>
 
       {/* Footnote / data-source caption */}

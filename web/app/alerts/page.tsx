@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -12,83 +12,60 @@ import { BeginnerHint } from "@/components/beginner-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAlertConfig, useUpdateAlertConfig } from "@/hooks/use-alerts-config";
 
-// Mock data
-const alertTypes = [
-  {
-    id: "buy-sell",
-    name: "▲ Buy / ▼ Sell crossings",
-    description:
-      "Composite signal crosses BUY (≥ 70) or SELL (≤ 30) threshold for any tracked pair on the configured timeframes.",
-    enabled: true,
-  },
-  {
-    id: "regime",
-    name: "◈ Regime transitions",
-    description:
-      "HMM regime state changes (Bull → Transition → Accumulation → Distribution → Bear). Per-pair, with confidence threshold.",
-    enabled: true,
-  },
-  {
-    id: "onchain",
-    name: "⬡ On-chain divergences",
-    description:
-      "MVRV-Z, SOPR, or exchange reserve flow flips direction relative to spot price for ≥ 2 consecutive days.",
-    enabled: true,
-  },
-  {
-    id: "funding",
-    name: "⚡ Funding rate spikes",
-    description:
-      "Perpetual funding ≥ +0.05% or ≤ −0.05% for 8h. Often signals over-leveraged positioning before a flush.",
-    enabled: false,
-  },
-  {
-    id: "unlock",
-    name: "🔓 Token unlock proximity",
-    description:
-      "CryptoRank-tracked unlocks within 7 days for any pair in the watchlist. Flags forward sell-pressure events.",
-    enabled: false,
-  },
-];
-
-const channels = [
-  {
-    icon: "📧",
-    name: "Email",
-    status: "Connected · david.duraes.dd1@gmail.com",
-    connected: true,
-  },
-  {
-    icon: "💬",
-    name: "Slack webhook",
-    status: "Not connected · paste a webhook URL to enable",
-    connected: false,
-  },
-  {
-    icon: "📨",
-    name: "Telegram bot",
-    status: "Not connected · @YourBotName + chat ID",
-    connected: false,
-  },
-  {
-    icon: "🔔",
-    name: "Browser push",
-    status: "Not connected · works only when app tab is open",
-    connected: false,
-  },
-];
+// AUDIT-2026-05-06 (Everything-Live, item 6): hardcoded alertTypes +
+// channels arrays removed — pulled live from /alerts/config and
+// persisted via PUT /alerts/config.
 
 export default function AlertsPage() {
   const router = useRouter();
-  const [emailEnabled, setEmailEnabled] = useState(true);
+  const configQuery = useAlertConfig();
+  const updateConfig = useUpdateAlertConfig();
+
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [emailAddress, setEmailAddress] = useState("");
   const [threshold, setThreshold] = useState(75);
-  const [types, setTypes] = useState(alertTypes);
+  const [typesState, setTypesState] = useState<Record<string, boolean>>({});
+
+  // Sync local state with persisted config when it loads
+  useEffect(() => {
+    const data = configQuery.data;
+    if (!data) return;
+    setEmailEnabled(Boolean(data.email_enabled));
+    setEmailAddress(data.email_address ?? "");
+    setThreshold(typeof data.confidence_threshold === "number" ? data.confidence_threshold : 75);
+    setTypesState(Object.fromEntries((data.alert_types ?? []).map((t) => [t.id, t.enabled])));
+  }, [configQuery.data]);
+
+  const types = (configQuery.data?.alert_types ?? []).map((t) => ({
+    ...t,
+    enabled: typesState[t.id] ?? t.enabled,
+  }));
+  const channels = configQuery.data?.channels ?? [];
 
   const toggleType = (id: string) => {
-    setTypes((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, enabled: !t.enabled } : t))
-    );
+    const next = !(typesState[id] ?? types.find((t) => t.id === id)?.enabled ?? false);
+    setTypesState((prev) => ({ ...prev, [id]: next }));
+    updateConfig.mutate({ alert_types: { [id]: next } });
+  };
+
+  const toggleEmail = () => {
+    const next = !emailEnabled;
+    setEmailEnabled(next);
+    updateConfig.mutate({ email_enabled: next });
+  };
+
+  const handleEmailBlur = (value: string) => {
+    if (value !== emailAddress) {
+      setEmailAddress(value);
+      updateConfig.mutate({ email_address: value });
+    }
+  };
+
+  const handleThresholdChange = (next: number) => {
+    setThreshold(next);
+    updateConfig.mutate({ confidence_threshold: next });
   };
 
   return (
@@ -145,7 +122,7 @@ export default function AlertsPage() {
               label="Enable email alerts"
               sublabel="master switch · turn off without losing config"
               enabled={emailEnabled}
-              onToggle={() => setEmailEnabled(!emailEnabled)}
+              onToggle={toggleEmail}
             />
 
             <div className="space-y-1.5">
@@ -154,11 +131,14 @@ export default function AlertsPage() {
               </label>
               <Input
                 type="email"
-                defaultValue="david.duraes.dd1@gmail.com"
+                value={emailAddress}
+                onChange={(e) => setEmailAddress(e.target.value)}
+                onBlur={(e) => handleEmailBlur(e.target.value)}
+                placeholder="alerts@your-domain.com"
                 className="h-9 text-[13px]"
               />
               <p className="text-[11.5px] text-text-muted">
-                Comma-separated for multiple recipients
+                Comma-separated for multiple recipients · saves on blur
               </p>
             </div>
 
@@ -198,16 +178,17 @@ export default function AlertsPage() {
                   {threshold}%
                 </span>
               </div>
-              <div className="relative h-1.5 rounded-full bg-bg-3">
-                <div
-                  className="absolute left-0 top-0 h-full rounded-full bg-accent-brand"
-                  style={{ width: `${threshold}%` }}
-                />
-                <div
-                  className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-accent-brand shadow-[0_0_0_3px_rgba(34,211,111,0.2)]"
-                  style={{ left: `${threshold}%`, transform: "translate(-50%, -50%)" }}
-                />
-              </div>
+              <input
+                type="range"
+                min={50}
+                max={95}
+                step={1}
+                value={threshold}
+                onChange={(e) => setThreshold(Number(e.target.value))}
+                onMouseUp={() => handleThresholdChange(threshold)}
+                onTouchEnd={() => handleThresholdChange(threshold)}
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-bg-3 accent-accent-brand"
+              />
               <p className="text-[11.5px] text-text-muted">
                 Alerts fire when composite signal confidence ≥ this threshold
               </p>
@@ -260,15 +241,23 @@ export default function AlertsPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-2.5">
-            {channels.map((ch) => (
-              <ChannelRow
-                key={ch.name}
-                icon={ch.icon}
-                name={ch.name}
-                status={ch.status}
-                connected={ch.connected}
-              />
-            ))}
+            {channels.length === 0 && configQuery.isLoading ? (
+              <div className="text-center text-xs text-text-muted">Loading channels…</div>
+            ) : channels.length === 0 ? (
+              <div className="text-center text-xs text-text-muted">
+                No channels configured — set email above or paste a Slack/Telegram webhook to enable.
+              </div>
+            ) : (
+              channels.map((ch) => (
+                <ChannelRow
+                  key={ch.id ?? ch.name}
+                  icon={ch.icon}
+                  name={ch.name}
+                  status={ch.status}
+                  connected={ch.connected}
+                />
+              ))
+            )}
           </div>
         </CardContent>
       </Card>
