@@ -268,16 +268,40 @@ def get_macro_strip() -> dict[str, Any]:
     dxy_val = results["dxy"]
     vix_val = results["vix"]
 
+    # AUDIT-2026-05-06 (post-launch v3.5): fallback for BTC dominance too.
+    # CoinGecko intermittently fails on Render — same pattern as DXY/VIX.
+    # Recent BTC dom hovers ~58-59% per April 2026 readings.
+    _BTC_DOM_FALLBACK = 58.5
+    btc_dom_val = gm.get("btc_dominance")
+    btc_dom_alt = gm.get("altcoin_season_label")
+    btc_dom_src = gm.get("source")
+    if btc_dom_val is None:
+        btc_dom_val = _BTC_DOM_FALLBACK
+        btc_dom_alt = "BTC_DOMINANT"
+        btc_dom_src = "fallback"
     payload["btc_dominance"] = {
-        "value": gm.get("btc_dominance"),
-        "alt_season_label": gm.get("altcoin_season_label"),
-        "source": gm.get("source") or "unavailable",
+        "value": btc_dom_val,
+        "alt_season_label": btc_dom_alt,
+        "source": btc_dom_src,
     }
+
+    # F&G fallback when alternative.me fails.
+    _FG_FALLBACK = 50
+    fg_val = fg.get("value")
+    fg_label = fg.get("label")
+    fg_signal = fg.get("signal")
+    fg_source = "alternative.me"
+    if fg_val is None:
+        fg_val = _FG_FALLBACK
+        fg_label = "Neutral"
+        fg_signal = "NEUTRAL"
+        fg_source = "fallback"
     payload["fear_greed"] = {
-        "value": fg.get("value"),
-        "label": fg.get("label"),
-        "bias": fg.get("bias"),
-        "signal": fg.get("signal"),
+        "value": fg_val,
+        "label": fg_label,
+        "bias": fg.get("bias", 0.0),
+        "signal": fg_signal,
+        "source": fg_source,
     }
     # AUDIT-2026-05-06 (post-launch v3.4): when DXY/VIX FRED CSV fails
     # (intermittent on Render — root-cause requires Render shell access),
@@ -355,11 +379,25 @@ def get_macro_strip() -> dict[str, Any]:
         dxy=dxy_for_signal, vix=vix_for_signal, ten_y=ten_y, two_y=two_y, hy_bps=hy
     )
     payload["macro_signal"] = {"label": sig_label, "score": sig_score}
+    # BTC funding fallback — Bybit primary (works most of the time).
+    _BTC_FUNDING_FALLBACK = 0.001  # ~0.001% / 8h is roughly neutral
+    fund_val = fund.get("funding_rate_pct")
+    fund_signal = fund.get("signal", "NEUTRAL")
+    fund_source = fund.get("source")
+    if fund_val is None:
+        fund_val = _BTC_FUNDING_FALLBACK
+        fund_signal = "NEUTRAL"
+        fund_source = "fallback"
     payload["btc_funding"] = {
-        "value":  fund.get("funding_rate_pct"),
-        "signal": fund.get("signal"),
-        "source": fund.get("source"),
+        "value":  fund_val,
+        "signal": fund_signal,
+        "source": fund_source,
     }
-    payload["hy_spreads"] = {"value": hy}
+
+    # HY spreads fallback — recent April 2026 reading ~280bps.
+    payload["hy_spreads"] = {
+        "value": hy if hy is not None else 280.0,
+        "source": "FRED:BAMLH0A0HYM2" if hy is not None else "fallback",
+    }
 
     return serialize(payload)
