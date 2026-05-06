@@ -22,8 +22,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# env files — gitignore everything except *.example templates
 .env*
+!.env.example
+!.env.local.example
 
 # vercel
 .vercel
