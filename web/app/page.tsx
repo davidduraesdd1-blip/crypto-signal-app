@@ -203,7 +203,10 @@ export default function HomePage() {
     }));
   })();
 
-  // Map /backtest/summary → BacktestCard kpi cells
+  // Map /backtest/summary → BacktestCard kpi cells.
+  // AUDIT-2026-05-06 (post-launch): when backtest_trades table is empty
+  // (engine hasn't run a backtest yet — common on fresh deploy), surface
+  // a "no trades yet" message in each delta cell instead of "loading".
   const backtestKpis = (() => {
     const summary = backtestQuery.data;
     if (!summary) {
@@ -212,6 +215,15 @@ export default function HomePage() {
         { label: "Max drawdown", value: "—", delta: "loading", deltaType: "neutral" as const },
         { label: "Sharpe", value: "—", delta: "loading", deltaType: "neutral" as const },
         { label: "Win rate", value: "—", delta: "loading", deltaType: "neutral" as const },
+      ];
+    }
+    const noTrades = (summary.total_trades ?? 0) === 0;
+    if (noTrades) {
+      return [
+        { label: "Return (90d)", value: "—", delta: "no backtest trades yet", deltaType: "neutral" as const },
+        { label: "Max drawdown", value: "—", delta: "run a backtest", deltaType: "neutral" as const },
+        { label: "Sharpe", value: "—", delta: "run a backtest", deltaType: "neutral" as const },
+        { label: "Win rate", value: "—", delta: "run a backtest", deltaType: "neutral" as const },
       ];
     }
     return [
@@ -243,6 +255,20 @@ export default function HomePage() {
         deltaType: "neutral" as const,
       },
     ];
+  })();
+
+  // Live subtitle for the BacktestCard header.
+  // AUDIT-2026-05-06 (post-launch): pre-fix the component fell back to a
+  // hardcoded "BTC basket · 5.2 Sharpe" — fake even when the DB had 0
+  // trades. Now derives from the live summary or shows the truthful
+  // "no backtest trades yet" empty-state.
+  const backtestSubtitle = (() => {
+    const s = backtestQuery.data;
+    if (!s) return "loading";
+    const n = s.total_trades ?? 0;
+    if (n === 0) return "no backtest trades yet";
+    const sharpe = isMissing(s.sharpe_ratio) ? null : formatNumber(s.sharpe_ratio as number, 2);
+    return sharpe ? `BTC basket · ${sharpe} Sharpe (n=${n})` : `BTC basket · n=${n} trades`;
   })();
 
   return (
@@ -290,7 +316,7 @@ export default function HomePage() {
       {/* Two-column layout: Watchlist + Backtest */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Watchlist items={watchlistItems} />
-        <BacktestCard kpis={backtestKpis} />
+        <BacktestCard kpis={backtestKpis} subtitle={backtestSubtitle} />
       </div>
     </AppShell>
   );

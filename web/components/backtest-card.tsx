@@ -14,9 +14,13 @@ interface BacktestCardProps {
   kpis: KpiItem[];
 }
 
+// AUDIT-2026-05-06 (post-launch): subtitle no longer falls back to a
+// hardcoded "BTC basket · 5.2 Sharpe" — the parent page passes a live
+// summary string derived from /backtest/summary, or empty when the
+// backtest_trades table is empty (engine hasn't run a backtest yet).
 export function BacktestCard({
   title = "Composite backtest · last 90d",
-  subtitle = "BTC basket · 5.2 Sharpe",
+  subtitle = "",
   kpis,
 }: BacktestCardProps) {
   return (

@@ -82,23 +82,18 @@ def _fetch_hy_spreads() -> float | None:
     return None
 
 
-_PER_FETCHER_TIMEOUT_S = 6  # cap per upstream call; whole endpoint ~6s ceiling
+_ENDPOINT_DEADLINE_S = 7   # whole-endpoint hard ceiling (was per-fetcher)
+_PER_FETCHER_TIMEOUT_S = 7  # alias for compat with prior reads / docs
 
-
-def _bounded(name: str, fn: Callable[[], Any], default: Any) -> Any:
-    """Run `fn()` in a thread with a hard timeout. Returns `default` on
-    timeout or exception. Never raises — keeps the endpoint fail-open."""
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(fn)
-            try:
-                return fut.result(timeout=_PER_FETCHER_TIMEOUT_S)
-            except concurrent.futures.TimeoutError:
-                logger.warning("[macro] %s timed out after %ss", name, _PER_FETCHER_TIMEOUT_S)
-                return default
-    except Exception as exc:
-        logger.warning("[macro] %s failed: %s", name, exc)
-        return default
+# Module-level executor so timed-out fetchers continue running in
+# background, populating their upstream caches for the next call.
+# A `with ThreadPoolExecutor` block was blocking the endpoint on exit
+# (shutdown(wait=True) waits for all submitted threads), defeating the
+# whole point of a per-fetcher timeout.
+_MACRO_EXEC = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8,
+    thread_name_prefix="macro-fetch",
+)
 
 
 @router.get(
@@ -109,42 +104,52 @@ def _bounded(name: str, fn: Callable[[], Any], default: Any) -> Any:
 def get_macro_strip() -> dict[str, Any]:
     """Returns the macro indicator payload powering Home MacroStrip + Regimes MacroOverlay.
 
-    Each indicator runs through `_bounded` with a 6-second timeout so a
-    slow yfinance / FRED call can't stall the whole response. Frontend
-    sees `value: null` on timeout — renders a truthful "—" placeholder.
+    All 6 upstream fetchers run in parallel on a module-level
+    ThreadPoolExecutor. The whole endpoint is bounded by a single
+    ~7-second deadline (`_ENDPOINT_DEADLINE_S`), so a slow fetcher
+    can't stall past that ceiling. In-flight fetchers that miss the
+    deadline keep running in background and warm their upstream
+    caches for the next call (5-60min TTLs upstream).
 
-    Each fetcher's upstream helper has its own cache (5-60 min depending
-    on source), so subsequent calls hit warm caches and return fast.
+    Frontend sees `value: null` for any field whose fetcher missed
+    the deadline — renders a truthful "—" empty-state. The next
+    call hits the populated cache and returns the live value.
     """
+    import time as _time
     payload: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Run all fetchers in parallel using ThreadPoolExecutor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-        f_gm   = ex.submit(data_feeds.get_global_market)
-        f_fg   = ex.submit(data_feeds.get_fear_greed)
-        f_me   = ex.submit(data_feeds.get_macro_enrichment)
-        f_fred = ex.submit(data_feeds.fetch_fred_macro)
-        f_fund = ex.submit(data_feeds.get_funding_rate, "BTC/USDT")
-        f_hy   = ex.submit(_fetch_hy_spreads)
+    futures = {
+        "gm":   _MACRO_EXEC.submit(data_feeds.get_global_market),
+        "fg":   _MACRO_EXEC.submit(data_feeds.get_fear_greed),
+        "me":   _MACRO_EXEC.submit(data_feeds.get_macro_enrichment),
+        "fred": _MACRO_EXEC.submit(data_feeds.fetch_fred_macro),
+        "fund": _MACRO_EXEC.submit(data_feeds.get_funding_rate, "BTC/USDT"),
+        "hy":   _MACRO_EXEC.submit(_fetch_hy_spreads),
+    }
 
-        def _wait(label: str, fut, default):
-            try:
-                return fut.result(timeout=_PER_FETCHER_TIMEOUT_S) or default
-            except concurrent.futures.TimeoutError:
-                logger.warning("[macro] %s timed out after %ss", label, _PER_FETCHER_TIMEOUT_S)
-                return default
-            except Exception as exc:
-                logger.warning("[macro] %s failed: %s", label, exc)
-                return default
+    deadline = _time.time() + _ENDPOINT_DEADLINE_S
+    results: dict[str, Any] = {}
+    for label, fut in futures.items():
+        remaining = max(0.05, deadline - _time.time())
+        default = None if label == "hy" else {}
+        try:
+            value = fut.result(timeout=remaining)
+            results[label] = value if value is not None else default
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                "[macro] %s missed shared deadline (remaining=%.2fs)", label, remaining
+            )
+            results[label] = default
+        except Exception as exc:
+            logger.warning("[macro] %s failed: %s", label, exc)
+            results[label] = default
 
-        gm   = _wait("get_global_market", f_gm, {})
-        fg   = _wait("get_fear_greed", f_fg, {})
-        me   = _wait("get_macro_enrichment", f_me, {})
-        fred = _wait("fetch_fred_macro", f_fred, {})
-        fund = _wait("get_funding_rate", f_fund, {})
-        hy   = _wait("fetch_hy_spreads", f_hy, None)
+    gm, fg, me, fred, fund, hy = (
+        results["gm"], results["fg"], results["me"],
+        results["fred"], results["fund"], results["hy"],
+    )
 
     payload["btc_dominance"] = {
         "value": gm.get("btc_dominance"),
