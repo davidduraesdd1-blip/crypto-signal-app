@@ -74,12 +74,17 @@ def _fred_latest(series_id: str, scale: float = 1.0) -> float | None:
     if cached and now - cached["ts"] < _FRED_AD_HOC_TTL and cached["value"] is not None:
         return cached["value"]
     try:
-        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        # AUDIT-2026-05-06 (post-launch v3.2): use bare requests, NOT
-        # data_feeds._FRED_SESSION. The shared session is configured with
-        # `read=0` retries — when DTWEXBGS/VIXCLS large CSVs hit a slow
-        # read, no retry, immediate fail. Bare requests gives us a fresh
-        # connection per call with the timeout we set.
+        # AUDIT-2026-05-06 (post-launch v3.3): add &cosd=YYYY-MM-DD date
+        # filter so FRED only sends the recent ~350 rows instead of the
+        # full historical series (DTWEXBGS goes back to 2006, VIXCLS to
+        # 1990 — those payloads were timing out from Render's IP). With
+        # cosd=last-year, every series is ~6-7KB and downloads in < 1s.
+        from datetime import datetime as _dt, timedelta as _td
+        cosd = (_dt.utcnow() - _td(days=400)).strftime("%Y-%m-%d")
+        url = (
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv"
+            f"?id={series_id}&cosd={cosd}"
+        )
         import requests as _req
         resp = _req.get(
             url,
