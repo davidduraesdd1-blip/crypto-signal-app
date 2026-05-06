@@ -68,22 +68,31 @@ const onChainIndicators = [
   { label: "Whale", value: "—", subtext: "live in /on-chain", variant: "default" as const },
 ];
 
+// AUDIT-2026-05-05 (P0-8): user-visible "TODO(D-ext)" subtext strings
+// were leaking dev jargon to end-users. Replaced with honest "not in V1"
+// / "backfill pending" copy. The internal dev-side TODOs that flag the
+// actual missing endpoints stay above each block as comments.
+
+// TODO(internal, post-V1): wire /sentiment endpoint — F&G live in /home,
+// funding rates derivable from existing data_feeds.py funding fetcher,
+// Google Trends from pytrends with rate-limit fallback, news sentiment
+// is the gap that needs a new feed source.
 const sentimentIndicators = [
-  // TODO(D-ext): /sentiment endpoint
-  { label: "Fear&Greed", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "Funding", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "Google trends", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "News sent.", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
+  { label: "Fear&Greed", value: "—", subtext: "see Home", variant: "default" as const },
+  { label: "Funding", value: "—", subtext: "backfill pending", variant: "default" as const },
+  { label: "Google trends", value: "—", subtext: "not in V1", variant: "default" as const },
+  { label: "News sent.", value: "—", subtext: "not in V1", variant: "default" as const },
 ];
 
+// TODO(internal, post-V1): some are derivable from /signals enriched,
+// others (token unlocks) need a new /token-unlocks endpoint backed by
+// cryptorank.io.
 const priceIndicators = [
-  // TODO(D-ext): some are derivable from /signals enriched, others
-  // need /token-unlocks endpoint for the unlock schedule
-  { label: "Vol (24h)", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "ATR (14d)", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "Beta vs S&P", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "Funding (8h)", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
-  { label: "Token unlocks", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
+  { label: "Vol (24h)", value: "—", subtext: "backfill pending", variant: "default" as const },
+  { label: "ATR (14d)", value: "—", subtext: "backfill pending", variant: "default" as const },
+  { label: "Beta vs S&P", value: "—", subtext: "not in V1", variant: "default" as const },
+  { label: "Funding (8h)", value: "—", subtext: "backfill pending", variant: "default" as const },
+  { label: "Token unlocks", value: "—", subtext: "not in V1", variant: "default" as const },
 ];
 
 // AUDIT-2026-05-05 (P0-7): the v0 mock signal-history block (Apr 12,

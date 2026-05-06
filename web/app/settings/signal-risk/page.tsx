@@ -188,7 +188,7 @@ export default function SignalRiskSettingsPage() {
               label="Portfolio size USD"
               value={portfolioSizeUsd}
               onChange={setPortfolioSizeUsd}
-              help="TODO(D-ext): persists via dev-tools group · agent_portfolio_size_usd"
+              help="Persists via Settings → Dev tools · agent_portfolio_size_usd"
             />
             <SliderField
               label="Risk per trade"
@@ -202,19 +202,19 @@ export default function SignalRiskSettingsPage() {
               label="Max exposure"
               value={maxExposure}
               onChange={setMaxExposure}
-              help="Total open-position equity as % of portfolio · TODO(D-ext): no FastAPI key today"
+              help="Total open-position equity as % of portfolio · server-side persistence pending"
             />
             <InputField
               label="Max position cap USD"
               value={maxPositionCapUsd}
               onChange={setMaxPositionCapUsd}
-              help="TODO(D-ext): persists via execution group · max_order_size_usd"
+              help="Persists via Settings → Execution · max_order_size_usd"
             />
             <InputField
               label="Max open per pair"
               value={maxOpenPerPair}
               onChange={setMaxOpenPerPair}
-              help="TODO(D-ext): no FastAPI key today"
+              help="Server-side persistence pending"
             />
           </div>
         </div>
@@ -258,13 +258,13 @@ export default function SignalRiskSettingsPage() {
               label="MTF alignment threshold"
               value={mtfAlignment}
               onChange={setMtfAlignment}
-              help="% of active timeframes that must agree · TODO(D-ext): no FastAPI key today"
+              help="% of active timeframes that must agree · server-side persistence pending"
             />
             <SliderField
               label="Regime-confidence floor"
               value={regimeConfidence}
               onChange={setRegimeConfidence}
-              help="HMM regime must report ≥ this confidence · TODO(D-ext): no FastAPI key today"
+              help="HMM regime must report ≥ this confidence · server-side persistence pending"
             />
 
             {/* Composite layer weights — visual reference */}

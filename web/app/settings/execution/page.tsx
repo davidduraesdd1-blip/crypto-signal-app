@@ -196,7 +196,7 @@ export default function ExecutionSettingsPage() {
             min={70}
             max={95}
             onChange={setAutoExecConfidence}
-            help="TODO(D-ext): no FastAPI key today; persists locally only"
+            help="Persists locally only — server-side persistence pending"
           />
         </div>
       </div>

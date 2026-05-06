@@ -88,13 +88,14 @@ function rowToDecision(r: AiDecision): {
   };
 }
 
+// AUDIT-2026-05-05 (P0-8): user-visible "TODO(D-ext)" leaks scrubbed.
 // Mock metrics + fallback table data — kept until /agent/summary lands
 // (returns total_cycles + last_cycle_age + last_pair + last_decision).
 const metrics = [
-  { label: "Total Cycles", value: "—", subtext: "TODO(D-ext)" },
-  { label: "Last Cycle", value: "—", subtext: "TODO(D-ext)" },
-  { label: "Last Pair", value: "—", subtext: "TODO(D-ext)" },
-  { label: "Last Decision", value: "—", subtext: "TODO(D-ext)" },
+  { label: "Total Cycles", value: "—", subtext: "backfill pending" },
+  { label: "Last Cycle", value: "—", subtext: "backfill pending" },
+  { label: "Last Pair", value: "—", subtext: "backfill pending" },
+  { label: "Last Decision", value: "—", subtext: "backfill pending" },
 ];
 
 export default function AIAssistantPage() {
