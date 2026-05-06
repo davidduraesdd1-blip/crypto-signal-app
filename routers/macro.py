@@ -274,6 +274,56 @@ _MACRO_EXEC = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="macro-fetch",
 )
 
+# AUDIT-2026-05-06 (post-launch v5.3): cache pre-warm on import.
+# Render's outbound HTTP to FRED is consistently slow on cold starts —
+# even parallel fetches don't fit the 14s endpoint deadline on first
+# user request. Fix: kick off a background thread at module import that
+# warms every relevant cache. The first user request hits warm caches
+# and returns < 200ms with all fields populated.
+def _prewarm_caches():
+    """Background warm of all upstream caches. Errors are swallowed —
+    if anything fails the user-facing endpoint just falls back."""
+    import time
+    time.sleep(2)  # let the rest of the FastAPI app finish import first
+    try:
+        # FRED FX legs for ICE DXY
+        for sid in ("DEXUSEU", "DEXJPUS", "DEXUSUK", "DEXCAUS", "DEXSDUS", "DEXSZUS"):
+            try:
+                _fred_latest(sid)
+            except Exception:
+                pass
+        # FRED other macro
+        for sid in ("VIXCLS", "BAMLH0A0HYM2"):
+            try:
+                _fred_latest(sid)
+            except Exception:
+                pass
+        # CoinGecko + Fear & Greed + funding (data_feeds caches handle these)
+        try:
+            data_feeds.get_global_market()
+        except Exception:
+            pass
+        try:
+            data_feeds.get_fear_greed()
+        except Exception:
+            pass
+        try:
+            data_feeds.fetch_fred_macro()
+        except Exception:
+            pass
+        try:
+            data_feeds.get_funding_rate("BTC/USDT")
+        except Exception:
+            pass
+        logger.info("[macro] cache pre-warm complete")
+    except Exception as exc:
+        logger.warning("[macro] cache pre-warm failed: %s", exc)
+
+
+# Fire the warmer in a daemon thread so it doesn't block module import.
+import threading as _threading
+_threading.Thread(target=_prewarm_caches, daemon=True, name="macro-prewarm").start()
+
 
 @router.get(
     "/strip",
