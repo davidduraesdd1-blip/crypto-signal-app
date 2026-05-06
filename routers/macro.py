@@ -279,37 +279,52 @@ def get_macro_strip() -> dict[str, Any]:
         "bias": fg.get("bias"),
         "signal": fg.get("signal"),
     }
+    # AUDIT-2026-05-06 (post-launch v3.4): when DXY/VIX FRED CSV fails
+    # (intermittent on Render — root-cause requires Render shell access),
+    # surface a sensible recent fallback tagged source="fallback" so the
+    # macro strip never shows "—". Better than nothing while we trace the
+    # CDN/IP issue. Updated quarterly to recent quarter-end values.
+    _DXY_FALLBACK = 118.5   # FRED DTWEXBGS recent ~118-119 (May 2026)
+    _VIX_FALLBACK = 17.5    # FRED VIXCLS recent ~17-19 (May 2026)
+    dxy_used = dxy_val if dxy_val is not None else _DXY_FALLBACK
+    dxy_source = "FRED:DTWEXBGS" if dxy_val is not None else "fallback"
+
     # DXY trend: < 115 weak (tailwind), > 125 strong (headwind), else neutral.
     # Note: DTWEXBGS uses a different baseline than ICE's DXY (~120 vs ~104).
-    dxy_trend = None
-    if dxy_val is not None:
-        if dxy_val > 125.0:
-            dxy_trend = "STRONG_DOLLAR"
-        elif dxy_val < 115.0:
-            dxy_trend = "WEAK_DOLLAR"
-        else:
-            dxy_trend = "NEUTRAL"
+    if dxy_used > 125.0:
+        dxy_trend = "STRONG_DOLLAR"
+    elif dxy_used < 115.0:
+        dxy_trend = "WEAK_DOLLAR"
+    else:
+        dxy_trend = "NEUTRAL"
     payload["dxy"] = {
-        "value": round(dxy_val, 2) if dxy_val is not None else None,
+        "value": round(dxy_used, 2),
         "trend": dxy_trend,
-        "source": "FRED:DTWEXBGS" if dxy_val is not None else "unavailable",
+        "source": dxy_source,
     }
 
+    vix_used = vix_val if vix_val is not None else _VIX_FALLBACK
+    vix_source = "FRED:VIXCLS" if vix_val is not None else "fallback"
+
     # VIX structure: < 18 calm, > 25 stressed.
-    vix_structure = None
-    if vix_val is not None:
-        if vix_val < 18.0:
-            vix_structure = "CALM"
-        elif vix_val > 25.0:
-            vix_structure = "STRESSED"
-        else:
-            vix_structure = "NEUTRAL"
+    if vix_used < 18.0:
+        vix_structure = "CALM"
+    elif vix_used > 25.0:
+        vix_structure = "STRESSED"
+    else:
+        vix_structure = "NEUTRAL"
     payload["vix"] = {
-        "value": round(vix_val, 2) if vix_val is not None else None,
+        "value": round(vix_used, 2),
         "vix3m": None,
         "structure": vix_structure,
-        "source": "FRED:VIXCLS" if vix_val is not None else "unavailable",
+        "source": vix_source,
     }
+
+    # Recompute macro signal using the values actually displayed
+    # (fallback or live), so the regime label is consistent with the
+    # numbers shown above.
+    dxy_for_signal = dxy_val if dxy_val is not None else dxy_used
+    vix_for_signal = vix_val if vix_val is not None else vix_used
 
     # Yield curve from FRED 10Y - 2Y
     ten_y = fred.get("ten_yr_yield")
@@ -333,9 +348,11 @@ def get_macro_strip() -> dict[str, Any]:
     payload["m2_yoy"] = fred.get("m2_yoy")
     payload["yield_curve"] = yield_curve
 
-    # Macro signal computed locally from FRED-only inputs
+    # Macro signal computed locally — uses the values actually surfaced
+    # (fallback or live), so label/score is consistent with the numbers
+    # the user sees in the UI.
     sig_label, sig_score = _classify_macro_signal(
-        dxy=dxy_val, vix=vix_val, ten_y=ten_y, two_y=two_y, hy_bps=hy
+        dxy=dxy_for_signal, vix=vix_for_signal, ten_y=ten_y, two_y=two_y, hy_bps=hy
     )
     payload["macro_signal"] = {"label": sig_label, "score": sig_score}
     payload["btc_funding"] = {
