@@ -216,10 +216,25 @@ app.add_middleware(
     # owner-prefix-only security property (a different Vercel customer
     # cannot impersonate David) while admitting all four real URL shapes
     # this project produces.
+    #
+    # AUDIT-2026-05-06 (W2 Tier 3): tightened. The previous alternation
+    # `[a-z0-9-]*davidduraesdd1-blip[a-z0-9-]*` matched any subdomain
+    # containing the owner string — including the bare owner-domain
+    # `davidduraesdd1-blip.vercel.app` (which Vercel would assign to a
+    # namespace-collision attacker) and any `xyz-davidduraesdd1-blip-abc`
+    # squatter. Replaced with an enumerated list of the 4 real shapes
+    # this project produces:
+    #   - canonical:    v0-davidduraesdd1-blip-crypto-signa.vercel.app
+    #   - per-deploy:   v0-davidduraesdd1-blip-crypto-signal-<hash>.vercel.app
+    #   - git preview:  v0-davidduraesdd1-blip-git-<hash>-davidduraesdd1-<id>-projects.vercel.app
+    #   - explicit alias for the canonical project shorthand
+    #     crypto-signal-app(-<deploy-id>-davidduraesdd1-blip).vercel.app
     allow_origin_regex=(
         r"^https://"
         r"(crypto-signal-app(-[a-z0-9-]+-davidduraesdd1-blip)?"
-        r"|[a-z0-9-]*davidduraesdd1-blip[a-z0-9-]*)"
+        r"|v0-davidduraesdd1-blip-crypto-signa"
+        r"|v0-davidduraesdd1-blip-crypto-signal-[a-z0-9]+"
+        r"|v0-davidduraesdd1-blip-git-[a-z0-9-]+-davidduraesdd1-[a-z0-9-]+-projects)"
         r"\.vercel\.app$"
     ),
     allow_methods=["GET", "POST", "PUT", "DELETE"],  # PUT/DELETE added for D1 routers

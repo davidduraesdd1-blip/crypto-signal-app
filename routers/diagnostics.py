@@ -321,12 +321,21 @@ _FEED_PROBES: list[dict[str, Any]] = [
     # Sentiment / market data
     {"name": "alternative.me F&G", "url": "https://api.alternative.me/fng/?limit=1", "method": "GET", "category": "sentiment"},
     # Macro
-    {"name": "FRED", "url": "https://fred.stlouisfed.org/", "method": "HEAD", "category": "macro"},
+    # AUDIT-2026-05-06 (W2 Tier 4): the previous probe URL hit FRED's
+    # SPA root which hangs on Akamai edge. The fred.stlouisfed.org
+    # static CSV path returns in ~280ms. This matches what the actual
+    # macro fetcher uses (`fred.stlouisfed.org/graph/fredgraph.csv`).
+    {"name": "FRED", "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10", "method": "GET", "category": "macro"},
 ]
 
 
 def _probe_feed(spec: dict[str, Any]) -> dict[str, Any]:
-    """Single probe — bounded to 5s, fail-open with status='unreachable'."""
+    """Single probe — bounded to 3s, fail-open with status='unreachable'.
+
+    AUDIT-2026-05-06 (W2 Tier 3): timeout dropped 5s → 3s. Worst case
+    8 probes × 5s = 40s exceeds Render's 30s proxy read-timeout. At 3s
+    worst case is 24s with comfort margin.
+    """
     import urllib.request
     import urllib.error
 
@@ -336,7 +345,7 @@ def _probe_feed(spec: dict[str, Any]) -> dict[str, Any]:
         # Polaris Edge UA so upstream rate-limiters can identify our traffic
         # (and so cf-blocks that key on missing/empty UA don't trigger).
         req.add_header("User-Agent", "PolarisEdge-DiagnosticsProbe/1.0")
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
             elapsed_ms = int((time.time() - started) * 1000)
             return {
                 "name": spec["name"],
