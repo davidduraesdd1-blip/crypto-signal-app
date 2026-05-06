@@ -1148,7 +1148,16 @@ def place_iceberg_order(
 # ─── Status ─────────────────────────────────────────────────────────────────────
 
 def get_status() -> dict:
-    """Return current execution config summary (no secrets)."""
+    """Return current execution config summary (no secrets).
+
+    AUDIT-2026-05-06 (W2 Tier 2): added agent_running flag so the
+    frontend topbar AGENT pill can show RUNNING vs STOPPED based on
+    actual agent state, not just `live_trading` (which only reflects
+    user toggle, not whether the agent is currently executing).
+
+    True iff: live_trading is on AND auto_execute is on AND keys are
+    configured. Any of those off = agent is not actually trading.
+    """
     cfg = get_exec_config()
     return {
         "ccxt_available":     _CCXT_AVAILABLE,
@@ -1157,6 +1166,9 @@ def get_status() -> dict:
         "auto_min_conf":      cfg["auto_min_conf"],
         "keys_configured":    cfg["keys_configured"],
         "default_order_type": cfg["default_order_type"],
+        "agent_running":      bool(
+            cfg["live_trading"] and cfg["auto_execute"] and cfg["keys_configured"]
+        ),
     }
 
 

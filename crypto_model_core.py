@@ -4877,7 +4877,12 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         'trending':           pair_is_trending,
         'altcoin_season':     global_mkt.get('altcoin_season_label', 'N/A'),
         # Fallback keys always present so downstream consumers never get KeyError
-        'regime':             f"Regime: {regime_1h}",
+        # AUDIT-2026-05-06 (W2 Tier 2 finding): drop the "Regime: " prefix.
+        # Pre-fix this string was rendered as "regime: trending" on the
+        # Home / Signals / Regimes pages because regimeToDisplay() lowercases
+        # whatever the engine emits. Other call sites in this file already
+        # strip the prefix before consumption (see regime_1h.replace logic).
+        'regime':             regime_1h,
         'sr_status':          tf_data.get('1h', {}).get('sr_status', 'N/A'),
         # Confluence (Group 1 — A3)
         'confluence_count':   _confluence_count,   # 0–4: TFs agreeing with overall direction
@@ -4915,7 +4920,9 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
             'risk_mode':              risk_info['risk_mode'],
             'corr_with_btc':          risk_info.get('corr_with_btc'),
             'corr_adjusted_size_pct': risk_info.get('corr_adjusted_size_pct'),
-            'regime':                 f"Regime: {regime_1h}",
+            # AUDIT-2026-05-06 (W2 Tier 2): drop "Regime: " prefix; see
+            # twin call site above for rationale.
+            'regime':                 regime_1h,
             'sr_status':              tf_data.get('1h', {}).get('sr_status', 'N/A'),
         })
     return result

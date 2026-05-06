@@ -730,10 +730,14 @@ def get_backtest_trades(limit: int = 50, offset: int = 0):
     """
     df = db.get_backtest_df()
     if df.empty:
-        return {"total": 0, "offset": offset, "limit": limit, "trades": []}
+        # AUDIT-2026-05-06 (W2 Tier 2): emit BOTH `count` and `total`.
+        # Frontend (web/app/backtester/page.tsx:133) reads `count`; the
+        # original `total` is kept as alias for any external consumer.
+        return {"count": 0, "total": 0, "offset": offset, "limit": limit, "trades": []}
     total = len(df)
     page = df.iloc[offset : offset + limit]
     return {
+        "count": total,
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -1087,14 +1091,43 @@ def get_execution_log(limit: int = 100):
     summary="Alert dispatch audit log",
 )
 def get_alerts_log(limit: int = 100):
-    """Returns recent alert dispatch records from all channels (Email, TradingView webhook)."""
+    """Returns recent alert dispatch records from all channels (Email, TradingView webhook).
+
+    AUDIT-2026-05-06 (W2 Tier 2): the DB columns are `sent_at`,
+    `channel`, `pair`, `direction`, `confidence`, `status`, `error_msg`,
+    but the frontend (web/app/alerts/history/page.tsx) reads
+    `timestamp`, `type`, `message`. Three name drifts caused every
+    timestamp + every successful alert to render with empty fields.
+    Aliases added on the way out so the existing TS client just works.
+    """
     limit = min(limit, 500)
     df = db.get_alerts_log_df()
     if df.empty:
         return {"count": 0, "alerts": []}
+
+    rows = df.tail(limit).to_dict(orient="records")
+    aliased = []
+    for r in rows:
+        out = dict(r)
+        # sent_at → timestamp (keep sent_at for back-compat)
+        if "sent_at" in out and "timestamp" not in out:
+            out["timestamp"] = out["sent_at"]
+        # channel → type (frontend uses `type` to pick a badge color)
+        if "channel" in out and "type" not in out:
+            out["type"] = out["channel"]
+        # error_msg → message (or status if no error)
+        if "message" not in out:
+            err = out.get("error_msg")
+            status = out.get("status")
+            out["message"] = (
+                err if err
+                else f"{out.get('direction','')} {out.get('pair','')}".strip()
+                or (status or "")
+            )
+        aliased.append(out)
     return {
         "count": len(df),
-        "alerts": _serialize(df.tail(limit).to_dict(orient="records")),
+        "alerts": _serialize(aliased),
     }
 
 
