@@ -1,0 +1,137 @@
+# AUDIT-2026-05-06 (W2 Tier 8 P1-E): Vercel auto-promote.
+#
+# This v0-generated Vercel project doesn't expose the
+# "Promote production deployments automatically" toggle in any
+# Settings tab (Git / Domains / General all checked 2026-05-06).
+# Without it, every push to main creates a Preview deploy that
+# David has to manually promote via the dashboard ⋮ menu.
+#
+# This workflow runs on every push to main, polls the Vercel API
+# for the resulting deploy keyed by commit SHA, then promotes it
+# to Production. ~30-90s end-to-end (mostly waiting for Vercel
+# build). Free tier.
+#
+# ─── Setup (one-time, ~3 min) ─────────────────────────────────────
+#  1. https://vercel.com/account/tokens — "Create Token", scope = Full
+#     Account (or just this project), copy the value.
+#  2. GitHub repo → Settings → Secrets and variables → Actions
+#     → New repository secret:
+#       Name:  VERCEL_TOKEN
+#       Value: <token from step 1>
+#  3. Same page → New repository secret:
+#       Name:  VERCEL_PROJECT_ID
+#       Value: <project ID from Vercel → Project Settings → General →
+#              "Project ID" (looks like `prj_abc123...`)>
+#  4. (Optional, only needed if you have multiple Vercel teams):
+#       Name:  VERCEL_TEAM_ID
+#       Value: <team ID from team settings; leave unset for personal>
+#
+# After step 3, the next push to main auto-promotes within ~60s.
+# ──────────────────────────────────────────────────────────────────
+
+name: Vercel auto-promote
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  # Only one promote at a time. If a new main push arrives mid-run,
+  # cancel the older — we always want the latest commit promoted.
+  group: vercel-promote-main
+  cancel-in-progress: true
+
+jobs:
+  promote:
+    name: Promote latest main deploy to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - name: Verify required secrets
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -z "${VERCEL_TOKEN:-}" ] && missing+=("VERCEL_TOKEN")
+          [ -z "${VERCEL_PROJECT_ID:-}" ] && missing+=("VERCEL_PROJECT_ID")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "See the comment block at the top of this workflow file for setup steps."
+            exit 1
+          fi
+          echo "::notice::Both required secrets present."
+
+      - name: Find Vercel deployment for this commit
+        id: find_deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          team_qs=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            team_qs="&teamId=${VERCEL_TEAM_ID}"
+          fi
+          # Poll Vercel API for the deployment matching this commit SHA.
+          # Up to 36 attempts × 10s = 6 min cap.
+          deploy_id=""
+          deploy_url=""
+          for attempt in $(seq 1 36); do
+            resp=$(curl -sS \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&limit=20${team_qs}")
+            # Find the entry where meta.githubCommitSha matches COMMIT_SHA
+            # AND state == READY. jq is preinstalled on ubuntu-latest.
+            row=$(echo "$resp" | jq -r --arg sha "$COMMIT_SHA" '
+              .deployments[]?
+              | select(.meta.githubCommitSha == $sha)
+              | select(.state == "READY")
+              | "\(.uid)|\(.url)"
+              ' | head -n1)
+            if [ -n "$row" ]; then
+              deploy_id="${row%%|*}"
+              deploy_url="${row##*|}"
+              echo "Found ready deployment ${deploy_id} (${deploy_url}) on attempt ${attempt}"
+              break
+            fi
+            echo "Attempt ${attempt}: no READY deploy yet for ${COMMIT_SHA:0:7}, sleeping 10s..."
+            sleep 10
+          done
+          if [ -z "$deploy_id" ]; then
+            echo "::error::Timed out waiting for Vercel deploy of ${COMMIT_SHA} to reach READY state."
+            exit 1
+          fi
+          echo "deploy_id=${deploy_id}" >> "$GITHUB_OUTPUT"
+          echo "deploy_url=${deploy_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Promote deployment to production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          DEPLOY_ID: ${{ steps.find_deploy.outputs.deploy_id }}
+          DEPLOY_URL: ${{ steps.find_deploy.outputs.deploy_url }}
+        run: |
+          set -euo pipefail
+          team_qs=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            team_qs="?teamId=${VERCEL_TEAM_ID}"
+          fi
+          # Vercel "promote" endpoint v10. Returns 200 on success.
+          status=$(curl -sS -o /tmp/promote.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+            "https://api.vercel.com/v10/projects/${VERCEL_PROJECT_ID}/promote/${DEPLOY_ID}${team_qs}")
+          if [ "$status" -ne 200 ] && [ "$status" -ne 201 ]; then
+            echo "::error::Vercel promote API returned HTTP ${status}"
+            cat /tmp/promote.json
+            exit 1
+          fi
+          echo "::notice::Promoted ${DEPLOY_URL} (id=${DEPLOY_ID}) to production."
