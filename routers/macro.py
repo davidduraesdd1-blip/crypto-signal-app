@@ -59,16 +59,39 @@ _FRED_AD_HOC_TTL = 3600  # 1 hour
 
 def _fred_latest(series_id: str, scale: float = 1.0) -> float | None:
     """Fetch the latest non-empty value of a FRED series via free CSV.
-    Returns None on any failure. Cached 1h per series."""
+    Returns None on any failure. Cached 1h per series.
+
+    AUDIT-2026-05-06 (post-launch v3 fix): bumped timeout 5→12s and
+    reuse `data_feeds._FRED_SESSION` (HTTPAdapter with retries +
+    keep-alive) so larger series like DTWEXBGS / VIXCLS don't fail on
+    cold connect from Render. The 5s timeout was tight for ~9000-row
+    CSVs over Render's slow datacenter network. Also adds an explicit
+    User-Agent because FRED has been observed to 403 the default
+    python-requests/X.X UA from cloud IPs.
+    """
     cached = _FRED_AD_HOC_CACHE.get(series_id)
     now = _time.time()
     if cached and now - cached["ts"] < _FRED_AD_HOC_TTL and cached["value"] is not None:
         return cached["value"]
     try:
-        import requests
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        resp = requests.get(url, timeout=5)
+        # Use the existing FRED session (retries + keep-alive) from data_feeds
+        sess = getattr(data_feeds, "_FRED_SESSION", None)
+        if sess is not None:
+            resp = sess.get(
+                url,
+                timeout=12,
+                headers={"User-Agent": "crypto-signal-app/1.0 (+macro/strip)"},
+            )
+        else:
+            import requests as _req
+            resp = _req.get(
+                url,
+                timeout=12,
+                headers={"User-Agent": "crypto-signal-app/1.0 (+macro/strip)"},
+            )
         if resp.status_code != 200:
+            logger.warning("[macro] FRED %s status=%s", series_id, resp.status_code)
             return None
         for line in reversed(resp.text.strip().split("\n")[1:]):
             parts = line.split(",")
@@ -80,7 +103,7 @@ def _fred_latest(series_id: str, scale: float = 1.0) -> float | None:
                 except ValueError:
                     continue
     except Exception as exc:
-        logger.debug("[macro] FRED %s fetch failed: %s", series_id, exc)
+        logger.warning("[macro] FRED %s fetch failed: %s", series_id, exc)
     return None
 
 
@@ -155,8 +178,14 @@ def _classify_macro_signal(dxy: float | None, vix: float | None,
     return "NEUTRAL", score
 
 
-_ENDPOINT_DEADLINE_S = 7   # whole-endpoint hard ceiling (was per-fetcher)
-_PER_FETCHER_TIMEOUT_S = 7  # alias for compat with prior reads / docs
+_ENDPOINT_DEADLINE_S = 11   # whole-endpoint hard ceiling
+_PER_FETCHER_TIMEOUT_S = 11  # alias for compat with prior reads / docs
+
+# AUDIT-2026-05-06 (post-launch v3 fix): bumped 7→11s after observing on
+# Render that DTWEXBGS + VIXCLS CSVs (large historical series, 5000-9000
+# rows) take 8-10s to download cold. The 7s deadline was killing them
+# before they could populate the cache. Subsequent calls hit the 1h
+# cache and return in <100ms.
 
 # Module-level executor so timed-out fetchers continue running in
 # background, populating their upstream caches for the next call.
