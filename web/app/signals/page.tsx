@@ -119,42 +119,75 @@ function _formatTs(iso: string): string {
   }
 }
 
+/** Defensive number coercion — daily_signals rows from older engine
+ *  versions can have any of these fields as string, null, or undefined.
+ *  Only return a number if the value cleanly coerces to a finite one. */
+function _toFiniteNumber(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Coerce a value that should be a string but might be null/number/etc. */
+function _toCleanString(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s.length > 0 && s.toLowerCase() !== "nan" ? s : null;
+}
+
 /** Compress consecutive same-direction rows into transition entries.
  *  Each kept row is the FIRST scan that flipped to a new direction.
  *  Return % is computed from price at this transition vs price at the
- *  next transition (i.e. the holding period of the previous direction). */
+ *  next transition (i.e. the holding period of the previous direction).
+ *
+ *  AUDIT-2026-05-05 (HOTFIX): hardened against type drift in
+ *  daily_signals rows. Pre-fix, calling .toFixed() on a null/string
+ *  mtf_alignment crashed the page (caught by the H1 error boundary).
+ *  Now every numeric read is coerced through _toFiniteNumber and every
+ *  string read through _toCleanString. */
 function _deriveTransitions(rows: SignalHistoryRow[]): HistoryEntry[] {
-  // Backend returns oldest-first via .tail() — flip to newest-first.
-  const desc = [...rows].reverse();
-  const transitions: { row: SignalHistoryRow; signal: SignalType }[] = [];
-  let prevSignal: SignalType | null = null;
-  for (const row of desc) {
-    const sig = _mapDirectionToSignal(row.direction);
-    if (sig !== prevSignal) {
-      transitions.push({ row, signal: sig });
-      prevSignal = sig;
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  try {
+    // Backend returns oldest-first via .tail() — flip to newest-first.
+    const desc = [...rows].reverse();
+    const transitions: { row: SignalHistoryRow; signal: SignalType }[] = [];
+    let prevSignal: SignalType | null = null;
+    for (const row of desc) {
+      const sig = _mapDirectionToSignal(row.direction);
+      if (sig !== prevSignal) {
+        transitions.push({ row, signal: sig });
+        prevSignal = sig;
+      }
     }
+    return transitions.slice(0, 6).map((t, i) => {
+      const next = transitions[i + 1];
+      const priceNow = _toFiniteNumber(t.row.price_usd);
+      const pricePrev = next ? _toFiniteNumber(next.row.price_usd) : null;
+      const ret =
+        priceNow !== null && pricePrev !== null && pricePrev > 0
+          ? ((priceNow - pricePrev) / pricePrev) * 100
+          : null;
+      const noteParts: string[] = [];
+      const regime = _toCleanString(t.row.regime);
+      if (regime) noteParts.push(regime.replace(/^Regime:\s*/i, "").trim());
+      const conf = _toFiniteNumber(t.row.confidence_avg_pct);
+      if (conf !== null) noteParts.push(`conf ${Math.round(conf)}%`);
+      const mtf = _toFiniteNumber(t.row.mtf_alignment);
+      if (mtf !== null) noteParts.push(`mtf ${mtf.toFixed(2)}`);
+      const ts = _toCleanString(t.row.scan_timestamp) ?? "";
+      return {
+        timestamp: ts ? _formatTs(ts) : "—",
+        signal: t.signal,
+        note: noteParts.length ? noteParts.join(" · ") : "—",
+        returnPct: _formatReturn(ret),
+      };
+    });
+  } catch (err) {
+    // Last-resort guard — empty entries beat a crashed page.
+    // eslint-disable-next-line no-console
+    console.error("[signals] _deriveTransitions failed", err);
+    return [];
   }
-  // Compute return between this transition and the previous one (older).
-  return transitions.slice(0, 6).map((t, i) => {
-    const next = transitions[i + 1];
-    const priceNow = t.row.price_usd;
-    const pricePrev = next?.row.price_usd ?? null;
-    const ret =
-      priceNow != null && pricePrev != null && pricePrev > 0
-        ? ((priceNow - pricePrev) / pricePrev) * 100
-        : null;
-    const noteParts: string[] = [];
-    if (t.row.regime) noteParts.push(t.row.regime.replace(/^Regime:\s*/i, "").trim());
-    if (t.row.confidence_avg_pct != null) noteParts.push(`conf ${Math.round(t.row.confidence_avg_pct)}%`);
-    if (t.row.mtf_alignment != null) noteParts.push(`mtf ${t.row.mtf_alignment.toFixed(2)}`);
-    return {
-      timestamp: _formatTs(t.row.scan_timestamp),
-      signal: t.signal,
-      note: noteParts.length ? noteParts.join(" · ") : "—",
-      returnPct: _formatReturn(ret),
-    };
-  });
 }
 
 // Engine TF order (crypto_model_core.py:87) — defines tile sequence.
@@ -232,37 +265,41 @@ export default function SignalsPage() {
   // Engine returns a dict keyed by '1h'/'4h'/'1d'/'1w'/'1M' — we
   // surface them as 5 tiles in fixed order. Direction → buy/hold/sell;
   // 'NO DATA' / 'LOW VOL' both render as hold.
+  // Hardened against type drift via _toCleanString / _toFiniteNumber.
   const timeframes: { label: string; signal: SignalType; score: number }[] = (() => {
-    const tfDict = (detail?.timeframes ?? {}) as Record<
-      string,
-      { direction?: string; confidence?: number } | undefined
-    >;
-    return _ENGINE_TFS.map((tf) => {
-      const row = tfDict[tf] ?? {};
-      const dir = (row.direction ?? "NO DATA").toUpperCase();
-      const sig: SignalType = dir.includes("BUY")
-        ? "buy"
-        : dir.includes("SELL")
-          ? "sell"
-          : "hold";
-      const score = typeof row.confidence === "number" ? Math.round(row.confidence) : 0;
-      return { label: tf, signal: sig, score };
-    });
+    try {
+      const tfDict = (detail?.timeframes ?? {}) as Record<
+        string,
+        { direction?: unknown; confidence?: unknown } | undefined
+      >;
+      return _ENGINE_TFS.map((tf) => {
+        const row = tfDict[tf] ?? {};
+        const dir = (_toCleanString(row.direction) ?? "NO DATA").toUpperCase();
+        const sig: SignalType = dir.includes("BUY")
+          ? "buy"
+          : dir.includes("SELL")
+            ? "sell"
+            : "hold";
+        const conf = _toFiniteNumber(row.confidence);
+        return { label: tf, signal: sig, score: conf !== null ? Math.round(conf) : 0 };
+      });
+    } catch {
+      return _ENGINE_TFS.map((tf) => ({ label: tf, signal: "hold" as SignalType, score: 0 }));
+    }
   })();
 
   // AUDIT-2026-05-05 (P0-COMPOSITE): composite score is the engine's
-  // confidence_avg_pct (0-100). Per-layer scoring (Tech/Macro/Sentiment/
-  // On-chain) doesn't exist as distinct backend fields yet — composite
-  // is internally a regime-weighted blend but the intermediate weights
-  // aren't exposed. Surface the composite + an honest note until the
-  // backend ships /signals/{pair}/composite-layers.
-  const compositeFallback = {
-    score: typeof detail?.confidence_avg_pct === "number" ? detail.confidence_avg_pct : 0,
-    layers: [] as { name: string; score: number }[],
-    weightsNote: detail
-      ? `Composite confidence ${detail.confidence_avg_pct ?? "—"}%. Per-layer breakdown (Technical / Macro / Sentiment / On-chain) not in V1 — backend exposes the blended composite only.`
-      : "Run a scan to populate.",
-  };
+  // confidence_avg_pct (0-100). Per-layer scoring not yet in backend.
+  const compositeFallback = (() => {
+    const composite = _toFiniteNumber(detail?.confidence_avg_pct);
+    return {
+      score: composite ?? 0,
+      layers: [] as { name: string; score: number }[],
+      weightsNote: detail
+        ? `Composite confidence ${composite !== null ? composite.toFixed(1) + "%" : "—"}. Per-layer breakdown (Technical / Macro / Sentiment / On-chain) not in V1 — backend exposes the blended composite only.`
+        : "Run a scan to populate.",
+    };
+  })();
 
   // Technical indicators from snap_* fields when present
   const technicalIndicators = (() => {
