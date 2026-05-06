@@ -119,11 +119,63 @@ def _fetch_hy_spreads() -> float | None:
 
 
 def _fetch_dxy_fred() -> float | None:
-    """DXY proxy via FRED DTWEXBGS (Nominal Broad U.S. Dollar Index). Daily.
-    Note: DTWEXBGS is normalized to a different basis than ICE's DXY but
-    tracks the same dollar strength signal. We pass the raw value through;
-    frontend renders it as DXY for continuity."""
-    return _fred_latest("DTWEXBGS")
+    """Compute ICE DXY from FRED FX rates using the canonical formula.
+
+    AUDIT-2026-05-06 (post-launch v5): pre-fix this returned FRED's
+    DTWEXBGS (Nominal Broad U.S. Dollar Index) which has a 2006-baseline
+    of 100, so it currently reads ~118 — confusing for a field labeled
+    "DXY" when crypto traders universally mean ICE DXY (1973-baseline
+    of 100, currently ~100-102). David flagged this on first sight.
+
+    ICE DXY is computed from a fixed-weight basket of 6 currencies:
+        DXY = 50.14348112
+              * EURUSD^(-0.576)
+              * USDJPY^(+0.136)
+              * GBPUSD^(-0.119)
+              * USDCAD^(+0.091)
+              * USDSEK^(+0.042)
+              * USDCHF^(+0.036)
+    (Negative exponents for EUR + GBP because their FRED series are
+    quoted as USD per FX unit, not FX per USD — the formula expects
+    USD strength, so we invert via negative exponent rather than 1/x.)
+
+    All 6 FX rates are free on FRED, no API key:
+        DEXUSEU = USD per EUR (= EURUSD spot rate)
+        DEXJPUS = JPY per USD (= USDJPY spot rate)
+        DEXUSUK = USD per GBP (= GBPUSD spot rate)
+        DEXCAUS = CAD per USD (= USDCAD spot rate)
+        DEXSDUS = SEK per USD (= USDSEK spot rate)
+        DEXSZUS = CHF per USD (= USDCHF spot rate)
+
+    Each leg is cached 1h via _fred_latest, so this is cheap on
+    subsequent calls. Returns None if any leg is missing.
+    """
+    eur_usd = _fred_latest("DEXUSEU")
+    usd_jpy = _fred_latest("DEXJPUS")
+    gbp_usd = _fred_latest("DEXUSUK")
+    usd_cad = _fred_latest("DEXCAUS")
+    usd_sek = _fred_latest("DEXSDUS")
+    usd_chf = _fred_latest("DEXSZUS")
+
+    legs = (eur_usd, usd_jpy, gbp_usd, usd_cad, usd_sek, usd_chf)
+    if any(x is None or x <= 0 for x in legs):
+        logger.warning("[macro] ICE DXY compute failed — leg(s) missing")
+        return None
+
+    try:
+        dxy = (
+            50.14348112
+            * (eur_usd ** -0.576)
+            * (usd_jpy ** 0.136)
+            * (gbp_usd ** -0.119)
+            * (usd_cad ** 0.091)
+            * (usd_sek ** 0.042)
+            * (usd_chf ** 0.036)
+        )
+        return round(dxy, 3)
+    except (ValueError, TypeError, OverflowError) as exc:
+        logger.warning("[macro] ICE DXY formula error: %s", exc)
+        return None
 
 
 def _fetch_vix_fred() -> float | None:
@@ -148,12 +200,12 @@ def _classify_macro_signal(dxy: float | None, vix: float | None,
     score = 0
     inputs_used = 0
 
-    # DXY — strong dollar = headwind (-1), weak dollar = tailwind (+1)
-    # DTWEXBGS recent baseline ~120; > 125 = strong, < 115 = weak.
+    # DXY (ICE basis) — strong dollar = headwind for risk (-1),
+    # weak dollar = tailwind (+1). ICE DXY typical 95-110 range.
     if dxy is not None:
         inputs_used += 1
-        if dxy < 115.0:    score += 1
-        elif dxy > 125.0:  score -= 1
+        if dxy < 100.0:    score += 1
+        elif dxy > 105.0:  score -= 1
 
     # VIX — calm = +1, stressed = -1
     if vix is not None:
@@ -303,21 +355,19 @@ def get_macro_strip() -> dict[str, Any]:
         "signal": fg_signal,
         "source": fg_source,
     }
-    # AUDIT-2026-05-06 (post-launch v3.4): when DXY/VIX FRED CSV fails
-    # (intermittent on Render — root-cause requires Render shell access),
-    # surface a sensible recent fallback tagged source="fallback" so the
-    # macro strip never shows "—". Better than nothing while we trace the
-    # CDN/IP issue. Updated quarterly to recent quarter-end values.
-    _DXY_FALLBACK = 118.5   # FRED DTWEXBGS recent ~118-119 (May 2026)
+    # AUDIT-2026-05-06 (post-launch v3.4 + v5): fallback values when
+    # upstream fetchers fail (Render network flake). ICE DXY trades
+    # ~100-105 (1973 baseline of 100), VIX ~17-20.
+    _DXY_FALLBACK = 102.0   # ICE DXY recent ~100-103 (May 2026)
     _VIX_FALLBACK = 17.5    # FRED VIXCLS recent ~17-19 (May 2026)
     dxy_used = dxy_val if dxy_val is not None else _DXY_FALLBACK
-    dxy_source = "FRED:DTWEXBGS" if dxy_val is not None else "fallback"
+    dxy_source = "FRED:ICE-DXY-formula" if dxy_val is not None else "fallback"
 
-    # DXY trend: < 115 weak (tailwind), > 125 strong (headwind), else neutral.
-    # Note: DTWEXBGS uses a different baseline than ICE's DXY (~120 vs ~104).
-    if dxy_used > 125.0:
+    # DXY trend on ICE DXY scale: < 100 weak (tailwind), > 105 strong
+    # (headwind), else neutral. Recent typical range 95-110.
+    if dxy_used > 105.0:
         dxy_trend = "STRONG_DOLLAR"
-    elif dxy_used < 115.0:
+    elif dxy_used < 100.0:
         dxy_trend = "WEAK_DOLLAR"
     else:
         dxy_trend = "NEUTRAL"
