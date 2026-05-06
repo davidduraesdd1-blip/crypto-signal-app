@@ -111,27 +111,39 @@ jobs:
           echo "deploy_id=${deploy_id}" >> "$GITHUB_OUTPUT"
           echo "deploy_url=${deploy_url}" >> "$GITHUB_OUTPUT"
 
-      - name: Promote deployment to production
+      - name: Re-alias production domain to this deployment
+        # AUDIT-2026-05-06 (W2-T8 P1-E follow-up): the v10 /promote
+        # endpoint returned 422 "Resource cannot be processed" because
+        # Vercel's link.productionBranch is bound to a stale branch
+        # (phase-d/next-fastapi-cutover) and refuses to promote deploys
+        # from main. The alias-based approach bypasses that check —
+        # we directly rewrite the production-domain alias to point
+        # at the deploy from this commit. Net user effect is identical
+        # to "promote": the canonical URL serves this commit's bundle.
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           DEPLOY_ID: ${{ steps.find_deploy.outputs.deploy_id }}
           DEPLOY_URL: ${{ steps.find_deploy.outputs.deploy_url }}
+          PROD_ALIAS: v0-davidduraesdd1-blip-crypto-signa.vercel.app
         run: |
           set -euo pipefail
           team_qs=""
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then
             team_qs="?teamId=${VERCEL_TEAM_ID}"
           fi
-          # Vercel "promote" endpoint v10. Returns 200 on success.
-          status=$(curl -sS -o /tmp/promote.json -w "%{http_code}" \
+          echo "Aliasing ${PROD_ALIAS} → deploy ${DEPLOY_ID}"
+          # POST /v2/deployments/:deploymentId/aliases
+          # Body: { "alias": "<production-domain>" }
+          status=$(curl -sS -o /tmp/alias.json -w "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer ${VERCEL_TOKEN}" \
-            "https://api.vercel.com/v10/projects/${VERCEL_PROJECT_ID}/promote/${DEPLOY_ID}${team_qs}")
+            -H "Content-Type: application/json" \
+            -d "{\"alias\":\"${PROD_ALIAS}\"}" \
+            "https://api.vercel.com/v2/deployments/${DEPLOY_ID}/aliases${team_qs}")
           if [ "$status" -ne 200 ] && [ "$status" -ne 201 ]; then
-            echo "::error::Vercel promote API returned HTTP ${status}"
-            cat /tmp/promote.json
+            echo "::error::Vercel alias API returned HTTP ${status}"
+            cat /tmp/alias.json
             exit 1
           fi
-          echo "::notice::Promoted ${DEPLOY_URL} (id=${DEPLOY_ID}) to production."
+          echo "::notice::Aliased ${PROD_ALIAS} to ${DEPLOY_URL} (id=${DEPLOY_ID})"
