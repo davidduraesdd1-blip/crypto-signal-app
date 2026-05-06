@@ -7,6 +7,7 @@ import { SignalCard, type SignalType } from "@/components/signal-card";
 import { MacroStrip } from "@/components/macro-strip";
 import { Watchlist } from "@/components/watchlist";
 import { BacktestCard } from "@/components/backtest-card";
+import { BeginnerHint } from "@/components/beginner-hint";
 import { useHomeSummary } from "@/hooks/use-home-summary";
 import { useBacktestSummary } from "@/hooks/use-backtester";
 import {
@@ -191,6 +192,16 @@ export default function HomePage() {
       >
         <DataSourceRow sources={dataSources} />
       </PageHeader>
+
+      {/* AUDIT-2026-05-06 (W2 Tier 6 F-LEVEL-1): Beginner gloss */}
+      <BeginnerHint title="What you're looking at">
+        Each card below is one cryptocurrency with a quick verdict
+        (Buy / Hold / Sell), how confident the model is, and the
+        current market &ldquo;regime&rdquo; (Trending / Ranging /
+        Risk-off). The model never guarantees a profit — it surfaces
+        the strongest opportunities and risks. Always size positions
+        to your own risk tolerance.
+      </BeginnerHint>
 
       {/* Hero signals — empty-state when no scan has run yet */}
       {heroSignals.length === 0 ? (

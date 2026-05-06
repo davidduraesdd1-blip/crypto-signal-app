@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { DataSourceRow } from "@/components/data-source-badge";
 import { OnChainCard } from "@/components/onchain-card";
 import { WhaleActivity } from "@/components/whale-activity";
+import { BeginnerHint } from "@/components/beginner-hint";
 import { useOnchainDashboard } from "@/hooks/use-onchain-dashboard";
 import { formatNumber, isMissing } from "@/lib/format";
 import type { OnchainDashboard } from "@/lib/api-types";
@@ -138,6 +139,17 @@ export default function OnChainPage() {
       >
         <DataSourceRow sources={dataSources} />
       </PageHeader>
+
+      {/* AUDIT-2026-05-06 (W2 Tier 6 F-LEVEL-1): Beginner gloss */}
+      <BeginnerHint title="On-chain — what blockchain data tells us">
+        These metrics come straight from the blockchain itself, not
+        from exchanges. They show what
+        <em> long-term holders </em> are doing — adding to positions
+        (bullish), selling to exchanges (bearish), or moving between
+        cold storage and trading (neutral). On-chain data is slow but
+        honest: it&rsquo;s what the people with skin in the game
+        actually do, not what they tweet.
+      </BeginnerHint>
 
       {/* Section header */}
       <div className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">

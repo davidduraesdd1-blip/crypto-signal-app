@@ -8,6 +8,7 @@ import { SegmentedControl } from "@/components/segmented-control";
 import { AlertTypeCard } from "@/components/alert-type-card";
 import { ChannelRow } from "@/components/channel-row";
 import { ToggleSwitch } from "@/components/toggle-switch";
+import { BeginnerHint } from "@/components/beginner-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -96,6 +97,20 @@ export default function AlertsPage() {
         title="Alerts"
         subtitle="Get notified when signals change, regimes shift, on-chain divergences fire, or funding spikes break threshold. Sent via the channels you've connected."
       />
+
+      {/* AUDIT-2026-05-06 (W2 Tier 6 F-LEVEL-1): Beginner gloss */}
+      <BeginnerHint title="When should you set up alerts?">
+        Alerts are how the model gets your attention without you
+        having to keep checking. Most people start with two:
+        <strong className="text-text-primary"> high-confidence
+        signal changes </strong>
+        (so you know when the model rotates from Hold to Buy or
+        Sell) and
+        <strong className="text-text-primary"> regime shifts </strong>
+        (so you know when conditions change for the whole market).
+        Add more once you&rsquo;ve seen what feels useful and what
+        feels noisy.
+      </BeginnerHint>
 
       {/* Tab navigation */}
       <div className="mb-5">

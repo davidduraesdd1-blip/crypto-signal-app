@@ -8,6 +8,7 @@ import { RegimeTimeline, type TimelineState } from "@/components/regime-timeline
 import { MacroOverlay } from "@/components/macro-overlay";
 import { RegimeWeights } from "@/components/regime-weights";
 import { Button } from "@/components/ui/button";
+import { BeginnerHint } from "@/components/beginner-hint";
 import { useRegimes } from "@/hooks/use-regimes";
 
 // AUDIT-2026-05-03 (D4b): regime cards wired to GET /regimes/. The
@@ -145,6 +146,20 @@ export default function RegimesPage() {
         title="Regimes"
         subtitle="HMM-inferred market regime per asset + macro overlay. Regime-specific signal weights auto-adjust."
       />
+
+      {/* AUDIT-2026-05-06 (W2 Tier 6 F-LEVEL-1): Beginner gloss */}
+      <BeginnerHint title="What is a market regime?">
+        Markets behave differently in different conditions:
+        <strong className="text-text-primary"> trending </strong>
+        (sustained direction up or down),
+        <strong className="text-text-primary"> ranging </strong>
+        (sideways), or
+        <strong className="text-text-primary"> risk-off </strong>
+        (defensive, cash-heavy). The model figures out which regime
+        each coin is in right now, and tunes its signal weights
+        accordingly. A &ldquo;Buy&rdquo; in a Trending regime means
+        something different than the same Buy in a Ranging regime.
+      </BeginnerHint>
 
       {/* Section header */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

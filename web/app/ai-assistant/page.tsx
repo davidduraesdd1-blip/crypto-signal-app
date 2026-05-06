@@ -10,6 +10,7 @@ import { DecisionsTable } from "@/components/decisions-table";
 import { PipelineDiagram } from "@/components/pipeline-diagram";
 import { AgentConfigCard } from "@/components/agent-config-card";
 import { EmergencyStopCard } from "@/components/emergency-stop-card";
+import { BeginnerHint } from "@/components/beginner-hint";
 import { useAiDecisions, useAskAi } from "@/hooks/use-ai";
 import { useExecutionStatus } from "@/hooks/use-execution-status";
 import type { AiDecision } from "@/lib/api-types";
@@ -128,6 +129,17 @@ export default function AIAssistantPage() {
         title="AI Assistant"
         subtitle="LangGraph + Claude Sonnet 4.6 autonomous agent. Hard Python risk gates wrap every Claude decision — Claude may only approve or reject, never place orders directly."
       />
+
+      {/* AUDIT-2026-05-06 (W2 Tier 6 F-LEVEL-1): Beginner gloss */}
+      <BeginnerHint title="What does the AI agent do?">
+        The agent watches the model&rsquo;s signals and, when
+        confidence is high enough, places a trade automatically. It
+        doesn&rsquo;t replace your judgment — it&rsquo;s a
+        rule-follower with risk limits you set. Every decision is
+        logged so you can see why it acted (or didn&rsquo;t). You can
+        run it in <em>Dry Run</em> mode (logs only, no real trades)
+        until you trust it.
+      </BeginnerHint>
 
       {/* Live status */}
       <section className="mb-6">

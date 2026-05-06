@@ -10,6 +10,7 @@ import { EquityCurve } from "@/components/equity-curve";
 import { OptunaTable, type OptunaRun } from "@/components/optuna-table";
 import { TradesTable, type Trade } from "@/components/trades-table";
 import { Button } from "@/components/ui/button";
+import { BeginnerHint } from "@/components/beginner-hint";
 import {
   useBacktestSummary,
   useBacktestTrades,
@@ -138,6 +139,19 @@ export default function BacktesterPage() {
         title="Backtester"
         subtitle="Composite signal backtested across 2023–2026. Optuna-tuned hyperparams."
       />
+
+      {/* AUDIT-2026-05-06 (W2 Tier 6 F-LEVEL-1): Beginner gloss */}
+      <BeginnerHint title="What is backtesting?">
+        Backtesting replays the model&rsquo;s rules across years of
+        historical data, asking: &ldquo;If I had used this exact
+        strategy in the past, what would I have made or lost?&rdquo;
+        It&rsquo;s the single best sanity-check we have. Pay attention
+        to <strong className="text-text-primary">max drawdown</strong>
+        (worst losing streak) — past performance doesn&rsquo;t
+        guarantee future returns, but a strategy with terrible
+        backtest drawdowns won&rsquo;t magically become good in
+        production.
+      </BeginnerHint>
 
       {/* Primary view toggle */}
       <SegmentedControl
