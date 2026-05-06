@@ -75,21 +75,21 @@ def _fred_latest(series_id: str, scale: float = 1.0) -> float | None:
         return cached["value"]
     try:
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        # Use the existing FRED session (retries + keep-alive) from data_feeds
-        sess = getattr(data_feeds, "_FRED_SESSION", None)
-        if sess is not None:
-            resp = sess.get(
-                url,
-                timeout=12,
-                headers={"User-Agent": "crypto-signal-app/1.0 (+macro/strip)"},
-            )
-        else:
-            import requests as _req
-            resp = _req.get(
-                url,
-                timeout=12,
-                headers={"User-Agent": "crypto-signal-app/1.0 (+macro/strip)"},
-            )
+        # AUDIT-2026-05-06 (post-launch v3.2): use bare requests, NOT
+        # data_feeds._FRED_SESSION. The shared session is configured with
+        # `read=0` retries — when DTWEXBGS/VIXCLS large CSVs hit a slow
+        # read, no retry, immediate fail. Bare requests gives us a fresh
+        # connection per call with the timeout we set.
+        import requests as _req
+        resp = _req.get(
+            url,
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; crypto-signal-app/1.0)",
+                "Accept": "text/csv,*/*",
+                "Accept-Encoding": "gzip",
+            },
+        )
         if resp.status_code != 200:
             logger.warning("[macro] FRED %s status=%s", series_id, resp.status_code)
             return None
@@ -178,8 +178,8 @@ def _classify_macro_signal(dxy: float | None, vix: float | None,
     return "NEUTRAL", score
 
 
-_ENDPOINT_DEADLINE_S = 11   # whole-endpoint hard ceiling
-_PER_FETCHER_TIMEOUT_S = 11  # alias for compat with prior reads / docs
+_ENDPOINT_DEADLINE_S = 14   # whole-endpoint hard ceiling
+_PER_FETCHER_TIMEOUT_S = 14  # alias for compat with prior reads / docs
 
 # AUDIT-2026-05-06 (post-launch v3 fix): bumped 7→11s after observing on
 # Render that DTWEXBGS + VIXCLS CSVs (large historical series, 5000-9000
