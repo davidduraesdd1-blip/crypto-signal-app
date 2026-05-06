@@ -1,13 +1,17 @@
 """
 routers/diagnostics.py — Operator diagnostics for the Settings · Dev Tools page.
 
-Two read-only endpoints:
+Three read-only endpoints:
   - GET /diagnostics/circuit-breakers — 7-gate Level-C agent safety status,
     matching the card on Settings · Dev Tools (mockup row labels exact)
   - GET /diagnostics/database — table row counts + DB size, matching the
     5-col KPI strip on Settings · Dev Tools
+  - GET /diagnostics/feeds — Render-side reachability check for every
+    upstream data source named in CLAUDE.md §10. Added 2026-05-05 (P0-10
+    of Phase 0.9 audit) so "is OKX/Glassnode reachable from Render?"
+    stops being log archaeology.
 
-Pure read-side; no mutations. Both endpoints fail-open with safe defaults
+Pure read-side; no mutations. Endpoints fail-open with safe defaults
 when downstream helpers raise (DB unavailable, agent module not imported,
 etc.) so the Dev Tools page never shows a stack trace to the operator.
 
@@ -18,6 +22,8 @@ gaps surfaced by the D4 code-wire plan.
 from __future__ import annotations
 
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -283,3 +289,125 @@ def get_database_health():
         "wal_mode":             True,
         "auto_vacuum":          "nightly",
     })
+
+
+# ── /diagnostics/feeds — Render-side data feed reachability ─────────────────
+# AUDIT-2026-05-05 (P0-10, Tier 4): Render Oregon datacenter IPs are
+# geo-blocked by OKX (CLAUDE.md §10) and possibly Binance US. There was
+# no way to verify which sources are reachable from inside Render
+# without log archaeology. This endpoint pings every documented source
+# from inside the worker process and caches the result for 60 seconds
+# so the Dev Tools page can show a green/yellow/red strip per feed.
+
+# 60-second result cache. Probing every feed on every request would be
+# rude to the upstreams; cache lasts long enough that the Dev Tools
+# page can refresh repeatedly without DDoSing OKX.
+_FEED_CACHE_TTL_S = 60.0
+_feed_cache: dict[str, Any] = {"ts": 0.0, "result": None}
+
+# Per-feed probe spec: hostname, a known-good cheap path, and the
+# expected status. Public endpoints only — no auth required for any of
+# these. Probes use HEAD where possible, GET for hosts that 405 on HEAD.
+_FEED_PROBES: list[dict[str, Any]] = [
+    # OHLCV chain (CLAUDE.md §10)
+    {"name": "Kraken (CCXT)", "url": "https://api.kraken.com/0/public/Time", "method": "GET", "category": "ohlcv"},
+    {"name": "Gate.io REST", "url": "https://api.gateio.ws/api/v4/spot/time", "method": "GET", "category": "ohlcv"},
+    {"name": "Bybit REST", "url": "https://api.bybit.com/v5/market/time", "method": "GET", "category": "ohlcv"},
+    {"name": "MEXC REST", "url": "https://api.mexc.com/api/v3/time", "method": "GET", "category": "ohlcv"},
+    # OKX is geo-blocked from Render Oregon — kept in the list so the
+    # operator sees the geo-block confirmed. CLAUDE.md §10 documents this.
+    {"name": "OKX REST (geo-blocked)", "url": "https://www.okx.com/api/v5/public/time", "method": "GET", "category": "ohlcv"},
+    {"name": "CoinGecko", "url": "https://api.coingecko.com/api/v3/ping", "method": "GET", "category": "ohlcv"},
+    # Sentiment / market data
+    {"name": "alternative.me F&G", "url": "https://api.alternative.me/fng/?limit=1", "method": "GET", "category": "sentiment"},
+    # Macro
+    {"name": "FRED", "url": "https://fred.stlouisfed.org/", "method": "HEAD", "category": "macro"},
+]
+
+
+def _probe_feed(spec: dict[str, Any]) -> dict[str, Any]:
+    """Single probe — bounded to 5s, fail-open with status='unreachable'."""
+    import urllib.request
+    import urllib.error
+
+    started = time.time()
+    try:
+        req = urllib.request.Request(spec["url"], method=spec.get("method", "GET"))
+        # Polaris Edge UA so upstream rate-limiters can identify our traffic
+        # (and so cf-blocks that key on missing/empty UA don't trigger).
+        req.add_header("User-Agent", "PolarisEdge-DiagnosticsProbe/1.0")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            elapsed_ms = int((time.time() - started) * 1000)
+            return {
+                "name": spec["name"],
+                "category": spec["category"],
+                "status": "ok" if 200 <= resp.status < 400 else "warn",
+                "http_code": resp.status,
+                "elapsed_ms": elapsed_ms,
+                "error": None,
+            }
+    except urllib.error.HTTPError as e:
+        # Non-2xx — record the code but treat as warn (host reachable, route maybe wrong)
+        return {
+            "name": spec["name"],
+            "category": spec["category"],
+            "status": "warn",
+            "http_code": e.code,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "error": f"HTTP {e.code}",
+        }
+    except Exception as e:
+        # Network / DNS / timeout / geo-block — host unreachable from this worker
+        return {
+            "name": spec["name"],
+            "category": spec["category"],
+            "status": "unreachable",
+            "http_code": None,
+            "elapsed_ms": int((time.time() - started) * 1000),
+            "error": type(e).__name__ + ": " + str(e)[:100],
+        }
+
+
+@router.get(
+    "/feeds",
+    summary="Render-side data feed reachability — pings every documented source",
+    dependencies=[Depends(require_api_key)],
+)
+def get_feeds_health():
+    """Probes every public data feed from inside the worker process.
+
+    Result is cached for 60 seconds so repeated dashboard refreshes
+    don't hammer the upstreams. The probe runs SEQUENTIALLY (not in
+    parallel) so it can't accidentally exhaust file descriptors during
+    cold start. Total probe budget: 8 feeds × 5s timeout = 40s worst
+    case, but typical run is under 5s when nothing is broken.
+
+    Returns:
+      - generated_at: ISO timestamp of THIS result (cached or fresh)
+      - cached: bool — true if served from the 60s cache
+      - feeds: list of {name, category, status, http_code, elapsed_ms, error}
+      - summary: {ok: N, warn: N, unreachable: N, total: N}
+    """
+    now = time.time()
+    cached = _feed_cache["result"]
+    if cached is not None and (now - _feed_cache["ts"]) < _FEED_CACHE_TTL_S:
+        cached = dict(cached)
+        cached["cached"] = True
+        return serialize(cached)
+
+    feeds = [_probe_feed(spec) for spec in _FEED_PROBES]
+    counts = {"ok": 0, "warn": 0, "unreachable": 0}
+    for f in feeds:
+        counts[f["status"]] = counts.get(f["status"], 0) + 1
+    counts["total"] = len(feeds)
+
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "cached":       False,
+        "render_region": os.environ.get("RENDER_REGION", "unknown"),
+        "feeds":        feeds,
+        "summary":      counts,
+    }
+    _feed_cache["ts"] = now
+    _feed_cache["result"] = payload
+    return serialize(payload)
