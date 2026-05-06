@@ -314,7 +314,12 @@ export default function SignalsPage() {
     };
   })();
 
-  // Technical indicators from snap_* fields when present
+  // AUDIT-2026-05-06 (P1-B): technical indicators were reading
+  // `detail.rsi` / `.macd` / `.adx` at top level, but the engine puts
+  // them under `detail.timeframes['<active-tf>'].rsi`. Pre-fix every
+  // tile rendered "—" "unavailable". Now reads from the active TF
+  // keyed off `activeTimeframe` index so changing the tile updates
+  // the indicator panel beneath.
   const technicalIndicators = (() => {
     if (!detail) {
       return [
@@ -324,54 +329,68 @@ export default function SignalsPage() {
         { label: "ADX (14)", value: "—", subtext: "loading", variant: "default" as const },
       ];
     }
-    const rsi = detail.rsi as number | undefined;
-    const macd = detail.macd as number | undefined;
-    const adx = detail.adx as number | undefined;
+    const activeTf = _ENGINE_TFS[activeTimeframe] ?? "1d";
+    const tfDict = (detail.timeframes ?? {}) as Record<string, Record<string, unknown> | undefined>;
+    const tfRow = tfDict[activeTf] ?? {};
+    const rsi = _toFiniteNumber(tfRow.rsi);
+    // engine key is `macd_div` (a string like "Bullish (hidden) (Strong)")
+    // — there's no scalar MACD-histogram field. Surface the divergence
+    // text instead with bull/bear/neutral classification.
+    const macdDivRaw = _toCleanString(tfRow.macd_div);
+    const macdDiv = macdDivRaw && macdDivRaw !== "None (N/A)" ? macdDivRaw : null;
+    const adx = _toFiniteNumber(tfRow.adx);
+    const supertrend = _toCleanString(tfRow.supertrend);
     return [
       {
         label: "RSI (14)",
-        value: isMissing(rsi) ? "—" : formatNumber(rsi as number, 1),
-        subtext: isMissing(rsi)
+        value: rsi === null ? "—" : formatNumber(rsi, 1),
+        subtext: rsi === null
           ? "unavailable"
-          : (rsi as number) >= 70
+          : rsi >= 70
             ? "overbought"
-            : (rsi as number) <= 30
+            : rsi <= 30
               ? "oversold"
               : "neutral",
-        variant: (isMissing(rsi)
+        variant: (rsi === null
           ? "default"
-          : (rsi as number) >= 70
+          : rsi >= 70 || rsi <= 30
             ? "warning"
             : "default") as "default" | "warning" | "success",
       },
       {
         label: "MACD",
-        value: isMissing(macd) ? "—" : formatNumber(macd as number, 2),
-        subtext: isMissing(macd)
-          ? "unavailable"
-          : (macd as number) >= 0
-            ? "bullish"
-            : "bearish",
-        variant: (isMissing(macd)
-          ? "default"
-          : (macd as number) >= 0
-            ? "success"
-            : "warning") as "default" | "warning" | "success",
+        value: macdDiv ? macdDiv.split(" ")[0] : "—",
+        subtext: macdDiv
+          ? macdDiv.toLowerCase().includes("bull")
+            ? "bullish divergence"
+            : macdDiv.toLowerCase().includes("bear")
+              ? "bearish divergence"
+              : "neutral"
+          : "no divergence",
+        variant: (macdDiv && macdDiv.toLowerCase().includes("bull")
+          ? "success"
+          : macdDiv && macdDiv.toLowerCase().includes("bear")
+            ? "warning"
+            : "default") as "default" | "warning" | "success",
       },
       {
         label: "Supertrend",
-        value: directionToSignalType(detail.direction).toUpperCase(),
-        subtext: regimeToDisplay(detail.regime ?? null),
-        variant: "success" as const,
+        value: supertrend ?? "—",
+        subtext: `${activeTf} regime`,
+        variant: (supertrend?.toLowerCase().includes("up")
+          ? "success"
+          : supertrend?.toLowerCase().includes("down")
+            ? "warning"
+            : "default") as "default" | "warning" | "success",
       },
       {
         label: "ADX (14)",
-        value: isMissing(adx) ? "—" : formatNumber(adx as number, 1),
-        subtext: isMissing(adx)
+        value: adx === null ? "—" : formatNumber(adx, 1),
+        subtext: adx === null
           ? "unavailable"
-          : (adx as number) > 25
+          : adx > 25
             ? "strong trend"
-            : (adx as number) > 15
+            : adx > 15
               ? "weak trend"
               : "no trend",
         variant: "default" as const,
