@@ -2,6 +2,7 @@
 
 import { Sidebar, MobileNav } from "./sidebar";
 import { Topbar } from "./topbar";
+import { useAndroidBackButton } from "@/hooks/use-android-back-button";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -20,6 +21,10 @@ interface AppShellProps {
 // able to skip the topbar / sidebar nav and jump straight to content.
 // The link is visually hidden until focused via Tab.
 export function AppShell({ children, crumbs, currentPage, agentRunning }: AppShellProps) {
+  // AUDIT-2026-05-06 (W2 Tier 7 P0): Android hardware back button wired
+  // to router.back() inside Capacitor's WebView. No-op on web/iOS.
+  useAndroidBackButton();
+
   return (
     <div className="app grid min-h-screen max-w-[100vw] grid-cols-1 grid-rows-[var(--topbar-h)_1fr_56px] overflow-x-hidden md:grid-cols-[var(--rail-w)_minmax(0,1fr)] md:grid-rows-[var(--topbar-h)_1fr]">
       {/* Skip-to-content — first focusable on every page */}
