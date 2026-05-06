@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,39 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
+// AUDIT-2026-05-06 (post-launch v6): the level switcher (Beginner/
+// Intermediate/Advanced) was visibly flickering every 5 seconds because
+// it shared a parent component with the AGENT pill that polls every 5s.
+// Extracted as a memoized child that only re-renders when its own state
+// (level from useUserLevel context) actually changes.
+const LevelSwitcher = memo(function LevelSwitcher() {
+  const { level, setLevel } = useUserLevel();
+  return (
+    <div
+      role="radiogroup"
+      aria-label="User experience level"
+      className="hidden items-center gap-0 rounded-lg border border-border-default bg-bg-1 p-0.5 md:inline-flex"
+    >
+      {(["Beginner", "Intermediate", "Advanced"] as UserLevel[]).map((l) => (
+        <button
+          key={l}
+          type="button"
+          role="radio"
+          aria-checked={level === l}
+          onClick={() => setLevel(l)}
+          className={cn(
+            "min-h-[32px] min-w-[44px] rounded-md px-2.5 py-1 text-xs font-medium text-text-muted transition-colors",
+            "hover:text-text-primary",
+            level === l && "bg-accent-soft text-text-primary",
+          )}
+        >
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+});
 
 // AUDIT-2026-05-05 (P0-5): level state lifted from local Topbar useState
 // into <UserLevelProvider> so any page can scale content to the user's
@@ -31,7 +65,6 @@ interface TopbarProps {
 }
 
 export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning }: TopbarProps) {
-  const { level, setLevel } = useUserLevel();
 
   // AUDIT-2026-05-03 (D4 audit, MEDIUM): use next-themes useTheme()
   // instead of hand-managing the .light class on <html>. The
@@ -58,7 +91,9 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
   // AUDIT-2026-05-03 (D4b): global "Refresh All Data" button —
   // invalidates every active query + force-refetches the on-page ones
   // per CLAUDE.md §12 master-template requirement.
-  const { refresh, isFetching } = useRefreshAll();
+  // AUDIT-2026-05-06 (v6): now shows progress (n pending / n peak)
+  // and a thin progress bar under the button while in flight.
+  const { refresh, isFetching, pendingCount, totalCount, progress } = useRefreshAll();
 
   return (
     <header className="sticky top-0 z-10 flex h-[var(--topbar-h)] items-center gap-4 border-b border-border-default bg-bg-0 px-6 md:gap-4 md:px-6">
@@ -121,46 +156,69 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Level group - hidden on mobile */}
-      {/* AUDIT-2026-05-04 (overnight a11y): radiogroup semantics so the
-          three-level toggle (CLAUDE.md §7 core UX) reads as a grouped
-          choice instead of three plain buttons. */}
-      <div
-        role="radiogroup"
-        aria-label="User experience level"
-        className="hidden items-center gap-0 rounded-lg border border-border-default bg-bg-1 p-0.5 md:inline-flex"
-      >
-        {(["Beginner", "Intermediate", "Advanced"] as Level[]).map((l) => (
-          <button
-            key={l}
-            type="button"
-            role="radio"
-            aria-checked={level === l}
-            onClick={() => setLevel(l)}
-            className={cn(
-              "min-h-[32px] min-w-[44px] rounded-md px-2.5 py-1 text-xs font-medium text-text-muted transition-colors",
-              "hover:text-text-primary",
-              level === l && "bg-accent-soft text-text-primary"
-            )}
+      {/* Level group - memoized child, isolated from topbar re-renders.
+          AUDIT-2026-05-06 (v6 — fix 5s flicker on level buttons). */}
+      <LevelSwitcher />
+
+      {/* Refresh button + live progress indicator + schedule tooltip.
+          AUDIT-2026-05-06 (v6): shows "n/N" count while fetching and a
+          thin progress bar fills as queries complete. */}
+      <div className="relative inline-flex flex-col">
+        <button
+          onClick={refresh}
+          disabled={isFetching}
+          className={cn(
+            "inline-flex min-h-[36px] min-w-[44px] items-center gap-2 rounded-lg border border-border-default bg-bg-1 px-2.5 py-1.5 text-[13px] text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary md:px-2.5",
+            isFetching && "cursor-wait",
+          )}
+          aria-label={isFetching ? `Refreshing: ${pendingCount} of ${totalCount} pending` : "Refresh all data"}
+          title={
+            isFetching
+              ? `Refreshing — ${pendingCount} of ${totalCount} pending`
+              : "Refresh all data — see refresh schedule for auto-poll cadence"
+          }
+        >
+          <span className={cn(isFetching && "animate-spin text-accent-brand")}>↻</span>
+          <span className="hidden md:inline">
+            {isFetching ? `Refresh ${totalCount - pendingCount}/${totalCount}` : "Refresh"}
+          </span>
+        </button>
+        {isFetching && (
+          <div
+            aria-hidden="true"
+            className="absolute -bottom-0.5 left-0 right-0 h-0.5 overflow-hidden rounded-full bg-bg-2"
           >
-            {l}
-          </button>
-        ))}
+            <div
+              className="h-full bg-accent-brand transition-all duration-300 ease-out"
+              style={{ width: `${(progress * 100).toFixed(1)}%` }}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Refresh button — wired to invalidate-all-queries + refetch-active */}
+      {/* Refresh-schedule tooltip — shows the auto-poll cadence for
+          every data type so the user knows how often things refresh.
+          AUDIT-2026-05-06 (v6). */}
       <button
-        onClick={refresh}
-        disabled={isFetching}
-        className={cn(
-          "inline-flex min-h-[36px] min-w-[44px] items-center gap-2 rounded-lg border border-border-default bg-bg-1 px-2.5 py-1.5 text-[13px] text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary md:px-2.5",
-          isFetching && "opacity-60 cursor-wait",
-        )}
-        aria-label="Refresh all data"
-        title="Stale-mark every query and re-fetch the on-page ones"
+        type="button"
+        aria-label="Show refresh schedule"
+        title={[
+          "Auto-refresh schedule (per CLAUDE.md §12):",
+          "  Agent status   — every 15s",
+          "  AI agent log   — every 10s",
+          "  Signals + Home — every 5 min",
+          "  Funding rates  — every 10 min",
+          "  Regime states  — every 15 min",
+          "  Macro / health — every 5 min",
+          "  On-chain       — every 1 hour",
+          "  Backtest data  — every 1 hour",
+          "  Settings       — session-long (until you change them)",
+          "",
+          "Click 'Refresh' to force-refresh everything now.",
+        ].join("\n")}
+        className="hidden min-h-[36px] items-center justify-center rounded-lg border border-border-default bg-bg-1 px-2 text-[12px] text-text-muted transition-colors hover:border-border-strong hover:text-text-primary md:inline-flex"
       >
-        <span className={cn(isFetching && "animate-spin")}>↻</span>
-        <span className="hidden md:inline">{isFetching ? "Refreshing…" : "Refresh"}</span>
+        ⓘ
       </button>
 
       {/* Theme toggle */}

@@ -93,8 +93,10 @@ export const queryKeys = {
 // ─── Stale-time presets (per CLAUDE.md §12 cache windows) ──────────────────
 
 export const STALE_TIME = {
-  /** Live execution status — drives the AGENT pill */
-  EXECUTION_STATUS: 5 * 1000,            // 5 seconds
+  /** Live execution status — drives the AGENT pill. Bumped 5s→15s
+   *  in v6 to stop the visible re-render flicker on the topbar level
+   *  switcher every 5 seconds. */
+  EXECUTION_STATUS: 15 * 1000,           // 15 seconds
   /** OHLCV intraday + composite signal */
   SIGNALS: 5 * 60 * 1000,                // 5 minutes
   /** Funding rates */
