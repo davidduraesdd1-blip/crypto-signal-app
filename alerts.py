@@ -22,7 +22,39 @@ logger = logging.getLogger(__name__)
 # generic HTTPS webhook that calls _SESSION. If a future webhook lands
 # here, re-add the import + reuse the same TCP-keepalive headers.
 
-_ALERTS_CONFIG_FILE = "alerts_config.json"
+# AUDIT-2026-05-06 (W2 Tier 8 P1): alerts_config.json now lives on the
+# Render persistent disk so operator-tuned values survive redeploys.
+# Pre-fix the file was at cwd, which Render wipes on every redeploy —
+# every Settings page write was lost. The migration also routes the
+# legacy cwd location as a one-time-import fallback so existing local
+# dev installs keep working without manual intervention.
+def _resolve_alerts_config_path() -> str:
+    import os as _os
+    from pathlib import Path as _Path
+    legacy = "alerts_config.json"
+    # Prefer database._DATA_DIR (Render persistent mount or local data/).
+    try:
+        from database import _DATA_DIR as _db_data_dir
+        target = _Path(_db_data_dir) / "alerts_config.json"
+    except Exception:
+        # database.py couldn't import (extremely unlikely in prod) —
+        # fall back to legacy cwd location.
+        return legacy
+    target_str = str(target)
+    # One-time migration: if the disk file doesn't exist but the legacy
+    # cwd file does, copy it over so we don't lose existing settings.
+    try:
+        if not _os.path.exists(target_str) and _os.path.exists(legacy):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(legacy, "rb") as _src, open(target_str, "wb") as _dst:
+                _dst.write(_src.read())
+            logging.info("[alerts] Migrated %s → %s on first run.", legacy, target_str)
+    except Exception as _mig_err:
+        logging.warning("[alerts] Migration of legacy alerts_config failed: %s", _mig_err)
+    return target_str
+
+
+_ALERTS_CONFIG_FILE = _resolve_alerts_config_path()
 
 # AUDIT-2026-05-03 (P1 — MEDIUM bug fix): config-file lock for the
 # load → modify → save sequence in callers. Atomic-rename in

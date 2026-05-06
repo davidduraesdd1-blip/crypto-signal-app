@@ -99,7 +99,17 @@ def _current_layer_weights() -> dict:
     try:
         import json as _json
         from pathlib import Path as _Path
+        # AUDIT-2026-05-06 (W2 Tier 8 P1): try the persistent-disk path
+        # first, fall back to legacy cwd-adjacent file. Pure path-resolution
+        # change; no signal math touched. §22 regression untouched.
         _cfg_path = _Path(__file__).resolve().parent / "alerts_config.json"
+        try:
+            from alerts import _ALERTS_CONFIG_FILE as _disk_path
+            _disk = _Path(_disk_path)
+            if _disk.exists():
+                _cfg_path = _disk
+        except Exception:
+            pass
         if _cfg_path.exists():
             _cfg = _json.loads(_cfg_path.read_text(encoding="utf-8"))
             _learned = (_cfg or {}).get("composite_layer_weights")

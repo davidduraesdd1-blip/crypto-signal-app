@@ -1821,7 +1821,18 @@ import json       as _json       # noqa: E402 (already imported as json above)
 import os         as _os         # noqa: E402 (already imported as os above)
 import threading  as _threading  # noqa: E402 (already imported as threading above)
 
-_API_KEYS_FILE = "alerts_config.json"
+# AUDIT-2026-05-06 (W2 Tier 8 P1): align with alerts.py — read keys
+# from the persistent disk path (alerts.py:_resolve_alerts_config_path)
+# instead of cwd, so paid-API key edits survive Render redeploys.
+def _resolve_api_keys_path() -> str:
+    try:
+        from alerts import _ALERTS_CONFIG_FILE as _path
+        return _path
+    except Exception:
+        return "alerts_config.json"
+
+
+_API_KEYS_FILE = _resolve_api_keys_path()
 _paid_key_cache: dict = {}
 _paid_key_cache_ts: float = 0.0
 _PAID_KEY_TTL = 30  # re-read keys every 30s so UI saves are picked up quickly

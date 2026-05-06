@@ -84,7 +84,19 @@ _W_MIN = 0.05
 _W_MAX = 0.60
 
 # Where to persist the learned weights.
-_CONFIG_PATH = Path(__file__).resolve().parent / "alerts_config.json"
+# AUDIT-2026-05-06 (W2 Tier 8 P1): align with alerts.py — write to the
+# persistent-disk path so optimizer-tuned weights survive Render
+# redeploys. Falls back to the legacy cwd-adjacent path if the
+# alerts module can't be imported (e.g. unit-test isolation).
+def _resolve_config_path() -> Path:
+    try:
+        from alerts import _ALERTS_CONFIG_FILE as _disk_path
+        return Path(_disk_path)
+    except Exception:
+        return Path(__file__).resolve().parent / "alerts_config.json"
+
+
+_CONFIG_PATH = _resolve_config_path()
 
 
 def _default_weights() -> dict:
