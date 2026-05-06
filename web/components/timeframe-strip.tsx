@@ -2,7 +2,9 @@
 
 import { cn } from "@/lib/utils";
 
-export type SignalType = "buy" | "hold" | "sell";
+// AUDIT-2026-05-06 (P1-D): canonical SignalType lives in lib/signal-types.
+export type { SignalType } from "@/lib/signal-types";
+import type { SignalType } from "@/lib/signal-types";
 
 interface TimeframeCell {
   label: string;

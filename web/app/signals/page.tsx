@@ -19,6 +19,7 @@ import {
   formatNumber,
   formatPct,
   isMissing,
+  isStrongSignal,
   regimeToDisplay,
 } from "@/lib/format";
 
@@ -250,21 +251,13 @@ export default function SignalsPage() {
       change24h: isMissing(change24) ? "—" : formatPct(change24 as number, 2, true),
       change30d: isMissing(change30) ? "—" : formatPct(change30 as number, 2, true),
       change1y: isMissing(change1y) ? "—" : formatPct(change1y as number, 2, true),
-      // AUDIT-2026-05-05 (HOTFIX): collapse 5-tier (strong-buy/strong-
-      // sell) to 3-tier (buy/sell/hold) — SignalHero / TimeframeStrip /
-      // SignalHistory all key on 3 values. The "strong" intensity flows
-      // through signalStrength below, so no info is lost.
-      signal: ((): SignalType => {
-        const d = directionToSignalType(detail.direction);
-        if (d === "strong-buy") return "buy";
-        if (d === "strong-sell") return "sell";
-        return d;
-      })(),
-      signalStrength: ((): string => {
-        const dRaw = (detail.direction ?? "").toUpperCase();
-        if (dRaw.startsWith("STRONG")) return "strong";
-        return detail.high_conf ? "strong" : "moderate";
-      })(),
+      // AUDIT-2026-05-06 (P1-D): directionToSignalType is now canonical
+      // 3-tier (lib/signal-types) — collapses STRONG SELL → "sell" etc.
+      // internally. The intensity flows through signalStrength below.
+      signal: directionToSignalType(detail.direction),
+      signalStrength: detail.high_conf || isStrongSignal(detail.direction)
+        ? "strong"
+        : "moderate",
       timeframe: "1d",
       regime: regimeToDisplay(detail.regime ?? detail.regime_label ?? null),
       confidence: isMissing(detail.confidence_avg_pct)

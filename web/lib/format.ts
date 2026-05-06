@@ -83,16 +83,14 @@ export function formatConfidence(value: number | null | undefined, withSuffix = 
   return withSuffix ? `${v}% conf` : `${v}%`;
 }
 
-/** Map engine direction labels to v0's signal-card type. */
-export function directionToSignalType(direction: string | null | undefined): "buy" | "sell" | "hold" | "strong-buy" | "strong-sell" {
-  if (!direction) return "hold";
-  const d = direction.toUpperCase().trim();
-  if (d === "STRONG BUY") return "strong-buy";
-  if (d === "STRONG SELL") return "strong-sell";
-  if (d === "BUY") return "buy";
-  if (d === "SELL") return "sell";
-  return "hold";
-}
+// AUDIT-2026-05-06 (P1-D): the original directionToSignalType returned
+// 5 values (buy/sell/hold/strong-buy/strong-sell), but every UI
+// component (SignalHero, SignalHistory, TimeframeStrip, SignalCard)
+// only handles 3. The mismatch crashed SignalHero on STRONG SELL
+// (HOTFIX commit 9d136c2). Single source of truth now lives in
+// lib/signal-types — re-export for back-compat with existing imports.
+export { directionToSignalType, isStrongSignal } from "@/lib/signal-types";
+export type { SignalType, EngineDirection } from "@/lib/signal-types";
 
 /** Lowercase regime label v0 components expect. */
 export function regimeToDisplay(regime: string | null | undefined): string {
