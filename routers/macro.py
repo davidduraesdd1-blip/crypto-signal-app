@@ -150,16 +150,36 @@ def _fetch_dxy_fred() -> float | None:
     Each leg is cached 1h via _fred_latest, so this is cheap on
     subsequent calls. Returns None if any leg is missing.
     """
-    eur_usd = _fred_latest("DEXUSEU")
-    usd_jpy = _fred_latest("DEXJPUS")
-    gbp_usd = _fred_latest("DEXUSUK")
-    usd_cad = _fred_latest("DEXCAUS")
-    usd_sek = _fred_latest("DEXSDUS")
-    usd_chf = _fred_latest("DEXSZUS")
+    # AUDIT-2026-05-06 (post-launch v5.1): parallelize the 6 leg fetches
+    # via _MACRO_EXEC. Sequential calls were taking 30-60s (way past the
+    # 14s endpoint deadline) — parallel completes in 2-4s with cold
+    # caches. Each leg has its own 1h cache via _fred_latest, so warm
+    # calls return < 100ms regardless.
+    series_ids = ("DEXUSEU", "DEXJPUS", "DEXUSUK", "DEXCAUS", "DEXSDUS", "DEXSZUS")
+    futures_legs = {sid: _MACRO_EXEC.submit(_fred_latest, sid) for sid in series_ids}
+
+    deadline = _time.time() + 8  # leg-fetches share an 8s ceiling
+    leg_values: dict[str, float | None] = {}
+    for sid, fut in futures_legs.items():
+        remaining = max(0.05, deadline - _time.time())
+        try:
+            leg_values[sid] = fut.result(timeout=remaining)
+        except Exception:
+            leg_values[sid] = None
+
+    eur_usd = leg_values["DEXUSEU"]
+    usd_jpy = leg_values["DEXJPUS"]
+    gbp_usd = leg_values["DEXUSUK"]
+    usd_cad = leg_values["DEXCAUS"]
+    usd_sek = leg_values["DEXSDUS"]
+    usd_chf = leg_values["DEXSZUS"]
 
     legs = (eur_usd, usd_jpy, gbp_usd, usd_cad, usd_sek, usd_chf)
     if any(x is None or x <= 0 for x in legs):
-        logger.warning("[macro] ICE DXY compute failed — leg(s) missing")
+        logger.warning(
+            "[macro] ICE DXY compute failed — leg(s) missing: EUR=%s JPY=%s GBP=%s CAD=%s SEK=%s CHF=%s",
+            eur_usd, usd_jpy, gbp_usd, usd_cad, usd_sek, usd_chf,
+        )
         return None
 
     try:
