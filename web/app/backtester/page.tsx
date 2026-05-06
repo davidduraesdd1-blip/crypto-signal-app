@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -79,6 +80,17 @@ export default function BacktesterPage() {
   const tradesQuery = useBacktestTrades(50);
   const optunaQuery = useOptunaRuns(5);
   const equityQuery = useEquityCurve();
+
+  // AUDIT-2026-05-06 (post-launch v3): the 5 backtest knobs are now real
+  // dropdown menus. V1: page-level state only — selecting different
+  // values updates the visible label but doesn't trigger a re-run yet
+  // (engine config is server-side and would need /backtest/config PUT).
+  // Tagged TODO(post-V1) for the wiring.
+  const [universe,  setUniverse]   = useState("Top 10 cap");
+  const [period,    setPeriod]     = useState("2023-01-01 → today");
+  const [initial,   setInitial]    = useState("$100,000");
+  const [rebalance, setRebalance]  = useState("Weekly");
+  const [costs,     setCosts]      = useState("12 bps · realistic slippage");
 
   // Derive KPI strip from /backtest/summary
   const kpis = (() => {
@@ -206,13 +218,39 @@ export default function BacktesterPage() {
         className="mb-5"
       />
 
-      {/* Controls row */}
+      {/* Controls row — 5 real dropdown menus (V1 page-state only;
+          TODO post-V1: persist via /backtest/config + auto re-run). */}
       <div className="mb-5 flex flex-wrap items-center gap-2.5">
-        <ControlButton label="Universe" value="Top 10 cap" />
-        <ControlButton label="Period" value="2023-01-01 → today" />
-        <ControlButton label="Initial" value="$100,000" />
-        <ControlButton label="Rebalance" value="Weekly" />
-        <ControlButton label="Costs" value="12 bps · realistic slippage" />
+        <ControlButton
+          label="Universe"
+          value={universe}
+          options={["Top 5 cap", "Top 10 cap", "Top 25 cap", "Top 50 cap", "Top 100 cap"]}
+          onValueChange={setUniverse}
+        />
+        <ControlButton
+          label="Period"
+          value={period}
+          options={["Last 30d", "Last 90d", "Last 1y", "2023-01-01 → today", "2024-01-01 → today", "2025-01-01 → today"]}
+          onValueChange={setPeriod}
+        />
+        <ControlButton
+          label="Initial"
+          value={initial}
+          options={["$10,000", "$50,000", "$100,000", "$500,000", "$1,000,000"]}
+          onValueChange={setInitial}
+        />
+        <ControlButton
+          label="Rebalance"
+          value={rebalance}
+          options={["Daily", "Weekly", "Bi-weekly", "Monthly"]}
+          onValueChange={setRebalance}
+        />
+        <ControlButton
+          label="Costs"
+          value={costs}
+          options={["0 bps · ideal", "5 bps · best-case", "12 bps · realistic slippage", "25 bps · conservative"]}
+          onValueChange={setCosts}
+        />
         <Button className="min-h-[44px]">Re-run backtest →</Button>
       </div>
 
