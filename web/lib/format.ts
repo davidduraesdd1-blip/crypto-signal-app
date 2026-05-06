@@ -30,9 +30,12 @@ export function isMissing(v: unknown): boolean {
 // boundary on 2026-05-05). Promoted from signals/page.tsx so every
 // page that reads engine output can use them.
 
-/** Coerce a value that should be a finite number; null otherwise. */
+/** Coerce a value that should be a finite number; null otherwise.
+ *  Treats empty / whitespace-only strings as null (Number("") is 0,
+ *  which would silently mask missing data — see W2 vitest case). */
 export function toFiniteNumber(v: unknown): number | null {
   if (v == null) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
 }
