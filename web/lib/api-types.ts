@@ -69,6 +69,8 @@ export interface SignalRow {
   price?: number | null;
   price_usd?: number | null;
   change_24h_pct?: number | null;
+  change_30d_pct?: number | null;  // AUDIT-2026-05-05 (P0-3) wired backend-side
+  change_1y_pct?: number | null;   // AUDIT-2026-05-05 (P0-3) wired backend-side
   mtf_alignment?: number | null;
   risk_mode?: string | null;
   entry?: number | null;

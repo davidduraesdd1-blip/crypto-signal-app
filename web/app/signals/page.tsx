@@ -131,7 +131,12 @@ export default function SignalsPage() {
         regimeAge: "—",
       };
     }
+    // AUDIT-2026-05-05 (P0-3): change_30d_pct + change_1y_pct now wired
+    // in the engine scan-result dict (crypto_model_core.py:4794). Old
+    // TODO(D-ext) comments retired.
     const change24 = detail.change_24h_pct;
+    const change30 = (detail as { change_30d_pct?: number | null }).change_30d_pct;
+    const change1y = (detail as { change_1y_pct?: number | null }).change_1y_pct;
     return {
       ticker: detail.pair.replace("/", " / "),
       name: detail.pair.split("/")[0],
@@ -139,8 +144,8 @@ export default function SignalsPage() {
         ? "—"
         : formatNumber((detail.price ?? detail.price_usd) as number, 2),
       change24h: isMissing(change24) ? "—" : formatPct(change24 as number, 2, true),
-      change30d: "—",  // TODO(D-ext): change_30d_pct in /signals enriched
-      change1y: "—",   // TODO(D-ext): change_1y_pct
+      change30d: isMissing(change30) ? "—" : formatPct(change30 as number, 2, true),
+      change1y: isMissing(change1y) ? "—" : formatPct(change1y as number, 2, true),
       signal: directionToSignalType(detail.direction) as SignalType,
       signalStrength: detail.high_conf ? "strong" : "moderate",
       timeframe: "1d",

@@ -4791,9 +4791,67 @@ def _scan_pair(pair, ta_ex, fng_value, fng_category,
         if effective_direction == "STRONG BUY":
             effective_direction = "BUY"
 
+    # AUDIT-2026-05-05 (P0-3): the frontend SignalHero + Home hero cards +
+    # watchlist all read top-level `price`, `change_24h_pct`, `change_30d_pct`,
+    # `change_1y_pct`. Pre-fix they only got `price_usd` (often None due to
+    # `if current_price else None` coercing 0.0 fetches to None) and never
+    # got the deltas. Closes 3 P0 surfaces at once with one dict patch.
+    #
+    # Delta source: the OHLCV frames already fetched in this same scan —
+    # zero new API calls.
+    #   change_24h_pct → 1h frame, 24 bars back  (or 4h frame, 6 bars back)
+    #   change_30d_pct → 1d frame, 30 bars back  (or 4h frame, 180 bars back)
+    #   change_1y_pct  → 1w frame, 52 bars back  (or 1d frame, 365 bars back)
+    # Fallback chain handles short OHLCV histories on freshly-listed alts.
+    def _pct_change_from_frame(_df, _bars_back):
+        if _df is None or len(_df) <= _bars_back:
+            return None
+        try:
+            _now = float(_df['close'].iloc[-1])
+            _then = float(_df['close'].iloc[-1 - _bars_back])
+            if _then <= 0:
+                return None
+            return round((_now - _then) / _then * 100.0, 2)
+        except Exception:
+            return None
+
+    _f1h = _ohlcv_frames.get('1h')
+    _f4h = _ohlcv_frames.get('4h')
+    _f1d = _ohlcv_frames.get('1d')
+    _f1w = _ohlcv_frames.get('1w')
+
+    _change_24h = _pct_change_from_frame(_f1h, 24)
+    if _change_24h is None:
+        _change_24h = _pct_change_from_frame(_f4h, 6)
+    _change_30d = _pct_change_from_frame(_f1d, 30)
+    if _change_30d is None:
+        _change_30d = _pct_change_from_frame(_f4h, 180)
+    _change_1y = _pct_change_from_frame(_f1w, 52)
+    if _change_1y is None:
+        _change_1y = _pct_change_from_frame(_f1d, 365)
+
+    # If current_price is missing or 0 (broken fetch), fall back to last close
+    # of any non-empty frame so the hero card never shows "—".
+    if not current_price:
+        for _fallback_frame in (_f1h, _f4h, _f1d, _f1w):
+            if _fallback_frame is not None and len(_fallback_frame) > 0:
+                try:
+                    _candidate = float(_fallback_frame['close'].iloc[-1])
+                    if _candidate > 0:
+                        current_price = _candidate
+                        break
+                except Exception:
+                    continue
+
+    _price_rounded = round(current_price, 4) if current_price else None
+
     result = {
         'pair':               pair,
-        'price_usd':          round(current_price, 4) if current_price else None,
+        'price_usd':          _price_rounded,
+        'price':              _price_rounded,   # alias — frontend reads `price`
+        'change_24h_pct':     _change_24h,
+        'change_30d_pct':     _change_30d,
+        'change_1y_pct':      _change_1y,
         'confidence_avg_pct': conf_avg,
         'direction':          effective_direction,
         'strategy_bias':      bias_1h,
