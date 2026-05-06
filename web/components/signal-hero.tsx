@@ -52,7 +52,12 @@ export function SignalHero({
   confidence,
   regimeAge,
 }: SignalHeroProps) {
-  const config = signalConfig[signal];
+  // AUDIT-2026-05-05 (HOTFIX): defensive lookup. If `signal` is anything
+  // other than buy/hold/sell (e.g. "strong-buy" / "strong-sell" leaking
+  // from format.ts:directionToSignalType which returns 5 values, or any
+  // future drift), fall back to hold. Pre-fix this crashed the page when
+  // BTC rotated to STRONG SELL post-scan.
+  const config = signalConfig[signal] ?? signalConfig.hold;
   const is24hPositive = change24h.startsWith("+");
   const is30dPositive = change30d.startsWith("+");
   const is1yPositive = change1y.startsWith("+");
