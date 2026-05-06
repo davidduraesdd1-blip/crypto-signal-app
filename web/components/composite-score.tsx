@@ -24,6 +24,17 @@ export function CompositeScore({ score, layers, weightsNote }: CompositeScorePro
         </span>
       </div>
 
+      {/* AUDIT-2026-05-05 (P0-COMPOSITE): when the parent passes an
+          empty layer list (backend doesn't ship per-layer scores yet),
+          show an honest empty state instead of a blank box. */}
+      {layers.length === 0 && (
+        <div className="mt-2 flex flex-1 items-center justify-center rounded-lg border border-dashed border-border-default bg-bg-2 p-6 text-center text-[12.5px] text-text-muted">
+          Per-layer breakdown not in V1 — composite is a regime-weighted
+          blend of Technical / Macro / Sentiment / On-chain layers, but
+          the backend exposes the composite only for now.
+        </div>
+      )}
+
       <div className="mt-2 flex flex-1 flex-col gap-3.5">
         {layers.map((layer) => {
           const barVariant = layer.score >= 75 ? "high" : layer.score >= 60 ? "mid" : "low";

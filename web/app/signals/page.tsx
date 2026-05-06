@@ -33,32 +33,18 @@ import {
 // /signals/{pair}/composite-layers, /signals/history). Each is a
 // future D-extension.
 
-// ─── Stubs (TODO(D-ext): wire when endpoints exist) ────────────────────────
-
-const timeframes: { label: string; signal: SignalType; score: number }[] = [
-  // TODO(D-ext): GET /signals/{pair}/timeframes
-  { label: "1m", signal: "hold", score: 52 },
-  { label: "5m", signal: "buy", score: 64 },
-  { label: "15m", signal: "buy", score: 70 },
-  { label: "30m", signal: "buy", score: 73 },
-  { label: "1h", signal: "buy", score: 76 },
-  { label: "4h", signal: "buy", score: 80 },
-  { label: "1d", signal: "buy", score: 78 },
-  { label: "1w", signal: "buy", score: 84 },
-];
-
-const compositeFallback = {
-  // TODO(D-ext): GET /signals/{pair}/composite-layers
-  score: 78.4,
-  layers: [
-    { name: "Layer 1 · Technical", score: 82 },
-    { name: "Layer 2 · Macro", score: 74 },
-    { name: "Layer 3 · Sentiment", score: 71 },
-    { name: "Layer 4 · On-chain", score: 86 },
-  ],
-  weightsNote:
-    "Composite = weighted avg per regime-adjusted weights. Current regime weights: tech 0.30, macro 0.15, sentiment 0.20, on-chain 0.35.",
-};
+// AUDIT-2026-05-05 (P0-MTF, P0-COMPOSITE): the prior `timeframes` array
+// + `compositeFallback` were 100% hardcoded mock data — the timeframe
+// strip showed 1m/5m/15m/30m tiles that DON'T EXIST in the engine
+// (TIMEFRAMES = ['1h','4h','1d','1w','1M'] per crypto_model_core.py:87)
+// and composite layer scores (Tech 82 / Macro 74 / etc.) were demo
+// numbers with no backend equivalent. Replaced below with live data.
+//
+// Per-layer scores (Technical/Macro/Sentiment/On-chain) don't exist as
+// distinct backend fields yet — composite_signal.py blends them into
+// confidence_avg_pct without exposing intermediate weights. Until the
+// backend ships per-layer scoring, the layer breakdown shows the
+// composite + an honest "per-layer breakdown not in V1" note.
 
 const onChainIndicators = [
   // TODO(D-ext): pull from /onchain/dashboard for the selected pair
@@ -171,9 +157,13 @@ function _deriveTransitions(rows: SignalHistoryRow[]): HistoryEntry[] {
   });
 }
 
+// Engine TF order (crypto_model_core.py:87) — defines tile sequence.
+const _ENGINE_TFS = ["1h", "4h", "1d", "1w", "1M"] as const;
+
 export default function SignalsPage() {
   const [activeCoinIdx, setActiveCoinIdx] = useState(0);
-  const [activeTimeframe, setActiveTimeframe] = useState(6); // 1d default
+  // Default to 1d (index 2 in the 5-element engine TF list).
+  const [activeTimeframe, setActiveTimeframe] = useState(2);
   const { level } = useUserLevel();
 
   // Derive the coin list from /signals top-N rows
@@ -237,6 +227,42 @@ export default function SignalsPage() {
       regimeAge: "—",  // TODO(D-ext): regime_age_days from regime_history join
     };
   })();
+
+  // AUDIT-2026-05-05 (P0-MTF): timeframes wired to detail.timeframes.
+  // Engine returns a dict keyed by '1h'/'4h'/'1d'/'1w'/'1M' — we
+  // surface them as 5 tiles in fixed order. Direction → buy/hold/sell;
+  // 'NO DATA' / 'LOW VOL' both render as hold.
+  const timeframes: { label: string; signal: SignalType; score: number }[] = (() => {
+    const tfDict = (detail?.timeframes ?? {}) as Record<
+      string,
+      { direction?: string; confidence?: number } | undefined
+    >;
+    return _ENGINE_TFS.map((tf) => {
+      const row = tfDict[tf] ?? {};
+      const dir = (row.direction ?? "NO DATA").toUpperCase();
+      const sig: SignalType = dir.includes("BUY")
+        ? "buy"
+        : dir.includes("SELL")
+          ? "sell"
+          : "hold";
+      const score = typeof row.confidence === "number" ? Math.round(row.confidence) : 0;
+      return { label: tf, signal: sig, score };
+    });
+  })();
+
+  // AUDIT-2026-05-05 (P0-COMPOSITE): composite score is the engine's
+  // confidence_avg_pct (0-100). Per-layer scoring (Tech/Macro/Sentiment/
+  // On-chain) doesn't exist as distinct backend fields yet — composite
+  // is internally a regime-weighted blend but the intermediate weights
+  // aren't exposed. Surface the composite + an honest note until the
+  // backend ships /signals/{pair}/composite-layers.
+  const compositeFallback = {
+    score: typeof detail?.confidence_avg_pct === "number" ? detail.confidence_avg_pct : 0,
+    layers: [] as { name: string; score: number }[],
+    weightsNote: detail
+      ? `Composite confidence ${detail.confidence_avg_pct ?? "—"}%. Per-layer breakdown (Technical / Macro / Sentiment / On-chain) not in V1 — backend exposes the blended composite only.`
+      : "Run a scan to populate.",
+  };
 
   // Technical indicators from snap_* fields when present
   const technicalIndicators = (() => {
