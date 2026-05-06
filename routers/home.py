@@ -106,7 +106,7 @@ def get_home_summary(
 
 
 @router.get(
-    "/watchlist",
+    "/home/watchlist",
     summary="Watchlist payload — top-N pairs with price + 24h change + 1h sparkline",
     dependencies=[Depends(require_api_key)],
 )
