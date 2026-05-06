@@ -23,11 +23,16 @@ services:
     # original Outcome C plan (separate worker tier with shared disk)
     # is invalid. Path A: single Starter web service runs both uvicorn
     # AND the scheduler (as a daemon thread inside the uvicorn process,
-    # via api.py's CRYPTO_SIGNAL_AUTOSTART_SCHEDULER hook). Same $7/mo
-    # Cowork already approved, simpler architecture, no cross-process
-    # SQLite contention. Starter tier doesn't sleep, so the scheduler
-    # keeps ticking 24/7.
-    plan: starter                       # $7/mo, 512 MB RAM, no idle sleep, supports persistent disks
+    # via api.py's CRYPTO_SIGNAL_AUTOSTART_SCHEDULER hook). Simpler
+    # architecture, no cross-process SQLite contention. The tier doesn't
+    # sleep, so the scheduler keeps ticking 24/7.
+    #
+    # AUDIT-2026-05-05 (P0-4): tier reconciled — was `starter` ($7/mo,
+    # 512 MB) but the live deploy is on `standard` ($25/mo, 1 CPU, 2 GB).
+    # Starter OOM'd during scheduler scans during the D8 cutover (the
+    # original 502 cycle); David upgraded the live service via the Render
+    # dashboard but render.yaml was never resynced. IaC now matches reality.
+    plan: standard                      # $25/mo, 1 CPU, 2 GB RAM, no idle sleep, supports persistent disks
     region: oregon                      # US West — matches David's manual config
     branch: main                        # post-D8 cutover (2026-05-04): production lives on main
     autoDeploy: true                    # redeploy on every push to the branch
