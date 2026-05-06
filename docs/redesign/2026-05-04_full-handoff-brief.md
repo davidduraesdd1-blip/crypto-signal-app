@@ -58,12 +58,15 @@ Phase D splits it into a Next.js frontend (Vercel) + FastAPI backend (Render).
 | **Backend health (no auth)** | `https://crypto-signal-app-1fsi.onrender.com/health` | ✅ public probe |
 | **Streamlit (legacy fallback)** | `https://cryptosignal-ddb1.streamlit.app` | ✅ stays live 30 days post-D8 |
 
-**Auth keys (Production)**
+**Auth keys (Production)** — values redacted; read from each platform's env-var dashboard.
 ```
-CRYPTO_SIGNAL_API_KEY = DY0YUB3Z0qTClL5p59I49Lv-gb1zUw1r2FWzoJYFKhg
-NEXT_PUBLIC_API_KEY   = DY0YUB3Z0qTClL5p59I49Lv-gb1zUw1r2FWzoJYFKhg  (same value)
+CRYPTO_SIGNAL_API_KEY = <set in Render env vars>
+NEXT_PUBLIC_API_KEY   = <set in Vercel env vars — same value as CRYPTO_SIGNAL_API_KEY>
 ```
 Set in Render env (server-side) + Vercel env (Production scope, browser-exposed).
+The original committed plaintext value (43-char base64) was rotated on 2026-05-05
+after a Phase 0.9 audit flagged it as a P0 leak. If you see the old value anywhere
+in the repo, scrub it.
 **Known issue**: `NEXT_PUBLIC_*` Next.js env vars are inlined into the JS bundle
 and visible to anyone who opens DevTools. This is documented as a post-cutover
 hardening item — replace with NextAuth + JWT (1-2 days work).
@@ -335,7 +338,7 @@ issue earlier was: empty database (no scan had ever been run on Render).
 
 ### Health + scan state
 ```bash
-KEY="DY0YUB3Z0qTClL5p59I49Lv-gb1zUw1r2FWzoJYFKhg"
+KEY="$CRYPTO_SIGNAL_API_KEY"   # export from your shell — never paste the literal here
 curl -s https://crypto-signal-app-1fsi.onrender.com/health | head -c 300
 curl -s -H "X-API-Key: $KEY" https://crypto-signal-app-1fsi.onrender.com/scan/status
 curl -s -H "X-API-Key: $KEY" https://crypto-signal-app-1fsi.onrender.com/diagnostics/database

@@ -55,7 +55,7 @@ and add these two:
 | Key | Value | Environments |
 |---|---|---|
 | `NEXT_PUBLIC_API_BASE` | `https://crypto-signal-app-1fsi.onrender.com` | Production, Preview, Development |
-| `NEXT_PUBLIC_API_KEY` | `DY0YUB3Z0qTClL5p59I49Lv-gb1zUw1r2FWzoJYFKhg` | Production, Preview, Development |
+| `NEXT_PUBLIC_API_KEY` | _(paste the value of `CRYPTO_SIGNAL_API_KEY` from Render's env vars)_ | Production, Preview, Development |
 
 **Important:**
 - The `NEXT_PUBLIC_*` prefix is required. Without it, Next.js won't
