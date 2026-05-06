@@ -7,7 +7,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * shells. The `webDir` MUST point to the Next.js export output (`out/`),
  * which is produced by `npm run build:mobile` (BUILD_TARGET=mobile).
  *
- * Bundle ID: `com.polaris-edge.app` — must match what's registered in
+ * Bundle ID: `com.polaris.edge` — must match what's registered in
  * App Store Connect (iOS) and Google Play Console (Android) when those
  * accounts are created (Day 4-5 of the mobile sprint).
  *
@@ -25,7 +25,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * those land.
  */
 const config: CapacitorConfig = {
-  appId: "com.polaris-edge.app",
+  appId: "com.polaris.edge",
   appName: "Polaris Edge",
   webDir: "out",
   server: {
