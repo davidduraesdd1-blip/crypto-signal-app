@@ -90,10 +90,16 @@ SCAN_OHLCV_LIMIT = 200  # PERF: reduced limit for scan — all indicators need <
 # PERF-A4: per-timeframe OHLCV limits — longer TFs have fewer useful bars; reduces payload further
 # 1h: 150 bars (6.25 days) — all indicators converge well within 150 1h bars
 # 4h: 100 bars (16.7 days) — Ichimoku / Supertrend need ~50; 100 gives comfortable headroom
-# 1d: 100 bars (3.3 months) — daily indicators saturate by bar 60
+# 1d: 400 bars (~13 months) — daily indicators saturate by bar 60, but
+#     P1-A (2026-05-06) needs >=365 bars to compute change_1y_pct as a
+#     1d × 365 fallback when 1w × 52 doesn't have enough history. Cost
+#     is one extra ~30 KB fetch per pair (~1 MB total at 30 pairs) per
+#     scan; sources ≥ tier-2 (Kraken / Gate.io / Bybit) all support it.
+#     CoinGecko free-tier last-resort still caps at 30 days; the 1Y
+#     delta stays null when the chain falls all the way through.
 # 1w: 52 bars (1 year)     — weekly only needs ~26 for Ichimoku kijun (26-period)
 # 1M: 36 bars (3 years)    — monthly indicators saturate by bar 26 (Ichimoku kijun)
-_TF_OHLCV_LIMIT: dict = {'1h': 150, '4h': 100, '1d': 100, '1w': 52, '1M': 36}
+_TF_OHLCV_LIMIT: dict = {'1h': 150, '4h': 100, '1d': 400, '1w': 52, '1M': 36}
 
 # PERF-A5: delta scan cache — stores last result + price per pair so unchanged pairs
 # can be skipped on repeat scan presses (60-80% faster on manual re-presses)
