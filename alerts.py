@@ -165,6 +165,18 @@ _SENSITIVE_ENV_MAP = {
     "okx_secret":     "OKX_API_SECRET",
     "okx_passphrase": "OKX_PASSPHRASE",
     "email_pass":     "EMAIL_APP_PASSWORD",
+    # AUDIT-2026-05-06 (W2 Tier 4 KEY-1): paid-API keys in env-var
+    # precedence. Pre-fix these only resolved from alerts_config.json
+    # which lived on cwd (now on disk per W2 Tier 8 P1) — but env-var
+    # precedence still beats either disk write for security + rotation
+    # ergonomics. Gives operators a single rotation path that doesn't
+    # require touching the config file.
+    "glassnode_key":   "GLASSNODE_API_KEY",
+    "lunarcrush_key":  "LUNARCRUSH_API_KEY",
+    "coinglass_key":   "COINGLASS_API_KEY",
+    "cryptoquant_key": "CRYPTOQUANT_API_KEY",
+    "cryptopanic_key": "CRYPTOPANIC_API_KEY",
+    "cryptorank_key":  "CRYPTORANK_API_KEY",
 }
 
 # AUDIT-2026-05-04 (B2): legacy env var names — checked if the canonical

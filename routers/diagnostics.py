@@ -312,19 +312,26 @@ _FEED_PROBES: list[dict[str, Any]] = [
     # OHLCV chain (CLAUDE.md §10)
     {"name": "Kraken (CCXT)", "url": "https://api.kraken.com/0/public/Time", "method": "GET", "category": "ohlcv"},
     {"name": "Gate.io REST", "url": "https://api.gateio.ws/api/v4/spot/time", "method": "GET", "category": "ohlcv"},
-    {"name": "Bybit REST", "url": "https://api.bybit.com/v5/market/time", "method": "GET", "category": "ohlcv"},
+    {"name": "Bybit REST (time)", "url": "https://api.bybit.com/v5/market/time", "method": "GET", "category": "ohlcv"},
+    # AUDIT-2026-05-06 (W2 Tier 4): added the load-bearing Bybit paths
+    # so we know whether funding-rate primary (commit 41e6a8c) and
+    # OHLCV are blocked, not just /v5/market/time.
+    {"name": "Bybit funding", "url": "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", "method": "GET", "category": "funding"},
+    {"name": "Bybit kline", "url": "https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=1", "method": "GET", "category": "ohlcv"},
     {"name": "MEXC REST", "url": "https://api.mexc.com/api/v3/time", "method": "GET", "category": "ohlcv"},
-    # OKX is geo-blocked from Render Oregon — kept in the list so the
-    # operator sees the geo-block confirmed. CLAUDE.md §10 documents this.
-    {"name": "OKX REST (geo-blocked)", "url": "https://www.okx.com/api/v5/public/time", "method": "GET", "category": "ohlcv"},
+    # AUDIT-2026-05-06 (W2 Tier 4): expanded OKX probes. Previous /public/time
+    # was 200 from Render but commit 0940681's geo-block claim was about
+    # the OHLCV/funding paths. Probing the actually-load-bearing endpoints
+    # to know whether the chain reorder can be reverted.
+    {"name": "OKX time", "url": "https://www.okx.com/api/v5/public/time", "method": "GET", "category": "ohlcv"},
+    {"name": "OKX kline", "url": "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1H&limit=1", "method": "GET", "category": "ohlcv"},
+    {"name": "OKX funding", "url": "https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP", "method": "GET", "category": "funding"},
+    {"name": "OKX open-interest", "url": "https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId=BTC-USDT-SWAP", "method": "GET", "category": "open-interest"},
     {"name": "CoinGecko", "url": "https://api.coingecko.com/api/v3/ping", "method": "GET", "category": "ohlcv"},
     # Sentiment / market data
     {"name": "alternative.me F&G", "url": "https://api.alternative.me/fng/?limit=1", "method": "GET", "category": "sentiment"},
-    # Macro
-    # AUDIT-2026-05-06 (W2 Tier 4): the previous probe URL hit FRED's
-    # SPA root which hangs on Akamai edge. The fred.stlouisfed.org
-    # static CSV path returns in ~280ms. This matches what the actual
-    # macro fetcher uses (`fred.stlouisfed.org/graph/fredgraph.csv`).
+    # Macro — fred.stlouisfed.org/graph/fredgraph.csv matches the actual
+    # macro-fetcher path; SPA root hangs on Akamai edge.
     {"name": "FRED", "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10", "method": "GET", "category": "macro"},
 ]
 

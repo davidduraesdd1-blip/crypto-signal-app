@@ -645,6 +645,16 @@ def fetch_chart_ohlcv(pair: str, timeframe: str, limit: int = 250) -> list:
         _cg_id = _cg_id_map.get(_base)
         _days = _tf_days.get(timeframe, 30)
         if _cg_id:
+            # AUDIT-2026-05-06 (W2 Tier 4 CG-1): acquire the shared
+            # CoinGecko limiter before this fallback request. Pre-fix
+            # this site bypassed the limiter (other sibling call sites
+            # in data_feeds.py:846/3060/3143 acquire it correctly),
+            # which caused the 429 we observed in /diagnostics/feeds
+            # tonight when the OHLCV chain forced fallback to CoinGecko.
+            try:
+                _df._COINGECKO_LIMITER.acquire()
+            except Exception:
+                pass  # limiter unavailable — proceed without (no-op)
             _r = _df._SESSION.get(
                 f"https://api.coingecko.com/api/v3/coins/{_cg_id}/ohlc",
                 params={"vs_currency": "usd", "days": str(_days)},
