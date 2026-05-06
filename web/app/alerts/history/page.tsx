@@ -146,7 +146,12 @@ export default function AlertsHistoryPage() {
         ))}
       </div>
 
-      {/* Filter row — TODO(D-ext): wire via URL search params */}
+      {/* Filter row — search box wired (filters visibleEntries below);
+          Range / Type / Status / Channel filter pills are static labels
+          until backend supports filter params (no /alerts/log filtering
+          on type/channel yet — TODO post-V1).
+          AUDIT-2026-05-06 (post-launch dropdown fix): chevrons removed
+          from labels that aren't real dropdowns. */}
       <div className="mb-5 flex flex-wrap items-center gap-2.5">
         <div className="flex min-w-[200px] max-w-[320px] flex-1 items-center gap-2 rounded-lg border border-border bg-bg-1 px-3 py-1.5">
           <span className="text-text-muted">🔎</span>
@@ -156,26 +161,22 @@ export default function AlertsHistoryPage() {
             className="h-7 border-0 bg-transparent p-0 text-[13px] focus-visible:ring-0"
           />
         </div>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-[13px]">
+        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
           <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Range</span>
           <span className="font-mono font-medium">Last 7d</span>
-          <span className="text-[11px] text-text-muted">▾</span>
-        </Button>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-[13px]">
+        </span>
+        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
           <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Type</span>
           <span className="font-mono font-medium">All</span>
-          <span className="text-[11px] text-text-muted">▾</span>
-        </Button>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-[13px]">
+        </span>
+        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
           <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Status</span>
           <span className="font-mono font-medium">All</span>
-          <span className="text-[11px] text-text-muted">▾</span>
-        </Button>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-[13px]">
+        </span>
+        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
           <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Channel</span>
           <span className="font-mono font-medium">All</span>
-          <span className="text-[11px] text-text-muted">▾</span>
-        </Button>
+        </span>
         <Button
           variant="outline"
           size="sm"

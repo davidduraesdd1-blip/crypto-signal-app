@@ -30,14 +30,23 @@ export function OnChainCard({
   return (
     <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border-default bg-bg-1 p-4">
       {/* Card header */}
+      {/* AUDIT-2026-05-06 (post-launch dropdown fix): drop the ▾ + button
+          wrapper when no onTickerClick handler is wired. The page passes
+          BTC/ETH/XRP as fixed tickers — there's no swap UI yet. */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-1.5 border-b border-border-default pb-3">
-        <button
-          onClick={onTickerClick}
-          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-transparent px-2 py-1 font-mono text-lg font-semibold transition-all hover:border-border-default hover:bg-bg-2"
-        >
-          {ticker}
-          <span className="text-[11px] font-medium text-text-muted">▾</span>
-        </button>
+        {typeof onTickerClick === "function" ? (
+          <button
+            onClick={onTickerClick}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-transparent px-2 py-1 font-mono text-lg font-semibold transition-all hover:border-border-default hover:bg-bg-2"
+          >
+            {ticker}
+            <span className="text-[11px] font-medium text-text-muted">▾</span>
+          </button>
+        ) : (
+          <span className="inline-flex min-h-[44px] items-center gap-1.5 px-2 py-1 font-mono text-lg font-semibold">
+            {ticker}
+          </span>
+        )}
         <div className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
           <span
             className={cn(

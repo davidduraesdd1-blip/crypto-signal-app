@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -51,6 +52,7 @@ export default function ArbitragePage() {
   const router = useRouter();
   const arbQuery = useBacktestArbitrage();
   const { level } = useUserLevel();
+  const [logExpanded, setLogExpanded] = useState(false);
   const opportunities = arbQuery.data?.opportunities ?? [];
   const spreads: ArbSpread[] = opportunities.map(rowToSpread);
 
@@ -190,14 +192,44 @@ export default function ArbitragePage() {
         />
       </div>
 
-      {/* Historical log expander */}
-      <button className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-border bg-bg-1 px-4 py-3 text-[13px] text-text-secondary transition-all hover:bg-bg-2 hover:text-text-primary">
+      {/* Historical log expander — wired with local state.
+          AUDIT-2026-05-06 (post-launch dropdown fix): the chevron now
+          rotates on expand and clicking the row actually toggles. */}
+      <button
+        type="button"
+        onClick={() => setLogExpanded((prev) => !prev)}
+        aria-expanded={logExpanded}
+        className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-border bg-bg-1 px-4 py-3 text-[13px] text-text-secondary transition-all hover:bg-bg-2 hover:text-text-primary"
+      >
         <span>
-          <strong className="text-text-primary">Historical Arbitrage Log</strong> — last 48 opportunities ·
-          DB-backed · click to expand
+          <strong className="text-text-primary">Historical Arbitrage Log</strong> — last {arbQuery.data?.opportunities?.length ?? 0} opportunities ·
+          DB-backed · {logExpanded ? "click to collapse" : "click to expand"}
         </span>
-        <span className="text-[11px] text-text-muted">▾</span>
+        <span className={`text-[11px] text-text-muted transition-transform ${logExpanded ? "rotate-180" : ""}`}>▾</span>
       </button>
+      {logExpanded && (
+        <div className="mt-3 rounded-lg border border-border bg-bg-1 p-4">
+          {(arbQuery.data?.opportunities?.length ?? 0) === 0 ? (
+            <div className="text-center text-xs text-text-muted">
+              {arbQuery.isLoading
+                ? "Loading historical arbitrage log…"
+                : "No historical arbitrage opportunities recorded yet."}
+            </div>
+          ) : (
+            <div className="space-y-1.5 font-mono text-[12px]">
+              {(arbQuery.data?.opportunities ?? []).slice(0, 48).map((opp, idx) => (
+                <div key={idx} className="flex items-center justify-between border-b border-border pb-1 last:border-0">
+                  <span className="truncate">{String(opp.pair ?? "—")}</span>
+                  <span className="text-text-muted">{String(opp.buy_exchange ?? "—")} → {String(opp.sell_exchange ?? "—")}</span>
+                  <span className="text-success">
+                    {isMissing(opp.net_spread_pct) ? "—" : formatPct(opp.net_spread_pct as number, 2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </AppShell>
   );
 }

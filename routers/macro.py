@@ -17,15 +17,21 @@ macro payload:
   - macro_signal      ← get_macro_enrichment().macro_signal
                         (RISK_ON | MILD_RISK_ON | NEUTRAL | RISK_OFF)
 
-5-min cache via the upstream helpers' own caches; this endpoint adds
-no extra layer.
+POST-LAUNCH FIX (2026-05-06 — also Everything-Live, screenshot review):
+yfinance + FRED can block 30+ seconds on Render cold-start, leaving the
+frontend stuck on "loading" indefinitely. Each fetcher now runs inside
+a 6-second-bounded ThreadPoolExecutor; on timeout the field surfaces as
+null with `error: "timeout"` so the UI renders an honest "—" instead of
+hanging. Subsequent calls hit the upstream helpers' own caches and
+return fast.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends
 
@@ -76,6 +82,25 @@ def _fetch_hy_spreads() -> float | None:
     return None
 
 
+_PER_FETCHER_TIMEOUT_S = 6  # cap per upstream call; whole endpoint ~6s ceiling
+
+
+def _bounded(name: str, fn: Callable[[], Any], default: Any) -> Any:
+    """Run `fn()` in a thread with a hard timeout. Returns `default` on
+    timeout or exception. Never raises — keeps the endpoint fail-open."""
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(fn)
+            try:
+                return fut.result(timeout=_PER_FETCHER_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                logger.warning("[macro] %s timed out after %ss", name, _PER_FETCHER_TIMEOUT_S)
+                return default
+    except Exception as exc:
+        logger.warning("[macro] %s failed: %s", name, exc)
+        return default
+
+
 @router.get(
     "/strip",
     summary="Macro indicator strip (BTC dom + F&G + DXY + VIX + 10Y + HY + funding + regime)",
@@ -84,93 +109,80 @@ def _fetch_hy_spreads() -> float | None:
 def get_macro_strip() -> dict[str, Any]:
     """Returns the macro indicator payload powering Home MacroStrip + Regimes MacroOverlay.
 
-    Each indicator includes the raw value, a human-readable sub-label,
-    and (where applicable) a 7d / 30d delta. Frontend picks fields per page.
+    Each indicator runs through `_bounded` with a 6-second timeout so a
+    slow yfinance / FRED call can't stall the whole response. Frontend
+    sees `value: null` on timeout — renders a truthful "—" placeholder.
 
-    Fail-open: any individual fetcher returning None doesn't fail the whole
-    response — that field surfaces with `value: null` so the front-end
-    renders a truthful "—" empty-state instead of a stack trace.
+    Each fetcher's upstream helper has its own cache (5-60 min depending
+    on source), so subsequent calls hit warm caches and return fast.
     """
     payload: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # BTC dominance (CoinGecko free)
-    try:
-        gm = data_feeds.get_global_market() or {}
-        payload["btc_dominance"] = {
-            "value": gm.get("btc_dominance"),
-            "alt_season_label": gm.get("altcoin_season_label"),
-            "source": gm.get("source"),
-        }
-    except Exception as exc:
-        logger.warning("[macro] get_global_market failed: %s", exc)
-        payload["btc_dominance"] = {"value": None, "source": "unavailable"}
+    # Run all fetchers in parallel using ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        f_gm   = ex.submit(data_feeds.get_global_market)
+        f_fg   = ex.submit(data_feeds.get_fear_greed)
+        f_me   = ex.submit(data_feeds.get_macro_enrichment)
+        f_fred = ex.submit(data_feeds.fetch_fred_macro)
+        f_fund = ex.submit(data_feeds.get_funding_rate, "BTC/USDT")
+        f_hy   = ex.submit(_fetch_hy_spreads)
 
-    # Fear & Greed (alternative.me free)
-    try:
-        fg = data_feeds.get_fear_greed() or {}
-        payload["fear_greed"] = {
-            "value": fg.get("value"),
-            "label": fg.get("label"),
-            "bias": fg.get("bias"),
-            "signal": fg.get("signal"),
-        }
-    except Exception as exc:
-        logger.warning("[macro] get_fear_greed failed: %s", exc)
-        payload["fear_greed"] = {"value": None, "label": None}
+        def _wait(label: str, fut, default):
+            try:
+                return fut.result(timeout=_PER_FETCHER_TIMEOUT_S) or default
+            except concurrent.futures.TimeoutError:
+                logger.warning("[macro] %s timed out after %ss", label, _PER_FETCHER_TIMEOUT_S)
+                return default
+            except Exception as exc:
+                logger.warning("[macro] %s failed: %s", label, exc)
+                return default
 
-    # Macro enrichment (DXY, VIX, 10Y, yield curve, macro signal)
-    try:
-        me = data_feeds.get_macro_enrichment() or {}
-        payload["dxy"] = {
-            "value": me.get("dxy"),
-            "trend": me.get("dxy_trend"),
-        }
-        payload["vix"] = {
-            "value": me.get("vix"),
-            "vix3m": me.get("vix3m"),
-            "structure": me.get("vix_structure"),
-        }
-        payload["ten_yr_yield"] = {
-            "value": me.get("yield_spread_pp"),  # for 2Y10Y spread
-            "raw_10y": me.get("ten_yr"),
-        }
-        payload["yield_curve"] = me.get("yield_curve")
-        payload["macro_signal"] = {
-            "label": me.get("macro_signal"),
-            "score": me.get("macro_score"),
-        }
-    except Exception as exc:
-        logger.warning("[macro] get_macro_enrichment failed: %s", exc)
-        payload["dxy"] = {"value": None}
-        payload["vix"] = {"value": None}
-        payload["ten_yr_yield"] = {"value": None}
-        payload["yield_curve"] = None
-        payload["macro_signal"] = {"label": None, "score": None}
+        gm   = _wait("get_global_market", f_gm, {})
+        fg   = _wait("get_fear_greed", f_fg, {})
+        me   = _wait("get_macro_enrichment", f_me, {})
+        fred = _wait("fetch_fred_macro", f_fred, {})
+        fund = _wait("get_funding_rate", f_fund, {})
+        hy   = _wait("fetch_hy_spreads", f_hy, None)
 
-    # 10Y treasury yield raw — re-pull from fred_macro for clarity
-    try:
-        fred = data_feeds.fetch_fred_macro() or {}
-        payload["ten_yr_yield"]["raw"] = fred.get("ten_yr_yield")
-        payload["two_yr_yield"] = {"value": fred.get("two_yr_yield")}
-        payload["m2_yoy"] = fred.get("m2_yoy")
-    except Exception as exc:
-        logger.debug("[macro] fetch_fred_macro failed: %s", exc)
-
-    # BTC funding rate (8h) — Bybit primary
-    try:
-        fund = data_feeds.get_funding_rate("BTC/USDT") or {}
-        payload["btc_funding"] = {
-            "value": fund.get("funding_rate_pct"),
-            "signal": fund.get("signal"),
-            "source": fund.get("source"),
-        }
-    except Exception as exc:
-        logger.warning("[macro] get_funding_rate failed: %s", exc)
-        payload["btc_funding"] = {"value": None}
-
-    # HY spreads (FRED BAMLH0A0HYM2)
-    payload["hy_spreads"] = {"value": _fetch_hy_spreads()}
+    payload["btc_dominance"] = {
+        "value": gm.get("btc_dominance"),
+        "alt_season_label": gm.get("altcoin_season_label"),
+        "source": gm.get("source") or "unavailable",
+    }
+    payload["fear_greed"] = {
+        "value": fg.get("value"),
+        "label": fg.get("label"),
+        "bias": fg.get("bias"),
+        "signal": fg.get("signal"),
+    }
+    payload["dxy"] = {
+        "value": me.get("dxy"),
+        "trend": me.get("dxy_trend"),
+    }
+    payload["vix"] = {
+        "value": me.get("vix"),
+        "vix3m": me.get("vix3m"),
+        "structure": me.get("vix_structure"),
+    }
+    payload["ten_yr_yield"] = {
+        "value": me.get("yield_spread_pp"),  # 2Y10Y spread
+        "raw":   fred.get("ten_yr_yield"),
+        "raw_10y": me.get("ten_yr"),
+    }
+    payload["two_yr_yield"] = {"value": fred.get("two_yr_yield")}
+    payload["m2_yoy"] = fred.get("m2_yoy")
+    payload["yield_curve"] = me.get("yield_curve")
+    payload["macro_signal"] = {
+        "label": me.get("macro_signal"),
+        "score": me.get("macro_score"),
+    }
+    payload["btc_funding"] = {
+        "value":  fund.get("funding_rate_pct"),
+        "signal": fund.get("signal"),
+        "source": fund.get("source"),
+    }
+    payload["hy_spreads"] = {"value": hy}
 
     return serialize(payload)

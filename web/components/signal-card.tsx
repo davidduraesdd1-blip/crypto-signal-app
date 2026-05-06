@@ -55,13 +55,15 @@ export function SignalCard({
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-3 rounded-xl border border-border-default bg-bg-1 p-4">
       {/* Header row: ticker + signal badge */}
+      {/* AUDIT-2026-05-06 (post-launch dropdown fix): the ▾ chevron
+          implied a click-to-swap dropdown that never existed (button had
+          no onClick). The hero card shows whatever pair the parent
+          assigns; pair switching belongs on the /signals page picker.
+          Render the ticker as a plain label. */}
       <div className="flex items-center justify-between gap-2">
-        <button
-          className="inline-flex min-h-[44px] items-center gap-1 rounded-md border border-transparent px-1 py-0.5 text-sm font-medium text-text-secondary transition-all hover:border-border-default hover:bg-bg-2 hover:text-text-primary"
-          title="Click to swap pair"
-        >
-          {ticker} <span className="text-[10px] text-text-muted">▾</span>
-        </button>
+        <span className="inline-flex items-center gap-1 px-1 py-0.5 text-sm font-medium text-text-secondary">
+          {ticker}
+        </span>
         <span
           className={cn(
             "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-semibold tracking-wide",

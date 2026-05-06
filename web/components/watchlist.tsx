@@ -17,21 +17,16 @@ export function Watchlist({ items, refreshedAgo = "2m ago" }: WatchlistProps) {
   return (
     <div className="min-w-0 max-w-full rounded-xl border border-border-default bg-bg-1 p-4">
       {/* Header */}
+      {/* AUDIT-2026-05-06 (post-launch dropdown fix): "Customize ▾" was a
+          decorative button with no handler — there's no watchlist-edit UI
+          yet. Drop it; bring it back when the customize panel ships. */}
       <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-xs font-medium uppercase tracking-wider text-text-muted">
           Watchlist · top-cap
         </div>
-        <div className="flex items-center gap-2.5">
-          <span className="text-[11.5px] text-text-muted">
-            scan refreshed {refreshedAgo}
-          </span>
-          <button
-            className="min-h-[32px] rounded-md border border-border-default px-2 py-0.5 text-[11.5px] text-text-muted transition-colors hover:border-border-strong hover:bg-bg-2 hover:text-text-primary"
-            title="Add or remove pairs from your watchlist"
-          >
-            Customize ▾
-          </button>
-        </div>
+        <span className="text-[11.5px] text-text-muted">
+          scan refreshed {refreshedAgo}
+        </span>
       </div>
 
       {/* Rows */}
