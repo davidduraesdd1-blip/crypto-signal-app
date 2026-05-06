@@ -270,7 +270,7 @@ _PER_FETCHER_TIMEOUT_S = 14  # alias for compat with prior reads / docs
 # (shutdown(wait=True) waits for all submitted threads), defeating the
 # whole point of a per-fetcher timeout.
 _MACRO_EXEC = concurrent.futures.ThreadPoolExecutor(
-    max_workers=8,
+    max_workers=16,  # 7 top-level + 6 DXY sub-legs + headroom for /v5.1
     thread_name_prefix="macro-fetch",
 )
 
