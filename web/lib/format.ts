@@ -22,6 +22,32 @@ export function isMissing(v: unknown): boolean {
   return false;
 }
 
+// AUDIT-2026-05-06 (P1-D + W2-N2): defensive coercion helpers. The
+// daily_signals SQLite table has REAL columns that can occasionally
+// surface as strings via pandas/SQLite type drift across schema
+// migrations. Calling .toFixed() / .toLocaleString() / arithmetic on
+// these without coercing crashes the page (caught by H1 error
+// boundary on 2026-05-05). Promoted from signals/page.tsx so every
+// page that reads engine output can use them.
+
+/** Coerce a value that should be a finite number; null otherwise. */
+export function toFiniteNumber(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Coerce a value that should be a non-empty string; null otherwise.
+ *  Treats "NaN" / "None" / whitespace as missing. */
+export function toCleanString(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (s.length === 0) return null;
+  const lower = s.toLowerCase();
+  if (lower === "nan" || lower === "none" || lower === "n/a") return null;
+  return s;
+}
+
 /** Format a USD value: $104,280 / $1.2K / $2.13M / $5.40B / em-dash */
 export function formatUsd(value: number | null | undefined, decimals = 2, compact = false): string {
   if (isMissing(value)) return EM_DASH;

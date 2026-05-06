@@ -45,7 +45,12 @@ export function SignalCard({
     },
   };
 
-  const config = signalConfig[signal];
+  // AUDIT-2026-05-06 (W2-N1): defensive lookup mirrors the SignalHero
+  // hotfix from 9d136c2. Pre P1-D, directionToSignalType could return
+  // "strong-buy" / "strong-sell" which crashed this lookup; P1-D
+  // narrowed it to 3-tier but the defensive guard stays as
+  // belt-and-suspenders for any future SignalType drift.
+  const config = signalConfig[signal] ?? signalConfig.hold;
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-3 rounded-xl border border-border-default bg-bg-1 p-4">

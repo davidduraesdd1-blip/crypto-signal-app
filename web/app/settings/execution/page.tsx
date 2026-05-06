@@ -5,6 +5,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useSettings, useSaveSettings } from "@/hooks/use-settings";
 import { useTestExchangeConnection } from "@/hooks/use-exchange";
+import { toFiniteNumber } from "@/lib/format";
 
 // AUDIT-2026-05-03 (D4c): Execution settings page wired:
 // - useSettings() hydrates live_trading_enabled / auto_execute /
@@ -336,11 +337,20 @@ export default function ExecutionSettingsPage() {
           >
             {testResult.ok ? (
               <>
+                {/* AUDIT-2026-05-06 (W2-N2): coerce balance_usdt before
+                    .toLocaleString — pre-fix this crashed if the API
+                    returned the value as a string (same bug class as
+                    SignalHero / daily_signals type drift). */}
                 ✓ Connected · USDT balance:{" "}
-                {testResult.balance_usdt.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
+                {(() => {
+                  const v = toFiniteNumber(testResult.balance_usdt);
+                  return v === null
+                    ? "—"
+                    : v.toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      });
+                })()}
               </>
             ) : (
               <>✗ {testResult.error ?? "connection failed"}</>
