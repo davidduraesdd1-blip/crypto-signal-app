@@ -2,15 +2,24 @@ import { cn } from "@/lib/utils";
 
 export type SignalType = "buy" | "hold" | "sell";
 
-interface HistoryEntry {
+export interface HistoryEntry {
   timestamp: string;
   signal: SignalType;
   note: string;
+  /** Already-formatted signed pct string ("+ 12.6%" / "− 6.2%" / "—") */
   returnPct: string;
 }
 
 interface SignalHistoryProps {
+  /** Real entries from the daily_signals table (after transition-dedup
+   *  in the parent). Empty array → render the honest empty state. */
   entries: HistoryEntry[];
+  /** Display ticker (e.g. "BTC", "ETH") for the heading. */
+  ticker?: string;
+  /** Loading state (waiting for /signals/history to resolve). */
+  isLoading?: boolean;
+  /** Error state (request failed). */
+  error?: { message: string } | null;
 }
 
 const signalConfig: Record<SignalType, { icon: string; label: string; className: string }> = {
@@ -19,22 +28,44 @@ const signalConfig: Record<SignalType, { icon: string; label: string; className:
   sell: { icon: "▼", label: "SELL", className: "text-danger" },
 };
 
-export function SignalHistory({ entries }: SignalHistoryProps) {
+export function SignalHistory({ entries, ticker = "—", isLoading, error }: SignalHistoryProps) {
   return (
     <div className="rounded-xl border border-border-default bg-bg-1 p-4">
       <div className="mb-2.5 flex items-baseline justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-text-muted">
-          Recent signal history · BTC
+          Recent signal history · {ticker}
         </span>
         <span className="text-xs text-text-muted">
-          last {entries.length} state transitions
+          {entries.length > 0
+            ? `last ${entries.length} state transitions`
+            : "transitions only — consecutive same-direction scans collapse"}
         </span>
       </div>
+
+      {/* P0-7 honest empty / loading / error states. v0 mock pre-fix
+          showed Apr/Mar/Feb 2026 demo dates regardless of API state. */}
+      {isLoading && (
+        <div className="py-6 text-center text-[12.5px] text-text-muted">
+          Loading…
+        </div>
+      )}
+      {!isLoading && error && (
+        <div className="py-6 text-center text-[12.5px] text-text-muted">
+          History unavailable — {error.message}
+        </div>
+      )}
+      {!isLoading && !error && entries.length === 0 && (
+        <div className="py-6 text-center text-[12.5px] text-text-muted">
+          No signal transitions logged yet for {ticker}. The first transition
+          appears after the next scheduled scan flips direction.
+        </div>
+      )}
 
       <div className="flex flex-col">
         {entries.map((entry, index) => {
           const config = signalConfig[entry.signal];
           const isPositive = entry.returnPct.startsWith("+");
+          const isUnknown = entry.returnPct === "—";
 
           return (
             <div
@@ -52,7 +83,11 @@ export function SignalHistory({ entries }: SignalHistoryProps) {
               <span
                 className={cn(
                   "font-mono md:text-right",
-                  isPositive ? "text-success" : "text-danger"
+                  isUnknown
+                    ? "text-text-muted"
+                    : isPositive
+                      ? "text-success"
+                      : "text-danger"
                 )}
               >
                 {entry.returnPct}

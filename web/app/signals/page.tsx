@@ -10,7 +10,7 @@ import { PriceChart } from "@/components/price-chart";
 import { CompositeScore } from "@/components/composite-score";
 import { IndicatorTile, IndicatorGrid } from "@/components/indicator-tile";
 import { SignalHistory } from "@/components/signal-history";
-import { useSignals, useSignalDetail } from "@/hooks/use-signals";
+import { useSignals, useSignalDetail, useSignalHistory } from "@/hooks/use-signals";
 import { useTriggerScan } from "@/hooks/use-scan";
 import { ApiError } from "@/lib/api";
 import { useUserLevel } from "@/providers/user-level-provider";
@@ -86,15 +86,81 @@ const priceIndicators = [
   { label: "Token unlocks", value: "—", subtext: "TODO(D-ext)", variant: "default" as const },
 ];
 
-const signalHistory = [
-  // TODO(D-ext): GET /signals/{pair}/history
-  { timestamp: "Apr 12 08:20", signal: "buy" as SignalType, note: "Composite crossed above 70; regime shifted bull → accumulation", returnPct: "+ 18.4%" },
-  { timestamp: "Mar 28 14:10", signal: "hold" as SignalType, note: "Consolidation; ADX < 20", returnPct: "+ 2.1%" },
-  { timestamp: "Mar 14 09:00", signal: "buy" as SignalType, note: "On-chain score 86, MVRV-Z rising", returnPct: "+ 12.6%" },
-  { timestamp: "Feb 28 19:45", signal: "sell" as SignalType, note: "Overbought + funding spike; regime risk-off", returnPct: "− 6.2%" },
-  { timestamp: "Feb 14 11:30", signal: "buy" as SignalType, note: "Multi-timeframe alignment confirmed", returnPct: "+ 9.8%" },
-  { timestamp: "Jan 28 03:20", signal: "hold" as SignalType, note: "Transition regime, awaiting confirmation", returnPct: "+ 1.2%" },
-];
+// AUDIT-2026-05-05 (P0-7): the v0 mock signal-history block (Apr 12,
+// Mar 28, etc.) was here. Replaced with live data via useSignalHistory
+// — see deriveSignalHistory() inside SignalsPage.
+import type { SignalHistoryRow } from "@/lib/api";
+import type { HistoryEntry } from "@/components/signal-history";
+
+/** Map a raw daily_signals row's direction column to the component's
+ *  three-tier signal type. Engine emits 'BUY', 'STRONG BUY', 'SELL',
+ *  'STRONG SELL', 'HOLD', 'NEUTRAL' etc. */
+function _mapDirectionToSignal(dir: string | null | undefined): SignalType {
+  const d = (dir ?? "").toUpperCase();
+  if (d.includes("BUY")) return "buy";
+  if (d.includes("SELL")) return "sell";
+  return "hold";
+}
+
+/** Format a signed % return string ("+ 12.6%" / "− 6.2%"). */
+function _formatReturn(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return "—";
+  const sign = pct >= 0 ? "+ " : "− ";
+  return `${sign}${Math.abs(pct).toFixed(1)}%`;
+}
+
+/** Format a daily_signals.scan_timestamp ISO string into "Apr 12 08:20". */
+function _formatTs(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const month = d.toLocaleString("en-US", { month: "short" });
+    const day = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${month} ${day} ${hh}:${mm}`;
+  } catch {
+    return iso;
+  }
+}
+
+/** Compress consecutive same-direction rows into transition entries.
+ *  Each kept row is the FIRST scan that flipped to a new direction.
+ *  Return % is computed from price at this transition vs price at the
+ *  next transition (i.e. the holding period of the previous direction). */
+function _deriveTransitions(rows: SignalHistoryRow[]): HistoryEntry[] {
+  // Backend returns oldest-first via .tail() — flip to newest-first.
+  const desc = [...rows].reverse();
+  const transitions: { row: SignalHistoryRow; signal: SignalType }[] = [];
+  let prevSignal: SignalType | null = null;
+  for (const row of desc) {
+    const sig = _mapDirectionToSignal(row.direction);
+    if (sig !== prevSignal) {
+      transitions.push({ row, signal: sig });
+      prevSignal = sig;
+    }
+  }
+  // Compute return between this transition and the previous one (older).
+  return transitions.slice(0, 6).map((t, i) => {
+    const next = transitions[i + 1];
+    const priceNow = t.row.price_usd;
+    const pricePrev = next?.row.price_usd ?? null;
+    const ret =
+      priceNow != null && pricePrev != null && pricePrev > 0
+        ? ((priceNow - pricePrev) / pricePrev) * 100
+        : null;
+    const noteParts: string[] = [];
+    if (t.row.regime) noteParts.push(t.row.regime.replace(/^Regime:\s*/i, "").trim());
+    if (t.row.confidence_avg_pct != null) noteParts.push(`conf ${Math.round(t.row.confidence_avg_pct)}%`);
+    if (t.row.mtf_alignment != null) noteParts.push(`mtf ${t.row.mtf_alignment.toFixed(2)}`);
+    return {
+      timestamp: _formatTs(t.row.scan_timestamp),
+      signal: t.signal,
+      note: noteParts.length ? noteParts.join(" · ") : "—",
+      returnPct: _formatReturn(ret),
+    };
+  });
+}
 
 export default function SignalsPage() {
   const [activeCoinIdx, setActiveCoinIdx] = useState(0);
@@ -114,6 +180,10 @@ export default function SignalsPage() {
   // Per-pair detail for the hero card + technical tiles
   const detailQuery = useSignalDetail(activePair);
   const detail = detailQuery.data;
+
+  // P0-7: live signal-history transitions for this pair
+  const historyQuery = useSignalHistory(activePair, 50);
+  const signalHistoryEntries = _deriveTransitions(historyQuery.data?.results ?? []);
 
   // Build the SignalHero props from the detail row
   const heroData = (() => {
@@ -392,8 +462,13 @@ export default function SignalsPage() {
         </div>
       </div>
 
-      {/* Signal history */}
-      <SignalHistory entries={signalHistory} />
+      {/* Signal history — wired to /signals/history (P0-7) */}
+      <SignalHistory
+        entries={signalHistoryEntries}
+        ticker={activePair ? activePair.split("/")[0] : "—"}
+        isLoading={historyQuery.isLoading}
+        error={historyQuery.error ? { message: (historyQuery.error as Error).message } : null}
+      />
     </AppShell>
   );
 }

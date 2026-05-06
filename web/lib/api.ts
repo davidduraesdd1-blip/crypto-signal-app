@@ -280,6 +280,35 @@ function _pairPathSegment(pair: string): string {
 export const getSignalForPair = (pair: TradingPair, signal?: AbortSignal) =>
   apiFetch<SignalRow>(`/signals/${_pairPathSegment(pair)}`, { signal });
 
+// AUDIT-2026-05-05 (P0-7): wire /signals/history (api.py:597) to replace
+// the v0 mock signal-history block. Backend reads from daily_signals
+// table — every scan tick lands a row, so we ask for ~50 rows and let
+// the consumer dedupe to direction transitions only.
+export interface SignalHistoryRow {
+  scan_timestamp: string;
+  pair: string;
+  price_usd: number | null;
+  confidence_avg_pct: number | null;
+  direction: string;
+  regime: string | null;
+  mtf_alignment: number | null;
+  high_conf?: number | boolean | null;
+  fng_value?: number | null;
+}
+export interface SignalHistoryResponse {
+  count: number;
+  results: SignalHistoryRow[];
+}
+export const getSignalHistory = (
+  pair: TradingPair,
+  limit = 50,
+  signal?: AbortSignal,
+) =>
+  apiFetch<SignalHistoryResponse>(
+    `/signals/history?pair=${encodeURIComponent(pair)}&limit=${limit}`,
+    { signal },
+  );
+
 // ─── Regimes ────────────────────────────────────────────────────────────────
 
 export const getRegimes = (signal?: AbortSignal) =>
