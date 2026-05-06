@@ -125,7 +125,26 @@ function ToggleField({ label, checked, sublabel }: ToggleFieldProps) {
   );
 }
 
+// AUDIT-2026-05-06 (W2 Tier 1 F-AI-1): pre-fix every SliderField was
+// rendered with a `value` prop but NO parent `onChange` — the native
+// <input type="range"> was effectively read-only because React kept
+// re-rendering the same controlled value. The whole card looked
+// broken. Fix: hoist each slider/input into local state so the
+// controls move as the user drags. Persistence to the backend is
+// still pending (no /agent/config endpoint), so the "Save Agent
+// Config" button stays a local-only no-op for now.
+function _pct(value: number, min: number, max: number): number {
+  if (max <= min) return 0;
+  return Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+}
+
 export function AgentConfigCard() {
+  const [minConfidence, setMinConfidence] = useState(75);
+  const [maxTradeSize, setMaxTradeSize] = useState(10);
+  const [cooldownLoss, setCooldownLoss] = useState(1800);
+  const [dailyLossLimit, setDailyLossLimit] = useState(5);
+  const [maxDrawdown, setMaxDrawdown] = useState(15);
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {/* Left: Cycle behavior */}
@@ -141,27 +160,31 @@ export function AgentConfigCard() {
           <InputField label="Cycle Interval" value={60} help="30 to 3600 · default 60s" />
           <SliderField
             label="Min Confidence to Act"
-            value={75}
+            value={minConfidence}
             min={50}
             max={99}
-            fillPercent={50}
+            onChange={setMinConfidence}
+            fillPercent={_pct(minConfidence, 50, 99)}
             help="Composite confidence floor before agent considers acting · 50–99%"
           />
           <SliderField
             label="Max Trade Size"
-            value={10}
+            value={maxTradeSize}
             min={0}
             max={50}
-            fillPercent={20}
+            onChange={setMaxTradeSize}
+            fillPercent={_pct(maxTradeSize, 0, 50)}
             help="Hard cap on any single trade as % of total portfolio equity"
           />
           <SliderField
             label="Cooldown After Loss"
-            value={1800}
+            value={cooldownLoss}
             unit="s"
             min={0}
             max={86400}
-            fillPercent={30}
+            step={60}
+            onChange={setCooldownLoss}
+            fillPercent={_pct(cooldownLoss, 0, 86400)}
             help="Pause before next trade after a losing cycle · 0 to 86,400s"
           />
         </div>
@@ -180,23 +203,32 @@ export function AgentConfigCard() {
           />
           <SliderField
             label="Daily Loss Limit"
-            value={5}
+            value={dailyLossLimit}
             min={0}
             max={50}
-            fillPercent={10}
+            onChange={setDailyLossLimit}
+            fillPercent={_pct(dailyLossLimit, 0, 50)}
             help="Agent halts new entries when daily P&L drops below this"
           />
           <SliderField
             label="Max Drawdown from Peak"
-            value={15}
+            value={maxDrawdown}
             min={0}
             max={50}
-            fillPercent={25}
+            onChange={setMaxDrawdown}
+            fillPercent={_pct(maxDrawdown, 0, 50)}
             help="Halts all entries if portfolio drawdown exceeds this from peak"
           />
-          <button className="mt-2 inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-accent-brand px-5 py-2.5 text-sm font-semibold text-bg-0 transition-colors hover:bg-accent-brand/90">
+          <button
+            type="button"
+            className="mt-2 inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-accent-brand px-5 py-2.5 text-sm font-semibold text-bg-0 transition-colors hover:bg-accent-brand/90"
+            title="Backend /agent/config endpoint not in V1 — persists locally only"
+          >
             Save Agent Config
           </button>
+          <p className="text-[11px] text-text-muted">
+            Server-side persistence pending — values reset on reload.
+          </p>
           <details className="rounded-lg border border-border-default bg-bg-2">
             <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-text-secondary">
               Active Limits

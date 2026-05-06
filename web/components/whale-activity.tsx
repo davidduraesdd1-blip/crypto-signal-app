@@ -17,13 +17,16 @@ interface WhaleActivityProps {
 export function WhaleActivity({ events }: WhaleActivityProps) {
   return (
     <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border-default bg-bg-1 p-4">
-      {/* Header */}
+      {/* AUDIT-2026-05-06 (W2 Tier 1 F-ONC-1): drop "live stream" claim
+          — the events array is currently mock data passed by the parent
+          page until /onchain/whale-events is wired (post-V1). Honest
+          "demo data" subtitle pending real endpoint. */}
       <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-xs font-medium uppercase tracking-wider text-text-muted">
           Whale activity · last 24h
         </div>
         <div className="text-xs text-text-muted">
-          ≥ $10M USD equivalent · live stream
+          ≥ $10M USD equivalent · sample data (not in V1)
         </div>
       </div>
 
