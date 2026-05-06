@@ -81,7 +81,7 @@ python scheduler.py
 
 # Run tests
 python -m pytest -x
-# → 428 passed, 1 skipped (as of 2026-05-03)
+# → 460+ passed (as of 2026-05-06)
 ```
 
 ### Next.js side (web/)
@@ -119,7 +119,7 @@ pnpm test:contract      # → contract test only
 ├── data_feeds.py               OHLCV + macro + on-chain fetchers (CCXT, Glassnode, etc.)
 ├── llm_analysis.py             Claude prompt builders (XML-tagged untrusted blocks)
 ├── routers/                    Phase D-1 FastAPI routers (home/signals/regimes/...)
-├── tests/                      pytest suite (428 passed)
+├── tests/                      pytest suite (460+ passed; vitest under web/tests/)
 ├── web/                        Next.js 16 frontend (Phase D-3+ via v0)
 │   ├── app/                    App-router pages (15 routes)
 │   ├── components/             v0-generated UI + shadcn primitives
@@ -188,7 +188,7 @@ open https://cryptosignal-ddb1.streamlit.app
 
 | Service | Plan | Cost/mo | Purpose |
 |---|---|---|---|
-| `crypto-signal-app` (web) | Starter | **$7** | FastAPI uvicorn + in-process scheduler daemon thread (full autoscan pipeline: run_scan + append_to_master + feedback loop + position updates + alerts). No idle sleep. |
+| `crypto-signal-app` (web) | Standard | **$25** | FastAPI uvicorn + in-process scheduler daemon thread (full autoscan pipeline: run_scan + append_to_master + feedback loop + position updates + alerts). No idle sleep. 1 CPU / 2 GB RAM. |
 | Persistent disk `crypto-signal-data` | 1 GB | included | Mounted at `/opt/render/project/src/data` — covers `crypto_model.db` and `data/scheduler.log`. |
 
 **Architecture note (D8 cutover, 2026-05-04):** Cowork's original Outcome C
@@ -196,10 +196,14 @@ plan was a separate worker service running `scheduler.py` with a shared
 disk. **Render persistent disks attach to a single service**, so that plan
 was structurally invalid. The scheduler now runs as a daemon thread
 inside uvicorn (gated by `CRYPTO_SIGNAL_AUTOSTART_SCHEDULER=true` —
-see `api.py:78-103`), keeping the same single $7/mo Cowork approved.
-Single-process design also eliminates the cross-process SQLite contention
-that the original plan would have required. Rationale and inventory in
-`docs/audits/2026-05-04_scheduler-inventory.md`.
+see `api.py:78-103`). Single-process design also eliminates the
+cross-process SQLite contention that the original plan would have required.
+Rationale and inventory in `docs/audits/2026-05-04_scheduler-inventory.md`.
+
+**Tier upgrade (P0-4, 2026-05-05):** Originally Starter ($7, 512 MB), but
+the scheduler scan caused an OOM cycle inside uvicorn. Upgraded to Standard
+($25, 1 CPU / 2 GB) on 2026-05-05; render.yaml synced in commit 76dff07.
+The /execute/status 502s that motivated the upgrade are now resolved.
 
 ---
 
