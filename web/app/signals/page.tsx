@@ -13,6 +13,7 @@ import { SignalHistory } from "@/components/signal-history";
 import { useSignals, useSignalDetail } from "@/hooks/use-signals";
 import { useTriggerScan } from "@/hooks/use-scan";
 import { ApiError } from "@/lib/api";
+import { useUserLevel } from "@/providers/user-level-provider";
 import {
   directionToSignalType,
   formatNumber,
@@ -98,6 +99,7 @@ const signalHistory = [
 export default function SignalsPage() {
   const [activeCoinIdx, setActiveCoinIdx] = useState(0);
   const [activeTimeframe, setActiveTimeframe] = useState(6); // 1d default
+  const { level } = useUserLevel();
 
   // Derive the coin list from /signals top-N rows
   const signalsQuery = useSignals();
@@ -290,6 +292,36 @@ export default function SignalsPage() {
       <div className="mb-5">
         <SignalHero {...heroData} />
       </div>
+
+      {/* AUDIT-2026-05-05 (P0-5): Beginner gets a "what does this mean
+          for me?" hint per CLAUDE.md §7. Intermediate / Advanced see the
+          numbers in the hero + composite cards and don't need the gloss. */}
+      {level === "Beginner" && detail && (
+        <div className="mb-5 rounded-xl border-l-[3px] border-accent-brand bg-bg-1 p-4">
+          <div className="text-xs font-medium uppercase tracking-wider text-text-muted">
+            What does this mean for me?
+          </div>
+          <p className="mt-1.5 text-[13px] leading-relaxed text-text-secondary">
+            {(() => {
+              const dir = (detail.direction ?? "").toUpperCase();
+              const conf = detail.confidence_avg_pct;
+              const tickName = detail.pair.split("/")[0];
+              const confLabel =
+                conf == null ? "moderate confidence" :
+                conf >= 75 ? "high confidence" :
+                conf >= 55 ? "moderate confidence" :
+                "low confidence";
+              if (dir.includes("BUY")) {
+                return `${tickName} is showing upward momentum across multiple timeframes (${confLabel}). The model favors a long bias here. Always size to your risk tolerance — no signal is a guarantee.`;
+              }
+              if (dir.includes("SELL")) {
+                return `${tickName} is showing downward pressure across multiple timeframes (${confLabel}). The model favors a short / cash bias here. Don't average down on losing positions.`;
+              }
+              return `${tickName} is in a sideways or transitional state — no clear edge right now (${confLabel}). The model recommends holding existing positions and waiting for a cleaner setup.`;
+            })()}
+          </p>
+        </div>
+      )}
 
       {/* Multi-timeframe strip */}
       <div className="mb-5 rounded-xl border border-border-default bg-bg-1 p-4">

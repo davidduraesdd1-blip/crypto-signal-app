@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { useBacktestArbitrage } from "@/hooks/use-backtester";
 import { formatNumber, formatPct, isMissing } from "@/lib/format";
 import type { ArbitrageOpportunity } from "@/lib/api-types";
+import { useUserLevel } from "@/providers/user-level-provider";
 
 // AUDIT-2026-05-03 (D4b): Backtester · Arbitrage page partially wired:
 // - Spot Price Spread table → useBacktestArbitrage (when endpoint
@@ -49,6 +50,7 @@ const carries: FundingCarry[] = [
 export default function ArbitragePage() {
   const router = useRouter();
   const arbQuery = useBacktestArbitrage();
+  const { level } = useUserLevel();
   const opportunities = arbQuery.data?.opportunities ?? [];
   const spreads: ArbSpread[] = opportunities.map(rowToSpread);
 
@@ -143,13 +145,15 @@ export default function ArbitragePage() {
         )}
       </div>
 
-      {/* Beginner-level story card preview */}
+      {/* Beginner-level story card — gated on actual user level (P0-5).
+          Pre-fix this rendered for every tier with a "shown when level =
+          Beginner" caption that lied. */}
+      {level === "Beginner" && (
       <div className="mb-5 rounded-xl border border-dashed border-border bg-bg-2 p-4">
         <div className="mb-2.5 flex items-baseline justify-between">
           <span className="text-xs font-medium uppercase tracking-wider text-text-muted">
             Beginner view · same data, plain English
           </span>
-          <span className="text-[11px] text-text-muted">shown when level = Beginner</span>
         </div>
         <div className="mb-2.5 rounded-lg border-l-[3px] border-accent-brand bg-bg-2 p-3.5">
           <div className="font-mono text-sm font-semibold">XRP/USDT · Net spread + 0.56%</div>
@@ -172,6 +176,7 @@ export default function ArbitragePage() {
           </p>
         </div>
       </div>
+      )}
 
       {/* Funding-Rate Carry Trades */}
       <div className="mb-3.5 flex items-baseline justify-between">
