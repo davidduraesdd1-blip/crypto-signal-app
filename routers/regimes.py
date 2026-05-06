@@ -115,6 +115,143 @@ def get_regime_history(pair: str, days: int = Query(default=90, ge=1, le=365)):
 
 
 @router.get(
+    "/weights",
+    summary="Regime-specific layer weights (CRISIS / TRENDING / RANGING / NORMAL)",
+    dependencies=[Depends(require_api_key)],
+)
+def get_regime_weights() -> dict:
+    """Return the per-regime layer-weight table from composite_signal.
+
+    AUDIT-2026-05-06 (Everything-Live, item 3): pre-fix the Regimes page
+    RegimeWeights component rendered hardcoded weights for 4 made-up
+    labels (bull/accumulation/distribution/bear) that don't match the
+    engine's actual regime taxonomy (CRISIS/TRENDING/RANGING/NORMAL per
+    composite_signal.py:175). Now reads the live table — including the
+    NORMAL row's Optuna-tuned weights from alerts_config.json.
+
+    Read-only. composite_signal.py is §22-protected; we only call its
+    public-style `_regime_weights()` helper which returns a fresh dict
+    each call.
+    """
+    try:
+        import composite_signal
+        table = composite_signal._regime_weights() or {}
+    except Exception as exc:
+        logger.warning("[regimes] _regime_weights() failed: %s", exc)
+        table = {}
+
+    columns = []
+    for regime_label in ("CRISIS", "TRENDING", "RANGING", "NORMAL"):
+        weights = table.get(regime_label, {})
+        columns.append({
+            "regime": regime_label,
+            "weights": {
+                "technical": weights.get("technical"),
+                "macro":     weights.get("macro"),
+                "sentiment": weights.get("sentiment"),
+                "onchain":   weights.get("onchain"),
+            },
+        })
+    return serialize({"columns": columns})
+
+
+@router.get(
+    "/{pair}/timeline",
+    summary="Date-stamped regime timeline for one pair",
+    dependencies=[Depends(require_api_key)],
+)
+def get_regime_timeline(pair: str, days: int = Query(default=90, ge=1, le=365)):
+    """Return date-stamped regime transitions for `pair` over the last `days`.
+
+    AUDIT-2026-05-06 (Everything-Live, item 5): the existing /history
+    endpoint returns aggregated `[(state, pct)]` segments without dates,
+    which can't power "Bull since Apr 12" framing on the Regimes page.
+    This endpoint reads regime_history with timestamps and emits a
+    chronological list of `(state, start_iso, end_iso, duration_days)`
+    rows so the frontend can render both the segmented timeline AND the
+    "current state since X" caption.
+    """
+    from datetime import datetime as _dt, timezone as _tz, timedelta
+    try:
+        normalized = normalize_pair(pair)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    cutoff_iso = (_dt.now(_tz.utc) - timedelta(days=int(days))).isoformat()
+
+    rows: list[tuple[str, str]] = []
+    try:
+        # Read regime_history directly so we get the timestamps.
+        conn = db._get_conn()
+        try:
+            cur = conn.execute(
+                """SELECT timestamp, state FROM regime_history
+                     WHERE pair = ? AND timestamp >= ?
+                     ORDER BY timestamp ASC""",
+                (normalized, cutoff_iso),
+            )
+            rows = list(cur.fetchall())
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("[regimes] timeline fetch failed for %s: %s", normalized, exc)
+        rows = []
+
+    if not rows:
+        return serialize({
+            "pair":           normalized,
+            "days":           days,
+            "current_state":  None,
+            "since":          None,
+            "duration_days":  0,
+            "segments":       [],
+        })
+
+    # Collapse contiguous same-state runs.
+    def _parse(ts: str) -> _dt:
+        try:
+            return _dt.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return _dt.now(_tz.utc)
+
+    parsed: list[tuple[_dt, str]] = [(_parse(ts), state) for ts, state in rows]
+
+    segments: list[dict] = []
+    seg_start = parsed[0][0]
+    seg_state = parsed[0][1]
+    for i in range(1, len(parsed)):
+        ts, state = parsed[i]
+        if state != seg_state:
+            duration = (ts - seg_start).total_seconds() / 86400.0
+            segments.append({
+                "state":         seg_state,
+                "start":         seg_start.isoformat(),
+                "end":           ts.isoformat(),
+                "duration_days": round(duration, 2),
+            })
+            seg_start, seg_state = ts, state
+
+    # Final open segment extends to now
+    now = _dt.now(_tz.utc)
+    final_duration = (now - seg_start).total_seconds() / 86400.0
+    segments.append({
+        "state":         seg_state,
+        "start":         seg_start.isoformat(),
+        "end":           now.isoformat(),
+        "duration_days": round(final_duration, 2),
+    })
+
+    return serialize({
+        "pair":          normalized,
+        "days":          days,
+        "current_state": seg_state,
+        "since":         seg_start.isoformat(),
+        "duration_days": round(final_duration, 2),
+        "segments":      segments,
+    })
+
+
+@router.get(
     "/transitions",
     summary="Recent regime transitions across the universe",
     dependencies=[Depends(require_api_key)],

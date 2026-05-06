@@ -97,6 +97,105 @@ async def ask_ai(req: AskRequest):
     })
 
 
+@router.post(
+    "/agent/start",
+    summary="Enable the autonomous agent (sets auto_execute = True)",
+    dependencies=[Depends(require_api_key)],
+)
+def start_agent():
+    """Enable the autonomous agent toggle.
+
+    AUDIT-2026-05-06 (Everything-Live, item 7): pre-fix the AI Assistant
+    Start/Stop button only flipped local React state — pressing it did
+    nothing on the backend. Now sets `auto_execute=True` in
+    alerts_config; the engine respects this flag in its scan loop.
+
+    Note: agent_running stays False until live_trading + auto_execute +
+    keys_configured are all true. The /agent/summary response surfaces
+    each prerequisite so the UI can explain "agent disabled because X"
+    instead of silently looking broken.
+    """
+    import alerts as alerts_module
+
+    def _enable(cfg: dict) -> dict:
+        cfg["auto_execute"] = True
+        return cfg
+    alerts_module.update_alerts_config(_enable)
+
+    import execution as exec_engine
+    return serialize({"status": "started", **exec_engine.get_status()})
+
+
+@router.post(
+    "/agent/stop",
+    summary="Disable the autonomous agent (sets auto_execute = False)",
+    dependencies=[Depends(require_api_key)],
+)
+def stop_agent():
+    """Disable the autonomous agent toggle (item 7 — see /agent/start)."""
+    import alerts as alerts_module
+
+    def _disable(cfg: dict) -> dict:
+        cfg["auto_execute"] = False
+        return cfg
+    alerts_module.update_alerts_config(_disable)
+
+    import execution as exec_engine
+    return serialize({"status": "stopped", **exec_engine.get_status()})
+
+
+@router.get(
+    "/agent/summary",
+    summary="Live agent execution summary (cycles + last-cycle + last-decision)",
+    dependencies=[Depends(require_api_key)],
+)
+def agent_summary():
+    """Return the AgentMetricStrip data: total cycles, last-cycle age,
+    last-pair, last-decision — all derived from agent_log + execution_log.
+
+    AUDIT-2026-05-06 (Everything-Live, item 7): pre-fix the AgentStatusCard
+    showed `cycle={47}` — a hardcoded literal. Now returns the actual row
+    count from agent_log. Empty rows return zeros + nulls; UI renders an
+    honest empty-state ("no agent activity yet — start the agent to begin").
+    """
+    import execution as exec_engine
+    status = exec_engine.get_status()
+
+    cycles = 0
+    last_cycle_iso = None
+    last_pair = None
+    last_decision = None
+    last_age_s = None
+
+    try:
+        df = db.get_agent_log_df(limit=200)
+        if df is not None and not df.empty:
+            cycles = int(len(df))
+            tail = df.iloc[-1]
+            last_pair = str(tail.get("pair") or "—")
+            last_decision = str(tail.get("decision") or tail.get("direction") or "—")
+            ts = tail.get("timestamp")
+            if ts is not None:
+                last_cycle_iso = str(ts)
+                try:
+                    from datetime import datetime, timezone
+                    parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    last_age_s = (datetime.now(timezone.utc) - parsed).total_seconds()
+                except Exception:
+                    last_age_s = None
+    except Exception as exc:
+        logger.debug("[ai] agent_log read failed: %s", exc)
+
+    return serialize({
+        **status,
+        "cycles":              cycles,
+        "last_cycle":          last_cycle_iso,
+        "last_cycle_age_s":    last_age_s,
+        "last_pair":           last_pair,
+        "last_decision":       last_decision,
+    })
+
+
 @router.get(
     "/decisions",
     summary="Recent signal direction calls (Recent Decisions log)",

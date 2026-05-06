@@ -24,6 +24,7 @@ router = APIRouter()
 
 
 _HERO_DEFAULT_PAIRS = ("BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT")
+_WATCHLIST_DEFAULT_PAIRS = ("BTC/USDT", "ETH/USDT", "SOL/USDT", "AVAX/USDT", "LINK/USDT", "NEAR/USDT")
 
 
 @router.get(
@@ -101,4 +102,71 @@ def get_home_summary(
             "scan_last_run":    scan_status.get("timestamp"),
             "scan_progress":    scan_status.get("progress", 0),
         },
+    })
+
+
+@router.get(
+    "/watchlist",
+    summary="Watchlist payload — top-N pairs with price + 24h change + 1h sparkline",
+    dependencies=[Depends(require_api_key)],
+)
+def get_watchlist(n: int = Query(default=6, ge=1, le=20), sparkline_n: int = Query(default=24, ge=8, le=168)):
+    """Return the watchlist payload for the Home page.
+
+    AUDIT-2026-05-06 (Everything-Live, item 8): pre-fix the Home Watchlist
+    rendered 6 hardcoded coins with hardcoded prices + hardcoded sparkline
+    coordinates. Now derives from /signals scan results + live sparkline
+    closes from data_feeds.fetch_sparkline_closes (OKX → Gate.io fallback,
+    5-min cache).
+
+    Returns up to `n` pairs. Default 6 to match the v0 watchlist layout.
+    Each row: {pair, price, change_24h_pct, direction, sparkline: [closes]}.
+    """
+    import data_feeds
+
+    try:
+        results = db.read_scan_results() or []
+    except Exception as exc:
+        logger.warning("[home/watchlist] scan results unavailable: %s", exc)
+        results = []
+
+    by_pair = {r.get("pair"): r for r in results if r.get("pair")}
+
+    selected: list[str] = []
+    for p in _WATCHLIST_DEFAULT_PAIRS:
+        if p in by_pair:
+            selected.append(p)
+        if len(selected) >= n:
+            break
+    if len(selected) < n:
+        for r in results:
+            p = r.get("pair")
+            if p and p not in selected:
+                selected.append(p)
+            if len(selected) >= n:
+                break
+
+    items = []
+    for p in selected:
+        r = by_pair.get(p, {})
+        # Sparkline closes (1h, last sparkline_n bars)
+        closes: list[float] = []
+        try:
+            closes = data_feeds.fetch_sparkline_closes(p, n=sparkline_n) or []
+        except Exception as exc:
+            logger.debug("[home/watchlist] sparkline %s failed: %s", p, exc)
+        items.append({
+            "pair":           p,
+            "ticker":         p.split("/")[0],
+            "price":          r.get("price") if r else None,
+            "change_24h_pct": r.get("change_24h_pct") if r else None,
+            "direction":      (r.get("direction") if r else None) or "HOLD",
+            "regime":         (r.get("regime") if r else None) or (r.get("regime_label") if r else None),
+            "sparkline":      closes,
+        })
+
+    return serialize({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "count":     len(items),
+        "items":     items,
     })

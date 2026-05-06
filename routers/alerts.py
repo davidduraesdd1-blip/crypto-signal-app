@@ -77,6 +77,129 @@ def _save_rules(rules: list[dict[str, Any]]):
     alerts_module.update_alerts_config(_updater)
 
 
+class AlertConfigPatch(BaseModel):
+    """Whitelisted top-level config keys the frontend Alerts page can edit.
+
+    AUDIT-2026-05-06 (Everything-Live, item 6): explicit allow-list — only
+    these keys can be PUT from the Alerts page. Any other key in the
+    request body is rejected silently. Prevents the page from being a
+    write-anything surface to alerts_config.json.
+    """
+    email_enabled:        Optional[bool]            = Field(default=None)
+    email_address:        Optional[str]             = Field(default=None, max_length=320)
+    confidence_threshold: Optional[float]           = Field(default=None, ge=0.0, le=100.0)
+    slack_webhook_url:    Optional[str]             = Field(default=None, max_length=2048)
+    telegram_bot_token:   Optional[str]             = Field(default=None, max_length=256)
+    telegram_chat_id:     Optional[str]             = Field(default=None, max_length=64)
+    browser_push_enabled: Optional[bool]            = Field(default=None)
+    alert_types:          Optional[dict[str, bool]] = Field(default=None, description="alert_type_id → enabled")
+
+
+_ALERT_TYPE_DEFS = [
+    {"id": "buy-sell",  "name": "▲ Buy / ▼ Sell crossings",
+     "description": "Composite signal crosses BUY (≥ 70) or SELL (≤ 30) threshold for any tracked pair on the configured timeframes."},
+    {"id": "regime",    "name": "◈ Regime transitions",
+     "description": "HMM regime state changes (CRISIS / TRENDING / RANGING / NORMAL). Per-pair, with confidence threshold."},
+    {"id": "onchain",   "name": "⬡ On-chain divergences",
+     "description": "MVRV-Z, SOPR, or exchange reserve flow flips direction relative to spot price for ≥ 2 consecutive days."},
+    {"id": "funding",   "name": "⚡ Funding rate spikes",
+     "description": "Perpetual funding ≥ +0.05% or ≤ −0.05% for 8h. Often signals over-leveraged positioning before a flush."},
+    {"id": "unlock",    "name": "🔓 Token unlock proximity",
+     "description": "CryptoRank-tracked unlocks within 7 days for any pair in the watchlist. Flags forward sell-pressure events."},
+]
+
+
+@router.get(
+    "/config",
+    summary="Read alerts page configuration (channels, types, thresholds)",
+    dependencies=[Depends(require_api_key)],
+)
+def get_alert_config():
+    """Return the alerts page configuration shape the Next.js Alerts page renders.
+
+    Reads `alerts_config.json` (now on persistent disk per W2-T8) and shapes it
+    into the {alert_types[], channels[], threshold, email_enabled} payload.
+    Truthful empty defaults on first run when the file doesn't have these keys yet.
+    """
+    cfg = alerts_module.load_alerts_config() or {}
+
+    types_state = cfg.get("alert_types") or {}
+    alert_types = []
+    for spec in _ALERT_TYPE_DEFS:
+        alert_types.append({
+            **spec,
+            "enabled": bool(types_state.get(spec["id"], spec["id"] in {"buy-sell", "regime", "onchain"})),
+        })
+
+    channels = [
+        {"id": "email", "icon": "📧", "name": "Email",
+         "status": (
+            f"Connected · {cfg.get('email_address')}"
+            if cfg.get("email_enabled") and cfg.get("email_address")
+            else "Not connected · add an email address to enable"
+         ),
+         "connected": bool(cfg.get("email_enabled") and cfg.get("email_address"))},
+        {"id": "slack", "icon": "💬", "name": "Slack webhook",
+         "status": (
+            "Connected · webhook configured"
+            if cfg.get("slack_webhook_url") else "Not connected · paste a webhook URL to enable"
+         ),
+         "connected": bool(cfg.get("slack_webhook_url"))},
+        {"id": "telegram", "icon": "📨", "name": "Telegram bot",
+         "status": (
+            "Connected · bot + chat configured"
+            if cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id")
+            else "Not connected · @YourBotName + chat ID"
+         ),
+         "connected": bool(cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"))},
+        {"id": "browser-push", "icon": "🔔", "name": "Browser push",
+         "status": (
+            "Enabled · works only when app tab is open"
+            if cfg.get("browser_push_enabled") else "Not connected · works only when app tab is open"
+         ),
+         "connected": bool(cfg.get("browser_push_enabled"))},
+    ]
+
+    return serialize({
+        "alert_types":          alert_types,
+        "channels":             channels,
+        "confidence_threshold": cfg.get("confidence_threshold", 75),
+        "email_enabled":        bool(cfg.get("email_enabled", False)),
+        "email_address":        cfg.get("email_address", ""),
+    })
+
+
+@router.put(
+    "/config",
+    summary="Update alerts page configuration (whitelisted keys only)",
+    dependencies=[Depends(require_api_key)],
+)
+def put_alert_config(patch: AlertConfigPatch):
+    """Apply a partial config update. Only whitelisted keys (see
+    AlertConfigPatch) are honored; any other field in the request body
+    is ignored. Returns the new full config shape (same as GET)."""
+    payload = patch.model_dump(exclude_none=True)
+    if not payload:
+        # No-op: just return current state
+        return get_alert_config()
+
+    def _apply(cfg: dict[str, Any]) -> dict[str, Any]:
+        for k, v in payload.items():
+            if k == "alert_types":
+                existing = cfg.get("alert_types") or {}
+                if isinstance(existing, dict) and isinstance(v, dict):
+                    existing.update({str(kk): bool(vv) for kk, vv in v.items()})
+                    cfg["alert_types"] = existing
+                else:
+                    cfg["alert_types"] = {str(kk): bool(vv) for kk, vv in v.items()} if isinstance(v, dict) else {}
+            else:
+                cfg[k] = v
+        return cfg
+
+    alerts_module.update_alerts_config(_apply)
+    return get_alert_config()
+
+
 @router.get(
     "/configure",
     summary="List all configured watchlist alert rules",

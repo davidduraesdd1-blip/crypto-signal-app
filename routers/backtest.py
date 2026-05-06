@@ -112,6 +112,130 @@ def get_backtest_summary():
 
 
 @router.get(
+    "/optuna-runs",
+    summary="Top-N Optuna hyperparameter tuning runs",
+    dependencies=[Depends(require_api_key)],
+)
+def get_optuna_runs(n: int = 10):
+    """Read the top-N Optuna study runs from `optuna_studies.sqlite`.
+
+    AUDIT-2026-05-06 (Everything-Live, item 4): pre-fix the Backtester
+    OptunaTable rendered 5 fabricated rows (rsi_period=14, sharpe=4.12,
+    +342.8% etc.) that had no source. Now reads the actual sqlite
+    database the engine writes to during hyperparameter search.
+
+    Returns empty list when the sqlite file doesn't exist yet (fresh
+    deploy, no tuning has run) — frontend renders the truthful
+    "no Optuna runs yet — run a tuning sweep to populate" empty-state.
+    """
+    import os
+    import sqlite3
+    n = max(1, min(int(n), 100))
+
+    db_path = os.environ.get("OPTUNA_DB_PATH", "optuna_studies.sqlite")
+    if not os.path.exists(db_path):
+        return serialize({"count": 0, "runs": [], "source": "none", "error": "optuna_studies.sqlite not found yet"})
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        try:
+            cur = conn.execute("""
+                SELECT t.trial_id, t.value, t.state,
+                       (SELECT GROUP_CONCAT(p.param_name || '=' || p.param_value, ', ')
+                          FROM trial_params p
+                         WHERE p.trial_id = t.trial_id) AS params
+                  FROM trials t
+                 WHERE t.state = 'COMPLETE' AND t.value IS NOT NULL
+                 ORDER BY t.value DESC
+                 LIMIT ?
+            """, (n,))
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("[backtest] optuna-runs read failed: %s", exc)
+        return serialize({"count": 0, "runs": [], "source": "error", "error": str(exc)})
+
+    runs: list[dict] = []
+    for rank, (trial_id, value, state, params) in enumerate(rows, start=1):
+        runs.append({
+            "rank":   rank,
+            "trial_id": trial_id,
+            "value":  round(float(value), 4) if value is not None else None,
+            "state":  state,
+            "params": params or "",
+        })
+    return serialize({"count": len(runs), "runs": runs, "source": "optuna_studies.sqlite"})
+
+
+@router.get(
+    "/equity-curve",
+    summary="Cumulative equity curve from backtest_trades",
+    dependencies=[Depends(require_api_key)],
+)
+def get_equity_curve():
+    """Replay backtest_trades in close_time order to compute the
+    cumulative compounded equity curve.
+
+    AUDIT-2026-05-06 (Everything-Live, item 5): pre-fix the EquityCurve
+    component on the Backtester page rendered a static SVG path with
+    fabricated coordinates. Now derives the curve from real trade PnLs.
+
+    Returns:
+      points: [{timestamp_iso, equity, drawdown_pct}, ...]
+      summary: {start, end, total_pnl_pct, max_dd_pct, n_trades}
+
+    Empty payload when no trades exist (fresh deploy).
+    """
+    try:
+        df = db_module.get_backtest_df()
+    except Exception as exc:
+        logger.warning("[backtest] equity-curve read failed: %s", exc)
+        return serialize({"points": [], "summary": {"n_trades": 0}, "error": str(exc)})
+
+    if df is None or df.empty or "pnl_pct" not in df.columns:
+        return serialize({"points": [], "summary": {"n_trades": 0}})
+
+    # Sort chronologically — prefer close_time, fall back to timestamp
+    sort_col = "close_time" if "close_time" in df.columns else (
+        "timestamp" if "timestamp" in df.columns else None
+    )
+    if sort_col is not None:
+        df = df.sort_values(sort_col)
+
+    pnl = df["pnl_pct"].fillna(0.0).astype(float).values
+    equity = 100.0  # start at 100 (= 100%)
+    running_max = 100.0
+    points: list[dict] = []
+    for i, p in enumerate(pnl):
+        equity = equity * (1.0 + p / 100.0)
+        running_max = max(running_max, equity)
+        dd = (equity / running_max - 1.0) * 100.0 if running_max > 0 else 0.0
+        ts_value = None
+        if sort_col is not None:
+            try:
+                ts_value = str(df.iloc[i][sort_col])
+            except Exception:
+                ts_value = None
+        points.append({
+            "timestamp": ts_value,
+            "equity":    round(equity, 4),
+            "drawdown_pct": round(dd, 2),
+        })
+
+    n = len(points)
+    summary = {
+        "n_trades":      n,
+        "start":         points[0]["timestamp"] if points else None,
+        "end":           points[-1]["timestamp"] if points else None,
+        "total_pnl_pct": round(equity - 100.0, 2),
+        "max_dd_pct":    round(min(p["drawdown_pct"] for p in points), 2) if points else 0.0,
+        "final_equity":  round(equity, 4),
+    }
+    return serialize({"points": points, "summary": summary})
+
+
+@router.get(
     "/arbitrage",
     summary="Recent arbitrage opportunities (spot + funding-carry)",
     dependencies=[Depends(require_api_key)],
