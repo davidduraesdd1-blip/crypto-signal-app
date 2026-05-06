@@ -208,6 +208,9 @@ export default function SignalsPage() {
   const allRows = signalsQuery.data?.results ?? [];
   const coins = allRows.slice(0, 5).map((r) => r.pair.split("/")[0]);
   const extraCoinsCount = Math.max(0, allRows.length - 5);
+  // AUDIT-2026-05-06 (post-launch v4): provide the full beyond-top-5
+  // ticker list to CoinPicker so its "More ▾" dropdown can show them.
+  const extraCoins = allRows.slice(5).map((r) => r.pair.split("/")[0]);
   const activePair = allRows[activeCoinIdx]?.pair ?? null;
 
   // Per-pair detail for the hero card + technical tiles
@@ -403,6 +406,12 @@ export default function SignalsPage() {
               coins={coins}
               activeIndex={activeCoinIdx}
               extraCount={extraCoinsCount}
+              extraCoins={extraCoins}
+              onPickExtra={(ticker) => {
+                // Find the full pair and set as active by index
+                const idx = allRows.findIndex((r) => r.pair.split("/")[0] === ticker);
+                if (idx >= 0) setActiveCoinIdx(idx);
+              }}
               onSelect={setActiveCoinIdx}
             />
           ) : (

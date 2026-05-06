@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -9,8 +9,38 @@ import { AlertLogTable } from "@/components/alert-log-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAlertLog } from "@/hooks/use-alerts";
 import type { AlertLogRow } from "@/lib/api-types";
+
+// AUDIT-2026-05-06 (post-launch v4): four real dropdown filters wire
+// client-side filtering of the alerts log. Range filter uses the
+// timestamp; Type / Status / Channel use the row fields directly.
+// Server-side filter params come post-V1 — for now we filter the
+// already-fetched 100-row response window.
+
+const RANGE_OPTIONS = ["Last 1h", "Last 24h", "Last 7d", "Last 30d", "All time"] as const;
+const TYPE_OPTIONS = ["All", "Buy", "Sell", "Regime", "On-chain", "Funding", "Unlock"] as const;
+const STATUS_OPTIONS = ["All", "Sent", "Failed", "Suppressed"] as const;
+const CHANNEL_OPTIONS = ["All", "Email", "Slack", "Telegram", "Browser push"] as const;
+
+type RangeValue = (typeof RANGE_OPTIONS)[number];
+type TypeValue = (typeof TYPE_OPTIONS)[number];
+type StatusValue = (typeof STATUS_OPTIONS)[number];
+type ChannelValue = (typeof CHANNEL_OPTIONS)[number];
+
+const RANGE_MS: Record<RangeValue, number | null> = {
+  "Last 1h":  60 * 60 * 1000,
+  "Last 24h": 24 * 60 * 60 * 1000,
+  "Last 7d":  7 * 24 * 60 * 60 * 1000,
+  "Last 30d": 30 * 24 * 60 * 60 * 1000,
+  "All time": null,
+};
 
 // AUDIT-2026-05-03 (D4b): Alerts → History page wired to GET /alerts/log.
 // Stats cards stay as visual mock until /alerts/log enriches with the
@@ -94,11 +124,52 @@ export default function AlertsHistoryPage() {
   const PAGE_SIZE = 10;
   const logQuery = useAlertLog(100);  // Server returns up to 100, paginate client-side for now
 
+  // AUDIT-2026-05-06 (post-launch v4): client-side filter state
+  const [searchTerm, setSearchTerm] = useState("");
+  const [rangeFilter, setRangeFilter] = useState<RangeValue>("Last 7d");
+  const [typeFilter, setTypeFilter] = useState<TypeValue>("All");
+  const [statusFilter, setStatusFilter] = useState<StatusValue>("All");
+  const [channelFilter, setChannelFilter] = useState<ChannelValue>("All");
+
   const allEntries = (logQuery.data?.alerts ?? []).map(rowToEntry);
   const totalCount = logQuery.data?.count ?? 0;
+
+  // AUDIT-2026-05-06 (post-launch v4): apply filters before paginating
+  const filteredEntries = useMemo(() => {
+    const cutoff = RANGE_MS[rangeFilter];
+    const cutoffMs = cutoff != null ? Date.now() - cutoff : null;
+    const term = searchTerm.trim().toLowerCase();
+
+    return allEntries.filter((e) => {
+      // Range
+      if (cutoffMs != null) {
+        const ts = Date.parse(e.timestamp);
+        if (!Number.isNaN(ts) && ts < cutoffMs) return false;
+      }
+      // Type
+      if (typeFilter !== "All") {
+        const want = typeFilter.toLowerCase().replace("-", "");
+        const got = e.type.toLowerCase().replace("-", "");
+        if (got !== want && want === "onchain" ? got !== "onchain" : got !== want) return false;
+      }
+      // Status
+      if (statusFilter !== "All") {
+        if (e.status.toLowerCase() !== statusFilter.toLowerCase()) return false;
+      }
+      // Channel
+      if (channelFilter !== "All") {
+        const want = channelFilter.toLowerCase().split(" ")[0];
+        if (!e.channel.toLowerCase().includes(want)) return false;
+      }
+      // Search term
+      if (term && !`${e.message} ${e.asset} ${e.typeLabel}`.toLowerCase().includes(term)) return false;
+      return true;
+    });
+  }, [allEntries, rangeFilter, typeFilter, statusFilter, channelFilter, searchTerm]);
+
   const startIdx = (currentPage - 1) * PAGE_SIZE;
-  const visibleEntries = allEntries.slice(startIdx, startIdx + PAGE_SIZE);
-  const totalPages = Math.max(1, Math.ceil(allEntries.length / PAGE_SIZE));
+  const visibleEntries = filteredEntries.slice(startIdx, startIdx + PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE));
 
   return (
     <AppShell crumbs="Account / Alerts" currentPage="History">
@@ -146,37 +217,91 @@ export default function AlertsHistoryPage() {
         ))}
       </div>
 
-      {/* Filter row — search box wired (filters visibleEntries below);
-          Range / Type / Status / Channel filter pills are static labels
-          until backend supports filter params (no /alerts/log filtering
-          on type/channel yet — TODO post-V1).
-          AUDIT-2026-05-06 (post-launch dropdown fix): chevrons removed
-          from labels that aren't real dropdowns. */}
+      {/* Filter row — all 4 dropdowns + search now real client-side
+          filters. AUDIT-2026-05-06 (post-launch v4). */}
       <div className="mb-5 flex flex-wrap items-center gap-2.5">
         <div className="flex min-w-[200px] max-w-[320px] flex-1 items-center gap-2 rounded-lg border border-border bg-bg-1 px-3 py-1.5">
           <span className="text-text-muted">🔎</span>
           <Input
             type="text"
+            value={searchTerm}
+            onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
             placeholder="search messages, assets, types..."
             className="h-7 border-0 bg-transparent p-0 text-[13px] focus-visible:ring-0"
           />
         </div>
-        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
-          <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Range</span>
-          <span className="font-mono font-medium">Last 7d</span>
-        </span>
-        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
-          <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Type</span>
-          <span className="font-mono font-medium">All</span>
-        </span>
-        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
-          <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Status</span>
-          <span className="font-mono font-medium">All</span>
-        </span>
-        <span className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px]">
-          <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Channel</span>
-          <span className="font-mono font-medium">All</span>
-        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px] outline-none transition-colors hover:border-border-strong hover:bg-bg-2 focus-visible:ring-2 focus-visible:ring-accent-brand">
+            <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Range</span>
+            <span className="font-mono font-medium">{rangeFilter}</span>
+            <span className="text-[11px] text-text-muted">▾</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[140px]">
+            {RANGE_OPTIONS.map((opt) => (
+              <DropdownMenuItem
+                key={opt}
+                onSelect={() => { setRangeFilter(opt); setCurrentPage(1); }}
+                className="cursor-pointer text-[13px]"
+              >
+                {opt === rangeFilter ? "✓ " : "  "}{opt}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px] outline-none transition-colors hover:border-border-strong hover:bg-bg-2 focus-visible:ring-2 focus-visible:ring-accent-brand">
+            <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Type</span>
+            <span className="font-mono font-medium">{typeFilter}</span>
+            <span className="text-[11px] text-text-muted">▾</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[140px]">
+            {TYPE_OPTIONS.map((opt) => (
+              <DropdownMenuItem
+                key={opt}
+                onSelect={() => { setTypeFilter(opt); setCurrentPage(1); }}
+                className="cursor-pointer text-[13px]"
+              >
+                {opt === typeFilter ? "✓ " : "  "}{opt}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px] outline-none transition-colors hover:border-border-strong hover:bg-bg-2 focus-visible:ring-2 focus-visible:ring-accent-brand">
+            <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Status</span>
+            <span className="font-mono font-medium">{statusFilter}</span>
+            <span className="text-[11px] text-text-muted">▾</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[140px]">
+            {STATUS_OPTIONS.map((opt) => (
+              <DropdownMenuItem
+                key={opt}
+                onSelect={() => { setStatusFilter(opt); setCurrentPage(1); }}
+                className="cursor-pointer text-[13px]"
+              >
+                {opt === statusFilter ? "✓ " : "  "}{opt}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-bg-1 px-3 text-[13px] outline-none transition-colors hover:border-border-strong hover:bg-bg-2 focus-visible:ring-2 focus-visible:ring-accent-brand">
+            <span className="text-[11px] uppercase tracking-[0.06em] text-text-muted">Channel</span>
+            <span className="font-mono font-medium">{channelFilter}</span>
+            <span className="text-[11px] text-text-muted">▾</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[160px]">
+            {CHANNEL_OPTIONS.map((opt) => (
+              <DropdownMenuItem
+                key={opt}
+                onSelect={() => { setChannelFilter(opt); setCurrentPage(1); }}
+                className="cursor-pointer text-[13px]"
+              >
+                {opt === channelFilter ? "✓ " : "  "}{opt}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
           variant="outline"
           size="sm"

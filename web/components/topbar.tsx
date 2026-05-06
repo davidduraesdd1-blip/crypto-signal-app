@@ -1,10 +1,19 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useExecutionStatus } from "@/hooks/use-execution-status";
 import { useRefreshAll } from "@/hooks/use-refresh-all";
 import { useUserLevel, type UserLevel } from "@/providers/user-level-provider";
+import { useStartAgent, useStopAgent } from "@/hooks/use-agent";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // AUDIT-2026-05-05 (P0-5): level state lifted from local Topbar useState
 // into <UserLevelProvider> so any page can scale content to the user's
@@ -39,6 +48,13 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
   const liveAgentRunning =
     agentRunning ?? Boolean(execQuery.data?.agent_running ?? execQuery.data?.live_trading);
 
+  // AUDIT-2026-05-06 (post-launch v4): AGENT pill is now a dropdown menu.
+  // Click opens Start / Stop / View activity. Mutations defined here so
+  // the topbar can act without navigating to /ai-assistant.
+  const router = useRouter();
+  const startAgent = useStartAgent();
+  const stopAgent = useStopAgent();
+
   // AUDIT-2026-05-03 (D4b): global "Refresh All Data" button —
   // invalidates every active query + force-refetches the on-page ones
   // per CLAUDE.md §12 master-template requirement.
@@ -54,26 +70,56 @@ export function Topbar({ crumbs = "Markets", currentPage = "Home", agentRunning 
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Agent status pill - hidden on mobile */}
-      <div
-        className={cn(
-          "hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-wide md:inline-flex",
-          liveAgentRunning
-            ? "bg-success/10 text-success"
-            : "bg-info/10 text-info"
-        )}
-        title={execQuery.isError ? "Status unavailable — check /execution/status" : undefined}
-      >
-        <span
+      {/* Agent status pill - hidden on mobile, now a dropdown menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger
           className={cn(
-            "h-1.5 w-1.5 rounded-full",
-            liveAgentRunning ? "animate-pulse bg-success" : "bg-info"
+            "hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-wide outline-none transition-colors md:inline-flex",
+            "hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent-brand",
+            liveAgentRunning
+              ? "bg-success/10 text-success hover:bg-success/15"
+              : "bg-info/10 text-info hover:bg-info/15",
           )}
-        />
-        <span>
-          Agent · {execQuery.isLoading && agentRunning === undefined ? "—" : liveAgentRunning ? "Running" : "Stopped"}
-        </span>
-      </div>
+          title={execQuery.isError ? "Status unavailable — check /execution/status" : "Click to manage agent"}
+        >
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              liveAgentRunning ? "animate-pulse bg-success" : "bg-info",
+            )}
+          />
+          <span>
+            Agent · {execQuery.isLoading && agentRunning === undefined ? "—" : liveAgentRunning ? "Running" : "Stopped"}
+          </span>
+          <span className="text-[10px] opacity-70">▾</span>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[200px]">
+          <DropdownMenuItem
+            disabled={liveAgentRunning || startAgent.isPending}
+            onSelect={() => startAgent.mutate()}
+            className="cursor-pointer"
+          >
+            <span className="mr-2 text-success">▶</span>
+            {startAgent.isPending ? "Starting…" : "Start agent"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!liveAgentRunning || stopAgent.isPending}
+            onSelect={() => stopAgent.mutate()}
+            className="cursor-pointer"
+          >
+            <span className="mr-2 text-danger">■</span>
+            {stopAgent.isPending ? "Stopping…" : "Stop agent"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => router.push("/ai-assistant")}
+            className="cursor-pointer"
+          >
+            <span className="mr-2">📊</span>
+            View activity & decisions
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Level group - hidden on mobile */}
       {/* AUDIT-2026-05-04 (overnight a11y): radiogroup semantics so the
