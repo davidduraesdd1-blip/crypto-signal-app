@@ -17,9 +17,17 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Crypto Signal App',
+  title: 'Polaris Edge',
   description: 'Composite signals + regime state across the top-cap set',
   generator: 'v0.app',
+  // AUDIT-2026-05-05 (P0-9): apple-mobile-web-app-* metas so iOS PWA /
+  // Capacitor in-WebView modes render the app shell with the right
+  // status-bar style instead of a transparent system bar over content.
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Polaris Edge',
+  },
   icons: {
     icon: [
       {
@@ -39,10 +47,15 @@ export const metadata: Metadata = {
   },
 }
 
+// AUDIT-2026-05-05 (P0-9, Tier 7 Capacitor compat): viewportFit:'cover'
+// is required for iOS notch / Dynamic Island so safe-area-inset-* CSS
+// vars resolve to non-zero. Without this the content area underflows
+// the status bar and the home indicator on iPhone 12+ devices.
 export const viewport: Viewport = {
   themeColor: '#0a0a0f',
   width: 'device-width',
   initialScale: 1,
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({
